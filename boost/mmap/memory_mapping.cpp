@@ -260,7 +260,7 @@ mapping_flags mapping_flags::create
     mapping_flags flags;
 #ifdef _WIN32
     flags.create_mapping_flags = ( handle_access_flags & handle_access_rights::execute ) ? PAGE_EXECUTE : PAGE_NOACCESS;
-    if ( share_mode & share_mode::hidden ) // WRITECOPY
+    if ( share_mode == share_mode::hidden ) // WRITECOPY
         flags.create_mapping_flags *= 8;
     else
     if ( handle_access_flags & handle_access_rights::write )
@@ -360,8 +360,7 @@ mapped_view<unsigned char const> mapped_view<unsigned char const>::map
     guard::native_handle_t const object_handle,
     std::size_t            const desired_size,
     std::size_t            const offset,
-    bool                   const map_for_code_execution,
-    unsigned int           const mapping_system_hints
+    bool                   const map_for_code_execution
 )
 {
     return mapped_view<unsigned char>::map
@@ -371,7 +370,7 @@ mapped_view<unsigned char const> mapped_view<unsigned char const>::map
         (
             mapping_flags::handle_access_rights::read | ( map_for_code_execution ? mapping_flags::handle_access_rights::execute : 0 ),
             mapping_flags::share_mode::shared,
-            mapping_system_hints
+            mapping_flags::system_hint::uninitialized
         ),
         desired_size,
         offset
@@ -379,7 +378,7 @@ mapped_view<unsigned char const> mapped_view<unsigned char const>::map
 }
 
 
-basic_mapped_view map_file( char const * const file_name, std::size_t const desired_size )
+basic_mapped_view map_file( char const * const file_name, std::size_t desired_size )
 {
     guard::native_handle const file_handle
     (
@@ -397,7 +396,10 @@ basic_mapped_view map_file( char const * const file_name, std::size_t const desi
         )
     );
 
-    set_file_size( file_handle.handle(), desired_size );
+    if ( desired_size )
+        set_file_size( file_handle.handle(), desired_size );
+    else
+        desired_size = get_file_size( file_handle.handle() );
 
     return basic_mapped_view::map
     (

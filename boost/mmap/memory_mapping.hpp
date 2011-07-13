@@ -367,8 +367,7 @@ public: // Factory methods.
         guard::native_handle_t object_handle,
         std::size_t            desired_size,
         std::size_t            offset                 = 0,
-        bool                   map_for_code_execution = false,
-        unsigned int           mapping_system_hints   = mapping_flags::system_hint::uninitialized
+        bool                   map_for_code_execution = false
     );
 
 private:
@@ -415,8 +414,7 @@ mapped_view<unsigned char const> mapped_view<unsigned char const>::map
     guard::native_handle_t object_handle,
     std::size_t            desired_size,
     std::size_t            offset,
-    bool                   map_for_code_execution,
-    unsigned int           mapping_system_hints
+    bool                   map_for_code_execution
 );
 
 
