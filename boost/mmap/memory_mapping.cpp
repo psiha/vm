@@ -379,7 +379,46 @@ mapped_view<unsigned char const> mapped_view<unsigned char const>::map
 }
 
 
-mapped_view<unsigned char const> map_read_only_file( char const * const file_name )
+basic_mapped_view map_file( char const * const file_name, std::size_t const desired_size )
+{
+    guard::native_handle const file_handle
+    (
+        create_file
+        (
+            file_name,
+            file_flags::create
+            (
+                file_flags::handle_access_rights::read | file_flags::handle_access_rights::write,
+                file_flags::share_mode          ::read,
+                file_flags::open_policy::open_or_create,
+                file_flags::system_hints        ::sequential_access,
+                file_flags::on_construction_rights::read | file_flags::on_construction_rights::write
+            )
+        )
+    );
+
+    set_file_size( file_handle.handle(), desired_size );
+
+    return basic_mapped_view::map
+    (
+        file_handle.handle(),
+        // Implementation note:
+        //   Windows APIs interpret zero as 'whole file' but we still need to
+        // query the file size in order to be able properly set the end pointer.
+        //                                    (13.07.2011.) (Domagoj Saric)
+        mapping_flags::create
+        (
+            mapping_flags::handle_access_rights::read | mapping_flags::handle_access_rights::write,
+            mapping_flags::share_mode::shared,
+            mapping_flags::system_hint::uninitialized
+        ),
+        get_file_size( file_handle.handle() ),
+        0
+    );
+}
+
+
+basic_mapped_read_only_view map_read_only_file( char const * const file_name )
 {
     guard::native_handle const file_handle
     (
@@ -396,14 +435,14 @@ mapped_view<unsigned char const> map_read_only_file( char const * const file_nam
         )
     );
 
-    return mapped_view<unsigned char const>::map
+    return basic_mapped_read_only_view::map
     (
         file_handle.handle(),
-        #ifdef _WIN32
-            0 // Windows APIs interpret zero as 'whole file'
-        #else // POSIX
-            get_file_size( file_handle.handle() )
-        #endif // OS impl
+        // Implementation note:
+        //   Windows APIs interpret zero as 'whole file' but we still need to
+        // query the file size in order to be able properly set the end pointer.
+        //                                    (13.07.2011.) (Domagoj Saric)
+        get_file_size( file_handle.handle() )
     );
 }
 

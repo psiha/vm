@@ -164,6 +164,9 @@ typedef iterator_range<unsigned char const *> basic_read_only_memory_range_t;
 template <typename Element>
 class mapped_view;
 
+typedef mapped_view<unsigned char      > basic_mapped_view;
+typedef mapped_view<unsigned char const> basic_mapped_read_only_view;
+
 namespace guard
 {
 //------------------------------------------------------------------------------
@@ -269,7 +272,7 @@ namespace detail
     template <typename Element>
     void mapped_view_base<Element>::unmap( mapped_view_base<Element> const & mapped_range )
     {
-        unmap<unsigned char const>( make_basic_view( mapped_range ) );
+        mapped_view_base<unsigned char const>::unmap( make_basic_view( mapped_range ) );
     }
 
     template <>
@@ -417,7 +420,8 @@ mapped_view<unsigned char const> mapped_view<unsigned char const>::map
 );
 
 
-mapped_view<unsigned char const> map_read_only_file( char const * file_name );
+basic_mapped_view           map_file          ( char const * file_name, std::size_t desired_size );
+basic_mapped_read_only_view map_read_only_file( char const * file_name                           );
 
 //------------------------------------------------------------------------------
 } // namespace boost
