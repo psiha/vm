@@ -33,6 +33,14 @@
 #endif // _WIN32
 #include <errno.h>
 #include <fcntl.h>
+
+#ifndef _WIN32
+    #ifdef __APPLE__
+        #define BOOST_AUX_MMAP_POSIX_OR_OSX( posix, osx ) osx
+    #else
+        #define BOOST_AUX_MMAP_POSIX_OR_OSX( posix, osx ) posix
+    #endif
+#endif
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -123,6 +131,7 @@ guard::native_handle create_file( char const * const file_name, file_flags const
 
     mode_t const current_mask( ::umask( 0 ) );
     int    const file_handle ( ::open( file_name, flags.oflag, flags.pmode ) );
+    //...zzz...investigate posix_fadvise, posix_madvise, fcntl for the system hints...
     BOOST_VERIFY( ::umask( current_mask ) == 0 );
 
 #endif // _WIN32
@@ -131,7 +140,7 @@ guard::native_handle create_file( char const * const file_name, file_flags const
 }
 
 
-bool set_file_size( guard::native_handle_t const file_handle, unsigned int const desired_size )
+bool set_file_size( guard::native_handle_t const file_handle, std::size_t const desired_size )
 {
 #ifdef _WIN32
     // It is 'OK' to send null/invalid handles to Windows functions (they will
@@ -175,11 +184,11 @@ unsigned int const file_flags::share_mode::read   = BOOST_AUX_IO_WIN32_OR_POSIX(
 unsigned int const file_flags::share_mode::write  = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_SHARE_WRITE , 0 );
 unsigned int const file_flags::share_mode::remove = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_SHARE_DELETE, 0 );
 
-unsigned int const file_flags::system_hints::random_access     = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_FLAG_RANDOM_ACCESS                         , O_RANDOM      );
-unsigned int const file_flags::system_hints::sequential_access = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_FLAG_SEQUENTIAL_SCAN                       , O_SEQUENTIAL  );
-unsigned int const file_flags::system_hints::non_cached        = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH, O_DIRECT      );
-unsigned int const file_flags::system_hints::delete_on_close   = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_FLAG_DELETE_ON_CLOSE                       , O_TEMPORARY   );
-unsigned int const file_flags::system_hints::temporary         = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_ATTRIBUTE_TEMPORARY                        , O_SHORT_LIVED );
+unsigned int const file_flags::system_hints::random_access     = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_FLAG_RANDOM_ACCESS                         , /*O_RANDOM*/0      );//...zzz...msvc specific flags...fix this...
+unsigned int const file_flags::system_hints::sequential_access = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_FLAG_SEQUENTIAL_SCAN                       , /*O_SEQUENTIAL*/0  );
+unsigned int const file_flags::system_hints::non_cached        = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH, /*O_DIRECT*/0      );
+unsigned int const file_flags::system_hints::delete_on_close   = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_FLAG_DELETE_ON_CLOSE                       , /*O_TEMPORARY*/0   );
+unsigned int const file_flags::system_hints::temporary         = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_ATTRIBUTE_TEMPORARY                        , /*O_SHORT_LIVED*/0 );
 
 unsigned int const file_flags::on_construction_rights::read    = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_ATTRIBUTE_READONLY, S_IRUSR );
 unsigned int const file_flags::on_construction_rights::write   = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_ATTRIBUTE_NORMAL  , S_IWUSR );
@@ -208,7 +217,7 @@ file_flags file_flags::create
                 :   on_construction_rights
         ) // flags_and_attributes
     #else // POSIX
-        ( ( handle_access_flags == O_RDONLY | O_WRONLY ) ? O_RDWR : handle_access_flags )
+        ( ( handle_access_flags == ( O_RDONLY | O_WRONLY ) ) ? O_RDWR : handle_access_flags )
             |
         open_flags
             |
@@ -244,10 +253,10 @@ unsigned int const mapping_flags::share_mode::shared = BOOST_AUX_IO_WIN32_OR_POS
 unsigned int const mapping_flags::share_mode::hidden = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_MAP_COPY, MAP_PRIVATE );
 
 unsigned int const mapping_flags::system_hint::strict_target_address   = BOOST_AUX_IO_WIN32_OR_POSIX(           0, MAP_FIXED              );
-unsigned int const mapping_flags::system_hint::lock_to_ram             = BOOST_AUX_IO_WIN32_OR_POSIX( SEC_COMMIT , MAP_LOCKED             );
+unsigned int const mapping_flags::system_hint::lock_to_ram             = BOOST_AUX_IO_WIN32_OR_POSIX( SEC_COMMIT , BOOST_AUX_MMAP_POSIX_OR_OSX( MAP_LOCKED, 0 )             );
 unsigned int const mapping_flags::system_hint::reserve_page_file_space = BOOST_AUX_IO_WIN32_OR_POSIX( SEC_RESERVE, /*khm#1*/MAP_NORESERVE );
-unsigned int const mapping_flags::system_hint::precommit               = BOOST_AUX_IO_WIN32_OR_POSIX( SEC_COMMIT , MAP_POPULATE           );
-unsigned int const mapping_flags::system_hint::uninitialized           = BOOST_AUX_IO_WIN32_OR_POSIX(           0, MAP_UNINITIALIZED      );
+unsigned int const mapping_flags::system_hint::precommit               = BOOST_AUX_IO_WIN32_OR_POSIX( SEC_COMMIT , BOOST_AUX_MMAP_POSIX_OR_OSX( MAP_POPULATE, 0 )           );
+unsigned int const mapping_flags::system_hint::uninitialized           = BOOST_AUX_IO_WIN32_OR_POSIX(           0, BOOST_AUX_MMAP_POSIX_OR_OSX( MAP_UNINITIALIZED, 0 )      );
 
 
 mapping_flags mapping_flags::create
@@ -275,7 +284,7 @@ mapping_flags mapping_flags::create
 
     flags.map_view_flags        = handle_access_flags;
 #else
-    flags.protection = handle_access_rights;
+    flags.protection = handle_access_flags;
     flags.flags      = share_mode | system_hints;
     if ( ( system_hints & system_hint::reserve_page_file_space ) ) /*khm#1*/
         flags.flags &= ~MAP_NORESERVE;
@@ -332,7 +341,7 @@ mapped_view<unsigned char> mapped_view<unsigned char>::map
 
 #else // POSIX
 
-    iterator_t const view_start( static_cast<iterator_t>( ::mmap( 0, desired_size, flags.protection, flags.flags, file_handle, 0 ) ) );
+    iterator_t const view_start( static_cast<iterator_t>( ::mmap( 0, desired_size, flags.protection, flags.flags, object_handle, 0 ) ) );
     return mapped_view<unsigned char>
     (
         view_start,
@@ -348,9 +357,9 @@ template <>
 void detail::mapped_view_base<unsigned char const>::unmap( detail::mapped_view_base<unsigned char const> const & mapped_range )
 {
 #ifdef _WIN32
-    BOOST_VERIFY( ::UnmapViewOfFile( mapped_range.begin()                      ) || mapped_range.empty() );
+    BOOST_VERIFY( ::UnmapViewOfFile(                              mapped_range.begin()                        )        || mapped_range.empty() );
 #else
-    BOOST_VERIFY( ( ::munmap( mapped_range.begin(), mapped_range.size() ) == 0 ) || mapped_range.empty() );
+    BOOST_VERIFY( ( ::munmap       ( const_cast<unsigned char *>( mapped_range.begin() ), mapped_range.size() ) == 0 ) || mapped_range.empty() );
 #endif // _WIN32
 }
 

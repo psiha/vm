@@ -187,12 +187,18 @@ private:
 };
 #endif // _WIN32
 
-class posix_handle : noncopyable
+class posix_handle
+#ifdef BOOST_MSVC
+    : noncopyable
+#endif // BOOST_MSVC
 {
 public:
     typedef int handle_t;
 
     explicit posix_handle( handle_t );
+    #ifndef BOOST_MSVC
+        posix_handle( posix_handle const & );
+    #endif // BOOST_MSVC
 
     #ifdef _WIN32
         explicit posix_handle( windows_handle::handle_t );
@@ -258,11 +264,11 @@ namespace detail
         #ifdef BOOST_MSVC
             const &
         #endif
-        make_typed_range( mapped_view_base<unsigned char const> const & );
+        make_typed_range( mapped_view_base<unsigned char> const & );
 
     private: // Hide mutable members
-        iterator_range & advance_begin( difference_type );
-        iterator_range & advance_end  ( difference_type );
+        void advance_begin();
+        void advance_end  ();
 
         void pop_front();
         void pop_back ();
@@ -277,6 +283,74 @@ namespace detail
 
     template <>
     void mapped_view_base<unsigned char const>::unmap( mapped_view_base<unsigned char const> const & );
+} // namespace detail
+
+template <typename Element>
+class mapped_view : public detail::mapped_view_base<Element>
+{
+public:
+    basic_memory_range_t basic_range() const
+    {
+        return basic_memory_range_t
+        (
+            static_cast<unsigned char *>( static_cast<void *>( this->begin() ) ),
+            static_cast<unsigned char *>( static_cast<void *>( this->end  () ) )
+        );
+    }
+
+public: // Factory methods.
+    static mapped_view map
+    (
+        guard::native_handle_t,
+        mapping_flags const &,
+        std::size_t desired_size,
+        std::size_t offset
+    );
+
+private:
+    template <typename Element> friend class detail::mapped_view_base;
+
+    mapped_view( iterator_range<Element *> const & mapped_range ) : detail::mapped_view_base<Element>( mapped_range   ) {}
+    mapped_view( Element * const p_begin, Element * const p_end ) : detail::mapped_view_base<Element>( p_begin, p_end ) {}
+};
+
+template <typename Element>
+class mapped_view<Element const> : public detail::mapped_view_base<Element const>
+{
+public:
+    basic_memory_range_t basic_range() const
+    {
+        return basic_memory_range_t
+        (
+            static_cast<unsigned char const *>( static_cast<void const *>( this->begin() ) ),
+            static_cast<unsigned char const *>( static_cast<void const *>( this->end  () ) )
+        );
+    }
+
+public: // Factory methods.
+    static mapped_view map
+    (
+        guard::native_handle_t object_handle,
+        std::size_t            desired_size,
+        std::size_t            offset                 = 0,
+        bool                   map_for_code_execution = false
+    );
+
+private:
+    template <typename Element> friend class detail::mapped_view_base;
+
+    mapped_view( iterator_range<Element const *> const & mapped_range       ) : detail::mapped_view_base<Element const>( mapped_range   ) {}
+    mapped_view( Element const * const p_begin, Element const * const p_end ) : detail::mapped_view_base<Element const>( p_begin, p_end ) {}
+    mapped_view( mapped_view<Element>            const & mutable_view       ) : detail::mapped_view_base<Element const>( mutable_view   ) {}
+};
+
+
+namespace detail
+{
+    // Implementation note:
+    //   These have to be defined after mapped_view for eager compilers (e.g.
+    // GCC and Clang).
+    //                                         (14.07.2011.) (Domagoj Saric)
 
     template <typename Element>
     mapped_view<unsigned char const>
@@ -301,13 +375,13 @@ namespace detail
     template <typename Element>
     mapped_view<Element>
     #ifdef BOOST_MSVC
-            const &
+        const &
     #endif
-    mapped_view_base<Element>::make_typed_range( mapped_view_base<unsigned char const> const & range )
+    mapped_view_base<Element>::make_typed_range( mapped_view_base<unsigned char> const & range )
     {
-        BOOST_ASSERT( range.begin() % sizeof( Element ) == 0 );
-        BOOST_ASSERT( range.end  () % sizeof( Element ) == 0 );
-        BOOST_ASSERT( range.size () % sizeof( Element ) == 0 );
+        BOOST_ASSERT( reinterpret_cast<std::size_t>( range.begin() ) % sizeof( Element ) == 0 );
+        BOOST_ASSERT( reinterpret_cast<std::size_t>( range.end  () ) % sizeof( Element ) == 0 );
+        BOOST_ASSERT(                                range.size ()   % sizeof( Element ) == 0 );
         return
         #ifdef BOOST_MSVC
             reinterpret_cast<mapped_view<Element> const &>( range );
@@ -321,59 +395,6 @@ namespace detail
     }
 } // namespace detail
 
-template <typename Element>
-class mapped_view : public detail::mapped_view_base<Element>
-{
-public:
-    basic_memory_range_t basic_range() const
-    {
-        return basic_memory_range_t
-        (
-            static_cast<unsigned char *>( static_cast<void *>( begin() ) ),
-            static_cast<unsigned char *>( static_cast<void *>( end  () ) )
-        );
-    }
-
-public: // Factory methods.
-    static mapped_view map
-    (
-        guard::native_handle_t,
-        mapping_flags const &,
-        std::size_t desired_size,
-        std::size_t offset
-    );
-
-private:
-    mapped_view( iterator_range<Element *> const & mapped_range ) : mapped_view_base( mapped_range   ) {}
-    mapped_view( Element * const p_begin, Element * const p_end ) : mapped_view_base( p_begin, p_end ) {}
-};
-
-template <typename Element>
-class mapped_view<Element const> : public detail::mapped_view_base<Element const>
-{
-public:
-    basic_memory_range_t basic_range() const
-    {
-        return basic_memory_range_t
-        (
-            static_cast<unsigned char const *>( static_cast<void const *>( begin() ) ),
-            static_cast<unsigned char const *>( static_cast<void const *>( end  () ) )
-        );
-    }
-
-public: // Factory methods.
-    static mapped_view map
-    (
-        guard::native_handle_t object_handle,
-        std::size_t            desired_size,
-        std::size_t            offset                 = 0,
-        bool                   map_for_code_execution = false
-    );
-
-private:
-    mapped_view( iterator_range<Element const *> const & mapped_range       ) : mapped_view_base( mapped_range   ) {}
-    mapped_view( Element const * const p_begin, Element const * const p_end ) : mapped_view_base( p_begin, p_end ) {}
-};
 
 template <typename Handle>
 struct is_mappable : mpl::false_ {};
@@ -387,16 +408,6 @@ template <> struct is_mappable<wchar_t                               *> : mpl::t
 template <> struct is_mappable<wchar_t                         const *> : mpl::true_ {};
 template <> struct is_mappable<guard::windows_handle::handle_t        > : mpl::true_ {};
 #endif // _WIN32
-
-
-template <typename Element>
-mapped_view<Element> mapped_view<Element>::map
-(
-    guard::native_handle_t,
-    mapping_flags const &,
-    std::size_t desired_size,
-    std::size_t offset
-);
 
 
 template <>
