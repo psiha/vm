@@ -404,17 +404,13 @@ basic_mapped_view map_file( char const * const file_name, std::size_t desired_si
     return basic_mapped_view::map
     (
         file_handle.handle(),
-        // Implementation note:
-        //   Windows APIs interpret zero as 'whole file' but we still need to
-        // query the file size in order to be able properly set the end pointer.
-        //                                    (13.07.2011.) (Domagoj Saric)
         mapping_flags::create
         (
             mapping_flags::handle_access_rights::read | mapping_flags::handle_access_rights::write,
             mapping_flags::share_mode::shared,
             mapping_flags::system_hint::uninitialized
         ),
-        get_file_size( file_handle.handle() ),
+        desired_size,
         0
     );
 }
