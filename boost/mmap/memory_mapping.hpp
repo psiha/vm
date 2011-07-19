@@ -162,10 +162,10 @@ typedef iterator_range<unsigned char       *> basic_memory_range_t;
 typedef iterator_range<unsigned char const *> basic_read_only_memory_range_t;
 
 template <typename Element>
-class mapped_view;
+class mapped_view_reference;
 
-typedef mapped_view<unsigned char      > basic_mapped_view;
-typedef mapped_view<unsigned char const> basic_mapped_read_only_view;
+typedef mapped_view_reference<unsigned char      > basic_mapped_view_ref;
+typedef mapped_view_reference<unsigned char const> basic_mapped_read_only_view_ref;
 
 namespace guard
 {
@@ -220,15 +220,6 @@ private:
 #endif // _WIN32
 typedef native_handle::handle_t native_handle_t;
 
-
-template <typename Element>
-class mapped_view : public boost::mapped_view<Element>
-{
-public:
-    mapped_view( boost::mapped_view<Element> const range ) : boost::mapped_view<Element>( range ) {}
-    ~mapped_view<Element>() { boost::mapped_view<Element>::unmap( *this ); }
-};
-
 //------------------------------------------------------------------------------
 } // namespace guard
 
@@ -254,13 +245,13 @@ namespace detail
         mapped_view_base( iterator_range<Element *> const & mapped_range ) : iterator_range<Element *>( mapped_range   ) {}
         mapped_view_base( Element * const p_begin, Element * const p_end ) : iterator_range<Element *>( p_begin, p_end ) {}
 
-        static mapped_view<unsigned char const>
+        static mapped_view_reference<unsigned char const>
         #ifdef BOOST_MSVC
             const &
         #endif
         make_basic_view( mapped_view_base<Element> const & );
 
-        static mapped_view<Element>
+        static mapped_view_reference<Element>
         #ifdef BOOST_MSVC
             const &
         #endif
@@ -286,7 +277,7 @@ namespace detail
 } // namespace detail
 
 template <typename Element>
-class mapped_view : public detail::mapped_view_base<Element>
+class mapped_view_reference : public detail::mapped_view_base<Element>
 {
 public:
     basic_memory_range_t basic_range() const
@@ -299,23 +290,23 @@ public:
     }
 
 public: // Factory methods.
-    static mapped_view map
+    static mapped_view_reference map
     (
         guard::native_handle_t,
         mapping_flags const &,
-        std::size_t desired_size,
-        std::size_t offset
+        std::size_t desired_size = 0,
+        std::size_t offset       = 0
     );
 
 private:
     template <typename Element> friend class detail::mapped_view_base;
 
-    mapped_view( iterator_range<Element *> const & mapped_range ) : detail::mapped_view_base<Element>( mapped_range   ) {}
-    mapped_view( Element * const p_begin, Element * const p_end ) : detail::mapped_view_base<Element>( p_begin, p_end ) {}
+    mapped_view_reference( iterator_range<Element *> const & mapped_range ) : detail::mapped_view_base<Element>( mapped_range   ) {}
+    mapped_view_reference( Element * const p_begin, Element * const p_end ) : detail::mapped_view_base<Element>( p_begin, p_end ) {}
 };
 
 template <typename Element>
-class mapped_view<Element const> : public detail::mapped_view_base<Element const>
+class mapped_view_reference<Element const> : public detail::mapped_view_base<Element const>
 {
 public:
     basic_memory_range_t basic_range() const
@@ -328,10 +319,10 @@ public:
     }
 
 public: // Factory methods.
-    static mapped_view map
+    static mapped_view_reference map
     (
         guard::native_handle_t object_handle,
-        std::size_t            desired_size,
+        std::size_t            desired_size           = 0,
         std::size_t            offset                 = 0,
         bool                   map_for_code_execution = false
     );
@@ -339,21 +330,21 @@ public: // Factory methods.
 private:
     template <typename Element> friend class detail::mapped_view_base;
 
-    mapped_view( iterator_range<Element const *> const & mapped_range       ) : detail::mapped_view_base<Element const>( mapped_range   ) {}
-    mapped_view( Element const * const p_begin, Element const * const p_end ) : detail::mapped_view_base<Element const>( p_begin, p_end ) {}
-    mapped_view( mapped_view<Element>            const & mutable_view       ) : detail::mapped_view_base<Element const>( mutable_view   ) {}
+    mapped_view_reference( iterator_range<Element const *> const & mapped_range       ) : detail::mapped_view_base<Element const>( mapped_range   ) {}
+    mapped_view_reference( Element const * const p_begin, Element const * const p_end ) : detail::mapped_view_base<Element const>( p_begin, p_end ) {}
+    mapped_view_reference( mapped_view_reference<Element>            const & mutable_view       ) : detail::mapped_view_base<Element const>( mutable_view   ) {}
 };
 
 
 namespace detail
 {
     // Implementation note:
-    //   These have to be defined after mapped_view for eager compilers (e.g.
-    // GCC and Clang).
+    //   These have to be defined after mapped_view_reference for eager
+    // compilers (e.g. GCC and Clang).
     //                                         (14.07.2011.) (Domagoj Saric)
 
     template <typename Element>
-    mapped_view<unsigned char const>
+    mapped_view_reference<unsigned char const>
     #ifdef BOOST_MSVC
         const &
     #endif
@@ -361,9 +352,9 @@ namespace detail
     {
         return
         #ifdef BOOST_MSVC
-            reinterpret_cast<mapped_view<unsigned char const> const &>( range );
+            reinterpret_cast<mapped_view_reference<unsigned char const> const &>( range );
         #else // compiler might care about strict aliasing rules
-            mapped_view<unsigned char const>
+            mapped_view_reference<unsigned char const>
             (
                 static_cast<unsigned char const *>( static_cast<void const *>( range.begin() ) ),
                 static_cast<unsigned char const *>( static_cast<void const *>( range.end  () ) )
@@ -373,7 +364,7 @@ namespace detail
 
 
     template <typename Element>
-    mapped_view<Element>
+    mapped_view_reference<Element>
     #ifdef BOOST_MSVC
         const &
     #endif
@@ -384,9 +375,9 @@ namespace detail
         BOOST_ASSERT(                                range.size ()   % sizeof( Element ) == 0 );
         return
         #ifdef BOOST_MSVC
-            reinterpret_cast<mapped_view<Element> const &>( range );
+            reinterpret_cast<mapped_view_reference<Element> const &>( range );
         #else // compiler might care about strict aliasing rules
-            mapped_view<unsigned char const>
+            mapped_view_reference<unsigned char const>
             (
                 static_cast<Element *>( static_cast<void *>( range.begin() ) ),
                 static_cast<Element *>( static_cast<void *>( range.end  () ) )
@@ -411,7 +402,7 @@ template <> struct is_mappable<guard::windows_handle::handle_t        > : mpl::t
 
 
 template <>
-mapped_view<unsigned char> mapped_view<unsigned char>::map
+mapped_view_reference<unsigned char> mapped_view_reference<unsigned char>::map
 (
     guard::native_handle_t,
     mapping_flags const &,
@@ -420,7 +411,7 @@ mapped_view<unsigned char> mapped_view<unsigned char>::map
 );
 
 template <>
-mapped_view<unsigned char const> mapped_view<unsigned char const>::map
+mapped_view_reference<unsigned char const> mapped_view_reference<unsigned char const>::map
 (
     guard::native_handle_t object_handle,
     std::size_t            desired_size,
@@ -429,8 +420,16 @@ mapped_view<unsigned char const> mapped_view<unsigned char const>::map
 );
 
 
-basic_mapped_view           map_file          ( char const * file_name, std::size_t desired_size );
-basic_mapped_read_only_view map_read_only_file( char const * file_name                           );
+template <typename Element>
+class mapped_view : public mapped_view_reference<Element>
+{
+public:
+    mapped_view( boost::mapped_view_reference<Element> const range ) : boost::mapped_view_reference<Element>( range ) {}
+    ~mapped_view<Element>() { boost::mapped_view_reference<Element>::unmap( *this ); }
+};
+
+basic_mapped_view_ref           map_file          ( char const * file_name, std::size_t desired_size );
+basic_mapped_read_only_view_ref map_read_only_file( char const * file_name                           );
 
 //------------------------------------------------------------------------------
 } // namespace boost

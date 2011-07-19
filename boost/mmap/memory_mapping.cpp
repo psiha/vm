@@ -297,7 +297,7 @@ mapping_flags mapping_flags::create
 
 
 template <>
-mapped_view<unsigned char> mapped_view<unsigned char>::map
+mapped_view_reference<unsigned char> mapped_view_reference<unsigned char>::map
 (
     guard::native_handle_t const   object_handle,
     mapping_flags          const & flags,
@@ -305,7 +305,7 @@ mapped_view<unsigned char> mapped_view<unsigned char>::map
     std::size_t            const   offset
 )
 {
-    typedef mapped_view<unsigned char>::iterator iterator_t;
+    typedef mapped_view_reference<unsigned char>::iterator iterator_t;
 
 #ifdef _WIN32
 
@@ -331,7 +331,7 @@ mapped_view<unsigned char> mapped_view<unsigned char>::map
 
     large_integer.QuadPart = offset;
     iterator_t const view_start( static_cast<iterator_t>( ::MapViewOfFile( mapping.handle(), flags.map_view_flags, large_integer.HighPart, large_integer.LowPart, desired_size ) ) );
-    return mapped_view<unsigned char>
+    return mapped_view_reference<unsigned char>
     (
         view_start,
         ( view_start && ( object_handle != INVALID_HANDLE_VALUE ) )
@@ -342,7 +342,7 @@ mapped_view<unsigned char> mapped_view<unsigned char>::map
 #else // POSIX
 
     iterator_t const view_start( static_cast<iterator_t>( ::mmap( 0, desired_size, flags.protection, flags.flags, object_handle, 0 ) ) );
-    return mapped_view<unsigned char>
+    return mapped_view_reference<unsigned char>
     (
         view_start,
         ( view_start != MAP_FAILED )
@@ -364,7 +364,7 @@ void detail::mapped_view_base<unsigned char const>::unmap( detail::mapped_view_b
 }
 
 template <>
-mapped_view<unsigned char const> mapped_view<unsigned char const>::map
+mapped_view_reference<unsigned char const> mapped_view_reference<unsigned char const>::map
 (
     guard::native_handle_t const object_handle,
     std::size_t            const desired_size,
@@ -372,7 +372,7 @@ mapped_view<unsigned char const> mapped_view<unsigned char const>::map
     bool                   const map_for_code_execution
 )
 {
-    return mapped_view<unsigned char>::map
+    return mapped_view_reference<unsigned char>::map
     (
         object_handle,
         mapping_flags::create
@@ -387,7 +387,7 @@ mapped_view<unsigned char const> mapped_view<unsigned char const>::map
 }
 
 
-basic_mapped_view map_file( char const * const file_name, std::size_t desired_size )
+basic_mapped_view_ref map_file( char const * const file_name, std::size_t desired_size )
 {
     guard::native_handle const file_handle
     (
@@ -410,7 +410,7 @@ basic_mapped_view map_file( char const * const file_name, std::size_t desired_si
     else
         desired_size = get_file_size( file_handle.handle() );
 
-    return basic_mapped_view::map
+    return basic_mapped_view_ref::map
     (
         file_handle.handle(),
         mapping_flags::create
@@ -425,7 +425,7 @@ basic_mapped_view map_file( char const * const file_name, std::size_t desired_si
 }
 
 
-basic_mapped_read_only_view map_read_only_file( char const * const file_name )
+basic_mapped_read_only_view_ref map_read_only_file( char const * const file_name )
 {
     guard::native_handle const file_handle
     (
@@ -442,7 +442,7 @@ basic_mapped_read_only_view map_read_only_file( char const * const file_name )
         )
     );
 
-    return basic_mapped_read_only_view::map
+    return basic_mapped_read_only_view_ref::map
     (
         file_handle.handle(),
         // Implementation note:
