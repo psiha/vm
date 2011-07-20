@@ -421,11 +421,20 @@ mapped_view_reference<unsigned char const> mapped_view_reference<unsigned char c
 
 
 template <typename Element>
-class mapped_view : public mapped_view_reference<Element>
+class mapped_view
+    :
+    public  mapped_view_reference<Element>
+    #ifdef BOOST_MSVC
+        ,private noncopyable
+    #endif // BOOST_MSVC
 {
 public:
     mapped_view( boost::mapped_view_reference<Element> const range ) : boost::mapped_view_reference<Element>( range ) {}
     ~mapped_view<Element>() { boost::mapped_view_reference<Element>::unmap( *this ); }
+
+    #ifndef BOOST_MSVC
+        mapped_view( mapped_view const & ); // Noncopyable
+    #endif // BOOST_MSVC
 };
 
 basic_mapped_view_ref           map_file          ( char const * file_name, std::size_t desired_size );
