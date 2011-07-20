@@ -26,13 +26,13 @@
     #pragma warning ( disable : 4996 ) // "The POSIX name for this item is deprecated. Instead, use the ISO C++ conformant name."
     #include "io.h"
 #else
-    #include <sys/mman.h>      // mmap, munmap.
-    #include <sys/stat.h>
-    #include <sys/types.h>     // struct stat.
-    #include <unistd.h>        // sysconf.
+    #include "sys/mman.h"      // mmap, munmap.
+    #include "sys/stat.h"
+    #include "sys/types.h"     // struct stat.
+    #include "unistd.h"        // sysconf.
 #endif // _WIN32
-#include <errno.h>
-#include <fcntl.h>
+#include "errno.h"
+#include "fcntl.h"
 
 #ifndef _WIN32
     #ifdef __APPLE__
