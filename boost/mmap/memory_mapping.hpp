@@ -299,7 +299,7 @@ public: // Factory methods.
     );
 
 private:
-    template <typename Element> friend class detail::mapped_view_base;
+    template <typename T> friend class detail::mapped_view_base;
 
     mapped_view_reference( iterator_range<Element *> const & mapped_range ) : detail::mapped_view_base<Element>( mapped_range   ) {}
     mapped_view_reference( Element * const p_begin, Element * const p_end ) : detail::mapped_view_base<Element>( p_begin, p_end ) {}
@@ -328,7 +328,7 @@ public: // Factory methods.
     );
 
 private:
-    template <typename Element> friend class detail::mapped_view_base;
+    template <typename T> friend class detail::mapped_view_base;
 
     mapped_view_reference( iterator_range<Element const *> const & mapped_range       ) : detail::mapped_view_base<Element const>( mapped_range   ) {}
     mapped_view_reference( Element const * const p_begin, Element const * const p_end ) : detail::mapped_view_base<Element const>( p_begin, p_end ) {}
