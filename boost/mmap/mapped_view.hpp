@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file memory_mapping.hpp
-/// ------------------------
+/// \file mapped_view.hpp
+/// ---------------------
 ///
 /// Copyright (c) Domagoj Saric 2010.-2011.
 ///
@@ -13,10 +13,13 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef memory_mapping_hpp__D9C84FF5_E506_4ECB_9778_61E036048D28
-#define memory_mapping_hpp__D9C84FF5_E506_4ECB_9778_61E036048D28
+#ifndef mapped_view_hpp__D9C84FF5_E506_4ECB_9778_61E036048D28
+#define mapped_view_hpp__D9C84FF5_E506_4ECB_9778_61E036048D28
 #pragma once
 //------------------------------------------------------------------------------
+#include "mappble_objects/posix_file/handle.hpp"
+#include "mappble_objects/win32_file/handle.hpp"
+
 #include "boost/assert.hpp"
 #include "boost/noncopyable.hpp"
 #include "boost/range/iterator_range.hpp"
@@ -45,80 +48,6 @@ namespace mmap
 // platform-dependent use-cases, not otherwise covered through the generic
 // interface, can also be covered.
 //                                            (10.10.2010.) (Domagoj Saric)
-
-struct file_flags
-{
-    struct handle_access_rights
-    {
-        static unsigned int const read   ;
-        static unsigned int const write  ;
-        static unsigned int const execute;
-    };
-
-    struct share_mode
-    {
-        static unsigned int const none  ;
-        static unsigned int const read  ;
-        static unsigned int const write ;
-        static unsigned int const remove;
-    };
-
-    struct open_policy
-    {
-        enum value_type
-        {
-            create_new                      = BOOST_AUX_IO_WIN32_OR_POSIX( 1, O_CREAT | O_EXCL  ),
-            create_new_or_truncate_existing = BOOST_AUX_IO_WIN32_OR_POSIX( 2, O_CREAT | O_TRUNC ),
-            open_existing                   = BOOST_AUX_IO_WIN32_OR_POSIX( 3, 0                 ),
-            open_or_create                  = BOOST_AUX_IO_WIN32_OR_POSIX( 4, O_CREAT           ),
-            open_and_truncate_existing      = BOOST_AUX_IO_WIN32_OR_POSIX( 5, O_TRUNC           )
-        };
-    };
-    typedef open_policy::value_type open_policy_t;
-
-    struct system_hints
-    {
-        static unsigned int const random_access    ;
-        static unsigned int const sequential_access;
-        static unsigned int const non_cached       ;
-        static unsigned int const delete_on_close  ;
-        static unsigned int const temporary        ;
-    };
-
-    struct on_construction_rights
-    {
-        static unsigned int const read   ;
-        static unsigned int const write  ;
-        static unsigned int const execute;
-    };
-
-    static file_flags create
-    (
-        unsigned int handle_access_flags   ,
-        unsigned int share_mode            ,
-        open_policy_t                      ,
-        unsigned int system_hints          ,
-        unsigned int on_construction_rights
-    );
-
-    static file_flags create_for_opening_existing_files
-    (
-        unsigned int handle_access_flags,
-        unsigned int share_mode         ,
-        bool         truncate           ,
-        unsigned int system_hints
-    );
-
-#ifdef _WIN32
-    unsigned long desired_access      ;
-    unsigned long share_mode          ;
-    unsigned long creation_disposition;
-    unsigned long flags_and_attributes;
-#else
-    int oflag;
-    int pmode;
-#endif // _WIN32
-};
 
 struct mapping_flags
 {
@@ -169,69 +98,6 @@ class mapped_view_reference;
 
 typedef mapped_view_reference<unsigned char      > basic_mapped_view_ref;
 typedef mapped_view_reference<unsigned char const> basic_mapped_read_only_view_ref;
-
-namespace guard
-{
-//------------------------------------------------------------------------------
-
-#ifdef _WIN32
-class windows_handle : noncopyable
-{
-public:
-    typedef void * handle_t;
-
-    explicit windows_handle( handle_t );
-    ~windows_handle();
-
-    handle_t const & handle() const { return handle_; }
-
-private:
-    handle_t const handle_;
-};
-#endif // _WIN32
-
-class posix_handle
-#ifdef BOOST_MSVC
-    : noncopyable
-#endif // BOOST_MSVC
-{
-public:
-    typedef int handle_t;
-
-    explicit posix_handle( handle_t );
-    #ifndef BOOST_MSVC
-        posix_handle( posix_handle const & );
-    #endif // BOOST_MSVC
-
-    #ifdef _WIN32
-        explicit posix_handle( windows_handle::handle_t );
-    #endif // _WIN32
-
-    ~posix_handle();
-
-    handle_t const & handle() const { return handle_; }
-
-private:
-    handle_t const handle_;
-};
-
-
-#ifdef _WIN32
-    typedef windows_handle native_handle;
-#else
-    typedef posix_handle   native_handle;
-#endif // _WIN32
-typedef native_handle::handle_t native_handle_t;
-
-//------------------------------------------------------------------------------
-} // namespace guard
-
-guard::native_handle create_file( char const * file_name, file_flags const &                            );
-guard::native_handle create_file( char const * file_name, file_flags const &, unsigned int desired_size );
-
-bool        set_file_size( guard::native_handle_t, std::size_t desired_size );
-std::size_t get_file_size( guard::native_handle_t                           );
-
 
 namespace detail
 {
@@ -335,7 +201,7 @@ private:
 
     mapped_view_reference( iterator_range<Element const *> const & mapped_range       ) : detail::mapped_view_base<Element const>( mapped_range   ) {}
     mapped_view_reference( Element const * const p_begin, Element const * const p_end ) : detail::mapped_view_base<Element const>( p_begin, p_end ) {}
-    mapped_view_reference( mapped_view_reference<Element>            const & mutable_view       ) : detail::mapped_view_base<Element const>( mutable_view   ) {}
+    mapped_view_reference( mapped_view_reference<Element>  const & mutable_view       ) : detail::mapped_view_base<Element const>( mutable_view   ) {}
 };
 
 
@@ -344,7 +210,7 @@ namespace detail
     // Implementation note:
     //   These have to be defined after mapped_view_reference for eager
     // compilers (e.g. GCC and Clang).
-    //                                         (14.07.2011.) (Domagoj Saric)
+    //                                        (14.07.2011.) (Domagoj Saric)
 
     template <typename Element>
     mapped_view_reference<unsigned char const>
@@ -440,16 +306,13 @@ public:
     #endif // BOOST_MSVC
 };
 
-basic_mapped_view_ref           map_file          ( char const * file_name, std::size_t desired_size );
-basic_mapped_read_only_view_ref map_read_only_file( char const * file_name                           );
-
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------
 } // namespace boost
 //------------------------------------------------------------------------------
 
-#define BOOST_MMAP_IMPL_FILE "memory_mapping.inl"
+#define BOOST_MMAP_IMPL_FILE "mapped_view.inl"
 #include "detail/include_impl_file.hpp"
 
-#endif // memory_mapping_hpp
+#endif // mapped_view_hpp

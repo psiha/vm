@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file memory_mapping.inl
-/// ------------------------
+/// \file mapped_view.inl
+/// ---------------------
 ///
 /// Copyright (c) Domagoj Saric 2010.-2011.
 ///
@@ -13,7 +13,7 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#include "memory_mapping.hpp"
+#include "mapped_view.hpp"
 
 #include "detail/impl_inline.hpp"
 
@@ -51,206 +51,6 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
-namespace guard
-{
-
-#ifdef _WIN32
-
-BOOST_IMPL_INLINE
-windows_handle::windows_handle( handle_t const handle )
-    :
-    handle_( handle )
-{}
-
-BOOST_IMPL_INLINE
-windows_handle::~windows_handle()
-{
-    BOOST_VERIFY
-    (
-        ( ::CloseHandle( handle_ ) != false               ) ||
-        ( handle_ == 0 || handle_ == INVALID_HANDLE_VALUE )
-    );
-}
-
-#endif // _WIN32
-
-BOOST_IMPL_INLINE
-posix_handle::posix_handle( handle_t const handle )
-    :
-    handle_( handle )
-{}
-
-#ifdef _WIN32
-BOOST_IMPL_INLINE
-posix_handle::posix_handle( windows_handle::handle_t const native_handle )
-    :
-    handle_( ::_open_osfhandle( reinterpret_cast<intptr_t>( native_handle ), _O_APPEND ) )
-{
-    if ( handle_ == -1 )
-    {
-        BOOST_VERIFY
-        (
-            ( ::CloseHandle( native_handle ) != false                     ) ||
-            ( native_handle == 0 || native_handle == INVALID_HANDLE_VALUE )
-        );
-    }
-}
-#endif // _WIN32
-
-BOOST_IMPL_INLINE
-posix_handle::~posix_handle()
-{
-    BOOST_VERIFY
-    (
-        ( ::close( handle() ) == 0 ) ||
-        (
-            ( handle() == -1    ) &&
-            ( errno    == EBADF )
-        )
-    );                
-}
-
-//------------------------------------------------------------------------------
-} // guard
-
-
-BOOST_IMPL_INLINE
-guard::native_handle create_file( char const * const file_name, file_flags const & flags )
-{
-    BOOST_ASSERT( file_name );
-
-#ifdef _WIN32
-
-    HANDLE const file_handle
-    (
-        ::CreateFileA
-        (
-            file_name, flags.desired_access, flags.share_mode, 0, flags.creation_disposition, flags.flags_and_attributes, 0
-        )
-    );
-    BOOST_ASSERT( ( file_handle == INVALID_HANDLE_VALUE ) || ( ::GetLastError() == NO_ERROR ) || ( ::GetLastError() == ERROR_ALREADY_EXISTS ) );
-
-#else
-
-    mode_t const current_mask( ::umask( 0 ) );
-    int    const file_handle ( ::open( file_name, flags.oflag, flags.pmode ) );
-    //...zzz...investigate posix_fadvise, posix_madvise, fcntl for the system hints...
-    BOOST_VERIFY( ::umask( current_mask ) == 0 );
-
-#endif // _WIN32
-
-    return guard::native_handle( file_handle );
-}
-
-
-BOOST_IMPL_INLINE
-bool set_file_size( guard::native_handle_t const file_handle, std::size_t const desired_size )
-{
-#ifdef _WIN32
-    // It is 'OK' to send null/invalid handles to Windows functions (they will
-    // simply fail), this simplifies error handling (it is enough to go through
-    // all the logic, inspect the final result and then throw on error).
-    DWORD const new_size( ::SetFilePointer( file_handle, desired_size, 0, FILE_BEGIN ) );
-    BOOST_ASSERT( ( new_size == desired_size ) || ( file_handle == INVALID_HANDLE_VALUE ) );
-    ignore_unused_variable_warning( new_size );
-
-    BOOL const success( ::SetEndOfFile( file_handle ) );
-
-    BOOST_VERIFY( ( ::SetFilePointer( file_handle, 0, 0, FILE_BEGIN ) == 0 ) || ( file_handle == INVALID_HANDLE_VALUE ) );
-
-    return success != false;
-#else
-    return ::ftruncate( file_handle, desired_size ) != -1;
-#endif // _WIN32
-}
-
-
-BOOST_IMPL_INLINE
-std::size_t get_file_size( guard::native_handle_t const file_handle )
-{
-#ifdef _WIN32
-    DWORD const file_size( ::GetFileSize( file_handle, 0 ) );
-    BOOST_ASSERT( ( file_size != INVALID_FILE_SIZE ) || ( file_handle == INVALID_HANDLE_VALUE ) || ( ::GetLastError() == NO_ERROR ) );
-    return file_size;
-#else
-    struct stat file_info;
-    BOOST_VERIFY( ::fstat( file_handle, &file_info ) == 0 );
-    return file_info.st_size;
-#endif // _WIN32
-}
-
-
-unsigned int const file_flags::handle_access_rights::read    = BOOST_AUX_IO_WIN32_OR_POSIX( GENERIC_READ   , O_RDONLY );
-unsigned int const file_flags::handle_access_rights::write   = BOOST_AUX_IO_WIN32_OR_POSIX( GENERIC_WRITE  , O_WRONLY );
-unsigned int const file_flags::handle_access_rights::execute = BOOST_AUX_IO_WIN32_OR_POSIX( GENERIC_EXECUTE, O_RDONLY );
-
-unsigned int const file_flags::share_mode::none   = BOOST_AUX_IO_WIN32_OR_POSIX( 0                , 0 );
-unsigned int const file_flags::share_mode::read   = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_SHARE_READ  , 0 );
-unsigned int const file_flags::share_mode::write  = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_SHARE_WRITE , 0 );
-unsigned int const file_flags::share_mode::remove = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_SHARE_DELETE, 0 );
-
-unsigned int const file_flags::system_hints::random_access     = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_FLAG_RANDOM_ACCESS                         , /*O_RANDOM*/0      );//...zzz...msvc specific flags...fix this...
-unsigned int const file_flags::system_hints::sequential_access = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_FLAG_SEQUENTIAL_SCAN                       , /*O_SEQUENTIAL*/0  );
-unsigned int const file_flags::system_hints::non_cached        = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH, /*O_DIRECT*/0      );
-unsigned int const file_flags::system_hints::delete_on_close   = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_FLAG_DELETE_ON_CLOSE                       , /*O_TEMPORARY*/0   );
-unsigned int const file_flags::system_hints::temporary         = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_ATTRIBUTE_TEMPORARY                        , /*O_SHORT_LIVED*/0 );
-
-unsigned int const file_flags::on_construction_rights::read    = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_ATTRIBUTE_READONLY, S_IRUSR );
-unsigned int const file_flags::on_construction_rights::write   = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_ATTRIBUTE_NORMAL  , S_IWUSR );
-unsigned int const file_flags::on_construction_rights::execute = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_ATTRIBUTE_NORMAL  , S_IXUSR );
-
-BOOST_IMPL_INLINE
-file_flags file_flags::create
-(
-    unsigned int  const handle_access_flags   ,
-    unsigned int  const share_mode            ,
-    open_policy_t const open_flags            ,
-    unsigned int  const system_hints          ,
-    unsigned int  const on_construction_rights
-)
-{
-    file_flags const flags =
-    {
-    #ifdef _WIN32
-        handle_access_flags, // desired_access
-        share_mode, // share_mode
-        open_flags, // creation_disposition
-        system_hints
-            |
-        (
-            ( on_construction_rights & FILE_ATTRIBUTE_NORMAL )
-                ? ( on_construction_rights & ~FILE_ATTRIBUTE_READONLY )
-                :   on_construction_rights
-        ) // flags_and_attributes
-    #else // POSIX
-        ( ( handle_access_flags == ( O_RDONLY | O_WRONLY ) ) ? O_RDWR : handle_access_flags )
-            |
-        open_flags
-            |
-        system_hints, // oflag
-        on_construction_rights // pmode
-    #endif // OS impl
-    };
-
-    return flags;
-}
-
-
-BOOST_IMPL_INLINE
-file_flags file_flags::create_for_opening_existing_files( unsigned int const handle_access_flags, unsigned int const share_mode , bool const truncate, unsigned int const system_hints )
-{
-    return create
-    (
-        handle_access_flags,
-        share_mode,
-        truncate
-            ? open_policy::open_and_truncate_existing
-            : open_policy::open_existing,
-        system_hints,
-        0
-    );
-}
-
 
 unsigned int const mapping_flags::handle_access_rights::read    = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_MAP_READ   , PROT_READ  );
 unsigned int const mapping_flags::handle_access_rights::write   = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_MAP_WRITE  , PROT_WRITE );
@@ -269,9 +69,9 @@ unsigned int const mapping_flags::system_hint::uninitialized           = BOOST_A
 BOOST_IMPL_INLINE
 mapping_flags mapping_flags::create
 (
-    unsigned int handle_access_flags,
-    unsigned int share_mode         ,
-    unsigned int system_hints
+    unsigned int const handle_access_flags,
+    unsigned int const share_mode         ,
+    unsigned int const system_hints
 )
 {
     mapping_flags flags;
@@ -400,6 +200,7 @@ mapped_view_reference<unsigned char const> mapped_view_reference<unsigned char c
 BOOST_IMPL_INLINE
 basic_mapped_view_ref map_file( char const * const file_name, std::size_t desired_size )
 {
+    typedef guard::native_handle::flags file_flags;
     guard::native_handle const file_handle
     (
         create_file
@@ -439,6 +240,7 @@ basic_mapped_view_ref map_file( char const * const file_name, std::size_t desire
 BOOST_IMPL_INLINE
 basic_mapped_read_only_view_ref map_read_only_file( char const * const file_name )
 {
+    typedef guard::native_handle::flags file_flags;
     guard::native_handle const file_handle
     (
         create_file
@@ -459,7 +261,8 @@ basic_mapped_read_only_view_ref map_read_only_file( char const * const file_name
         file_handle.handle(),
         // Implementation note:
         //   Windows APIs interpret zero as 'whole file' but we still need to
-        // query the file size in order to be able properly set the end pointer.
+        // query the file size in order to be able to properly set the end
+        // pointer.
         //                                    (13.07.2011.) (Domagoj Saric)
         get_file_size( file_handle.handle() )
     );
