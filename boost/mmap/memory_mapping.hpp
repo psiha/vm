@@ -13,9 +13,9 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#pragma once
 #ifndef memory_mapping_hpp__D9C84FF5_E506_4ECB_9778_61E036048D28
 #define memory_mapping_hpp__D9C84FF5_E506_4ECB_9778_61E036048D28
+#pragma once
 //------------------------------------------------------------------------------
 #include "boost/assert.hpp"
 #include "boost/noncopyable.hpp"
@@ -32,6 +32,9 @@
 #endif
 //------------------------------------------------------------------------------
 namespace boost
+{
+//------------------------------------------------------------------------------
+namespace mmap
 {
 //------------------------------------------------------------------------------
 
@@ -180,7 +183,7 @@ public:
     explicit windows_handle( handle_t );
     ~windows_handle();
 
-    handle_t const & handle() const;
+    handle_t const & handle() const { return handle_; }
 
 private:
     handle_t const handle_;
@@ -206,7 +209,7 @@ public:
 
     ~posix_handle();
 
-    handle_t const & handle() const;
+    handle_t const & handle() const { return handle_; }
 
 private:
     handle_t const handle_;
@@ -429,11 +432,11 @@ class mapped_view
     #endif // BOOST_MSVC
 {
 public:
-    mapped_view( boost::mapped_view_reference<Element> const range ) : boost::mapped_view_reference<Element>( range ) {}
+    mapped_view( mapped_view_reference<Element> const range ) : mapped_view_reference<Element>( range ) {}
     ~mapped_view<Element>() { boost::mapped_view_reference<Element>::unmap( *this ); }
 
     #ifndef BOOST_MSVC
-        mapped_view( mapped_view const & ); // Noncopyable
+        mapped_view( mapped_view const & ); // noncopyable
     #endif // BOOST_MSVC
 };
 
@@ -441,6 +444,12 @@ basic_mapped_view_ref           map_file          ( char const * file_name, std:
 basic_mapped_read_only_view_ref map_read_only_file( char const * file_name                           );
 
 //------------------------------------------------------------------------------
+} // namespace mmap
+//------------------------------------------------------------------------------
 } // namespace boost
 //------------------------------------------------------------------------------
+
+#define BOOST_MMAP_IMPL_FILE "memory_mapping.inl"
+#include "detail/include_impl_file.hpp"
+
 #endif // memory_mapping_hpp

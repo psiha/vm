@@ -1,6 +1,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file memory_mapping.cpp
+/// \file memory_mapping.inl
 /// ------------------------
 ///
 /// Copyright (c) Domagoj Saric 2010.-2011.
@@ -14,6 +14,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 #include "memory_mapping.hpp"
+
+#include "detail/impl_inline.hpp"
 
 #include "boost/assert.hpp"
 
@@ -41,19 +43,26 @@
         #define BOOST_AUX_MMAP_POSIX_OR_OSX( posix, osx ) posix
     #endif
 #endif
+
 //------------------------------------------------------------------------------
 namespace boost
+{
+//------------------------------------------------------------------------------
+namespace mmap
 {
 //------------------------------------------------------------------------------
 namespace guard
 {
 
 #ifdef _WIN32
+
+BOOST_IMPL_INLINE
 windows_handle::windows_handle( handle_t const handle )
     :
     handle_( handle )
 {}
 
+BOOST_IMPL_INLINE
 windows_handle::~windows_handle()
 {
     BOOST_VERIFY
@@ -63,18 +72,16 @@ windows_handle::~windows_handle()
     );
 }
 
-windows_handle::handle_t const & windows_handle::handle() const
-{
-    return handle_;
-}
 #endif // _WIN32
 
+BOOST_IMPL_INLINE
 posix_handle::posix_handle( handle_t const handle )
     :
     handle_( handle )
 {}
 
 #ifdef _WIN32
+BOOST_IMPL_INLINE
 posix_handle::posix_handle( windows_handle::handle_t const native_handle )
     :
     handle_( ::_open_osfhandle( reinterpret_cast<intptr_t>( native_handle ), _O_APPEND ) )
@@ -90,6 +97,7 @@ posix_handle::posix_handle( windows_handle::handle_t const native_handle )
 }
 #endif // _WIN32
 
+BOOST_IMPL_INLINE
 posix_handle::~posix_handle()
 {
     BOOST_VERIFY
@@ -102,16 +110,11 @@ posix_handle::~posix_handle()
     );                
 }
 
-
-posix_handle::handle_t const & posix_handle::handle() const
-{
-    return handle_;
-}
-
 //------------------------------------------------------------------------------
 } // guard
 
 
+BOOST_IMPL_INLINE
 guard::native_handle create_file( char const * const file_name, file_flags const & flags )
 {
     BOOST_ASSERT( file_name );
@@ -140,6 +143,7 @@ guard::native_handle create_file( char const * const file_name, file_flags const
 }
 
 
+BOOST_IMPL_INLINE
 bool set_file_size( guard::native_handle_t const file_handle, std::size_t const desired_size )
 {
 #ifdef _WIN32
@@ -161,6 +165,7 @@ bool set_file_size( guard::native_handle_t const file_handle, std::size_t const 
 }
 
 
+BOOST_IMPL_INLINE
 std::size_t get_file_size( guard::native_handle_t const file_handle )
 {
 #ifdef _WIN32
@@ -194,6 +199,7 @@ unsigned int const file_flags::on_construction_rights::read    = BOOST_AUX_IO_WI
 unsigned int const file_flags::on_construction_rights::write   = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_ATTRIBUTE_NORMAL  , S_IWUSR );
 unsigned int const file_flags::on_construction_rights::execute = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_ATTRIBUTE_NORMAL  , S_IXUSR );
 
+BOOST_IMPL_INLINE
 file_flags file_flags::create
 (
     unsigned int  const handle_access_flags   ,
@@ -230,6 +236,7 @@ file_flags file_flags::create
 }
 
 
+BOOST_IMPL_INLINE
 file_flags file_flags::create_for_opening_existing_files( unsigned int const handle_access_flags, unsigned int const share_mode , bool const truncate, unsigned int const system_hints )
 {
     return create
@@ -259,6 +266,7 @@ unsigned int const mapping_flags::system_hint::precommit               = BOOST_A
 unsigned int const mapping_flags::system_hint::uninitialized           = BOOST_AUX_IO_WIN32_OR_POSIX(           0, BOOST_AUX_MMAP_POSIX_OR_OSX( MAP_UNINITIALIZED, 0 )      );
 
 
+BOOST_IMPL_INLINE
 mapping_flags mapping_flags::create
 (
     unsigned int handle_access_flags,
@@ -296,7 +304,7 @@ mapping_flags mapping_flags::create
 }
 
 
-template <>
+template <> BOOST_IMPL_INLINE
 mapped_view_reference<unsigned char> mapped_view_reference<unsigned char>::map
 (
     guard::native_handle_t const   object_handle,
@@ -353,7 +361,8 @@ mapped_view_reference<unsigned char> mapped_view_reference<unsigned char>::map
 #endif // OS API
 }
 
-template <>
+
+template <> BOOST_IMPL_INLINE
 void detail::mapped_view_base<unsigned char const>::unmap( detail::mapped_view_base<unsigned char const> const & mapped_range )
 {
 #ifdef _WIN32
@@ -363,7 +372,8 @@ void detail::mapped_view_base<unsigned char const>::unmap( detail::mapped_view_b
 #endif // _WIN32
 }
 
-template <>
+
+template <> BOOST_IMPL_INLINE
 mapped_view_reference<unsigned char const> mapped_view_reference<unsigned char const>::map
 (
     guard::native_handle_t const object_handle,
@@ -387,6 +397,7 @@ mapped_view_reference<unsigned char const> mapped_view_reference<unsigned char c
 }
 
 
+BOOST_IMPL_INLINE
 basic_mapped_view_ref map_file( char const * const file_name, std::size_t desired_size )
 {
     guard::native_handle const file_handle
@@ -425,6 +436,7 @@ basic_mapped_view_ref map_file( char const * const file_name, std::size_t desire
 }
 
 
+BOOST_IMPL_INLINE
 basic_mapped_read_only_view_ref map_read_only_file( char const * const file_name )
 {
     guard::native_handle const file_handle
@@ -454,6 +466,8 @@ basic_mapped_read_only_view_ref map_read_only_file( char const * const file_name
 }
 
 
+//------------------------------------------------------------------------------
+} // mmap
 //------------------------------------------------------------------------------
 } // boost
 //------------------------------------------------------------------------------
