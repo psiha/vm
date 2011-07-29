@@ -17,8 +17,11 @@
 #define mapped_view_hpp__D9C84FF5_E506_4ECB_9778_61E036048D28
 #pragma once
 //------------------------------------------------------------------------------
+//...zzz...
 #include "mappble_objects/posix_file/handle.hpp"
+#ifdef _WIN32
 #include "mappble_objects/win32_file/handle.hpp"
+#endif // _WIN32
 
 #include "boost/assert.hpp"
 #include "boost/noncopyable.hpp"
@@ -299,12 +302,16 @@ class mapped_view
 {
 public:
     mapped_view( mapped_view_reference<Element> const range ) : mapped_view_reference<Element>( range ) {}
-    ~mapped_view<Element>() { boost::mapped_view_reference<Element>::unmap( *this ); }
+    ~mapped_view<Element>() { mapped_view_reference<Element>::unmap( *this ); }
 
     #ifndef BOOST_MSVC
         mapped_view( mapped_view const & ); // noncopyable
     #endif // BOOST_MSVC
 };
+
+
+basic_mapped_view_ref           map_file          ( char const * file_name, std::size_t desired_size );
+basic_mapped_read_only_view_ref map_read_only_file( char const * file_name                           );
 
 //------------------------------------------------------------------------------
 } // namespace mmap
@@ -312,7 +319,8 @@ public:
 } // namespace boost
 //------------------------------------------------------------------------------
 
-#define BOOST_MMAP_IMPL_FILE "mapped_view.inl"
-#include "detail/include_impl_file.hpp"
+#ifdef BOOST_MMAP_HEADER_ONLY
+    #include "mapped_view.inl"
+#endif
 
 #endif // mapped_view_hpp

@@ -110,8 +110,8 @@ struct win32_file_flags
 } // namespace boost
 //------------------------------------------------------------------------------
 
-#undef BOOST_MMAP_IMPL_FILE
-#define BOOST_MMAP_IMPL_FILE "flags.inl"
-#include "../../detail/include_impl_file.hpp"
+#ifdef BOOST_MMAP_HEADER_ONLY
+    #include "flags.inl"
+#endif // BOOST_MMAP_HEADER_ONLY
 
 #endif // flags_hpp

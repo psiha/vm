@@ -92,6 +92,23 @@ posix_file_flags posix_file_flags::create
     return flags;
 }
 
+
+BOOST_IMPL_INLINE
+posix_file_flags posix_file_flags::create_for_opening_existing_files( unsigned int const handle_access_flags, unsigned int const share_mode , bool const truncate, unsigned int const system_hints )
+{
+    return create
+    (
+        handle_access_flags,
+        share_mode,
+        truncate
+            ? open_policy::open_and_truncate_existing
+            : open_policy::open_existing,
+        system_hints,
+        0
+    );
+}
+
+
 //------------------------------------------------------------------------------
 } // mmap
 //------------------------------------------------------------------------------

@@ -44,6 +44,7 @@ class posix_handle
 {
 public:
     typedef int handle_t;
+    typedef posix_file_flags flags;
 
     explicit posix_handle( handle_t );
     #ifndef BOOST_MSVC
@@ -85,7 +86,8 @@ std::size_t get_file_size( guard::native_handle_t                           );
 } // namespace boost
 //------------------------------------------------------------------------------
 
-#define BOOST_MMAP_IMPL_FILE "handle.inl"
-#include "../../detail/include_impl_file.hpp"
+#ifdef BOOST_MMAP_HEADER_ONLY
+    #include "handle.inl"
+#endif
 
 #endif // handle_hpp
