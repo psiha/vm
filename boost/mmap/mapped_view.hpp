@@ -18,6 +18,7 @@
 #pragma once
 //------------------------------------------------------------------------------
 //...zzz...
+#include "mappble_objects/file/handle.hpp"
 #include "mappble_objects/posix_file/handle.hpp"
 #ifdef _WIN32
 #include "mappble_objects/win32_file/handle.hpp"

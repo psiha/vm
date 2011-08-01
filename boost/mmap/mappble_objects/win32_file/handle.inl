@@ -55,7 +55,7 @@ windows_handle::~windows_handle()
 
 
 BOOST_IMPL_INLINE
-guard::native_handle create_file( char const * const file_name, guard::native_handle::flags const & flags )
+guard::windows_handle create_file( char const * const file_name, guard::windows_handle::flags const & flags )
 {
     BOOST_ASSERT( file_name );
 
@@ -73,7 +73,7 @@ guard::native_handle create_file( char const * const file_name, guard::native_ha
 
 
 BOOST_IMPL_INLINE
-bool set_file_size( guard::native_handle_t const file_handle, std::size_t const desired_size )
+bool set_file_size( guard::windows_handle::handle_t const file_handle, std::size_t const desired_size )
 {
     // It is 'OK' to send null/invalid handles to Windows functions (they will
     // simply fail), this simplifies error handling (it is enough to go through
@@ -91,7 +91,7 @@ bool set_file_size( guard::native_handle_t const file_handle, std::size_t const 
 
 
 BOOST_IMPL_INLINE
-std::size_t get_file_size( guard::native_handle_t const file_handle )
+std::size_t get_file_size( guard::windows_handle::handle_t const file_handle )
 {
     DWORD const file_size( ::GetFileSize( file_handle, 0 ) );
     BOOST_ASSERT( ( file_size != INVALID_FILE_SIZE ) || ( file_handle == INVALID_HANDLE_VALUE ) || ( ::GetLastError() == NO_ERROR ) );
