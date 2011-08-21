@@ -13,14 +13,13 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef handle_hpp__1CEA6D65_D5C0_474E_833D_2CE927A1C74D
-#define handle_hpp__1CEA6D65_D5C0_474E_833D_2CE927A1C74D
+#ifndef handle_hpp__63113526_C3F1_46DC_850E_D8D8C62031DB
+#define handle_hpp__63113526_C3F1_46DC_850E_D8D8C62031DB
 #pragma once
 //------------------------------------------------------------------------------
-#include "boost/assert.hpp"
-#include "boost/noncopyable.hpp"
+#include "boost/config.hpp"
 
-#include <cstddef>
+#include "boost/noncopyable.hpp"
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -29,36 +28,26 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-struct win32_file_flags;
-
-namespace guard
-{
-//------------------------------------------------------------------------------
-
-class windows_handle : noncopyable
+class posix_handle
+#ifdef BOOST_MSVC
+    : noncopyable
+#endif // BOOST_MSVC
 {
 public:
-    typedef void * handle_t;
+    typedef int handle_t;
 
-    typedef win32_file_flags flags;
+    explicit posix_handle( handle_t );
+    #ifndef BOOST_MSVC
+        posix_handle( posix_handle const & );
+    #endif // BOOST_MSVC
 
-    explicit windows_handle( handle_t );
-    ~windows_handle();
+    ~posix_handle();
 
     handle_t const & handle() const { return handle_; }
 
 private:
     handle_t const handle_;
 };
-
-//------------------------------------------------------------------------------
-} // namespace guard
-
-guard::windows_handle create_file( char const * file_name, guard::windows_handle::flags const &                            );
-guard::windows_handle create_file( char const * file_name, guard::windows_handle::flags const &, unsigned int desired_size );
-
-bool        set_file_size( guard::windows_handle::handle_t, std::size_t desired_size );
-std::size_t get_file_size( guard::windows_handle::handle_t                           );
 
 //------------------------------------------------------------------------------
 } // namespace mmap

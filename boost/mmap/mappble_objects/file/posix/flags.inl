@@ -15,7 +15,7 @@
 //------------------------------------------------------------------------------
 #include "flags.hpp"
 
-#include "../../detail/impl_inline.hpp"
+#include "../../../detail/impl_inline.hpp"
 
 #include "boost/assert.hpp"
 

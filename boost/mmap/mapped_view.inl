@@ -107,10 +107,10 @@ mapping_flags mapping_flags::create
 template <> BOOST_IMPL_INLINE
 mapped_view_reference<unsigned char> mapped_view_reference<unsigned char>::map
 (
-    guard::native_handle_t const   object_handle,
-    mapping_flags          const & flags,
-    std::size_t            const   desired_size,
-    std::size_t            const   offset
+    native_handle_t         const object_handle,
+    mapping_flags   const &       flags,
+    std::size_t             const desired_size,
+    std::size_t             const offset
 )
 {
     typedef mapped_view_reference<unsigned char>::iterator iterator_t;
@@ -128,7 +128,7 @@ mapped_view_reference<unsigned char> mapped_view_reference<unsigned char>::map
     // CreateFileMapping accepts INVALID_HANDLE_VALUE as valid input but only if
     // the size parameter is not null.
     large_integer.QuadPart = desired_size;
-    guard::windows_handle const mapping
+    windows_handle const mapping
     (
         ::CreateFileMapping( object_handle, 0, flags.create_mapping_flags, large_integer.HighPart, large_integer.LowPart, 0 )
     );
@@ -176,10 +176,10 @@ void detail::mapped_view_base<unsigned char const>::unmap( detail::mapped_view_b
 template <> BOOST_IMPL_INLINE
 mapped_view_reference<unsigned char const> mapped_view_reference<unsigned char const>::map
 (
-    guard::native_handle_t const object_handle,
-    std::size_t            const desired_size,
-    std::size_t            const offset,
-    bool                   const map_for_code_execution
+    native_handle_t const object_handle,
+    std::size_t     const desired_size,
+    std::size_t     const offset,
+    bool            const map_for_code_execution
 )
 {
     return mapped_view_reference<unsigned char>::map
@@ -200,8 +200,8 @@ mapped_view_reference<unsigned char const> mapped_view_reference<unsigned char c
 BOOST_IMPL_INLINE
 basic_mapped_view_ref map_file( char const * const file_name, std::size_t desired_size )
 {
-    typedef guard::native_handle::flags file_flags;
-    guard::native_handle const file_handle
+    typedef native_file_flags file_flags;
+    native_handle const file_handle
     (
         create_file
         (
@@ -240,8 +240,8 @@ basic_mapped_view_ref map_file( char const * const file_name, std::size_t desire
 BOOST_IMPL_INLINE
 basic_mapped_read_only_view_ref map_read_only_file( char const * const file_name )
 {
-    typedef guard::native_handle::flags file_flags;
-    guard::native_handle const file_handle
+    typedef native_file_flags file_flags;
+    native_handle const file_handle
     (
         create_file
         (

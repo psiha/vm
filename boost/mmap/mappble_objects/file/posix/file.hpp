@@ -13,15 +13,13 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef handle_hpp__D3705ED0_EC0D_4747_A789_1EE17252B6E2
-#define handle_hpp__D3705ED0_EC0D_4747_A789_1EE17252B6E2
+#ifndef file_hpp__1E2F9841_1C6C_40D9_9AA7_BAC0003CD909
+#define file_hpp__1E2F9841_1C6C_40D9_9AA7_BAC0003CD909
 #pragma once
 //------------------------------------------------------------------------------
-#ifdef _WIN32
-#include "../win32_file/handle.hpp"
-#else
-#include "../posix_file/handle.hpp"
-#endif
+#include "../../../handles/posix/handle.hpp"
+
+#include <cstddef>
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -29,22 +27,24 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
-namespace guard
-{
-//------------------------------------------------------------------------------
 
-#ifdef _WIN32
-    typedef windows_handle native_handle;
-#else
-    typedef posix_handle   native_handle;
-#endif // _WIN32
-typedef native_handle::handle_t native_handle_t;
+struct posix_file_flags;
 
-//------------------------------------------------------------------------------
-} // namespace guard
+posix_handle create_file( char const * file_name, posix_file_flags const & );
+
+#ifdef BOOST_HAS_UNISTD_H
+bool        set_file_size( posix_handle::handle_t, std::size_t desired_size );
+#endif // BOOST_HAS_UNISTD_H
+std::size_t get_file_size( posix_handle::handle_t                           );
+
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------
 } // namespace boost
 //------------------------------------------------------------------------------
-#endif // handle_hpp
+
+#ifdef BOOST_MMAP_HEADER_ONLY
+    #include "file.inl"
+#endif
+
+#endif // file_hpp

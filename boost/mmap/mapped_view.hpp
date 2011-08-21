@@ -18,10 +18,10 @@
 #pragma once
 //------------------------------------------------------------------------------
 //...zzz...
-#include "mappble_objects/file/handle.hpp"
-#include "mappble_objects/posix_file/handle.hpp"
+#include "mappble_objects/file/file.hpp"
+#include "mappble_objects/file/posix/file.hpp"
 #ifdef _WIN32
-#include "mappble_objects/win32_file/handle.hpp"
+#include "mappble_objects/file/win32/file.hpp"
 #endif // _WIN32
 
 #include "boost/assert.hpp"
@@ -165,7 +165,7 @@ public:
 public: // Factory methods.
     static mapped_view_reference map
     (
-        guard::native_handle_t,
+        native_handle_t,
         mapping_flags const &,
         std::size_t desired_size = 0,
         std::size_t offset       = 0
@@ -194,10 +194,10 @@ public:
 public: // Factory methods.
     static mapped_view_reference map
     (
-        guard::native_handle_t object_handle,
-        std::size_t            desired_size           = 0,
-        std::size_t            offset                 = 0,
-        bool                   map_for_code_execution = false
+        native_handle_t object_handle,
+        std::size_t     desired_size           = 0,
+        std::size_t     offset                 = 0,
+        bool            map_for_code_execution = false
     );
 
 private:
@@ -263,21 +263,21 @@ namespace detail
 template <typename Handle>
 struct is_mappable : mpl::false_ {};
 
-template <> struct is_mappable<char                                  *> : mpl::true_ {};
-template <> struct is_mappable<char                            const *> : mpl::true_ {};
-template <> struct is_mappable<FILE                                  *> : mpl::true_ {};
-template <> struct is_mappable<guard::posix_handle::handle_t          > : mpl::true_ {};
+template <> struct is_mappable<char                         *> : mpl::true_ {};
+template <> struct is_mappable<char                   const *> : mpl::true_ {};
+template <> struct is_mappable<FILE                         *> : mpl::true_ {};
+template <> struct is_mappable<posix_handle::handle_t        > : mpl::true_ {};
 #ifdef _WIN32
-template <> struct is_mappable<wchar_t                               *> : mpl::true_ {};
-template <> struct is_mappable<wchar_t                         const *> : mpl::true_ {};
-template <> struct is_mappable<guard::windows_handle::handle_t        > : mpl::true_ {};
+template <> struct is_mappable<wchar_t                        *> : mpl::true_ {};
+template <> struct is_mappable<wchar_t                  const *> : mpl::true_ {};
+template <> struct is_mappable<windows_handle::handle_t        > : mpl::true_ {};
 #endif // _WIN32
 
 
 template <>
 mapped_view_reference<unsigned char> mapped_view_reference<unsigned char>::map
 (
-    guard::native_handle_t,
+    native_handle_t,
     mapping_flags const &,
     std::size_t desired_size,
     std::size_t offset
@@ -286,10 +286,10 @@ mapped_view_reference<unsigned char> mapped_view_reference<unsigned char>::map
 template <>
 mapped_view_reference<unsigned char const> mapped_view_reference<unsigned char const>::map
 (
-    guard::native_handle_t object_handle,
-    std::size_t            desired_size,
-    std::size_t            offset,
-    bool                   map_for_code_execution
+    native_handle_t object_handle,
+    std::size_t     desired_size,
+    std::size_t     offset,
+    bool            map_for_code_execution
 );
 
 
