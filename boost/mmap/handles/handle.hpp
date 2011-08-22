@@ -1,9 +1,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file handle.inl
+/// \file handle.hpp
 /// ----------------
 ///
-/// Copyright (c) Domagoj Saric 2010.-2011.
+/// Copyright (c) Domagoj Saric 2011.
 ///
 ///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
 ///  (See accompanying file LICENSE_1_0.txt or copy at
@@ -13,20 +13,13 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#include "handle.hpp"
+#ifndef handle_hpp__67A36E06_53FF_4361_9786_9E04A3917CD3
+#define handle_hpp__67A36E06_53FF_4361_9786_9E04A3917CD3
+#pragma once
+//------------------------------------------------------------------------------
+#include "../detail/impl_selection.hpp"
 
-#include "../../detail/impl_inline.hpp"
-
-#include "boost/assert.hpp"
-
-#ifndef WIN32_LEAN_AND_MEAN
-    #define WIN32_LEAN_AND_MEAN
-#endif // WIN32_LEAN_AND_MEAN
-#include "windows.h"
-
-#ifdef BOOST_MSVC
-    #include "io.h"
-#endif // BOOST_MSVC
+#include BOOST_MMAP_IMPL_INCLUDE( ., handle.hpp )
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -35,37 +28,18 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-BOOST_IMPL_INLINE
-windows_handle::windows_handle( handle_t const handle )
-    :
-    handle_( handle )
-{}
-
-BOOST_IMPL_INLINE
-windows_handle::~windows_handle()
-{
-    BOOST_VERIFY
-    (
-        ( ::CloseHandle( handle_ ) != false               ) ||
-        ( handle_ == 0 || handle_ == INVALID_HANDLE_VALUE )
-    );
-}
-
-
-#ifdef BOOST_MSVC
-    BOOST_IMPL_INLINE
-    posix_handle make_posix_handle( windows_handle::handle_t const native_handle, int const flags )
-    {
-        return posix_handle( ::_open_osfhandle( reinterpret_cast<intptr_t>( native_handle ), flags ) );
-    }
-#endif // BOOST_MSVC
+#ifdef _WIN32
+    typedef windows_handle   native_handle;
+    typedef win32_file_flags native_file_flags;
+#else
+    typedef posix_handle     native_handle;
+    typedef posix_file_flags native_file_flags;
+#endif // _WIN32
+typedef native_handle::handle_t native_handle_t;
 
 //------------------------------------------------------------------------------
-} // mmap
+} // namespace mmap
 //------------------------------------------------------------------------------
-} // boost
+} // namespace boost
 //------------------------------------------------------------------------------
-
-#ifndef BOOST_MMAP_HEADER_ONLY
-    #include "../posix/handle.inl"
-#endif // BOOST_MMAP_HEADER_ONLY
+#endif // handle_hpp

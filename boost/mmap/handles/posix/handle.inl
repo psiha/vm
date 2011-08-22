@@ -15,7 +15,7 @@
 //------------------------------------------------------------------------------
 #include "handle.hpp"
 
-#include "../../../detail/impl_inline.hpp"
+#include "../../detail/impl_inline.hpp"
 
 #include "boost/assert.hpp"
 
