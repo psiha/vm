@@ -36,13 +36,13 @@ namespace mmap
 //------------------------------------------------------------------------------
 
 BOOST_IMPL_INLINE
-windows_handle::windows_handle( handle_t const handle )
+handle<win32>::handle( native_handle_t const handle )
     :
     handle_( handle )
 {}
 
 BOOST_IMPL_INLINE
-windows_handle::~windows_handle()
+handle<win32>::~handle()
 {
     BOOST_VERIFY
     (
@@ -54,9 +54,9 @@ windows_handle::~windows_handle()
 
 #ifdef BOOST_MSVC
     BOOST_IMPL_INLINE
-    posix_handle make_posix_handle( windows_handle::handle_t const native_handle, int const flags )
+    handle<posix> make_posix_handle( handle<win32>::native_handle_t const native_handle, int const flags )
     {
-        return posix_handle( ::_open_osfhandle( reinterpret_cast<intptr_t>( native_handle ), flags ) );
+        return handle<posix>( ::_open_osfhandle( reinterpret_cast<intptr_t>( native_handle ), flags ) );
     }
 #endif // BOOST_MSVC
 

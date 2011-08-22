@@ -49,28 +49,28 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-unsigned int const posix_file_flags::handle_access_rights::read    = O_RDONLY;
-unsigned int const posix_file_flags::handle_access_rights::write   = O_WRONLY;
-unsigned int const posix_file_flags::handle_access_rights::execute = O_RDONLY;
+unsigned int const file_flags<posix>::handle_access_rights::read    = O_RDONLY;
+unsigned int const file_flags<posix>::handle_access_rights::write   = O_WRONLY;
+unsigned int const file_flags<posix>::handle_access_rights::execute = O_RDONLY;
 
-unsigned int const posix_file_flags::share_mode::none   = 0;
-unsigned int const posix_file_flags::share_mode::read   = 0;
-unsigned int const posix_file_flags::share_mode::write  = 0;
-unsigned int const posix_file_flags::share_mode::remove = 0;
+unsigned int const file_flags<posix>::share_mode::none   = 0;
+unsigned int const file_flags<posix>::share_mode::read   = 0;
+unsigned int const file_flags<posix>::share_mode::write  = 0;
+unsigned int const file_flags<posix>::share_mode::remove = 0;
 
-unsigned int const posix_file_flags::system_hints::random_access     = BOOST_AUX_IO_WIN32_OR_POSIX( O_RANDOM     , 0 );
-unsigned int const posix_file_flags::system_hints::sequential_access = BOOST_AUX_IO_WIN32_OR_POSIX( O_SEQUENTIAL , 0 );
+unsigned int const file_flags<posix>::system_hints::random_access     = BOOST_AUX_IO_WIN32_OR_POSIX( O_RANDOM     , 0 );
+unsigned int const file_flags<posix>::system_hints::sequential_access = BOOST_AUX_IO_WIN32_OR_POSIX( O_SEQUENTIAL , 0 );
 // http://stackoverflow.com/questions/2299402/how-does-one-do-raw-io-on-mac-os-x-ie-equivalent-to-linuxs-o-direct-flag
-unsigned int const posix_file_flags::system_hints::non_cached        = BOOST_AUX_IO_WIN32_OR_POSIX( 0            , BOOST_AUX_MMAP_POSIX_OR_OSX( O_DIRECT, 0 ) );
-unsigned int const posix_file_flags::system_hints::delete_on_close   = BOOST_AUX_IO_WIN32_OR_POSIX( O_TEMPORARY  , 0 );
-unsigned int const posix_file_flags::system_hints::temporary         = BOOST_AUX_IO_WIN32_OR_POSIX( _O_SHORT_LIVED, 0 );
+unsigned int const file_flags<posix>::system_hints::non_cached        = BOOST_AUX_IO_WIN32_OR_POSIX( 0            , BOOST_AUX_MMAP_POSIX_OR_OSX( O_DIRECT, 0 ) );
+unsigned int const file_flags<posix>::system_hints::delete_on_close   = BOOST_AUX_IO_WIN32_OR_POSIX( O_TEMPORARY  , 0 );
+unsigned int const file_flags<posix>::system_hints::temporary         = BOOST_AUX_IO_WIN32_OR_POSIX( _O_SHORT_LIVED, 0 );
 
-unsigned int const posix_file_flags::on_construction_rights::read    = BOOST_AUX_IO_WIN32_OR_POSIX( _S_IREAD , S_IRUSR );
-unsigned int const posix_file_flags::on_construction_rights::write   = BOOST_AUX_IO_WIN32_OR_POSIX( _S_IWRITE, S_IWUSR );
-unsigned int const posix_file_flags::on_construction_rights::execute = BOOST_AUX_IO_WIN32_OR_POSIX( _S_IEXEC , S_IXUSR );
+unsigned int const file_flags<posix>::on_construction_rights::read    = BOOST_AUX_IO_WIN32_OR_POSIX( _S_IREAD , S_IRUSR );
+unsigned int const file_flags<posix>::on_construction_rights::write   = BOOST_AUX_IO_WIN32_OR_POSIX( _S_IWRITE, S_IWUSR );
+unsigned int const file_flags<posix>::on_construction_rights::execute = BOOST_AUX_IO_WIN32_OR_POSIX( _S_IEXEC , S_IXUSR );
 
 BOOST_IMPL_INLINE
-posix_file_flags posix_file_flags::create
+file_flags<posix> file_flags<posix>::create
 (
     unsigned int  const handle_access_flags   ,
     unsigned int  const /*share_mode*/        ,
@@ -79,7 +79,7 @@ posix_file_flags posix_file_flags::create
     unsigned int  const on_construction_rights
 )
 {
-    posix_file_flags const flags =
+    file_flags<posix> const flags =
     {
         ( ( handle_access_flags == ( O_RDONLY | O_WRONLY ) ) ? O_RDWR : handle_access_flags )
             |
@@ -94,7 +94,7 @@ posix_file_flags posix_file_flags::create
 
 
 BOOST_IMPL_INLINE
-posix_file_flags posix_file_flags::create_for_opening_existing_files( unsigned int const handle_access_flags, unsigned int const share_mode , bool const truncate, unsigned int const system_hints )
+file_flags<posix> file_flags<posix>::create_for_opening_existing_files( unsigned int const handle_access_flags, unsigned int const share_mode , bool const truncate, unsigned int const system_hints )
 {
     return create
     (

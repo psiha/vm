@@ -17,8 +17,10 @@
 #define handle_hpp__63113526_C3F1_46DC_850E_D8D8C62031DB
 #pragma once
 //------------------------------------------------------------------------------
-#include "boost/config.hpp"
+#include "../handle_ref.hpp"
+#include "../../implementations.hpp"
 
+#include "boost/config.hpp"
 #include "boost/noncopyable.hpp"
 //------------------------------------------------------------------------------
 namespace boost
@@ -28,25 +30,32 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-class posix_handle
+template <typename Impl> class handle;
+
+template <>
+class handle<posix>
 #ifdef BOOST_MSVC
     : noncopyable
 #endif // BOOST_MSVC
 {
 public:
-    typedef int handle_t;
+    typedef int                         native_handle_t;
+    typedef handle_ref< handle<posix> > reference;
 
-    explicit posix_handle( handle_t );
+    explicit handle<posix>( native_handle_t );
     #ifndef BOOST_MSVC
-        posix_handle( posix_handle const & );
+        handle<posix>( handle<posix> const & );
     #endif // BOOST_MSVC
 
-    ~posix_handle();
+    ~handle<posix>();
 
-    handle_t const & handle() const { return handle_; }
+    native_handle_t const & get() const { return handle_; }
+
+    bool operator! () const { return !handle_; }
+    operator reference () const { return reference( handle_ ); }
 
 private:
-    handle_t const handle_;
+    native_handle_t const handle_;
 };
 
 //------------------------------------------------------------------------------

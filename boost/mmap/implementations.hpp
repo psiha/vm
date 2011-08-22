@@ -1,9 +1,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file handle.inl
-/// ----------------
+/// \file implementations.hpp
+/// -------------------------
 ///
-/// Copyright (c) Domagoj Saric 2010.-2011.
+/// Copyright (c) 2011 Domagoj Saric
 ///
 ///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
 ///  (See accompanying file LICENSE_1_0.txt or copy at
@@ -13,23 +13,9 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#include "handle.hpp"
-
-#include "../../detail/impl_inline.hpp"
-
-#include "boost/assert.hpp"
-
-#ifdef BOOST_MSVC
-    #pragma warning ( disable : 4996 ) // "The POSIX name for this item is deprecated. Instead, use the ISO C++ conformant name."
-    #include "io.h"
-#else
-    #include "sys/mman.h"      // mmap, munmap.
-    #include "sys/stat.h"
-    #include "sys/types.h"     // struct stat.
-    #include "unistd.h"        // sysconf.
-#endif // BOOST_MSVC
-#include "errno.h"
-#include "fcntl.h"
+#ifndef implementations_hpp__CD36EF12_73E1_4058_A57E_6168F337954A
+#define implementations_hpp__CD36EF12_73E1_4058_A57E_6168F337954A
+#pragma once
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -38,27 +24,14 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-BOOST_IMPL_INLINE
-handle<posix>::handle( native_handle_t const handle )
-    :
-    handle_( handle )
-{}
-
-BOOST_IMPL_INLINE
-handle<posix>::~handle()
-{
-    BOOST_VERIFY
-    (
-        ( ::close( handle_ ) == 0 ) ||
-        (
-            ( handle_ == -1    ) &&
-            ( errno   == EBADF )
-        )
-    );                
-}
+struct nt;
+struct posix;
+struct win32;
+struct xsi;
 
 //------------------------------------------------------------------------------
-} // mmap
+} // namespace mmap
 //------------------------------------------------------------------------------
-} // boost
+} // namespace boost
 //------------------------------------------------------------------------------
+#endif // implementations_hpp

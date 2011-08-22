@@ -28,12 +28,17 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-struct win32_file_flags;
+template <typename Impl  > struct file_flags;
+template <class    Handle> struct is_resizable;
 
-windows_handle create_file( char const * file_name, win32_file_flags const & );
+template <> struct is_resizable< handle<win32> > : mpl::true_ {};
 
-bool        set_file_size( windows_handle::handle_t, std::size_t desired_size );
-std::size_t get_file_size( windows_handle::handle_t                           );
+
+handle<win32> create_file( char const * file_name, file_flags<win32> const & );
+
+bool        set_size( handle<win32>::reference, std::size_t desired_size );
+std::size_t get_size( handle<win32>::reference                           );
+
 
 //------------------------------------------------------------------------------
 } // namespace mmap

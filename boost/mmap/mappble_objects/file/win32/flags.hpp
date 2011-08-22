@@ -27,6 +27,8 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
+template <typename Impl> struct file_flags;
+
 // Implementation note:
 //   Using structs with public members and factory functions to enable (almost)
 // zero-overhead 'link-time' conversion to native flag formats and to allow the
@@ -35,7 +37,8 @@ namespace mmap
 // interface, can also be covered.
 //                                            (10.10.2010.) (Domagoj Saric)
 
-struct win32_file_flags
+template <>
+struct file_flags<win32>
 {
     struct handle_access_rights
     {
@@ -81,7 +84,7 @@ struct win32_file_flags
         static unsigned int const execute;
     };
 
-    static win32_file_flags create
+    static file_flags<win32> create
     (
         unsigned int handle_access_flags   ,
         unsigned int share_mode            ,
@@ -90,7 +93,7 @@ struct win32_file_flags
         unsigned int on_construction_rights
     );
 
-    static win32_file_flags create_for_opening_existing_files
+    static file_flags<win32> create_for_opening_existing_files
     (
         unsigned int handle_access_flags,
         unsigned int share_mode         ,

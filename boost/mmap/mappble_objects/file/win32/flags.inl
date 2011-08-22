@@ -31,27 +31,27 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-unsigned int const win32_file_flags::handle_access_rights::read    = GENERIC_READ   ;
-unsigned int const win32_file_flags::handle_access_rights::write   = GENERIC_WRITE  ;
-unsigned int const win32_file_flags::handle_access_rights::execute = GENERIC_EXECUTE;
+unsigned int const file_flags<win32>::handle_access_rights::read    = GENERIC_READ   ;
+unsigned int const file_flags<win32>::handle_access_rights::write   = GENERIC_WRITE  ;
+unsigned int const file_flags<win32>::handle_access_rights::execute = GENERIC_EXECUTE;
 
-unsigned int const win32_file_flags::share_mode::none   = 0                ;
-unsigned int const win32_file_flags::share_mode::read   = FILE_SHARE_READ  ;
-unsigned int const win32_file_flags::share_mode::write  = FILE_SHARE_WRITE ;
-unsigned int const win32_file_flags::share_mode::remove = FILE_SHARE_DELETE;
+unsigned int const file_flags<win32>::share_mode::none   = 0                ;
+unsigned int const file_flags<win32>::share_mode::read   = FILE_SHARE_READ  ;
+unsigned int const file_flags<win32>::share_mode::write  = FILE_SHARE_WRITE ;
+unsigned int const file_flags<win32>::share_mode::remove = FILE_SHARE_DELETE;
 
-unsigned int const win32_file_flags::system_hints::random_access     = FILE_FLAG_RANDOM_ACCESS                         ;
-unsigned int const win32_file_flags::system_hints::sequential_access = FILE_FLAG_SEQUENTIAL_SCAN                       ;
-unsigned int const win32_file_flags::system_hints::non_cached        = FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH;
-unsigned int const win32_file_flags::system_hints::delete_on_close   = FILE_FLAG_DELETE_ON_CLOSE                       ;
-unsigned int const win32_file_flags::system_hints::temporary         = FILE_ATTRIBUTE_TEMPORARY                        ;
+unsigned int const file_flags<win32>::system_hints::random_access     = FILE_FLAG_RANDOM_ACCESS                         ;
+unsigned int const file_flags<win32>::system_hints::sequential_access = FILE_FLAG_SEQUENTIAL_SCAN                       ;
+unsigned int const file_flags<win32>::system_hints::non_cached        = FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH;
+unsigned int const file_flags<win32>::system_hints::delete_on_close   = FILE_FLAG_DELETE_ON_CLOSE                       ;
+unsigned int const file_flags<win32>::system_hints::temporary         = FILE_ATTRIBUTE_TEMPORARY                        ;
 
-unsigned int const win32_file_flags::on_construction_rights::read    = FILE_ATTRIBUTE_READONLY;
-unsigned int const win32_file_flags::on_construction_rights::write   = FILE_ATTRIBUTE_NORMAL  ;
-unsigned int const win32_file_flags::on_construction_rights::execute = FILE_ATTRIBUTE_NORMAL  ;
+unsigned int const file_flags<win32>::on_construction_rights::read    = FILE_ATTRIBUTE_READONLY;
+unsigned int const file_flags<win32>::on_construction_rights::write   = FILE_ATTRIBUTE_NORMAL  ;
+unsigned int const file_flags<win32>::on_construction_rights::execute = FILE_ATTRIBUTE_NORMAL  ;
 
 BOOST_IMPL_INLINE
-win32_file_flags win32_file_flags::create
+file_flags<win32> file_flags<win32>::create
 (
     unsigned int  const handle_access_flags   ,
     unsigned int  const share_mode            ,
@@ -60,7 +60,7 @@ win32_file_flags win32_file_flags::create
     unsigned int  const on_construction_rights
 )
 {
-    win32_file_flags const flags =
+    file_flags<win32> const flags =
     {
         handle_access_flags, // desired_access
         share_mode, // share_mode
@@ -79,7 +79,13 @@ win32_file_flags win32_file_flags::create
 
 
 BOOST_IMPL_INLINE
-win32_file_flags win32_file_flags::create_for_opening_existing_files( unsigned int const handle_access_flags, unsigned int const share_mode , bool const truncate, unsigned int const system_hints )
+file_flags<win32> file_flags<win32>::create_for_opening_existing_files
+(
+    unsigned int const handle_access_flags,
+    unsigned int const share_mode,
+    bool         const truncate,
+    unsigned int const system_hints
+)
 {
     return create
     (

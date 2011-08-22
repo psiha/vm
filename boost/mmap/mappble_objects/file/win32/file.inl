@@ -33,7 +33,7 @@ namespace mmap
 //------------------------------------------------------------------------------
 
 BOOST_IMPL_INLINE
-windows_handle create_file( char const * const file_name, win32_file_flags const & flags )
+handle<win32> create_file( char const * const file_name, file_flags<win32> const & flags )
 {
     BOOST_ASSERT( file_name );
 
@@ -46,12 +46,12 @@ windows_handle create_file( char const * const file_name, win32_file_flags const
     );
     BOOST_ASSERT( ( file_handle == INVALID_HANDLE_VALUE ) || ( ::GetLastError() == NO_ERROR ) || ( ::GetLastError() == ERROR_ALREADY_EXISTS ) );
 
-    return windows_handle( file_handle );
+    return handle<win32>( file_handle );
 }
 
 
 BOOST_IMPL_INLINE
-bool set_file_size( windows_handle::handle_t const file_handle, std::size_t const desired_size )
+bool set_size( handle<win32>::reference const file_handle, std::size_t const desired_size )
 {
     // It is 'OK' to send null/invalid handles to Windows functions (they will
     // simply fail), this simplifies error handling (it is enough to go through
@@ -69,7 +69,7 @@ bool set_file_size( windows_handle::handle_t const file_handle, std::size_t cons
 
 
 BOOST_IMPL_INLINE
-std::size_t get_file_size( windows_handle::handle_t const file_handle )
+std::size_t get_size( handle<win32>::reference const file_handle )
 {
     DWORD const file_size( ::GetFileSize( file_handle, 0 ) );
     BOOST_ASSERT( ( file_size != INVALID_FILE_SIZE ) || ( file_handle == INVALID_HANDLE_VALUE ) || ( ::GetLastError() == NO_ERROR ) );

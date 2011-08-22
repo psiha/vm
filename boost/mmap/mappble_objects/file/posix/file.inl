@@ -40,7 +40,7 @@ namespace mmap
 //------------------------------------------------------------------------------
 
 BOOST_IMPL_INLINE
-posix_handle create_file( char const * const file_name, posix_file_flags const & flags )
+handle<posix> create_file( char const * const file_name, file_flags<posix> const & flags )
 {
     BOOST_ASSERT( file_name );
 
@@ -49,13 +49,13 @@ posix_handle create_file( char const * const file_name, posix_file_flags const &
     //...zzz...investigate posix_fadvise, posix_madvise, fcntl for the system hints...
     BOOST_VERIFY( ::umask( current_mask ) == 0 );
 
-    return posix_handle( file_handle );
+    return handle<posix>( file_handle );
 }
 
 
 #ifdef BOOST_HAS_UNISTD_H
 BOOST_IMPL_INLINE
-bool set_file_size( posix_handle::handle_t const file_handle, std::size_t const desired_size )
+bool set_size( handle_ref< handle<posix> > const file_handle, std::size_t const desired_size )
 {
     return ::ftruncate( file_handle, desired_size ) != -1;
 }
@@ -63,7 +63,7 @@ bool set_file_size( posix_handle::handle_t const file_handle, std::size_t const 
 
 
 BOOST_IMPL_INLINE
-std::size_t get_file_size( posix_handle::handle_t const file_handle )
+std::size_t get_size( handle_ref< handle<posix> > const file_handle )
 {
     struct stat file_info;
     BOOST_VERIFY( ::fstat( file_handle, &file_info ) == 0 );

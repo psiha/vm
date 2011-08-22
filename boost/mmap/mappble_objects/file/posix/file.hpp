@@ -28,14 +28,23 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-struct posix_file_flags;
-
-posix_handle create_file( char const * file_name, posix_file_flags const & );
+template <typename Impl  > struct file_flags;
+template <class    Handle> struct is_resizable;
 
 #ifdef BOOST_HAS_UNISTD_H
-bool        set_file_size( posix_handle::handle_t, std::size_t desired_size );
+    template <> struct is_resizable< handle<posix> > : mpl::true_  {};
+#else
+    template <> struct is_resizable< handle<posix> > : mpl::false_ {};
 #endif // BOOST_HAS_UNISTD_H
-std::size_t get_file_size( posix_handle::handle_t                           );
+
+
+handle<posix> create_file( char const * file_name, file_flags<posix> const & );
+
+
+#ifdef BOOST_HAS_UNISTD_H
+bool        set_size( handle_ref< handle<posix> >, std::size_t desired_size );
+#endif // BOOST_HAS_UNISTD_H
+std::size_t get_size( handle_ref< handle<posix> >                           );
 
 //------------------------------------------------------------------------------
 } // namespace mmap

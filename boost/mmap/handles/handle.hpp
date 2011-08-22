@@ -19,7 +19,7 @@
 //------------------------------------------------------------------------------
 #include "../detail/impl_selection.hpp"
 
-#include BOOST_MMAP_IMPL_INCLUDE( ., handle.hpp )
+#include BOOST_MMAP_IMPL_INCLUDE( ./, /handle.hpp )
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -28,14 +28,9 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-#ifdef _WIN32
-    typedef windows_handle   native_handle;
-    typedef win32_file_flags native_file_flags;
-#else
-    typedef posix_handle     native_handle;
-    typedef posix_file_flags native_file_flags;
-#endif // _WIN32
-typedef native_handle::handle_t native_handle_t;
+template <typename Impl> class handle;
+
+typedef handle<BOOST_MMAP_IMPL> native_handle;
 
 //------------------------------------------------------------------------------
 } // namespace mmap

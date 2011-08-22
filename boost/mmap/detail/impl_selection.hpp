@@ -21,11 +21,11 @@
 #include "boost/preprocessor/stringize.hpp"
 //------------------------------------------------------------------------------
 #if defined( _WIN32 )
-    #define BOOST_MMAP_IMPL /win32/
+    #define BOOST_MMAP_IMPL win32
 #elif defined( _WIN32_WINNT )
-    #define BOOST_MMAP_IMPL /nt/
+    #define BOOST_MMAP_IMPL nt
 #elif defined( BOOST_HAS_UNISTD_H )
-    #define BOOST_MMAP_IMPL /posix/
+    #define BOOST_MMAP_IMPL posix
 #endif
 
 #define BOOST_MMAP_IMPL_INCLUDE( prefix_path, include )                         \

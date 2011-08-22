@@ -107,10 +107,10 @@ mapping_flags mapping_flags::create
 template <> BOOST_IMPL_INLINE
 mapped_view_reference<unsigned char> mapped_view_reference<unsigned char>::map
 (
-    native_handle_t         const object_handle,
-    mapping_flags   const &       flags,
-    std::size_t             const desired_size,
-    std::size_t             const offset
+    native_handle::reference         const object_handle,
+    mapping_flags            const &       flags,
+    std::size_t                      const desired_size,
+    std::size_t                      const offset
 )
 {
     typedef mapped_view_reference<unsigned char>::iterator iterator_t;
@@ -128,17 +128,17 @@ mapped_view_reference<unsigned char> mapped_view_reference<unsigned char>::map
     // CreateFileMapping accepts INVALID_HANDLE_VALUE as valid input but only if
     // the size parameter is not null.
     large_integer.QuadPart = desired_size;
-    windows_handle const mapping
+    handle<win32> const mapping
     (
         ::CreateFileMapping( object_handle, 0, flags.create_mapping_flags, large_integer.HighPart, large_integer.LowPart, 0 )
     );
     BOOST_ASSERT
     (
-        !mapping.handle() || ( object_handle == INVALID_HANDLE_VALUE ) || ( desired_size != 0 )
+        !mapping || ( object_handle == INVALID_HANDLE_VALUE ) || ( desired_size != 0 )
     );
 
     large_integer.QuadPart = offset;
-    iterator_t const view_start( static_cast<iterator_t>( ::MapViewOfFile( mapping.handle(), flags.map_view_flags, large_integer.HighPart, large_integer.LowPart, desired_size ) ) );
+    iterator_t const view_start( static_cast<iterator_t>( ::MapViewOfFile( mapping.get(), flags.map_view_flags, large_integer.HighPart, large_integer.LowPart, desired_size ) ) );
     return mapped_view_reference<unsigned char>
     (
         view_start,
@@ -176,10 +176,10 @@ void detail::mapped_view_base<unsigned char const>::unmap( detail::mapped_view_b
 template <> BOOST_IMPL_INLINE
 mapped_view_reference<unsigned char const> mapped_view_reference<unsigned char const>::map
 (
-    native_handle_t const object_handle,
-    std::size_t     const desired_size,
-    std::size_t     const offset,
-    bool            const map_for_code_execution
+    native_handle::reference const object_handle,
+    std::size_t              const desired_size,
+    std::size_t              const offset,
+    bool                     const map_for_code_execution
 )
 {
     return mapped_view_reference<unsigned char>::map
@@ -218,13 +218,13 @@ basic_mapped_view_ref map_file( char const * const file_name, std::size_t desire
     );
 
     if ( desired_size )
-        set_file_size( file_handle.handle(), desired_size );
+        set_size( file_handle.get(), desired_size );
     else
-        desired_size = get_file_size( file_handle.handle() );
+        desired_size = get_size( file_handle.get() );
 
     return basic_mapped_view_ref::map
     (
-        file_handle.handle(),
+        file_handle.get(),
         mapping_flags::create
         (
             mapping_flags::handle_access_rights::read | mapping_flags::handle_access_rights::write,
@@ -258,13 +258,13 @@ basic_mapped_read_only_view_ref map_read_only_file( char const * const file_name
 
     return basic_mapped_read_only_view_ref::map
     (
-        file_handle.handle(),
+        file_handle.get(),
         // Implementation note:
         //   Windows APIs interpret zero as 'whole file' but we still need to
         // query the file size in order to be able to properly set the end
         // pointer.
         //                                    (13.07.2011.) (Domagoj Saric)
-        get_file_size( file_handle.handle() )
+        get_size( file_handle.get() )
     );
 }
 

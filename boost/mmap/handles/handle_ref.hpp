@@ -1,9 +1,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file handle.inl
-/// ----------------
+/// \file handle_ref.hpp
+/// --------------------
 ///
-/// Copyright (c) Domagoj Saric 2010.-2011.
+/// Copyright (c) 2011 Domagoj Saric
 ///
 ///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
 ///  (See accompanying file LICENSE_1_0.txt or copy at
@@ -13,23 +13,9 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#include "handle.hpp"
-
-#include "../../detail/impl_inline.hpp"
-
-#include "boost/assert.hpp"
-
-#ifdef BOOST_MSVC
-    #pragma warning ( disable : 4996 ) // "The POSIX name for this item is deprecated. Instead, use the ISO C++ conformant name."
-    #include "io.h"
-#else
-    #include "sys/mman.h"      // mmap, munmap.
-    #include "sys/stat.h"
-    #include "sys/types.h"     // struct stat.
-    #include "unistd.h"        // sysconf.
-#endif // BOOST_MSVC
-#include "errno.h"
-#include "fcntl.h"
+#ifndef handle_ref_hpp__19A59763_A268_458C_932F_4E42DEA27751
+#define handle_ref_hpp__19A59763_A268_458C_932F_4E42DEA27751
+#pragma once
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -38,27 +24,21 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-BOOST_IMPL_INLINE
-handle<posix>::handle( native_handle_t const handle )
-    :
-    handle_( handle )
-{}
-
-BOOST_IMPL_INLINE
-handle<posix>::~handle()
+template <typename Handle>
+struct handle_ref
 {
-    BOOST_VERIFY
-    (
-        ( ::close( handle_ ) == 0 ) ||
-        (
-            ( handle_ == -1    ) &&
-            ( errno   == EBADF )
-        )
-    );                
-}
+    typedef typename Handle::native_handle_t native_handle_t;
+
+    handle_ref( native_handle_t const value_param ) : value( value_param ) {}
+
+    operator native_handle_t const & () const { return value; }
+
+    native_handle_t const value;
+};
 
 //------------------------------------------------------------------------------
-} // mmap
+} // namespace mmap
 //------------------------------------------------------------------------------
-} // boost
+} // namespace boost
 //------------------------------------------------------------------------------
+#endif // handle_ref_hpp
