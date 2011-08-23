@@ -15,5 +15,5 @@
 //------------------------------------------------------------------------------
 #include "../detail/impl_selection.hpp"
 
-#include BOOST_MMAP_IMPL_INCLUDE( ., handle.inl )
+#include BOOST_MMAP_IMPL_INCLUDE( ./, /handle.inl )
 //------------------------------------------------------------------------------
