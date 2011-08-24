@@ -110,7 +110,7 @@ namespace detail
     class mapped_view_base : public iterator_range<Element *>
     {
     public:
-        typedef iterator_range<Element> memory_range_t;
+        typedef iterator_range<Element *> memory_range_t;
 
     public: // Factory methods.
         static void unmap( mapped_view_base const & );
