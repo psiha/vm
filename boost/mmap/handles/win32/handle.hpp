@@ -56,7 +56,7 @@ private:
 };
 
 #ifdef BOOST_MSVC
-    handle<posix> make_posix_handle( handle<win32>::reference, int const flags );
+    handle<posix> make_posix_handle( handle<win32>::reference, int flags );
 #endif // BOOST_MSVC
 
 //------------------------------------------------------------------------------

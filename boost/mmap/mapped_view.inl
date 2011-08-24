@@ -75,6 +75,7 @@ mapping_flags mapping_flags::create
 )
 {
     mapping_flags flags;
+
 #ifdef _WIN32
     flags.create_mapping_flags = ( handle_access_flags & handle_access_rights::execute ) ? PAGE_EXECUTE : PAGE_NOACCESS;
     if ( share_mode == share_mode::hidden ) // WRITECOPY
