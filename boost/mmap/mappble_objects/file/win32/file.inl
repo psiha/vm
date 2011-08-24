@@ -56,13 +56,29 @@ bool set_size( handle<win32>::reference const file_handle, std::size_t const des
     // It is 'OK' to send null/invalid handles to Windows functions (they will
     // simply fail), this simplifies error handling (it is enough to go through
     // all the logic, inspect the final result and then throw on error).
-    DWORD const new_size( ::SetFilePointer( file_handle, desired_size, 0, FILE_BEGIN ) );
-    BOOST_ASSERT( ( new_size == desired_size ) || ( file_handle == INVALID_HANDLE_VALUE ) );
-    ignore_unused_variable_warning( new_size );
+    #ifdef _WIN64
+        BOOST_VERIFY
+        (
+            ::SetFilePointerEx( file_handle, reinterpret_cast<LARGE_INTEGER const &>( desired_size ), NULL, FILE_BEGIN ) ||
+            ( file_handle == INVALID_HANDLE_VALUE )
+        );
+    #else // _WIN32/64
+        DWORD const new_size( ::SetFilePointer( file_handle, desired_size, NULL, FILE_BEGIN ) );
+        BOOST_ASSERT( ( new_size == desired_size ) || ( file_handle == INVALID_HANDLE_VALUE ) );
+        ignore_unused_variable_warning( new_size );
+    #endif // _WIN32/64
 
     BOOL const success( ::SetEndOfFile( file_handle ) );
 
-    BOOST_VERIFY( ( ::SetFilePointer( file_handle, 0, 0, FILE_BEGIN ) == 0 ) || ( file_handle == INVALID_HANDLE_VALUE ) );
+    #ifdef _WIN64
+        BOOST_VERIFY
+        (
+            ::SetFilePointerEx( file_handle, 0, NULL, FILE_BEGIN ) ||
+            ( file_handle == INVALID_HANDLE_VALUE )
+        );
+    #else // _WIN32/64
+        BOOST_VERIFY( ( ::SetFilePointer( file_handle, 0, NULL, FILE_BEGIN ) == 0 ) || ( file_handle == INVALID_HANDLE_VALUE ) );
+    #endif // _WIN32/64
 
     return success != false;
 }
@@ -71,9 +87,15 @@ bool set_size( handle<win32>::reference const file_handle, std::size_t const des
 BOOST_IMPL_INLINE
 std::size_t get_size( handle<win32>::reference const file_handle )
 {
-    DWORD const file_size( ::GetFileSize( file_handle, 0 ) );
-    BOOST_ASSERT( ( file_size != INVALID_FILE_SIZE ) || ( file_handle == INVALID_HANDLE_VALUE ) || ( ::GetLastError() == NO_ERROR ) );
-    return file_size;
+    #ifdef _WIN64
+        LARGE_INTEGER file_size;
+        BOOST_VERIFY( ::GetFileSizeEx( file_handle, &file_size ) || ( file_handle == INVALID_HANDLE_VALUE ) );
+        return file_size.QuadPart;
+    #else // _WIN32/64
+        DWORD const file_size( ::GetFileSize( file_handle, 0 ) );
+        BOOST_ASSERT( ( file_size != INVALID_FILE_SIZE ) || ( file_handle == INVALID_HANDLE_VALUE ) || ( ::GetLastError() == NO_ERROR ) );
+        return file_size;
+    #endif // _WIN32/64
 }
 
 //------------------------------------------------------------------------------
