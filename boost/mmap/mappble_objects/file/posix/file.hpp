@@ -17,6 +17,7 @@
 #define file_hpp__1E2F9841_1C6C_40D9_9AA7_BAC0003CD909
 #pragma once
 //------------------------------------------------------------------------------
+#include "../../../implementations.hpp"
 #include "../../../handles/posix/handle.hpp"
 
 #include <cstddef>
@@ -38,13 +39,19 @@ template <class    Handle> struct is_resizable;
 #endif // BOOST_HAS_UNISTD_H
 
 
-handle<posix> create_file( char const * file_name, file_flags<posix> const & );
+handle<posix> create_file( char    const * file_name, file_flags<posix> const & );
+#ifdef BOOST_MSVC
+handle<posix> create_file( wchar_t const * file_name, file_flags<posix> const & );
+#endif // BOOST_MSVC
+
+bool delete_file( char    const * file_name, posix );
+bool delete_file( wchar_t const * file_name, posix );
 
 
 #ifdef BOOST_HAS_UNISTD_H
-bool        set_size( handle_ref< handle<posix> >, std::size_t desired_size );
+bool        set_size( handle<posix>::reference, std::size_t desired_size );
 #endif // BOOST_HAS_UNISTD_H
-std::size_t get_size( handle_ref< handle<posix> >                           );
+std::size_t get_size( handle<posix>::reference                           );
 
 //------------------------------------------------------------------------------
 } // namespace mmap

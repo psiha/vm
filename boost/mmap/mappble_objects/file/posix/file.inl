@@ -23,6 +23,7 @@
 #ifdef BOOST_MSVC
     #pragma warning ( disable : 4996 ) // "The POSIX name for this item is deprecated. Instead, use the ISO C++ conformant name."
     #include "io.h"
+    #include "wchar.h"
 #else
     #include "sys/mman.h"      // mmap, munmap.
     #include "sys/stat.h"
@@ -51,6 +52,35 @@ handle<posix> create_file( char const * const file_name, file_flags<posix> const
 
     return handle<posix>( file_handle );
 }
+
+#ifdef BOOST_MSVC
+BOOST_IMPL_INLINE
+handle<posix> create_file( wchar_t const * const file_name, file_flags<posix> const & flags )
+{
+    BOOST_ASSERT( file_name );
+
+    int const current_mask( ::umask( 0 ) );
+    int const file_handle ( ::_wopen( file_name, flags.oflag, flags.pmode ) );
+    BOOST_VERIFY( ::umask( current_mask ) == 0 );
+
+    return handle<posix>( file_handle );
+}
+#endif // BOOST_MSVC
+
+
+BOOST_IMPL_INLINE
+bool delete_file( char const * const file_name, posix )
+{
+    return ::unlink( file_name ) == 0;
+}
+
+#ifdef BOOST_MSVC
+BOOST_IMPL_INLINE
+bool delete_file( wchar_t const * const file_name, posix )
+{
+    return ::_wunlink( file_name ) == 0;
+}
+#endif // BOOST_MSVC
 
 
 #ifdef BOOST_HAS_UNISTD_H

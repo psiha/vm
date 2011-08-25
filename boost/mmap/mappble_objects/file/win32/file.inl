@@ -33,8 +33,14 @@ namespace mmap
 //------------------------------------------------------------------------------
 
 BOOST_IMPL_INLINE
-handle<win32> create_file( char const * const file_name, file_flags<win32> const & flags )
+file_handle<win32> create_file( char const * const file_name, file_flags<win32> const & flags )
 {
+    /// \note
+    ///   This typedef is required by MSVC++ 10 SP1 and must be placed before
+    /// the CreateFile call, otherwise it breaks at the return statement.
+    ///                                       (25.08.2011.) (Domagoj Saric)
+    typedef file_handle<win32> win32_file_handle;
+
     BOOST_ASSERT( file_name );
 
     HANDLE const file_handle
@@ -45,13 +51,50 @@ handle<win32> create_file( char const * const file_name, file_flags<win32> const
         )
     );
     BOOST_ASSERT( ( file_handle == INVALID_HANDLE_VALUE ) || ( ::GetLastError() == NO_ERROR ) || ( ::GetLastError() == ERROR_ALREADY_EXISTS ) );
+    
+    return win32_file_handle( file_handle );
+}
 
-    return handle<win32>( file_handle );
+BOOST_IMPL_INLINE
+file_handle<win32> create_file( wchar_t const * const file_name, file_flags<win32> const & flags )
+{
+    /// \note
+    ///   This typedef is required by MSVC++ 10 SP1 and must be placed before
+    /// the CreateFile call, otherwise it breaks at the return statement.
+    ///                                       (25.08.2011.) (Domagoj Saric)
+    typedef file_handle<win32> win32_file_handle;
+
+    BOOST_ASSERT( file_name );
+
+    HANDLE const file_handle
+    (
+        ::CreateFileW
+        (
+            file_name, flags.desired_access, flags.share_mode, 0, flags.creation_disposition, flags.flags_and_attributes, 0
+        )
+    );
+    BOOST_ASSERT( ( file_handle == INVALID_HANDLE_VALUE ) || ( ::GetLastError() == NO_ERROR ) || ( ::GetLastError() == ERROR_ALREADY_EXISTS ) );
+    
+    return win32_file_handle( file_handle );
 }
 
 
 BOOST_IMPL_INLINE
-bool set_size( handle<win32>::reference const file_handle, std::size_t const desired_size )
+bool delete_file( char    const * const file_name, win32 )
+{
+    return ::DeleteFileA( file_name ) != false;
+}
+
+BOOST_IMPL_INLINE
+bool delete_file( wchar_t const * const file_name, win32 )
+{
+    return ::DeleteFileW( file_name ) != false;
+}
+
+
+
+BOOST_IMPL_INLINE
+bool set_size( file_handle<win32>::reference const file_handle, std::size_t const desired_size )
 {
     // It is 'OK' to send null/invalid handles to Windows functions (they will
     // simply fail), this simplifies error handling (it is enough to go through
@@ -85,7 +128,7 @@ bool set_size( handle<win32>::reference const file_handle, std::size_t const des
 
 
 BOOST_IMPL_INLINE
-std::size_t get_size( handle<win32>::reference const file_handle )
+std::size_t get_size( file_handle<win32>::reference const file_handle )
 {
     #ifdef _WIN64
         LARGE_INTEGER file_size;

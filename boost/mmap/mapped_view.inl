@@ -131,7 +131,7 @@ mapped_view_reference<unsigned char> mapped_view_reference<unsigned char>::map
     large_integer.QuadPart = desired_size;
     handle<win32> const mapping
     (
-        ::CreateFileMapping( object_handle, 0, flags.create_mapping_flags, large_integer.HighPart, large_integer.LowPart, 0 )
+        ::CreateFileMappingW( object_handle, 0, flags.create_mapping_flags, large_integer.HighPart, large_integer.LowPart, 0 )
     );
     BOOST_ASSERT
     (
@@ -202,7 +202,7 @@ BOOST_IMPL_INLINE
 basic_mapped_view_ref map_file( char const * const file_name, std::size_t desired_size )
 {
     typedef native_file_flags file_flags;
-    native_handle const file_handle
+    file_handle<BOOST_MMAP_IMPL> const file_handle
     (
         create_file
         (
@@ -242,7 +242,7 @@ BOOST_IMPL_INLINE
 basic_mapped_read_only_view_ref map_read_only_file( char const * const file_name )
 {
     typedef native_file_flags file_flags;
-    native_handle const file_handle
+    file_handle<BOOST_MMAP_IMPL> const file_handle
     (
         create_file
         (

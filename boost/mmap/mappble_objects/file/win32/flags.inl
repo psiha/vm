@@ -48,7 +48,7 @@ unsigned int const file_flags<win32>::system_hints::temporary         = FILE_ATT
 
 unsigned int const file_flags<win32>::on_construction_rights::read    = FILE_ATTRIBUTE_READONLY;
 unsigned int const file_flags<win32>::on_construction_rights::write   = FILE_ATTRIBUTE_NORMAL  ;
-unsigned int const file_flags<win32>::on_construction_rights::execute = FILE_ATTRIBUTE_NORMAL  ;
+unsigned int const file_flags<win32>::on_construction_rights::execute = FILE_ATTRIBUTE_READONLY;
 
 BOOST_IMPL_INLINE
 file_flags<win32> file_flags<win32>::create

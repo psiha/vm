@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file implementations.hpp
-/// -------------------------
+/// \file mapping_handle.hpp
+/// ------------------------
 ///
 /// Copyright (c) 2011 Domagoj Saric
 ///
@@ -13,9 +13,10 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef implementations_hpp__CD36EF12_73E1_4058_A57E_6168F337954A
-#define implementations_hpp__CD36EF12_73E1_4058_A57E_6168F337954A
+#ifndef handle_hpp__56DDDE10_05C3_4B18_8DC5_89317D689F99
+#define handle_hpp__56DDDE10_05C3_4B18_8DC5_89317D689F99
 #pragma once
+//------------------------------------------------------------------------------
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -24,14 +25,20 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-struct nt    {};
-struct posix {};
-struct win32 {};
-struct xsi   {};
+template <typename Impl> class handle;
+
+template <typename Impl>
+struct file_handle : handle<Impl>
+{
+    file_handle( typename handle<Impl>::native_handle_t const native_handle )
+        : handle<Impl>( native_handle ) {}
+
+    typedef handle_ref< file_handle<Impl> > reference;
+};
 
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------
 } // namespace boost
 //------------------------------------------------------------------------------
-#endif // implementations_hpp
+#endif // handle_hpp

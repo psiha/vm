@@ -31,6 +31,9 @@ namespace mmap
 
 typedef file_flags<BOOST_MMAP_IMPL> native_file_flags;
 
+inline bool delete_file( char    const * const file_name ) { delete_file( file_name, BOOST_MMAP_IMPL () ); }
+inline bool delete_file( wchar_t const * const file_name ) { delete_file( file_name, BOOST_MMAP_IMPL () ); }
+
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------

@@ -17,10 +17,8 @@
 #define flags_hpp__BFFC0541_21AC_4A80_A9EE_E0450B6D4D8A
 #pragma once
 //------------------------------------------------------------------------------
-#ifdef _WIN32
-#include "../win32_file/flags.hpp"
-#else
-#include "../posix_file/flags.hpp"
-#endif
+#include "../../detail/impl_selection.hpp"
+
+#include BOOST_MMAP_IMPL_INCLUDE( ./, /flags.hpp )
 //------------------------------------------------------------------------------
 #endif // flags_hpp

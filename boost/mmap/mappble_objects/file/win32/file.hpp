@@ -17,7 +17,8 @@
 #define file_hpp__FB482005_18D9_4E3B_9193_A13DBFE88F45
 #pragma once
 //------------------------------------------------------------------------------
-#include "../../../handles/win32/handle.hpp"
+#include "../handle.hpp"
+#include "../../../implementations.hpp"
 
 #include <cstddef>
 //------------------------------------------------------------------------------
@@ -31,13 +32,17 @@ namespace mmap
 template <typename Impl  > struct file_flags;
 template <class    Handle> struct is_resizable;
 
-template <> struct is_resizable< handle<win32> > : mpl::true_ {};
+template <> struct is_resizable< file_handle<win32> > : mpl::true_ {};
 
 
-handle<win32> create_file( char const * file_name, file_flags<win32> const & );
+file_handle<win32> create_file( char    const * file_name, file_flags<win32> const & );
+file_handle<win32> create_file( wchar_t const * file_name, file_flags<win32> const & );
+bool               delete_file( char    const * file_name, win32                     );
+bool               delete_file( wchar_t const * file_name, win32                     );
 
-bool        set_size( handle<win32>::reference, std::size_t desired_size );
-std::size_t get_size( handle<win32>::reference                           );
+
+bool        set_size( file_handle<win32>::reference, std::size_t desired_size );
+std::size_t get_size( file_handle<win32>::reference                           );
 
 
 //------------------------------------------------------------------------------
