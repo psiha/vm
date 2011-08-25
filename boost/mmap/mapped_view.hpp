@@ -71,7 +71,6 @@ struct mapping_flags
 
     struct system_hint
     {
-        static unsigned int const strict_target_address  ;
         static unsigned int const lock_to_ram            ;
         static unsigned int const reserve_page_file_space;
         static unsigned int const precommit              ;

@@ -59,7 +59,6 @@ unsigned int const mapping_flags::handle_access_rights::execute = BOOST_AUX_IO_W
 unsigned int const mapping_flags::share_mode::shared = BOOST_AUX_IO_WIN32_OR_POSIX(             0, MAP_SHARED  );
 unsigned int const mapping_flags::share_mode::hidden = BOOST_AUX_IO_WIN32_OR_POSIX( FILE_MAP_COPY, MAP_PRIVATE );
 
-unsigned int const mapping_flags::system_hint::strict_target_address   = BOOST_AUX_IO_WIN32_OR_POSIX(           0, MAP_FIXED              );
 unsigned int const mapping_flags::system_hint::lock_to_ram             = BOOST_AUX_IO_WIN32_OR_POSIX( SEC_COMMIT , BOOST_AUX_MMAP_POSIX_OR_OSX( MAP_LOCKED, 0 )             );
 unsigned int const mapping_flags::system_hint::reserve_page_file_space = BOOST_AUX_IO_WIN32_OR_POSIX( SEC_RESERVE, /*khm#1*/MAP_NORESERVE );
 unsigned int const mapping_flags::system_hint::precommit               = BOOST_AUX_IO_WIN32_OR_POSIX( SEC_COMMIT , BOOST_AUX_MMAP_POSIX_OR_OSX( MAP_POPULATE, 0 )           );
