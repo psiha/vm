@@ -79,16 +79,22 @@ file_flags<posix> file_flags<posix>::create
     unsigned int  const on_construction_rights
 )
 {
+    unsigned int const oflag
+    (
+        ( ( handle_access_flags == ( O_RDONLY | O_WRONLY ) ) ? O_RDWR : handle_access_flags )
+                |
+            open_flags
+                |
+            system_hints
+    );
+
+    unsigned int const pmode( on_construction_rights );
+
     file_flags<posix> const flags =
     {
-        ( ( handle_access_flags == ( O_RDONLY | O_WRONLY ) ) ? O_RDWR : handle_access_flags )
-            |
-        open_flags
-            |
-        system_hints, // oflag
-        on_construction_rights // pmode
+        static_cast<int>( oflag ),
+        static_cast<int>( pmode )
     };
-
     return flags;
 }
 
