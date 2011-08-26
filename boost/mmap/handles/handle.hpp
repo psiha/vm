@@ -19,7 +19,7 @@
 //------------------------------------------------------------------------------
 #include "../detail/impl_selection.hpp"
 
-#include BOOST_MMAP_IMPL_INCLUDE( ./, /handle.hpp )
+#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /handle.hpp ) )
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -30,7 +30,7 @@ namespace mmap
 
 template <typename Impl> class handle;
 
-typedef handle<BOOST_MMAP_IMPL> native_handle;
+typedef handle<BOOST_MMAP_IMPL()> native_handle;
 
 //------------------------------------------------------------------------------
 } // namespace mmap

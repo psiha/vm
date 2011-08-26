@@ -19,8 +19,8 @@
 //------------------------------------------------------------------------------
 #include "../../detail/impl_selection.hpp"
 
-#include BOOST_MMAP_IMPL_INCLUDE( ./, /file.hpp  )
-#include BOOST_MMAP_IMPL_INCLUDE( ./, /flags.hpp )
+#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /file.hpp  ) )
+#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /flags.hpp ) )
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -29,10 +29,10 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-typedef file_flags<BOOST_MMAP_IMPL> native_file_flags;
+typedef file_flags<BOOST_MMAP_IMPL()> native_file_flags;
 
-inline bool delete_file( char    const * const file_name ) { delete_file( file_name, BOOST_MMAP_IMPL () ); }
-inline bool delete_file( wchar_t const * const file_name ) { delete_file( file_name, BOOST_MMAP_IMPL () ); }
+inline bool delete_file( char    const * const file_name ) { return delete_file( file_name, BOOST_MMAP_IMPL() () ); }
+inline bool delete_file( wchar_t const * const file_name ) { return delete_file( file_name, BOOST_MMAP_IMPL() () ); }
 
 //------------------------------------------------------------------------------
 } // namespace mmap

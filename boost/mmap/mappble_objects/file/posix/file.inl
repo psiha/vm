@@ -41,8 +41,10 @@ namespace mmap
 //------------------------------------------------------------------------------
 
 BOOST_IMPL_INLINE
-handle<posix> create_file( char const * const file_name, file_flags<posix> const & flags )
+file_handle<posix> create_file( char const * const file_name, file_flags<posix> const & flags )
 {
+    typedef file_handle<posix> posix_file_handle;
+
     BOOST_ASSERT( file_name );
 
     int const current_mask( ::umask( 0 ) );
@@ -50,12 +52,12 @@ handle<posix> create_file( char const * const file_name, file_flags<posix> const
     //...zzz...investigate posix_fadvise, posix_madvise, fcntl for the system hints...
     BOOST_VERIFY( ::umask( current_mask ) == 0 );
 
-    return handle<posix>( file_handle );
+    return posix_file_handle( file_handle );
 }
 
 #ifdef BOOST_MSVC
 BOOST_IMPL_INLINE
-handle<posix> create_file( wchar_t const * const file_name, file_flags<posix> const & flags )
+file_handle<posix> create_file( wchar_t const * const file_name, file_flags<posix> const & flags )
 {
     BOOST_ASSERT( file_name );
 
@@ -63,7 +65,7 @@ handle<posix> create_file( wchar_t const * const file_name, file_flags<posix> co
     int const file_handle ( ::_wopen( file_name, flags.oflag, flags.pmode ) );
     BOOST_VERIFY( ::umask( current_mask ) == 0 );
 
-    return handle<posix>( file_handle );
+    return file_handle<posix>( file_handle );
 }
 #endif // BOOST_MSVC
 
@@ -85,7 +87,7 @@ bool delete_file( wchar_t const * const file_name, posix )
 
 #ifdef BOOST_HAS_UNISTD_H
 BOOST_IMPL_INLINE
-bool set_size( handle_ref< handle<posix> > const file_handle, std::size_t const desired_size )
+bool set_size( file_handle<posix>::reference const file_handle, std::size_t const desired_size )
 {
     return ::ftruncate( file_handle, desired_size ) != -1;
 }
@@ -93,7 +95,7 @@ bool set_size( handle_ref< handle<posix> > const file_handle, std::size_t const 
 
 
 BOOST_IMPL_INLINE
-std::size_t get_size( handle_ref< handle<posix> > const file_handle )
+std::size_t get_size( file_handle<posix>::reference const file_handle )
 {
     struct stat file_info;
     BOOST_VERIFY( ::fstat( file_handle, &file_info ) == 0 );

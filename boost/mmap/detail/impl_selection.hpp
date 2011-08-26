@@ -13,26 +13,30 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#pragma once
 #ifndef impl_selection_hpp__05AF14B5_B23B_4CB8_A253_FD2D07B37ECF
 #define impl_selection_hpp__05AF14B5_B23B_4CB8_A253_FD2D07B37ECF
+#pragma once
 //------------------------------------------------------------------------------
 #include "boost/preprocessor/cat.hpp"
 #include "boost/preprocessor/stringize.hpp"
+
+// Implementation note:
+//   "Anti-pattern" forward includes to reduce the verbosity of files that
+// include this header.
+//                                            (26.08.2011.) (Domagoj Saric)
+#include "boost/preprocessor/facilities/empty.hpp"
+#include "boost/preprocessor/facilities/identity.hpp"
 //------------------------------------------------------------------------------
 #if defined( _WIN32 )
-    #define BOOST_MMAP_IMPL win32
+    #define BOOST_MMAP_IMPL() win32
 #elif defined( _WIN32_WINNT )
-    #define BOOST_MMAP_IMPL nt
+    #define BOOST_MMAP_IMPL() nt
 #elif defined( BOOST_HAS_UNISTD_H )
-    #define BOOST_MMAP_IMPL posix
+    #define BOOST_MMAP_IMPL() posix
 #endif
 
-#define BOOST_MMAP_IMPL_INCLUDE( prefix_path, include )                         \
-    BOOST_PP_STRINGIZE                                                          \
-    (                                                                           \
-        BOOST_PP_CAT( BOOST_PP_CAT( prefix_path, BOOST_MMAP_IMPL ), include )   \
-    )
+#define BOOST_MMAP_IMPL_INCLUDE( prefix_path, include ) \
+    BOOST_PP_STRINGIZE( prefix_path()BOOST_MMAP_IMPL()include() )
 
 //------------------------------------------------------------------------------
 #endif // impl_selection_hpp

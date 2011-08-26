@@ -16,6 +16,8 @@
 #include "mapped_view.hpp"
 
 #include "detail/impl_inline.hpp"
+#include "implementations.hpp"
+#include "mappble_objects/file/handle.hpp"
 
 #include "boost/assert.hpp"
 
@@ -201,7 +203,7 @@ BOOST_IMPL_INLINE
 basic_mapped_view_ref map_file( char const * const file_name, std::size_t desired_size )
 {
     typedef native_file_flags file_flags;
-    file_handle<BOOST_MMAP_IMPL> const file_handle
+    file_handle<BOOST_MMAP_IMPL()> const file_handle
     (
         create_file
         (
@@ -241,7 +243,7 @@ BOOST_IMPL_INLINE
 basic_mapped_read_only_view_ref map_read_only_file( char const * const file_name )
 {
     typedef native_file_flags file_flags;
-    file_handle<BOOST_MMAP_IMPL> const file_handle
+    file_handle<BOOST_MMAP_IMPL()> const file_handle
     (
         create_file
         (
