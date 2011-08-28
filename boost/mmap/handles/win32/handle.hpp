@@ -41,7 +41,6 @@ class handle<win32> : noncopyable
 public:
     typedef void *                      native_handle_t;
     typedef handle_ref< handle<win32> > reference;
-    typedef void * native_handle_t;
 
     explicit handle<win32>( native_handle_t );
     ~handle<win32>();
@@ -67,6 +66,6 @@ private:
 
 #ifdef BOOST_MMAP_HEADER_ONLY
     #include "handle.inl"
-#endif
+#endif // BOOST_MMAP_HEADER_ONLY
 
 #endif // handle_hpp
