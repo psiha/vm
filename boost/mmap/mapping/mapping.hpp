@@ -36,4 +36,9 @@ struct mapping;
 //------------------------------------------------------------------------------
 } // namespace boost
 //------------------------------------------------------------------------------
+
+#ifdef BOOST_MMAP_HEADER_ONLY
+    #include "mapping.inl"
+#endif // BOOST_MMAP_HEADER_ONLY
+
 #endif // mapping_hpp
