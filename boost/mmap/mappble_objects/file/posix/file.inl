@@ -18,7 +18,7 @@
 #include "open_flags.hpp"
 #include "../../../detail/impl_inline.hpp"
 #include "../../../detail/posix.hpp"
-#include "../../../mapping/posix.hpp"
+#include "../../../mapping/posix/mapping.hpp"
 
 #include "boost/assert.hpp"
 

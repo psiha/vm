@@ -36,8 +36,8 @@ struct mapping<posix>
     :
     handle<posix>::reference
 {
-    typedef handle<posix>::handle_t         native_handle_t;
-    typedef mapping                 const & reference;
+    typedef handle<posix>::native_handle_t         native_handle_t;
+    typedef mapping                        const & reference;
 
     BOOST_STATIC_CONSTANT( bool, owns_parent_handle = false );
 

@@ -54,7 +54,7 @@ struct file_mapping_flags<posix>
         {
             shared = MAP_SHARED,
             hidden = MAP_PRIVATE
-        }
+        };
     };
 
     static file_mapping_flags<posix> create

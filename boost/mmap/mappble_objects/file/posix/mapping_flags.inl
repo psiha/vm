@@ -29,10 +29,10 @@ file_mapping_flags<posix> file_mapping_flags<posix>::create
     share_mode::value_type const share_mode
 )
 {
-    mapping_flags flags;
+    file_mapping_flags<posix> flags;
 
     flags.protection = combined_handle_access_flags;
-    flags.flags      = share_mode | system_hints;
+    flags.flags      = share_mode;
 
     return flags;
 }
