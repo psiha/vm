@@ -33,14 +33,14 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-typedef iterator_range<unsigned char       *> basic_memory_range_t;
-typedef iterator_range<unsigned char const *> basic_read_only_memory_range_t;
+typedef iterator_range<char       *> basic_memory_range_t;
+typedef iterator_range<char const *> basic_read_only_memory_range_t;
 
 template <typename Element, typename Impl = BOOST_MMAP_IMPL()>
 class mapped_view_reference;
 
-typedef mapped_view_reference<unsigned char      > basic_mapped_view_ref;
-typedef mapped_view_reference<unsigned char const> basic_mapped_read_only_view_ref;
+typedef mapped_view_reference<char      > basic_mapped_view_ref;
+typedef mapped_view_reference<char const> basic_mapped_read_only_view_ref;
 
 namespace detail
 {
@@ -55,16 +55,16 @@ namespace detail
             std  ::size_t           desired_size
         )
         {
-            return make_typed_view( mapper<unsigned char, Impl>::map( source_mapping, offset, desired_size ) );
+            return make_typed_view( mapper<char, Impl>::map( source_mapping, offset, desired_size ) );
         }
 
         static void unmap( mapped_view_reference<Element, Impl> const & view )
         {
-            mapper<unsigned char, Impl>::unmap( make_basic_view( view ) );
+            mapper<char, Impl>::unmap( make_basic_view( view ) );
         }
 
     private:
-        static mapped_view_reference<unsigned char, Impl>
+        static mapped_view_reference<char, Impl>
         #ifdef BOOST_MSVC
             const &
         #endif
@@ -74,20 +74,20 @@ namespace detail
         #ifdef BOOST_MSVC
             const &
         #endif
-        make_typed_view( mapped_view_reference<unsigned char, Impl> const & );
+        make_typed_view( mapped_view_reference<char, Impl> const & );
     };
 
     template <typename Impl>
-    struct mapper<unsigned char, Impl>
+    struct mapper<char, Impl>
     {
-        static mapped_view_reference<unsigned char, Impl> map
+        static mapped_view_reference<char, Impl> map
         (
             mapping<Impl>   const & source_mapping,
             boost::uint64_t         offset        ,
             std  ::size_t           desired_size
         );
 
-        static void unmap( mapped_view_reference<unsigned char, Impl> const & );
+        static void unmap( mapped_view_reference<char, Impl> const & );
     };
 } // namespace detail
 
@@ -141,7 +141,7 @@ namespace detail
     //                                        (14.07.2011.) (Domagoj Saric)
 
     template <typename Element, typename Impl>
-    mapped_view_reference<unsigned char, Impl>
+    mapped_view_reference<char, Impl>
     #ifdef BOOST_MSVC
         const &
     #endif
@@ -149,12 +149,12 @@ namespace detail
     {
         return
         #ifdef BOOST_MSVC
-            reinterpret_cast<mapped_view_reference<unsigned char, Impl> const &>( range );
+            reinterpret_cast<mapped_view_reference<char, Impl> const &>( range );
         #else // compiler might care about strict aliasing rules
-            mapped_view_reference<unsigned char, Impl>
+            mapped_view_reference<char, Impl>
             (
-                static_cast<unsigned char *>( const_cast<void *>( static_cast<void const *>( range.begin() ) ) ),
-                static_cast<unsigned char *>( const_cast<void *>( static_cast<void const *>( range.end  () ) ) )
+                static_cast<char *>( const_cast<void *>( static_cast<void const *>( range.begin() ) ) ),
+                static_cast<char *>( const_cast<void *>( static_cast<void const *>( range.end  () ) ) )
             );
         #endif // compiler
     }
@@ -165,7 +165,7 @@ namespace detail
     #ifdef BOOST_MSVC
         const &
     #endif
-    mapper<Element, Impl>::make_typed_view( mapped_view_reference<unsigned char, Impl> const & range )
+    mapper<Element, Impl>::make_typed_view( mapped_view_reference<char, Impl> const & range )
     {
         //...zzz...add proper error handling...
         BOOST_ASSERT( reinterpret_cast<std::size_t>( range.begin() ) % sizeof( Element ) == 0 );
@@ -216,6 +216,7 @@ public:
     #endif // BOOST_MSVC
 };
 
+typedef mapped_view<char> basic_mapped_view;
 
 basic_mapped_view_ref           map_file          ( char const * file_name, std::size_t desired_size );
 basic_mapped_read_only_view_ref map_read_only_file( char const * file_name                           );

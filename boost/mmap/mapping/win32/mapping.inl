@@ -25,9 +25,9 @@ namespace mmap
 //------------------------------------------------------------------------------
 
 template <>
-struct detail::mapper<unsigned char, win32>
+struct detail::mapper<char, win32>
 {
-    static mapped_view_reference<unsigned char, win32> map
+    static mapped_view_reference<char, win32> map
     (
         mapping<win32>  const & source_mapping,
         boost::uint64_t         offset        ,
@@ -40,7 +40,7 @@ struct detail::mapper<unsigned char, win32>
         // http://msdn.microsoft.com/en-us/library/aa366537(VS.85).aspx
         //                                        (26.03.2010.) (Domagoj Saric)
 
-        typedef mapped_view_reference<unsigned char, win32>::iterator iterator;
+        typedef mapped_view_reference<char, win32>::iterator iterator;
 
         ULARGE_INTEGER large_integer;
         large_integer.QuadPart = offset;
@@ -60,7 +60,7 @@ struct detail::mapper<unsigned char, win32>
             )
         );
 
-        return mapped_view_reference<unsigned char>
+        return mapped_view_reference<char>
         (
             view_start,
             view_start
@@ -69,7 +69,7 @@ struct detail::mapper<unsigned char, win32>
         );
     }
 
-    static void unmap( mapped_view_reference<unsigned char, win32> const & view )
+    static void unmap( mapped_view_reference<char, win32> const & view )
     {
         BOOST_VERIFY( ::UnmapViewOfFile( view.begin() ) || view.empty() );
     }

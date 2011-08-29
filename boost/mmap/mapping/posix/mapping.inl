@@ -25,16 +25,16 @@ namespace mmap
 //------------------------------------------------------------------------------
 
 template <>
-struct detail::mapper<unsigned char, posix>
+struct detail::mapper<char, posix>
 {
-    static mapped_view_reference<unsigned char, posix> map
+    static mapped_view_reference<char, posix> map
     (
         mapping<posix>  const & source_mapping,
         boost::uint64_t         offset        ,
         std  ::size_t           desired_size
     )
     {
-        typedef mapped_view_reference<unsigned char, posix>::iterator iterator;
+        typedef mapped_view_reference<char, posix>::iterator iterator;
 
         iterator const view_start
         (
@@ -52,7 +52,7 @@ struct detail::mapper<unsigned char, posix>
             )
         );
 
-        return mapped_view_reference<unsigned char>
+        return mapped_view_reference<char>
         (
             view_start,
             ( view_start != MAP_FAILED )
@@ -61,7 +61,7 @@ struct detail::mapper<unsigned char, posix>
         );
     }
 
-    static void unmap( mapped_view_reference<unsigned char, posix> const & view )
+    static void unmap( mapped_view_reference<char, posix> const & view )
     {
         BOOST_VERIFY
         (
