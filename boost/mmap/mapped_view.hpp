@@ -107,7 +107,7 @@ public: // Factory methods.
     );
 
 private:
-    template <typename T, typename Impl> friend class detail::mapped_view_base;
+    template <typename Element_, typename Impl_> friend class detail::mapped_view_base;
 
     mapped_view_reference( iterator_range<Element *> const & mapped_range ) : detail::mapped_view_base<Element, Impl>( mapped_range   ) {}
     mapped_view_reference( Element * const p_begin, Element * const p_end ) : detail::mapped_view_base<Element, Impl>( p_begin, p_end ) {}
@@ -194,8 +194,8 @@ template <typename Element, typename Impl>
 mapped_view_reference<Element, Impl> mapped_view_reference<Element, Impl>::map
 (
     mapping<Impl>   const & source_mapping,
-    boost::uint64_t         offset       = 0,
-    std  ::size_t           desired_size = 0
+    boost::uint64_t         offset        ,
+    std  ::size_t           desired_size
 )
 {
     BOOST_ASSERT_MSG( !boost::is_const<Element>::value || source_mapping.is_read_only(), "Use const element mapped view for read only mappings." );
