@@ -31,7 +31,7 @@ template <typename Impl> struct shared_memory_flags;
 
 struct posix;
 
-typedef unsigned flags_t;
+typedef int flags_t;
 
 template <>
 struct shared_memory_flags<posix> : file_mapping_flags<posix>

@@ -30,7 +30,7 @@ namespace mmap
 
 template <typename Impl> struct file_open_flags;
 
-typedef unsigned int flags_t;
+typedef int flags_t;
 
 // Implementation note:
 //   Using structs with public members and factory functions to enable (almost)

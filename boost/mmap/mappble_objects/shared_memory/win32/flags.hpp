@@ -30,7 +30,7 @@ template <typename Impl> struct shared_memory_flags;
 
 struct win32;
 
-typedef unsigned flags_t;
+typedef int flags_t;
 
 template <>
 struct shared_memory_flags<win32> : file_mapping_flags<win32>

@@ -32,7 +32,7 @@ template <typename Impl> struct file_mapping_flags;
 
 struct posix;
 
-typedef unsigned flags_t;
+typedef int flags_t;
 
 template <>
 struct file_mapping_flags<posix>

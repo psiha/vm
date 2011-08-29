@@ -29,15 +29,7 @@ namespace mmap
 
 template <typename Impl> struct file_open_flags;
 
-// Implementation note:
-//   Using structs with public members and factory functions to enable (almost)
-// zero-overhead 'link-time' conversion to native flag formats and to allow the
-// user to modify the created flags or create fully custom ones so that specific
-// platform-dependent use-cases, not otherwise covered through the generic
-// interface, can also be covered.
-//                                            (10.10.2010.) (Domagoj Saric)
-
-typedef unsigned flags_t;
+typedef int flags_t;
 
 template <>
 struct file_open_flags<win32>
