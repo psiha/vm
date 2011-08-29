@@ -64,8 +64,8 @@ basic_mapped_view_ref map_file( char const * const file_name, std::size_t desire
                 mapping_flags::share_mode          ::shared
             )
         ),
-        desired_size,
-        0
+        0,
+        desired_size
     );
 }
 
@@ -100,8 +100,8 @@ basic_mapped_read_only_view_ref map_read_only_file( char const * const file_name
                 mapping_flags::share_mode          ::shared
             )
         ),
-        get_size( file_handle.get() ),
-        0
+        0,
+        get_size( file_handle.get() )
     );
 }
 

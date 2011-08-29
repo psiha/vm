@@ -25,55 +25,55 @@ namespace mmap
 //------------------------------------------------------------------------------
 
 template <>
-BOOST_IMPL_INLINE
-mapped_view_reference<unsigned char, win32> mapped_view_reference<unsigned char, win32>::map
-(
-    mapping<win32>  const &       source_mapping,
-    boost::uint64_t         const offset        ,
-    std  ::size_t           const desired_size
-)
+struct detail::mapper<unsigned char, win32>
 {
-    // Implementation note:
-    // Mapped views hold internal references to the following handles so we do
-    // not need to hold/store them ourselves:
-    // http://msdn.microsoft.com/en-us/library/aa366537(VS.85).aspx
-    //                                        (26.03.2010.) (Domagoj Saric)
-
-    typedef mapped_view_reference<unsigned char, win32>::iterator iterator_t;
-
-    ULARGE_INTEGER large_integer;
-    large_integer.QuadPart = offset;
-
-    iterator_t const view_start
+    static mapped_view_reference<unsigned char, win32> map
     (
-        static_cast<iterator_t>
+        mapping<win32>  const & source_mapping,
+        boost::uint64_t         offset        ,
+        std  ::size_t           desired_size
+    )
+    {
+        // Implementation note:
+        // Mapped views hold internal references to the following handles so we do
+        // not need to hold/store them ourselves:
+        // http://msdn.microsoft.com/en-us/library/aa366537(VS.85).aspx
+        //                                        (26.03.2010.) (Domagoj Saric)
+
+        typedef mapped_view_reference<unsigned char, win32>::iterator iterator;
+
+        ULARGE_INTEGER large_integer;
+        large_integer.QuadPart = offset;
+
+        iterator const view_start
         (
-            ::MapViewOfFile
+            static_cast<iterator>
             (
-                source_mapping.get(),
-                source_mapping.view_mapping_flags,
-                large_integer.HighPart,
-                large_integer.LowPart,
-                desired_size
+                ::MapViewOfFile
+                (
+                    source_mapping.get(),
+                    source_mapping.view_mapping_flags,
+                    large_integer.HighPart,
+                    large_integer.LowPart,
+                    desired_size
+                )
             )
-        )
-    );
+        );
 
-    return mapped_view_reference<unsigned char>
-    (
-        view_start,
-        view_start
-            ? view_start + desired_size
-            : view_start
-    );
-}
+        return mapped_view_reference<unsigned char>
+        (
+            view_start,
+            view_start
+                ? view_start + desired_size
+                : view_start
+        );
+    }
 
-
-template <> BOOST_IMPL_INLINE
-void detail::mapped_view_base<unsigned char const, win32>::unmap( detail::mapped_view_base<unsigned char const, win32> const & mapped_range )
-{
-    BOOST_VERIFY( ::UnmapViewOfFile( mapped_range.begin() ) || mapped_range.empty() );
-}
+    static void unmap( mapped_view_reference<unsigned char, win32> const & view )
+    {
+        BOOST_VERIFY( ::UnmapViewOfFile( view.begin() ) || view.empty() );
+    }
+};
 
 //------------------------------------------------------------------------------
 } // mmap

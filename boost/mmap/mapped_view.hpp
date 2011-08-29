@@ -17,10 +17,12 @@
 #define mapped_view_hpp__D9C84FF5_E506_4ECB_9778_61E036048D28
 #pragma once
 //------------------------------------------------------------------------------
-#include "handles/handle.hpp"
 #include "detail/impl_selection.hpp"
+#include "handles/handle.hpp"
+#include "mapping/mapping.hpp"
 
 #include "boost/assert.hpp"
+#include "boost/cstdint.hpp"
 #include "boost/noncopyable.hpp"
 #include "boost/range/iterator_range_core.hpp"
 //------------------------------------------------------------------------------
@@ -43,60 +45,59 @@ typedef mapped_view_reference<unsigned char const> basic_mapped_read_only_view_r
 namespace detail
 {
     template <typename Element, typename Impl>
-    class mapped_view_base : public iterator_range<Element *>
+    struct mapper
     {
     public:
-        typedef iterator_range<Element *> memory_range_t;
+        static mapped_view_reference<Element, Impl> map
+        (
+            mapping<Impl>   const & source_mapping,
+            boost::uint64_t         offset        ,
+            std  ::size_t           desired_size
+        )
+        {
+            return make_typed_view( mapper<unsigned char, Impl>::map( source_mapping, offset, desired_size ) );
+        }
 
-    public: // Factory methods.
-        static void unmap( mapped_view_base const & );
+        static void unmap( mapped_view_reference<Element, Impl> const & view )
+        {
+            mapper<unsigned char, Impl>::unmap( make_basic_view( view ) );
+        }
 
-    protected:
-        mapped_view_base( iterator_range<Element *> const & mapped_range ) : iterator_range<Element *>( mapped_range   ) {}
-        mapped_view_base( Element * const p_begin, Element * const p_end ) : iterator_range<Element *>( p_begin, p_end ) {}
-
-        static mapped_view_reference<unsigned char const, Impl>
+    private:
+        static mapped_view_reference<unsigned char, Impl>
         #ifdef BOOST_MSVC
             const &
         #endif
-        make_basic_view( mapped_view_base<Element, Impl> const & );
+        make_basic_view( mapped_view_reference<Element, Impl> const & );
 
         static mapped_view_reference<Element, Impl>
         #ifdef BOOST_MSVC
             const &
         #endif
-        make_typed_range( mapped_view_base<unsigned char, Impl> const & );
-
-    private: // Hide mutable members
-        void advance_begin();
-        void advance_end  ();
-
-        void pop_front();
-        void pop_back ();
+        make_typed_view( mapped_view_reference<unsigned char, Impl> const & );
     };
 
-
-    template <typename Element, typename Impl>
-    void mapped_view_base<Element, Impl>::unmap( mapped_view_base<Element, Impl> const & mapped_range )
+    template <typename Impl>
+    struct mapper<unsigned char, Impl>
     {
-        mapped_view_base<unsigned char const, Impl>::unmap( make_basic_view( mapped_range ) );
-    }
+        static mapped_view_reference<unsigned char, Impl> map
+        (
+            mapping<Impl>   const & source_mapping,
+            boost::uint64_t         offset        ,
+            std  ::size_t           desired_size
+        );
+
+        static void unmap( mapped_view_reference<unsigned char, Impl> const & );
+    };
 } // namespace detail
 
 template <typename Impl> struct mapping;
 
 template <typename Element, typename Impl>
-class mapped_view_reference : public detail::mapped_view_base<Element, Impl>
+class mapped_view_reference : public iterator_range<Element *>
 {
 public:
-    basic_memory_range_t basic_range() const
-    {
-        return basic_memory_range_t
-        (
-            static_cast<unsigned char *>( static_cast<void *>( this->begin() ) ),
-            static_cast<unsigned char *>( static_cast<void *>( this->end  () ) )
-        );
-    }
+    typedef iterator_range<Element *> memory_range_t;
 
 public: // Factory methods.
     static mapped_view_reference map
@@ -104,26 +105,32 @@ public: // Factory methods.
         mapping<Impl>   const & source_mapping,
         boost::uint64_t         offset       = 0,
         std  ::size_t           desired_size = 0
-    );
+    )
+    {
+        BOOST_ASSERT_MSG
+        (
+            !boost::is_const<Element>::value || source_mapping.is_read_only(),
+            "Use const element mapped view for read only mappings."
+        );
+        return detail::mapper<Element, Impl>::map( source_mapping, offset, desired_size );
+    }
 
-private:
-    template <typename Element_, typename Impl_> friend class detail::mapped_view_base;
+    static void unmap( mapped_view_reference const & view )
+    {
+        detail::mapper<Element, Impl>::unmap( view );
+    }
 
-    mapped_view_reference( iterator_range<Element *> const & mapped_range ) : detail::mapped_view_base<Element, Impl>( mapped_range   ) {}
-    mapped_view_reference( Element * const p_begin, Element * const p_end ) : detail::mapped_view_base<Element, Impl>( p_begin, p_end ) {}
+private: template <typename Element_, typename Impl_> friend struct detail::mapper;
+    mapped_view_reference( iterator_range<Element *> const & mapped_range ) : iterator_range<Element *>( mapped_range   ) {}
+    mapped_view_reference( Element * const p_begin, Element * const p_end ) : iterator_range<Element *>( p_begin, p_end ) {}
+
+private: // Hide mutable members
+    void advance_begin();
+    void advance_end  ();
+
+    void pop_front();
+    void pop_back ();
 };
-
-
-//...zzz...
-//template <typename Element, typename Impl>
-//basic_read_only_memory_range_t mapped_view_reference<Element const, Impl>::basic_range() const
-//{
-//    return basic_read_only_memory_range_t
-//    (
-//        static_cast<unsigned char const *>( static_cast<void const *>( this->begin() ) ),
-//        static_cast<unsigned char const *>( static_cast<void const *>( this->end  () ) )
-//    );
-//}
 
 
 namespace detail
@@ -134,20 +141,20 @@ namespace detail
     //                                        (14.07.2011.) (Domagoj Saric)
 
     template <typename Element, typename Impl>
-    mapped_view_reference<unsigned char const, Impl>
+    mapped_view_reference<unsigned char, Impl>
     #ifdef BOOST_MSVC
         const &
     #endif
-    mapped_view_base<Element, Impl>::make_basic_view( mapped_view_base<Element, Impl> const & range )
+    mapper<Element, Impl>::make_basic_view( mapped_view_reference<Element, Impl> const & range )
     {
         return
         #ifdef BOOST_MSVC
-            reinterpret_cast<mapped_view_reference<unsigned char const, Impl> const &>( range );
+            reinterpret_cast<mapped_view_reference<unsigned char, Impl> const &>( range );
         #else // compiler might care about strict aliasing rules
-            mapped_view_reference<unsigned char const, Impl>
+            mapped_view_reference<unsigned char, Impl>
             (
-                static_cast<unsigned char const *>( static_cast<void const *>( range.begin() ) ),
-                static_cast<unsigned char const *>( static_cast<void const *>( range.end  () ) )
+                static_cast<unsigned char *>( const_cast<void *>( static_cast<void const *>( range.begin() ) ) ),
+                static_cast<unsigned char *>( const_cast<void *>( static_cast<void const *>( range.end  () ) ) )
             );
         #endif // compiler
     }
@@ -158,8 +165,9 @@ namespace detail
     #ifdef BOOST_MSVC
         const &
     #endif
-    mapped_view_base<Element, Impl>::make_typed_range( mapped_view_base<unsigned char, Impl> const & range )
+    mapper<Element, Impl>::make_typed_view( mapped_view_reference<unsigned char, Impl> const & range )
     {
+        //...zzz...add proper error handling...
         BOOST_ASSERT( reinterpret_cast<std::size_t>( range.begin() ) % sizeof( Element ) == 0 );
         BOOST_ASSERT( reinterpret_cast<std::size_t>( range.end  () ) % sizeof( Element ) == 0 );
         BOOST_ASSERT(                                range.size ()   % sizeof( Element ) == 0 );
@@ -189,27 +197,6 @@ template <> struct is_mappable<wchar_t                              *> : mpl::tr
 template <> struct is_mappable<wchar_t                        const *> : mpl::true_ {};
 template <> struct is_mappable<handle<win32>::native_handle_t        > : mpl::true_ {};
 #endif // _WIN32
-
-template <typename Element, typename Impl>
-mapped_view_reference<Element, Impl> mapped_view_reference<Element, Impl>::map
-(
-    mapping<Impl>   const & source_mapping,
-    boost::uint64_t         offset        ,
-    std  ::size_t           desired_size
-)
-{
-    BOOST_ASSERT_MSG( !boost::is_const<Element>::value || source_mapping.is_read_only(), "Use const element mapped view for read only mappings." );
-    return mapped_view_reference<unsigned char, Impl>::map( source_mapping, offset, desired_size );
-}
-
-//...zzz...
-//template <unsigned char, typename Impl>
-//static mapped_view_reference<unsigned char, Impl> mapped_view_reference<unsigned char, Impl>::map
-//(
-//    mapping<Impl>   const & source_mapping,
-//    boost::uint64_t         offset       = 0,
-//    std  ::size_t           desired_size = 0
-//);
 
 
 template <typename Element, typename Impl = BOOST_MMAP_IMPL()>
