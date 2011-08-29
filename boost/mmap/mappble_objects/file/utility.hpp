@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file mapped_view.inl
-/// ---------------------
+/// \file utility.hpp
+/// -----------------
 ///
 /// Copyright (c) Domagoj Saric 2010.-2011.
 ///
@@ -13,7 +13,13 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#include "mapped_view.hpp"
+#ifndef utility_hpp__3713A8AF_A516_4A23_BE6A_2BB79EBF7B5F
+#define utility_hpp__3713A8AF_A516_4A23_BE6A_2BB79EBF7B5F
+#pragma once
+//------------------------------------------------------------------------------
+#include "../../mapped_view.hpp"
+
+#include <cstddef>
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -22,9 +28,17 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
+basic_mapped_view_ref           map_file          ( char const * file_name, std::size_t desired_size );
+basic_mapped_read_only_view_ref map_read_only_file( char const * file_name                           );
 
 //------------------------------------------------------------------------------
-} // mmap
+} // namespace mmap
 //------------------------------------------------------------------------------
-} // boost
+} // namespace boost
 //------------------------------------------------------------------------------
+
+#ifdef BOOST_MMAP_HEADER_ONLY
+    #include "utility.inl"
+#endif // BOOST_MMAP_HEADER_ONLY
+
+#endif // utility_hpp

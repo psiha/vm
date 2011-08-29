@@ -218,9 +218,6 @@ public:
 
 typedef mapped_view<char> basic_mapped_view;
 
-basic_mapped_view_ref           map_file          ( char const * file_name, std::size_t desired_size );
-basic_mapped_read_only_view_ref map_read_only_file( char const * file_name                           );
-
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------
