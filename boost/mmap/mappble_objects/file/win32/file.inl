@@ -15,7 +15,7 @@
 //------------------------------------------------------------------------------
 #include "file.hpp"
 
-#include "flags.hpp"
+#include "open_flags.hpp"
 #include "../../detail/impl_inline.hpp"
 #include "../../detail/windows.hpp"
 

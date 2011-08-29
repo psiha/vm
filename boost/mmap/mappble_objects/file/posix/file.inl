@@ -15,23 +15,17 @@
 //------------------------------------------------------------------------------
 #include "file.hpp"
 
-#include "flags.hpp"
+#include "open_flags.hpp"
 #include "../../../detail/impl_inline.hpp"
+#include "../../../detail/posix.hpp"
+#include "../../../mapping/posix.hpp"
 
 #include "boost/assert.hpp"
 
-#ifdef BOOST_MSVC
-    #pragma warning ( disable : 4996 ) // "The POSIX name for this item is deprecated. Instead, use the ISO C++ conformant name."
-    #include "io.h"
-    #include "wchar.h"
-#else
-    #include "sys/mman.h"      // mmap, munmap.
-    #include "sys/stat.h"
-    #include "sys/types.h"     // struct stat.
-    #include "unistd.h"        // sysconf.
-#endif // BOOST_MSVC
 #include "errno.h"
 #include "fcntl.h"
+#include "sys/stat.h"
+#include "sys/types.h"
 //------------------------------------------------------------------------------
 namespace boost
 {

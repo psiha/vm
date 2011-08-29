@@ -35,7 +35,7 @@ struct file_handle : handle<Impl>
 
     typedef handle_ref< file_handle<Impl> > reference;
 
-    operator reference () const { return reference( get() ); }
+    operator reference () const { return reference( this->get() ); }
 };
 
 //------------------------------------------------------------------------------

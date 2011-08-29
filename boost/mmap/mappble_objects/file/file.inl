@@ -13,9 +13,7 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifdef _WIN32
-    #include "win32/file.inl"
-#else
-    #include "posix/file.inl"
-#endif
+#include "../../detail/impl_selection.hpp"
+
+#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /file.inl  ) )
 //------------------------------------------------------------------------------

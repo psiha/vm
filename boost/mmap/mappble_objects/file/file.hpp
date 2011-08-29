@@ -39,4 +39,9 @@ inline bool delete_file( wchar_t const * const file_name ) { return delete_file(
 //------------------------------------------------------------------------------
 } // namespace boost
 //------------------------------------------------------------------------------
+
+#ifdef BOOST_MMAP_HEADER_ONLY
+    #include "file.inl"
+#endif // BOOST_MMAP_HEADER_ONLY
+
 #endif // file_hpp

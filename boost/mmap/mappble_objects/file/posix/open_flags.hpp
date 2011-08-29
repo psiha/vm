@@ -30,6 +30,8 @@ namespace mmap
 
 template <typename Impl> struct file_open_flags;
 
+typedef unsigned int flags_t;
+
 // Implementation note:
 //   Using structs with public members and factory functions to enable (almost)
 // zero-overhead 'link-time' conversion to native flag formats and to allow the
@@ -49,7 +51,7 @@ struct file_open_flags<posix>
             write   = O_WRONLY,
             execute = O_RDONLY,
             all     = read | write | execute
-        }
+        };
     };
 
     struct open_policy
@@ -72,7 +74,7 @@ struct file_open_flags<posix>
             sequential_access = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0,        0, 0, O_SEQUENTIAL                 ),
             avoid_caching     = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0, O_DIRECT, 0, 0                            ),
             temporary         = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0,        0, 0, O_TEMPORARY | _O_SHORT_LIVED ),
-        }
+        };
     };
 
     struct on_construction_rights
@@ -82,7 +84,7 @@ struct file_open_flags<posix>
             read    = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( S_IRUSR, S_IRUSR, S_IRUSR, _S_IREAD  ),
             write   = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( S_IWUSR, S_IWUSR, S_IWUSR, _S_IWRITE ),
             execute = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( S_IXUSR, S_IXUSR, S_IXUSR, _S_IEXEC  )
-        }
+        };
     };
 
     static file_open_flags<posix> create

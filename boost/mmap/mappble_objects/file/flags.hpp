@@ -22,4 +22,9 @@
 #include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /mapping_flags.hpp ) )
 #include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /open_flags.hpp    ) )
 //------------------------------------------------------------------------------
+
+#ifdef BOOST_MMAP_HEADER_ONLY
+    #include "flags.inl"
+#endif // BOOST_MMAP_HEADER_ONLY
+
 #endif // flags_hpp
