@@ -61,7 +61,7 @@ struct detail::mapper<unsigned char, posix>
         );
     }
 
-    static inline void unmap( mapped_view_reference<unsigned char, posix> const & view )
+    static void unmap( mapped_view_reference<unsigned char, posix> const & view )
     {
         BOOST_VERIFY
         (
