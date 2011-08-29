@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file file.hpp
-/// --------------
+/// \file mapping_flags.hpp
+/// -----------------------
 ///
 /// Copyright (c) Domagoj Saric 2010.-2011.
 ///
@@ -13,14 +13,11 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef file_hpp__D3705ED0_EC0D_4747_A789_1EE17252B6E2
-#define file_hpp__D3705ED0_EC0D_4747_A789_1EE17252B6E2
+#ifndef flags_hpp__504C3F9E_97C2_4E8C_82C6_881340C5FBA6
+#define flags_hpp__504C3F9E_97C2_4E8C_82C6_881340C5FBA6
 #pragma once
 //------------------------------------------------------------------------------
-#include "../../detail/impl_selection.hpp"
-
-#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /file.hpp  ) )
-#include "flags.hpp"
+#include "../../file/win32/mapping_flags.hpp"
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -29,14 +26,41 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-typedef file_open_flags<BOOST_MMAP_IMPL()> native_file_open_flags;
+template <typename Impl> struct shared_memory_flags;
 
-inline bool delete_file( char    const * const file_name ) { return delete_file( file_name, BOOST_MMAP_IMPL() () ); }
-inline bool delete_file( wchar_t const * const file_name ) { return delete_file( file_name, BOOST_MMAP_IMPL() () ); }
+struct win32;
+
+typedef unsigned flags_t;
+
+template <>
+struct shared_memory_flags<win32> : file_mapping_flags<win32>
+{
+    struct system_hints
+    {
+        enum value_type
+        {
+            default                    = 0x8000000,
+            only_reserve_address_space = 0x4000000
+        }
+    };
+
+    static shared_memory_flags<win32> create
+    (
+        flags_t                  combined_handle_access_rights,
+        share_mode  ::value_type share_mode,
+        system_hints::value_type system_hint
+    );
+};
+
 
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------
 } // namespace boost
 //------------------------------------------------------------------------------
-#endif // file_hpp
+
+#ifdef BOOST_MMAP_HEADER_ONLY
+    #include "flags.inl"
+#endif
+
+#endif // flags.hpp

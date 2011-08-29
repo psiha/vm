@@ -17,13 +17,9 @@
 
 #include "flags.hpp"
 #include "../../detail/impl_inline.hpp"
+#include "../../detail/windows.hpp"
 
 #include "boost/assert.hpp"
-
-#ifndef WIN32_LEAN_AND_MEAN
-    #define WIN32_LEAN_AND_MEAN
-#endif // WIN32_LEAN_AND_MEAN
-#include "windows.h"
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -32,8 +28,14 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
+namespace
+{
+    // http://en.wikipedia.org/wiki/File_locking#In_UNIX
+    DWORD const default_unix_shared_semantics( FILE_SHARE_READ | FILE_SHARE_WRITE );
+}
+
 BOOST_IMPL_INLINE
-file_handle<win32> create_file( char const * const file_name, file_flags<win32> const & flags )
+file_handle<win32> create_file( char const * const file_name, file_open_flags<win32> const & flags )
 {
     /// \note
     ///   This typedef is required by MSVC++ 10 SP1 and must be placed before
@@ -47,7 +49,7 @@ file_handle<win32> create_file( char const * const file_name, file_flags<win32> 
     (
         ::CreateFileA
         (
-            file_name, flags.desired_access, flags.share_mode, 0, flags.creation_disposition, flags.flags_and_attributes, 0
+            file_name, flags.desired_access, default_unix_shared_semantics, 0, flags.creation_disposition, flags.flags_and_attributes, 0
         )
     );
     BOOST_ASSERT( ( file_handle == INVALID_HANDLE_VALUE ) || ( ::GetLastError() == NO_ERROR ) || ( ::GetLastError() == ERROR_ALREADY_EXISTS ) );
@@ -56,26 +58,20 @@ file_handle<win32> create_file( char const * const file_name, file_flags<win32> 
 }
 
 BOOST_IMPL_INLINE
-file_handle<win32> create_file( wchar_t const * const file_name, file_flags<win32> const & flags )
+file_handle<win32> create_file( wchar_t const * const file_name, file_open_flags<win32> const & flags )
 {
-    /// \note
-    ///   This typedef is required by MSVC++ 10 SP1 and must be placed before
-    /// the CreateFile call, otherwise it breaks at the return statement.
-    ///                                       (25.08.2011.) (Domagoj Saric)
-    typedef file_handle<win32> win32_file_handle;
-
     BOOST_ASSERT( file_name );
 
-    HANDLE const file_handle
+    HANDLE const handle
     (
         ::CreateFileW
         (
-            file_name, flags.desired_access, flags.share_mode, 0, flags.creation_disposition, flags.flags_and_attributes, 0
+            file_name, flags.desired_access, default_unix_shared_semantics, 0, flags.creation_disposition, flags.flags_and_attributes, 0
         )
     );
-    BOOST_ASSERT( ( file_handle == INVALID_HANDLE_VALUE ) || ( ::GetLastError() == NO_ERROR ) || ( ::GetLastError() == ERROR_ALREADY_EXISTS ) );
+    BOOST_ASSERT( ( handle == INVALID_HANDLE_VALUE ) || ( ::GetLastError() == NO_ERROR ) || ( ::GetLastError() == ERROR_ALREADY_EXISTS ) );
     
-    return win32_file_handle( file_handle );
+    return file_handle<win32>( handle );
 }
 
 
@@ -90,7 +86,6 @@ bool delete_file( wchar_t const * const file_name, win32 )
 {
     return ::DeleteFileW( file_name ) != false;
 }
-
 
 
 BOOST_IMPL_INLINE
@@ -139,6 +134,23 @@ std::size_t get_size( file_handle<win32>::reference const file_handle )
         BOOST_ASSERT( ( file_size != INVALID_FILE_SIZE ) || ( file_handle == INVALID_HANDLE_VALUE ) || ( ::GetLastError() == NO_ERROR ) );
         return file_size;
     #endif // _WIN32/64
+}
+
+
+BOOST_IMPL_INLINE
+mapping<win32> create_mapping( file_handle<win32>::reference const file, file_mapping_flags<win32> const & flags )
+{
+    HANDLE const mapping_handle
+    (
+        ::CreateFileMappingW( file, NULL, flags.create_mapping_flags, 0, 0, NULL )
+    );
+    // CreateFileMapping accepts INVALID_HANDLE_VALUE as valid input but only if
+    // the size parameter is not null.
+    BOOST_ASSERT
+    (
+        ( file != INVALID_HANDLE_VALUE ) || !mapping_handle
+    );
+    return mapping<win32>( mapping_handle, flags.map_view_flags );
 }
 
 //------------------------------------------------------------------------------

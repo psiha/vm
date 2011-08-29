@@ -18,6 +18,7 @@
 #pragma once
 //------------------------------------------------------------------------------
 #include "../handle.hpp"
+#include "../../../detail/posix.hpp"
 #include "../../../implementations.hpp"
 
 #include <cstddef>
@@ -29,7 +30,8 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-template <typename Impl  > struct file_flags;
+template <typename Impl  > struct file_open_flags;
+template <typename Impl  > struct file_mapping_flags;
 template <class    Handle> struct is_resizable;
 
 #ifdef BOOST_HAS_UNISTD_H
@@ -39,9 +41,9 @@ template <class    Handle> struct is_resizable;
 #endif // BOOST_HAS_UNISTD_H
 
 
-file_handle<posix> create_file( char    const * file_name, file_flags<posix> const & );
+file_handle<posix> create_file( char    const * file_name, file_open_flags<posix> const & );
 #ifdef BOOST_MSVC
-file_handle<posix> create_file( wchar_t const * file_name, file_flags<posix> const & );
+file_handle<posix> create_file( wchar_t const * file_name, file_open_flags<posix> const & );
 #endif // BOOST_MSVC
 
 bool delete_file( char    const * file_name, posix );
@@ -52,6 +54,10 @@ bool delete_file( wchar_t const * file_name, posix );
 bool        set_size( file_handle<posix>::reference, std::size_t desired_size );
 #endif // BOOST_HAS_UNISTD_H
 std::size_t get_size( file_handle<posix>::reference                           );
+
+#ifdef BOOST_HAS_UNISTD_H
+mapping<posix> create_mapping( file_handle<posix>::reference, file_mapping_flags<posix> const & );
+#endif // BOOST_HAS_UNISTD_H
 
 //------------------------------------------------------------------------------
 } // namespace mmap

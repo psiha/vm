@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file file.hpp
-/// --------------
+/// \file mapping_flags.inl
+/// -----------------------
 ///
 /// Copyright (c) Domagoj Saric 2010.-2011.
 ///
@@ -13,14 +13,7 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef file_hpp__D3705ED0_EC0D_4747_A789_1EE17252B6E2
-#define file_hpp__D3705ED0_EC0D_4747_A789_1EE17252B6E2
-#pragma once
-//------------------------------------------------------------------------------
-#include "../../detail/impl_selection.hpp"
-
-#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /file.hpp  ) )
-#include "flags.hpp"
+#include "mapping_flags.hpp"
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -29,14 +22,23 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-typedef file_open_flags<BOOST_MMAP_IMPL()> native_file_open_flags;
+BOOST_IMPL_INLINE
+file_mapping_flags<posix> file_mapping_flags<posix>::create
+(
+    flags_t                const combined_handle_access_flags,
+    share_mode::value_type const share_mode
+)
+{
+    mapping_flags flags;
 
-inline bool delete_file( char    const * const file_name ) { return delete_file( file_name, BOOST_MMAP_IMPL() () ); }
-inline bool delete_file( wchar_t const * const file_name ) { return delete_file( file_name, BOOST_MMAP_IMPL() () ); }
+    flags.protection = combined_handle_access_flags;
+    flags.flags      = share_mode | system_hints;
+
+    return flags;
+}
 
 //------------------------------------------------------------------------------
-} // namespace mmap
+} // mmap
 //------------------------------------------------------------------------------
-} // namespace boost
+} // boost
 //------------------------------------------------------------------------------
-#endif // file_hpp

@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file mapping_handle.hpp
-/// ------------------------
+/// \file handle.hpp
+/// ----------------
 ///
 /// Copyright (c) 2011 Domagoj Saric
 ///
@@ -34,6 +34,8 @@ struct file_handle : handle<Impl>
         : handle<Impl>( native_handle ) {}
 
     typedef handle_ref< file_handle<Impl> > reference;
+
+    operator reference () const { return reference( get() ); }
 };
 
 //------------------------------------------------------------------------------

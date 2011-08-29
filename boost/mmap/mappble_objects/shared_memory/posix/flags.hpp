@@ -1,9 +1,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file mapping_handle.hpp
-/// ------------------------
+/// \file flags.hpp
+/// ---------------
 ///
-/// Copyright (c) 2011 Domagoj Saric
+/// Copyright (c) Domagoj Saric 2010.-2011.
 ///
 ///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
 ///  (See accompanying file LICENSE_1_0.txt or copy at
@@ -13,11 +13,12 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef mapping_handle_hpp__D42BC724_FD9A_4C7B_B521_CF3C29C948B3
-#define mapping_handle_hpp__D42BC724_FD9A_4C7B_B521_CF3C29C948B3
+#ifndef flags_hpp__F9CD9C91_1F07_4107_A422_0D814F0FE487
+#define flags_hpp__F9CD9C91_1F07_4107_A422_0D814F0FE487
 #pragma once
 //------------------------------------------------------------------------------
-#include "handle.hpp"
+#include "../../file/posix/mapping_flags.hpp"
+#include "../../../detail/posix.hpp"
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -26,19 +27,41 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-template <typename Impl> class handle;
+template <typename Impl> struct shared_memory_flags;
 
-template <typename Impl>
-class mapping_handle : handle<Impl>
+struct posix;
+
+typedef unsigned flags_t;
+
+template <>
+struct shared_memory_flags<posix> : file_mapping_flags<posix>
 {
-public:
-    mapping_handle( typename handle<Impl>::handle_t const native_handle )
-        : handle<Impl>( native_handle ) {}
+    struct system_hints
+    {
+        enum value_type
+        {
+            default                    = 0,
+            only_reserve_address_space = MAP_NORESERVE
+        }
+    };
+
+    static shared_memory_flags<posix> create
+    (
+        flags_t                  combined_handle_access_rights,
+        share_mode  ::value_type share_mode,
+        system_hints::value_type system_hint
+    );
 };
+
 
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------
 } // namespace boost
 //------------------------------------------------------------------------------
-#endif // handle_hpp
+
+#ifdef BOOST_MMAP_HEADER_ONLY
+    #include "flags.inl"
+#endif
+
+#endif // flags.hpp

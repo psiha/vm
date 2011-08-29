@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file flags.hpp
-/// ---------------
+/// \file open_flags.hpp
+/// --------------------
 ///
 /// Copyright (c) Domagoj Saric 2010.-2011.
 ///
@@ -13,8 +13,8 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef flags_hpp__77AE8A6F_0E93_433B_A1F2_531BBBB353FC
-#define flags_hpp__77AE8A6F_0E93_433B_A1F2_531BBBB353FC
+#ifndef open_flags_hpp__77AE8A6F_0E93_433B_A1F2_531BBBB353FC
+#define open_flags_hpp__77AE8A6F_0E93_433B_A1F2_531BBBB353FC
 #pragma once
 //------------------------------------------------------------------------------
 #include "boost/assert.hpp"
@@ -27,7 +27,7 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-template <typename Impl> struct file_flags;
+template <typename Impl> struct file_open_flags;
 
 // Implementation note:
 //   Using structs with public members and factory functions to enable (almost)
@@ -37,22 +37,20 @@ template <typename Impl> struct file_flags;
 // interface, can also be covered.
 //                                            (10.10.2010.) (Domagoj Saric)
 
+typedef unsigned flags_t;
+
 template <>
-struct file_flags<win32>
+struct file_open_flags<win32>
 {
     struct handle_access_rights
     {
-        static unsigned int const read   ;
-        static unsigned int const write  ;
-        static unsigned int const execute;
-    };
-
-    struct share_mode
-    {
-        static unsigned int const none  ;
-        static unsigned int const read  ;
-        static unsigned int const write ;
-        static unsigned int const remove;
+        enum values
+        {
+            read    = 0x80000000L,
+            write   = 0x40000000L,
+            execute = 0x20000000L,
+            all     = 0x10000000L
+        };
     };
 
     struct open_policy
@@ -66,43 +64,44 @@ struct file_flags<win32>
             open_and_truncate_existing      = 5
         };
     };
-    typedef open_policy::value_type open_policy_t;
 
     struct system_hints
     {
-        static unsigned int const random_access    ;
-        static unsigned int const sequential_access;
-        static unsigned int const non_cached       ;
-        static unsigned int const delete_on_close  ;
-        static unsigned int const temporary        ;
+        enum values
+        {
+            random_access     = 0x10000000,
+            sequential_access = 0x08000000,
+            avoid_caching     = 0x20000000 | 0x80000000,
+            temporary         = 0x00000100 | 0x04000000
+        };
     };
 
     struct on_construction_rights
     {
-        static unsigned int const read   ;
-        static unsigned int const write  ;
-        static unsigned int const execute;
+        enum values
+        {
+            read    = 0x00000001,
+            write   = 0x00000080,
+            execute = 0x00000001,
+        };
     };
 
-    static file_flags<win32> create
+    static file_open_flags<win32> create
     (
-        unsigned int handle_access_flags   ,
-        unsigned int share_mode            ,
-        open_policy_t                      ,
-        unsigned int system_hints          ,
-        unsigned int on_construction_rights
+        flags_t handle_access_flags   ,
+        open_policy::value_type       ,
+        flags_t system_hints          ,
+        flags_t on_construction_rights
     );
 
-    static file_flags<win32> create_for_opening_existing_files
+    static file_open_flags<win32> create_for_opening_existing_files
     (
-        unsigned int handle_access_flags,
-        unsigned int share_mode         ,
-        bool         truncate           ,
-        unsigned int system_hints
+        flags_t handle_access_flags,
+        bool    truncate           ,
+        flags_t system_hints
     );
 
     unsigned long desired_access      ;
-    unsigned long share_mode          ;
     unsigned long creation_disposition;
     unsigned long flags_and_attributes;
 };
@@ -114,7 +113,7 @@ struct file_flags<win32>
 //------------------------------------------------------------------------------
 
 #ifdef BOOST_MMAP_HEADER_ONLY
-    #include "flags.inl"
+    #include "open_flags.inl"
 #endif // BOOST_MMAP_HEADER_ONLY
 
-#endif // flags_hpp
+#endif // open_flags_hpp

@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file file.hpp
-/// --------------
+/// \file mapping_flags.hpp
+/// -----------------------
 ///
 /// Copyright (c) Domagoj Saric 2010.-2011.
 ///
@@ -13,14 +13,10 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef file_hpp__D3705ED0_EC0D_4747_A789_1EE17252B6E2
-#define file_hpp__D3705ED0_EC0D_4747_A789_1EE17252B6E2
+#ifndef mapping_flags_hpp__CD518463_D4CB_4E18_8E35_E0FBBA8CA1D1
+#define mapping_flags_hpp__CD518463_D4CB_4E18_8E35_E0FBBA8CA1D1
 #pragma once
 //------------------------------------------------------------------------------
-#include "../../detail/impl_selection.hpp"
-
-#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /file.hpp  ) )
-#include "flags.hpp"
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -29,14 +25,55 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-typedef file_open_flags<BOOST_MMAP_IMPL()> native_file_open_flags;
+template <typename Impl> struct file_mapping_flags;
 
-inline bool delete_file( char    const * const file_name ) { return delete_file( file_name, BOOST_MMAP_IMPL() () ); }
-inline bool delete_file( wchar_t const * const file_name ) { return delete_file( file_name, BOOST_MMAP_IMPL() () ); }
+struct win32;
+
+typedef unsigned flags_t;
+
+template <>
+struct file_mapping_flags<win32>
+{
+    struct handle_access_rights
+    {
+        enum values
+        {
+            read    = 0x0004,
+            write   = 0x0002,
+            execute = 0x0020,
+            all     = read | write | execute
+        };
+    };
+
+    struct share_mode
+    {
+        enum value_type
+        {
+            shared = 0,
+            hidden = 0x0001
+        };
+    };
+
+    static file_mapping_flags<win32> create
+    (
+        flags_t                combined_handle_access_rights,
+        share_mode::value_type share_mode
+    );
+
+
+    unsigned int create_mapping_flags;
+    unsigned int map_view_flags      ;
+};
+
 
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------
 } // namespace boost
 //------------------------------------------------------------------------------
-#endif // file_hpp
+
+#ifdef BOOST_MMAP_HEADER_ONLY
+    #include "mapping_flags.inl"
+#endif
+
+#endif // mapping_flags.hpp

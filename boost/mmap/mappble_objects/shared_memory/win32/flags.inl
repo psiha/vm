@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file file.hpp
-/// --------------
+/// \file flags.inl
+/// ---------------
 ///
 /// Copyright (c) Domagoj Saric 2010.-2011.
 ///
@@ -13,14 +13,11 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef file_hpp__D3705ED0_EC0D_4747_A789_1EE17252B6E2
-#define file_hpp__D3705ED0_EC0D_4747_A789_1EE17252B6E2
-#pragma once
-//------------------------------------------------------------------------------
-#include "../../detail/impl_selection.hpp"
-
-#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /file.hpp  ) )
 #include "flags.hpp"
+
+#include "../../../detail/windows.hpp"
+
+#include "boost/static_assert.hpp"
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -29,14 +26,25 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-typedef file_open_flags<BOOST_MMAP_IMPL()> native_file_open_flags;
+BOOST_STATIC_ASSERT( shared_memory_flags<win32>::system_hints::default                    == SEC_COMMIT  );
+BOOST_STATIC_ASSERT( shared_memory_flags<win32>::system_hints::only_reserve_address_space == SEC_RESERVE );
 
-inline bool delete_file( char    const * const file_name ) { return delete_file( file_name, BOOST_MMAP_IMPL() () ); }
-inline bool delete_file( wchar_t const * const file_name ) { return delete_file( file_name, BOOST_MMAP_IMPL() () ); }
+
+BOOST_IMPL_INLINE
+shared_memory_flags<win32> shared_memory_flags<win32>::create
+(
+    flags_t                  const combined_handle_access_flags,
+    share_mode  ::value_type const share_mode,
+    system_hints::value_type const system_hint
+)
+{
+    shared_memory_flags<win32> flags( file_mapping_flags<win32>::create( combined_handle_access_flags, share_mode ) );
+    flags.create_mapping_flags |= system_hint;
+    return flags;
+}
 
 //------------------------------------------------------------------------------
-} // namespace mmap
+} // mmap
 //------------------------------------------------------------------------------
-} // namespace boost
+} // boost
 //------------------------------------------------------------------------------
-#endif // file_hpp

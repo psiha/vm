@@ -19,6 +19,7 @@
 //------------------------------------------------------------------------------
 #include "../../detail/impl_selection.hpp"
 
-#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /flags.hpp ) )
+#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /mapping_flags.hpp ) )
+#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /open_flags.hpp    ) )
 //------------------------------------------------------------------------------
 #endif // flags_hpp

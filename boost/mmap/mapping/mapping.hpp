@@ -1,9 +1,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file file.hpp
-/// --------------
+/// \file mapping.hpp
+/// -----------------
 ///
-/// Copyright (c) Domagoj Saric 2010.-2011.
+/// Copyright (c) 2011 Domagoj Saric
 ///
 ///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
 ///  (See accompanying file LICENSE_1_0.txt or copy at
@@ -13,14 +13,13 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef file_hpp__D3705ED0_EC0D_4747_A789_1EE17252B6E2
-#define file_hpp__D3705ED0_EC0D_4747_A789_1EE17252B6E2
+#ifndef mapping_hpp__D42BC724_FD9A_4C7B_B521_CF3C29C948B3
+#define mapping_hpp__D42BC724_FD9A_4C7B_B521_CF3C29C948B3
 #pragma once
 //------------------------------------------------------------------------------
-#include "../../detail/impl_selection.hpp"
+#include "../detail/impl_selection.hpp"
 
-#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /file.hpp  ) )
-#include "flags.hpp"
+#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /mapping.hpp ) )
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -29,14 +28,12 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-typedef file_open_flags<BOOST_MMAP_IMPL()> native_file_open_flags;
-
-inline bool delete_file( char    const * const file_name ) { return delete_file( file_name, BOOST_MMAP_IMPL() () ); }
-inline bool delete_file( wchar_t const * const file_name ) { return delete_file( file_name, BOOST_MMAP_IMPL() () ); }
+template <typename Impl>
+struct mapping;
 
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------
 } // namespace boost
 //------------------------------------------------------------------------------
-#endif // file_hpp
+#endif // mapping_hpp

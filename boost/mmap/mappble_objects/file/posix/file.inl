@@ -41,7 +41,7 @@ namespace mmap
 //------------------------------------------------------------------------------
 
 BOOST_IMPL_INLINE
-file_handle<posix> create_file( char const * const file_name, file_flags<posix> const & flags )
+file_handle<posix> create_file( char const * const file_name, file_open_flags<posix> const & flags )
 {
     typedef file_handle<posix> posix_file_handle;
 
@@ -57,7 +57,7 @@ file_handle<posix> create_file( char const * const file_name, file_flags<posix> 
 
 #ifdef BOOST_MSVC
 BOOST_IMPL_INLINE
-file_handle<posix> create_file( wchar_t const * const file_name, file_flags<posix> const & flags )
+file_handle<posix> create_file( wchar_t const * const file_name, file_open_flags<posix> const & flags )
 {
     BOOST_ASSERT( file_name );
 
@@ -101,6 +101,16 @@ std::size_t get_size( file_handle<posix>::reference const file_handle )
     BOOST_VERIFY( ::fstat( file_handle, &file_info ) == 0 );
     return file_info.st_size;
 }
+
+
+#ifdef BOOST_HAS_UNISTD_H
+// Apple guidelines http://developer.apple.com/library/mac/#documentation/Performance/Conceptual/FileSystem/Articles/MappingFiles.html
+BOOST_IMPL_INLINE
+mapping<posix> create_mapping( file_handle<posix>::reference const file, file_mapping_flags<posix> const & flags )
+{
+    return mapping<posix>( file, flags );
+}
+#endif // BOOST_HAS_UNISTD_H
 
 //------------------------------------------------------------------------------
 } // mmap

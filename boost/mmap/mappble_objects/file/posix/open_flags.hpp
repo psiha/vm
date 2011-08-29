@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file flags.hpp
-/// ---------------
+/// \file open_flags.hpp
+/// --------------------
 ///
 /// Copyright (c) Domagoj Saric 2010.-2011.
 ///
@@ -13,12 +13,11 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef flags_hpp__0F422517_D9AA_4E3F_B3E4_B139021D068E
-#define flags_hpp__0F422517_D9AA_4E3F_B3E4_B139021D068E
+#ifndef open_flags_hpp__0F422517_D9AA_4E3F_B3E4_B139021D068E
+#define open_flags_hpp__0F422517_D9AA_4E3F_B3E4_B139021D068E
 #pragma once
 //------------------------------------------------------------------------------
-#include "boost/assert.hpp"
-#include "boost/noncopyable.hpp"
+#include "../../../detail/posix.hpp"
 
 #include "fcntl.h"
 //------------------------------------------------------------------------------
@@ -29,7 +28,7 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-template <typename Impl> struct file_flags;
+template <typename Impl> struct file_open_flags;
 
 // Implementation note:
 //   Using structs with public members and factory functions to enable (almost)
@@ -40,21 +39,17 @@ template <typename Impl> struct file_flags;
 //                                            (10.10.2010.) (Domagoj Saric)
 
 template <>
-struct file_flags<posix>
+struct file_open_flags<posix>
 {
     struct handle_access_rights
     {
-        static unsigned int const read   ;
-        static unsigned int const write  ;
-        static unsigned int const execute;
-    };
-
-    struct share_mode
-    {
-        static unsigned int const none  ;
-        static unsigned int const read  ;
-        static unsigned int const write ;
-        static unsigned int const remove;
+        enum values
+        {
+            read    = O_RDONLY,
+            write   = O_WRONLY,
+            execute = O_RDONLY,
+            all     = read | write | execute
+        }
     };
 
     struct open_policy
@@ -68,39 +63,41 @@ struct file_flags<posix>
             open_and_truncate_existing      = O_TRUNC
         };
     };
-    typedef open_policy::value_type open_policy_t;
 
     struct system_hints
     {
-        static unsigned int const random_access    ;
-        static unsigned int const sequential_access;
-        static unsigned int const non_cached       ;
-        static unsigned int const delete_on_close  ;
-        static unsigned int const temporary        ;
+        enum values
+        {
+            random_access     = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0,        0, 0, O_RANDOM                     ),
+            sequential_access = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0,        0, 0, O_SEQUENTIAL                 ),
+            avoid_caching     = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0, O_DIRECT, 0, 0                            ),
+            temporary         = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0,        0, 0, O_TEMPORARY | _O_SHORT_LIVED ),
+        }
     };
 
     struct on_construction_rights
     {
-        static unsigned int const read   ;
-        static unsigned int const write  ;
-        static unsigned int const execute;
+        enum values
+        {
+            read    = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( S_IRUSR, S_IRUSR, S_IRUSR, _S_IREAD  ),
+            write   = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( S_IWUSR, S_IWUSR, S_IWUSR, _S_IWRITE ),
+            execute = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( S_IXUSR, S_IXUSR, S_IXUSR, _S_IEXEC  )
+        }
     };
 
-    static file_flags<posix> create
+    static file_open_flags<posix> create
     (
-        unsigned int handle_access_flags   ,
-        unsigned int share_mode            ,
-        open_policy_t                      ,
-        unsigned int system_hints          ,
-        unsigned int on_construction_rights
+        flags_t handle_access_flags   ,
+        open_policy::value_type       ,
+        flags_t system_hints          ,
+        flags_t on_construction_rights
     );
 
-    static file_flags<posix> create_for_opening_existing_files
+    static file_open_flags<posix> create_for_opening_existing_files
     (
-        unsigned int handle_access_flags,
-        unsigned int share_mode         ,
-        bool         truncate           ,
-        unsigned int system_hints
+        flags_t handle_access_flags,
+        bool    truncate           ,
+        flags_t system_hints
     );
 
     int oflag;
@@ -114,7 +111,7 @@ struct file_flags<posix>
 //------------------------------------------------------------------------------
 
 #ifdef BOOST_MMAP_HEADER_ONLY
-    #include "flags.inl"
+    #include "open_flags.inl"
 #endif // BOOST_MMAP_HEADER_ONLY
 
-#endif // flags_hpp
+#endif // open_flags_hpp
