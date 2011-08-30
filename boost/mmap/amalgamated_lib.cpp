@@ -24,6 +24,6 @@
 #include "mappble_objects/file/utility.inl"
 //#include "mappble_objects/shared_memory/posix/flags.inl"
 //#include "mappble_objects/shared_memory/win32/flags.inl"
-#include "mapped_view.inl"
+#include "mapped_view/mapped_view.inl"
 #include "mapping/mapping.inl"
 //------------------------------------------------------------------------------
