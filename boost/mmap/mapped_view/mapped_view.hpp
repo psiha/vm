@@ -17,9 +17,9 @@
 #define mapped_view_hpp__D9C84FF5_E506_4ECB_9778_61E036048D28
 #pragma once
 //------------------------------------------------------------------------------
-#include "detail/impl_selection.hpp"
-#include "handles/handle.hpp"
-#include "mapping/mapping.hpp"
+#include "../detail/impl_selection.hpp"
+#include "../handles/handle.hpp"
+#include "../mapping/mapping.hpp"
 
 #include "boost/assert.hpp"
 #include "boost/cstdint.hpp"
