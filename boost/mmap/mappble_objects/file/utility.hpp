@@ -31,6 +31,11 @@ namespace mmap
 basic_mapped_view_ref           map_file          ( char const * file_name, std::size_t desired_size );
 basic_mapped_read_only_view_ref map_read_only_file( char const * file_name                           );
 
+#ifdef _WIN32
+basic_mapped_view_ref           map_file          ( wchar_t const * file_name, std::size_t desired_size );
+basic_mapped_read_only_view_ref map_read_only_file( wchar_t const * file_name                           );
+#endif // _WIN32
+
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------
