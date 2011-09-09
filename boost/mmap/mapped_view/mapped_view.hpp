@@ -208,7 +208,7 @@ class mapped_view
     #endif // BOOST_MSVC
 {
 public:
-    mapped_view( mapped_view_reference<Element, Impl> const range ) : mapped_view_reference<Element, Impl>( range ) {}
+    explicit mapped_view( mapped_view_reference<Element, Impl> const range ) : mapped_view_reference<Element, Impl>( range ) {}
     ~mapped_view() { mapped_view_reference<Element, Impl>::unmap( *this ); }
 
     #ifndef BOOST_MSVC
@@ -216,7 +216,8 @@ public:
     #endif // BOOST_MSVC
 };
 
-typedef mapped_view<char> basic_mapped_view;
+typedef mapped_view<char      > basic_mapped_view;
+typedef mapped_view<char const> basic_read_only_mapped_view;
 
 //------------------------------------------------------------------------------
 } // namespace mmap
