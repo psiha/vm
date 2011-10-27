@@ -20,7 +20,7 @@
 #include "../../handles/win32/handle.hpp"
 #include "../../mappble_objects/file/win32/mapping_flags.hpp"
 
-#include "boost/config/suffix.hpp"
+#include "boost/config.hpp"
 //------------------------------------------------------------------------------
 namespace boost
 {
