@@ -17,6 +17,7 @@
 #define impl_selection_hpp__05AF14B5_B23B_4CB8_A253_FD2D07B37ECF
 #pragma once
 //------------------------------------------------------------------------------
+#include "boost/config.hpp"
 #include "boost/preprocessor/cat.hpp"
 #include "boost/preprocessor/stringize.hpp"
 
