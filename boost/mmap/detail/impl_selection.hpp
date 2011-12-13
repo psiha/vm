@@ -39,5 +39,15 @@
 #define BOOST_MMAP_IMPL_INCLUDE( prefix_path, include ) \
     BOOST_PP_STRINGIZE( prefix_path()BOOST_MMAP_IMPL()include() )
 
+/// \todo Move to a separate header.
+///                                           (13.12.2011.) (Domagoj Saric)
+#if defined( _MSC_VER )
+    #define BOOST_NOTHROW __declspec( nothrow )
+#elif defined( __GNUC__ )
+    #define BOOST_NOTHROW __attribute__(( nothrow ))
+#else
+    #define BOOST_NOTHROW
+#endif
+
 //------------------------------------------------------------------------------
 #endif // impl_selection_hpp

@@ -39,7 +39,7 @@ namespace mmap
 //------------------------------------------------------------------------------
 
 BOOST_IMPL_INLINE
-file_handle<posix> create_file( char const * const file_name, file_open_flags<posix> const & flags )
+file_handle<posix> BOOST_NOTHROW create_file( char const * const file_name, file_open_flags<posix> const & flags )
 {
     typedef file_handle<posix> posix_file_handle;
 
@@ -55,7 +55,7 @@ file_handle<posix> create_file( char const * const file_name, file_open_flags<po
 
 #ifdef BOOST_MSVC
 BOOST_IMPL_INLINE
-file_handle<posix> create_file( wchar_t const * const file_name, file_open_flags<posix> const & flags )
+file_handle<posix> BOOST_NOTHROW create_file( wchar_t const * const file_name, file_open_flags<posix> const & flags )
 {
     BOOST_ASSERT( file_name );
 
@@ -69,14 +69,14 @@ file_handle<posix> create_file( wchar_t const * const file_name, file_open_flags
 
 
 BOOST_IMPL_INLINE
-bool delete_file( char const * const file_name, posix )
+bool BOOST_NOTHROW delete_file( char const * const file_name, posix )
 {
     return ::unlink( file_name ) == 0;
 }
 
 #ifdef BOOST_MSVC
 BOOST_IMPL_INLINE
-bool delete_file( wchar_t const * const file_name, posix )
+bool BOOST_NOTHROW delete_file( wchar_t const * const file_name, posix )
 {
     return ::_wunlink( file_name ) == 0;
 }
@@ -85,7 +85,7 @@ bool delete_file( wchar_t const * const file_name, posix )
 
 #ifdef BOOST_HAS_UNISTD_H
 BOOST_IMPL_INLINE
-bool set_size( file_handle<posix>::reference const file_handle, std::size_t const desired_size )
+bool BOOST_NOTHROW set_size( file_handle<posix>::reference const file_handle, std::size_t const desired_size )
 {
     return ::ftruncate( file_handle, desired_size ) != -1;
 }
@@ -93,7 +93,7 @@ bool set_size( file_handle<posix>::reference const file_handle, std::size_t cons
 
 
 BOOST_IMPL_INLINE
-std::size_t get_size( file_handle<posix>::reference const file_handle )
+std::size_t BOOST_NOTHROW get_size( file_handle<posix>::reference const file_handle )
 {
     struct stat file_info;
     BOOST_VERIFY( ::fstat( file_handle, &file_info ) == 0 );
@@ -104,7 +104,7 @@ std::size_t get_size( file_handle<posix>::reference const file_handle )
 #ifdef BOOST_HAS_UNISTD_H
 // Apple guidelines http://developer.apple.com/library/mac/#documentation/Performance/Conceptual/FileSystem/Articles/MappingFiles.html
 BOOST_IMPL_INLINE
-mapping<posix> create_mapping( file_handle<posix>::reference const file, file_mapping_flags<posix> const & flags )
+mapping<posix> BOOST_NOTHROW create_mapping( file_handle<posix>::reference const file, file_mapping_flags<posix> const & flags )
 {
     return mapping<posix>( file, flags );
 }

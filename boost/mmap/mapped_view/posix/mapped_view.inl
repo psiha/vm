@@ -29,7 +29,7 @@ namespace detail
     template <>
     struct mapper<char, posix>
     {
-        static mapped_view_reference<char, posix> map
+        static mapped_view_reference<char, posix> BOOST_NOTHROW map
         (
             mapping<posix>  const & source_mapping,
             boost::uint64_t         offset        ,
@@ -63,7 +63,7 @@ namespace detail
             );
         }
 
-        static void unmap( mapped_view_reference<char, posix> const & view )
+        static void BOOST_NOTHROW unmap( mapped_view_reference<char, posix> const & view )
         {
             BOOST_VERIFY
             (

@@ -56,7 +56,7 @@ namespace detail
     }
 
     BOOST_IMPL_INLINE
-    basic_mapped_view_ref map_file( default_file_handle::reference const file_handle, std::size_t desired_size )
+    basic_mapped_view_ref BOOST_NOTHROW map_file( default_file_handle::reference const file_handle, std::size_t desired_size )
     {
         if ( desired_size )
             set_size( file_handle, desired_size );
@@ -82,7 +82,7 @@ namespace detail
 
 
     BOOST_IMPL_INLINE
-    basic_mapped_read_only_view_ref map_read_only_file( default_file_handle::reference const file_handle )
+    basic_mapped_read_only_view_ref BOOST_NOTHROW map_read_only_file( default_file_handle::reference const file_handle )
     {
         typedef file_mapping_flags<BOOST_MMAP_IMPL()> mapping_flags;
         return basic_mapped_read_only_view_ref::map
@@ -103,13 +103,13 @@ namespace detail
 } // namespace detail
 
 BOOST_IMPL_INLINE
-basic_mapped_view_ref map_file( char const * const file_name, std::size_t const desired_size )
+basic_mapped_view_ref BOOST_NOTHROW map_file( char const * const file_name, std::size_t const desired_size )
 {
     return detail::map_file( create_file( file_name, detail::create_rw_file_flags() ), desired_size );
 }
 
 BOOST_IMPL_INLINE
-basic_mapped_read_only_view_ref map_read_only_file( char const * const file_name )
+basic_mapped_read_only_view_ref BOOST_NOTHROW map_read_only_file( char const * const file_name )
 {
     return detail::map_read_only_file( create_file( file_name, detail::create_r_file_flags() ) );
 }
