@@ -3,7 +3,7 @@
 /// \file handle_ref.hpp
 /// --------------------
 ///
-/// Copyright (c) 2011 Domagoj Saric
+/// Copyright (c) Domagoj Saric 2011.-2013.
 ///
 ///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
 ///  (See accompanying file LICENSE_1_0.txt or copy at
@@ -24,6 +24,9 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
+#pragma warning( push )
+#pragma warning( disable : 4512 ) // Assignment operator could not be generated.
+
 template <typename Handle>
 struct handle_ref
 {
@@ -35,6 +38,8 @@ struct handle_ref
 
     native_handle_t const value;
 };
+
+#pragma warning( pop )
 
 //------------------------------------------------------------------------------
 } // namespace mmap
