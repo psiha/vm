@@ -3,7 +3,7 @@
 /// \file file.inl
 /// --------------
 ///
-/// Copyright (c) Domagoj Saric 2010.-2011.
+/// Copyright (c) Domagoj Saric 2010.-2013.
 ///
 ///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
 ///  (See accompanying file LICENSE_1_0.txt or copy at
@@ -39,7 +39,7 @@ namespace mmap
 //------------------------------------------------------------------------------
 
 BOOST_IMPL_INLINE
-file_handle<posix> BOOST_NOTHROW create_file( char const * const file_name, file_open_flags<posix> const & flags )
+file_handle<posix> create_file( char const * const file_name, file_open_flags<posix> const & flags )
 {
     typedef file_handle<posix> posix_file_handle;
 
@@ -55,7 +55,7 @@ file_handle<posix> BOOST_NOTHROW create_file( char const * const file_name, file
 
 #ifdef BOOST_MSVC
 BOOST_IMPL_INLINE
-file_handle<posix> BOOST_NOTHROW create_file( wchar_t const * const file_name, file_open_flags<posix> const & flags )
+file_handle<posix> create_file( wchar_t const * const file_name, file_open_flags<posix> const & flags )
 {
     BOOST_ASSERT( file_name );
 
@@ -69,14 +69,14 @@ file_handle<posix> BOOST_NOTHROW create_file( wchar_t const * const file_name, f
 
 
 BOOST_IMPL_INLINE
-bool BOOST_NOTHROW delete_file( char const * const file_name, posix )
+bool delete_file( char const * const file_name, posix )
 {
     return ::unlink( file_name ) == 0;
 }
 
 #ifdef BOOST_MSVC
 BOOST_IMPL_INLINE
-bool BOOST_NOTHROW delete_file( wchar_t const * const file_name, posix )
+bool delete_file( wchar_t const * const file_name, posix )
 {
     return ::_wunlink( file_name ) == 0;
 }
@@ -85,7 +85,7 @@ bool BOOST_NOTHROW delete_file( wchar_t const * const file_name, posix )
 
 #ifdef BOOST_HAS_UNISTD_H
 BOOST_IMPL_INLINE
-bool BOOST_NOTHROW set_size( file_handle<posix>::reference const file_handle, std::size_t const desired_size )
+bool set_size( file_handle<posix>::reference const file_handle, std::size_t const desired_size )
 {
     return ::ftruncate( file_handle, desired_size ) != -1;
 }
@@ -93,10 +93,10 @@ bool BOOST_NOTHROW set_size( file_handle<posix>::reference const file_handle, st
 
 
 BOOST_IMPL_INLINE
-std::size_t BOOST_NOTHROW get_size( file_handle<posix>::reference const file_handle )
+std::size_t get_size( file_handle<posix>::reference const file_handle )
 {
     struct stat file_info;
-    BOOST_VERIFY( ::fstat( file_handle, &file_info ) == 0 );
+    BOOST_VERIFY( ( ::fstat( file_handle, &file_info ) == 0 ) || ( file_handle == -1 ) );
     return file_info.st_size;
 }
 
@@ -104,7 +104,7 @@ std::size_t BOOST_NOTHROW get_size( file_handle<posix>::reference const file_han
 #ifdef BOOST_HAS_UNISTD_H
 // Apple guidelines http://developer.apple.com/library/mac/#documentation/Performance/Conceptual/FileSystem/Articles/MappingFiles.html
 BOOST_IMPL_INLINE
-mapping<posix> BOOST_NOTHROW create_mapping( file_handle<posix>::reference const file, file_mapping_flags<posix> const & flags )
+mapping<posix> create_mapping( file_handle<posix>::reference const file, file_mapping_flags<posix> const & flags )
 {
     return mapping<posix>( file, flags );
 }
