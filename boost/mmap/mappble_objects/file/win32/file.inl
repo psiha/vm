@@ -3,7 +3,7 @@
 /// \file file.inl
 /// --------------
 ///
-/// Copyright (c) Domagoj Saric 2010.-2011.
+/// Copyright (c) Domagoj Saric 2010.-2013.
 ///
 ///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
 ///  (See accompanying file LICENSE_1_0.txt or copy at
@@ -113,9 +113,10 @@ bool set_size( file_handle<win32>::reference const file_handle, std::size_t cons
     BOOL const success( ::SetEndOfFile( file_handle ) );
 
     #ifdef _WIN64
+        LARGE_INTEGER const offset = { 0 };
         BOOST_VERIFY
         (
-            ::SetFilePointerEx( file_handle, 0, NULL, FILE_BEGIN ) ||
+            ::SetFilePointerEx( file_handle, offset, NULL, FILE_BEGIN ) ||
             ( file_handle == INVALID_HANDLE_VALUE )
         );
     #else // _WIN32/64
