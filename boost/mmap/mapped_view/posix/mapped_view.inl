@@ -3,7 +3,7 @@
 /// \file mapped_view.inl
 /// ---------------------
 ///
-/// Copyright (c) Domagoj Saric 2010.-2011.
+/// Copyright (c) Domagoj Saric 2010.-2013.
 ///
 ///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
 ///  (See accompanying file LICENSE_1_0.txt or copy at
@@ -29,7 +29,7 @@ namespace detail
     template <>
     struct mapper<char, posix>
     {
-        static mapped_view_reference<char, posix> BOOST_NOTHROW map
+        static mapped_view_reference<char, posix> map
         (
             mapping<posix>  const & source_mapping,
             boost::uint64_t         offset        ,
@@ -63,7 +63,7 @@ namespace detail
             );
         }
 
-        static void BOOST_NOTHROW unmap( mapped_view_reference<char, posix> const & view )
+        static void unmap( mapped_view_reference<char, posix> const & view )
         {
             BOOST_VERIFY
             (
