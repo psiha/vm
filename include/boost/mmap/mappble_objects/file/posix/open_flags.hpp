@@ -3,7 +3,7 @@
 /// \file open_flags.hpp
 /// --------------------
 ///
-/// Copyright (c) Domagoj Saric 2010.-2013.
+/// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
 ///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
 ///  (See accompanying file LICENSE_1_0.txt or copy at
@@ -32,13 +32,6 @@ template <typename Impl> struct file_open_flags;
 
 typedef int flags_t;
 
-// Implementation note:
-//   Using structs with public members and factory functions to enable (almost)
-// zero-overhead 'link-time' conversion to native flag formats and to allow the
-// user to modify the created flags or create fully custom ones so that specific
-// platform-dependent use-cases, not otherwise covered through the generic
-// interface, can also be covered.
-//                                            (10.10.2010.) (Domagoj Saric)
 
 template <>
 struct file_open_flags<posix>
@@ -49,8 +42,8 @@ struct file_open_flags<posix>
         {
             read    = O_RDONLY,
             write   = O_WRONLY,
-            execute = O_RDONLY,
-            all     = read | write | execute
+            readwrite = read | write,
+            all     = readwrite
         };
     };
 

@@ -3,7 +3,7 @@
 /// \file open_flags.hpp
 /// --------------------
 ///
-/// Copyright (c) Domagoj Saric 2010.-2013.
+/// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
 ///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
 ///  (See accompanying file LICENSE_1_0.txt or copy at
@@ -38,10 +38,11 @@ struct file_open_flags<win32>
     {
         enum values
         {
-            read    = 0x80000000L,
-            write   = 0x40000000L,
-            execute = 0x20000000L,
-            all     = 0x10000000L
+            metaread  = 0,
+            read      = 0x80000000L,
+            write     = 0x40000000L,
+            readwrite = read | write,   ///< Allow reading from and writing to the oppened file
+            all       = 0x10000000L
         };
     };
 

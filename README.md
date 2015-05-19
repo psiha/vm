@@ -6,6 +6,6 @@
  * config
  * functional
 
-##### Copyright © 2011 - 2014. Domagoj Saric. All rights reserved.
+##### Copyright © 2011 - 2015. Domagoj Saric. All rights reserved.
 
 ================================================================================

@@ -59,9 +59,9 @@ namespace detail
     basic_mapped_view_ref map_file( default_file_handle::reference const file_handle, std::size_t desired_size )
     {
         if ( desired_size )
-            set_size( file_handle, desired_size );
+                           set_size( file_handle, desired_size );
         else
-            desired_size = get_size( file_handle );
+            desired_size = get_size( file_handle               );
 
         typedef file_mapping_flags<BOOST_MMAP_IMPL()> mapping_flags;
         return basic_mapped_view_ref::map

@@ -3,7 +3,7 @@
 /// \file handle.hpp
 /// ----------------
 ///
-/// Copyright (c) Domagoj Saric 2010.-2013.
+/// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
 ///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
 ///  (See accompanying file LICENSE_1_0.txt or copy at
@@ -35,9 +35,9 @@ template <typename Impl  > struct file_mapping_flags;
 template <class    Handle> struct is_resizable;
 
 #ifdef BOOST_HAS_UNISTD_H
-    template <> struct is_resizable< handle<posix> > : mpl::true_  {};
+    template <> struct is_resizable<handle<posix>> : mpl::true_  {};
 #else
-    template <> struct is_resizable< handle<posix> > : mpl::false_ {};
+    template <> struct is_resizable<handle<posix>> : mpl::false_ {};
 #endif // BOOST_HAS_UNISTD_H
 
 

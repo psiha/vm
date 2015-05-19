@@ -3,7 +3,7 @@
 /// \file mapping_flags.inl
 /// -----------------------
 ///
-/// Copyright (c) Domagoj Saric 2010.-2013.
+/// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
 ///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
 ///  (See accompanying file LICENSE_1_0.txt or copy at
@@ -46,5 +46,4 @@ file_mapping_flags<posix> file_mapping_flags<posix>::create
 //------------------------------------------------------------------------------
 } // boost
 //------------------------------------------------------------------------------
-
 #endif // mapping_flags.inl

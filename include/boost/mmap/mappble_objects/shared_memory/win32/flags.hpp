@@ -3,7 +3,7 @@
 /// \file mapping_flags.hpp
 /// -----------------------
 ///
-/// Copyright (c) Domagoj Saric 2010.-2013.
+/// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
 ///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
 ///  (See accompanying file LICENSE_1_0.txt or copy at
@@ -41,7 +41,7 @@ struct shared_memory_flags<win32> : file_mapping_flags<win32>
         {
             default                    = 0x8000000,
             only_reserve_address_space = 0x4000000
-        }
+        };
     };
 
     static shared_memory_flags<win32> create
@@ -51,7 +51,6 @@ struct shared_memory_flags<win32> : file_mapping_flags<win32>
         system_hints::value_type system_hint
     );
 };
-
 
 //------------------------------------------------------------------------------
 } // namespace mmap
