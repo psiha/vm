@@ -3,11 +3,12 @@
 /// \file handle.hpp
 /// ----------------
 ///
-/// Copyright (c) Domagoj Saric 2010.-2013.
+/// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
-///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
-///  (See accompanying file LICENSE_1_0.txt or copy at
-///  http://www.boost.org/LICENSE_1_0.txt)
+/// Use, modification and distribution is subject to the
+/// Boost Software License, Version 1.0.
+/// (See accompanying file LICENSE_1_0.txt or copy at
+/// http://www.boost.org/LICENSE_1_0.txt)
 ///
 /// For more information, see http://www.boost.org
 ///
@@ -20,8 +21,16 @@
 #include "../handle_ref.hpp"
 #include "../../implementations.hpp"
 
+#include "boost/assert.hpp"
 #include "boost/config.hpp"
-#include "boost/noncopyable.hpp"
+
+#ifdef BOOST_MSVC
+    #pragma warning ( disable : 4996 ) // "The POSIX name for this item is deprecated. Instead, use the ISO C++ conformant name."
+    #include "io.h"
+#endif // BOOST_MSVC
+#include "fcntl.h"
+
+#include <cerrno>
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -30,42 +39,35 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-template <typename Impl> class handle;
+template <typename Impl> struct handle_traits;
 
 template <>
-class handle<posix>
-#ifdef BOOST_MSVC
-    : noncopyable
-#endif // BOOST_MSVC
+struct handle_traits<posix>
 {
-public:
-    typedef int                         native_handle_t;
-    typedef handle_ref< handle<posix> > reference;
+    using native_t = int;
 
-    explicit handle<posix>( native_handle_t );
-    #ifndef BOOST_MSVC
-        handle<posix>( handle<posix> const & );
-    #endif // BOOST_MSVC
+    static native_t const invalid_value = -1;
 
-    ~handle<posix>();
+    static BOOST_ATTRIBUTES( BOOST_COLD BOOST_RESTRICTED_FUNCTION_L2 BOOST_EXCEPTIONLESS )
+    void BOOST_CC_REG close( native_t const native_handle )
+    {
+        BOOST_VERIFY
+        (
+            ( ::close( native_handle ) == 0 ) ||
+            (
+                ( native_handle == -1    ) &&
+                ( errno         == EBADF )
+            )
+        );
+    }
 
-    native_handle_t const & get() const { return handle_; }
-
-    bool operator! () const { return !handle_; }
-    operator reference () const { return reference( handle_ ); }
-
-private:
-    native_handle_t const handle_;
-};
+    static BOOST_ATTRIBUTES( BOOST_COLD BOOST_RESTRICTED_FUNCTION_L2 BOOST_EXCEPTIONLESS )
+    native_t BOOST_CC_REG copy( native_t const native_handle ); //todo
+}; // handle_traits<posix>
 
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------
 } // namespace boost
 //------------------------------------------------------------------------------
-
-#ifdef BOOST_MMAP_HEADER_ONLY
-    #include "handle.inl"
-#endif
-
 #endif // handle_hpp

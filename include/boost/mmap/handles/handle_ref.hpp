@@ -3,11 +3,12 @@
 /// \file handle_ref.hpp
 /// --------------------
 ///
-/// Copyright (c) Domagoj Saric 2011.-2013.
+/// Copyright (c) Domagoj Saric 2011 - 2015.
 ///
-///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
-///  (See accompanying file LICENSE_1_0.txt or copy at
-///  http://www.boost.org/LICENSE_1_0.txt)
+/// Use, modification and distribution is subject to the
+/// Boost Software License, Version 1.0.
+/// (See accompanying file LICENSE_1_0.txt or copy at
+/// http://www.boost.org/LICENSE_1_0.txt)
 ///
 /// For more information, see http://www.boost.org
 ///
@@ -24,22 +25,25 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-#pragma warning( push )
-#pragma warning( disable : 4512 ) // Assignment operator could not be generated.
+#ifdef _MSC_VER
+    #pragma warning( push )
+    #pragma warning( disable : 4510 ) // Default constructor was implicitly defined as deleted.
+    #pragma warning( disable : 4512 ) // Assignment operator could not be generated.
+#endif // _MSC_VER
 
 template <typename Handle>
 struct handle_ref
 {
-    typedef typename Handle::native_handle_t native_handle_t;
-
-    handle_ref( native_handle_t const value_param ) : value( value_param ) {}
+    using native_handle_t = typename Handle::native_handle_t;
 
     operator native_handle_t const & () const { return value; }
 
     native_handle_t const value;
-};
+}; // struct handle_ref
 
-#pragma warning( pop )
+#ifdef _MSC_VER
+    #pragma warning( pop )
+#endif // _MSC_VER
 
 //------------------------------------------------------------------------------
 } // namespace mmap
