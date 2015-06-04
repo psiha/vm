@@ -18,8 +18,8 @@
 
 #include "file.hpp"
 
-#include "../../detail/impl_inline.hpp"
-#include "../../detail/impl_selection.hpp"
+#include "boost/mmap/detail/impl_inline.hpp"
+#include "boost/mmap/detail/impl_selection.hpp"
 //------------------------------------------------------------------------------
 namespace boost
 {
