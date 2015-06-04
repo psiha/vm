@@ -22,6 +22,8 @@
 #include "boost/mmap/mappable_objects/file/win32/mapping_flags.hpp"
 
 #include "boost/config.hpp"
+//#include "boost/detail/winapi/system.hpp" //...broken?
+#include "boost/mmap/detail/win32.hpp"
 
 #include <cstdint>
 //------------------------------------------------------------------------------
@@ -50,6 +52,33 @@ struct mapping<win32>
 
     std::uint32_t const view_mapping_flags;
 }; // struct mapping<win32>
+
+#ifdef PAGE_SIZE
+std::uint16_t const page_size( PAGE_SIZE );
+#else
+BOOST_OVERRIDABLE_SYMBOL std::uint16_t const page_size
+(
+    ([]()
+    {
+        //boost::detail::winapi::GetSystemInfo broken?
+        //boost::detail::winapi::SYSTEM_INFO_ info;
+        //boost::detail::winapi::GetNativeSystemInfo( &info );
+        ::SYSTEM_INFO info; ::GetSystemInfo( &info );
+        BOOST_ASSUME( info.dwPageSize == 4096 );
+        return static_cast<std::uint16_t>( info.dwPageSize );
+    })()
+);
+#endif // PAGE_SIZE
+BOOST_OVERRIDABLE_SYMBOL std::uint32_t const allocation_granularity
+(
+    ([]()
+    {
+        ::SYSTEM_INFO info; ::GetSystemInfo( &info );
+        BOOST_LIKELY( info.dwAllocationGranularity     == 65536 );
+        BOOST_ASSUME( info.dwAllocationGranularity % 2 == 0     );
+        return info.dwAllocationGranularity;
+    })()
+);
 
 //------------------------------------------------------------------------------
 } // namespace mmap

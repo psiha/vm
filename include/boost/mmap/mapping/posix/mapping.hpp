@@ -50,6 +50,23 @@ struct mapping<posix>
     file_mapping_flags<posix> const view_mapping_flags;
 }; // struct mapping<posix>
 
+
+#ifdef PAGE_SIZE
+std::uint16_t const page_size( PAGE_SIZE );
+#else
+BOOST_OVERRIDABLE_SYMBOL extern std::uint16_t const page_size
+(
+    ([]()
+    {
+        auto const size( ::sysconf( _SC_PAGE_SIZE ) );
+        BOOST_LIKELY( size     == 4096 );
+        BOOST_ASSUME( size % 2 == 0    );
+        return static_cast<std::uint16_t>( size );
+    })()
+);
+#endif // PAGE_SIZE
+BOOST_OVERRIDABLE_SYMBOL extern std::uint32_t const allocation_granularity( page_size );
+
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------
