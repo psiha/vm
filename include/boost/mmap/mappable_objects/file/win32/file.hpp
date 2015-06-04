@@ -20,7 +20,7 @@
 //------------------------------------------------------------------------------
 #include "boost/mmap/implementations.hpp"
 #include "boost/mmap/mapping/mapping.hpp"
-#include "boost/mmap/mappble_objects/file/handle.hpp"
+#include "boost/mmap/mappable_objects/file/handle.hpp"
 
 #include <cstddef>
 //------------------------------------------------------------------------------

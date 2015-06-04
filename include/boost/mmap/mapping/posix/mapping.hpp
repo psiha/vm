@@ -19,7 +19,7 @@
 #pragma once
 //------------------------------------------------------------------------------
 #include "boost/mmap/handles/posix/handle.hpp"
-#include "boost/mmap/mappble_objects/file/posix/mapping_flags.hpp"
+#include "boost/mmap/mappable_objects/file/posix/mapping_flags.hpp"
 
 #include "boost/config/suffix.hpp"
 //------------------------------------------------------------------------------

@@ -20,7 +20,7 @@
 //------------------------------------------------------------------------------
 #include "boost/config.hpp"
 
-#include "boost/mmap/mappble_objects/file/win32/mapping_flags.hpp"
+#include "boost/mmap/mappable_objects/file/win32/mapping_flags.hpp"
 //------------------------------------------------------------------------------
 namespace boost
 {
