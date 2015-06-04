@@ -3,11 +3,12 @@
 /// \file open_flags.inl
 /// --------------------
 ///
-/// Copyright (c) Domagoj Saric 2010.-2013.
+/// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
-///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
-///  (See accompanying file LICENSE_1_0.txt or copy at
-///  http://www.boost.org/LICENSE_1_0.txt)
+/// Use, modification and distribution is subject to the
+/// Boost Software License, Version 1.0.
+/// (See accompanying file LICENSE_1_0.txt or copy at
+/// http://www.boost.org/LICENSE_1_0.txt)
 ///
 /// For more information, see http://www.boost.org
 ///
@@ -19,11 +20,9 @@
 //------------------------------------------------------------------------------
 #include "open_flags.hpp"
 
-#include "../../../detail/impl_inline.hpp"
+#include "boost/mmap/detail/impl_inline.hpp"
 
 #include "boost/assert.hpp"
-
-#include "errno.h"
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -39,7 +38,7 @@ file_open_flags<posix> file_open_flags<posix>::create
     open_policy::value_type const open_flags            ,
     flags_t                 const system_hints          ,
     flags_t                 const on_construction_rights
-)
+) noexcept
 {
     //...zzz...use fadvise...
     // http://stackoverflow.com/questions/2299402/how-does-one-do-raw-io-on-mac-os-x-ie-equivalent-to-linuxs-o-direct-flag
@@ -57,8 +56,8 @@ file_open_flags<posix> file_open_flags<posix>::create
 
     file_open_flags<posix> const flags =
     {
-        static_cast<int>( oflag ),
-        static_cast<int>( pmode )
+        static_cast<flags_t>( oflag ),
+        static_cast<flags_t>( pmode )
     };
     return flags;
 }
@@ -70,7 +69,7 @@ file_open_flags<posix> file_open_flags<posix>::create_for_opening_existing_files
     flags_t const handle_access_flags,
     bool    const truncate,
     flags_t const system_hints
-)
+) noexcept
 {
     return create
     (
@@ -83,11 +82,9 @@ file_open_flags<posix> file_open_flags<posix>::create_for_opening_existing_files
     );
 }
 
-
 //------------------------------------------------------------------------------
 } // mmap
 //------------------------------------------------------------------------------
 } // boost
 //------------------------------------------------------------------------------
-
 #endif // open_flags_inl

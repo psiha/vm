@@ -3,11 +3,12 @@
 /// \file mapping_flags.hpp
 /// -----------------------
 ///
-/// Copyright (c) Domagoj Saric 2010.-2013.
+/// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
-///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
-///  (See accompanying file LICENSE_1_0.txt or copy at
-///  http://www.boost.org/LICENSE_1_0.txt)
+/// Use, modification and distribution is subject to the
+/// Boost Software License, Version 1.0.
+/// (See accompanying file LICENSE_1_0.txt or copy at
+/// http://www.boost.org/LICENSE_1_0.txt)
 ///
 /// For more information, see http://www.boost.org
 ///
@@ -32,7 +33,7 @@ template <typename Impl> struct file_mapping_flags;
 
 struct posix;
 
-typedef int flags_t;
+using flags_t = int;
 
 template <>
 struct file_mapping_flags<posix>
@@ -57,17 +58,15 @@ struct file_mapping_flags<posix>
         };
     };
 
-    static file_mapping_flags<posix> create
+    static file_mapping_flags<posix> BOOST_CC_REG create
     (
         flags_t                combined_handle_access_rights,
         share_mode::value_type share_mode
-    );
+    ) noexcept;
 
-
-    int protection;
-    int flags     ;
-};
-
+    flags_t protection;
+    flags_t flags     ;
+}; // struct file_mapping_flags<posix>
 
 //------------------------------------------------------------------------------
 } // namespace mmap

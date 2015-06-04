@@ -3,11 +3,12 @@
 /// \file mapping_flags.hpp
 /// -----------------------
 ///
-/// Copyright (c) Domagoj Saric 2010.-2013.
+/// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
-///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
-///  (See accompanying file LICENSE_1_0.txt or copy at
-///  http://www.boost.org/LICENSE_1_0.txt)
+/// Use, modification and distribution is subject to the
+/// Boost Software License, Version 1.0.
+/// (See accompanying file LICENSE_1_0.txt or copy at
+/// http://www.boost.org/LICENSE_1_0.txt)
 ///
 /// For more information, see http://www.boost.org
 ///
@@ -17,6 +18,9 @@
 #define mapping_flags_hpp__CD518463_D4CB_4E18_8E35_E0FBBA8CA1D1
 #pragma once
 //------------------------------------------------------------------------------
+#include "boost/detail/winapi/security.hpp"
+
+#include <cstdint>
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -29,7 +33,7 @@ template <typename Impl> struct file_mapping_flags;
 
 struct win32;
 
-typedef int flags_t;
+using flags_t = std::uint32_t;
 
 template <>
 struct file_mapping_flags<win32>
@@ -54,17 +58,17 @@ struct file_mapping_flags<win32>
         };
     };
 
-    static file_mapping_flags<win32> create
+    static file_mapping_flags<win32> BOOST_CC_REG create
     (
         flags_t                combined_handle_access_rights,
         share_mode::value_type share_mode
     );
 
-
-    unsigned int create_mapping_flags;
-    unsigned int map_view_flags      ;
-};
-
+    flags_t create_mapping_flags;
+    flags_t map_view_flags      ;
+    /*...mrmlj...boost::detail::winapi::SECURITY_ATTRIBUTES_*/
+    void const * p_security_attributes = nullptr;
+}; // struct file_mapping_flags<win32>
 
 //------------------------------------------------------------------------------
 } // namespace mmap

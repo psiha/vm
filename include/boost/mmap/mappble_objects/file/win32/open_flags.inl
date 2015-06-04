@@ -5,9 +5,10 @@
 ///
 /// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
-///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
-///  (See accompanying file LICENSE_1_0.txt or copy at
-///  http://www.boost.org/LICENSE_1_0.txt)
+/// Use, modification and distribution is subject to the
+/// Boost Software License, Version 1.0.
+/// (See accompanying file LICENSE_1_0.txt or copy at
+/// http://www.boost.org/LICENSE_1_0.txt)
 ///
 /// For more information, see http://www.boost.org
 ///
@@ -35,7 +36,6 @@ namespace mmap
 
 static_assert( file_open_flags<win32>::handle_access_rights::read    == GENERIC_READ   , "" );
 static_assert( file_open_flags<win32>::handle_access_rights::write   == GENERIC_WRITE  , "" );
-static_assert( file_open_flags<win32>::handle_access_rights::execute == GENERIC_EXECUTE, "" );
 static_assert( file_open_flags<win32>::handle_access_rights::all     == GENERIC_ALL    , "" );
 
 static_assert( file_open_flags<win32>::system_hints::random_access     ==   FILE_FLAG_RANDOM_ACCESS                               , "" );

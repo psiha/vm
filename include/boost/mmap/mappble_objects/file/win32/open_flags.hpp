@@ -5,9 +5,10 @@
 ///
 /// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
-///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
-///  (See accompanying file LICENSE_1_0.txt or copy at
-///  http://www.boost.org/LICENSE_1_0.txt)
+/// Use, modification and distribution is subject to the
+/// Boost Software License, Version 1.0.
+/// (See accompanying file LICENSE_1_0.txt or copy at
+/// http://www.boost.org/LICENSE_1_0.txt)
 ///
 /// For more information, see http://www.boost.org
 ///
@@ -18,7 +19,8 @@
 #pragma once
 //------------------------------------------------------------------------------
 #include "boost/assert.hpp"
-#include "boost/noncopyable.hpp"
+
+#include <cstdint>
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -29,7 +31,7 @@ namespace mmap
 
 template <typename Impl> struct file_open_flags;
 
-typedef int flags_t;
+using flags_t = std::uint32_t;
 
 template <>
 struct file_open_flags<win32>
@@ -79,7 +81,7 @@ struct file_open_flags<win32>
         };
     };
 
-    static file_open_flags<win32> create
+    static file_open_flags<win32> BOOST_CC_REG create
     (
         flags_t handle_access_flags   ,
         open_policy::value_type       ,
@@ -87,17 +89,17 @@ struct file_open_flags<win32>
         flags_t on_construction_rights
     );
 
-    static file_open_flags<win32> create_for_opening_existing_files
+    static file_open_flags<win32> BOOST_CC_REG create_for_opening_existing_files
     (
         flags_t handle_access_flags,
         bool    truncate           ,
         flags_t system_hints
     );
 
-    unsigned long desired_access      ;
-    unsigned long creation_disposition;
-    unsigned long flags_and_attributes;
-};
+    flags_t desired_access      ;
+    flags_t creation_disposition;
+    flags_t flags_and_attributes;
+}; // struct file_open_flags<win32>
 
 //------------------------------------------------------------------------------
 } // namespace mmap

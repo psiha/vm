@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file mapping.hpp
-/// -----------------
+/// \file error.hpp
+/// ---------------
 ///
 /// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
@@ -14,16 +14,13 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef mapping_hpp__8B2CEDFB_C87C_4AA4_B9D0_8EF0A42825F2
-#define mapping_hpp__8B2CEDFB_C87C_4AA4_B9D0_8EF0A42825F2
+#ifndef error_hpp__6EA873DA_5571_444D_AA8C_AAB9874C529D
+#define error_hpp__6EA873DA_5571_444D_AA8C_AAB9874C529D
 #pragma once
 //------------------------------------------------------------------------------
-#include "boost/mmap/handles/win32/handle.hpp"
-#include "boost/mmap/mappble_objects/file/win32/mapping_flags.hpp"
+#include "boost/mmap/detail/impl_selection.hpp"
 
-#include "boost/config.hpp"
-
-#include <cstdint>
+#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /error.hpp ) )
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -32,28 +29,11 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-template <typename Impl> struct mapping;
-
-template <>
-struct mapping<win32>
-    :
-    handle<win32>
-{
-    using reference = mapping const &;
-
-    static bool const owns_parent_handle = true;
-
-    mapping( native_handle_t const native_handle, std::uint32_t const view_mapping_flags_param )
-        : handle<win32>( native_handle ), view_mapping_flags( view_mapping_flags_param ) {}
-
-    bool is_read_only() const { return ( view_mapping_flags & file_mapping_flags<win32>::handle_access_rights::write ) == 0; }
-
-    std::uint32_t const view_mapping_flags;
-}; // struct mapping<win32>
+template <typename Impl = BOOST_MMAP_IMPL()> struct error;
 
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------
 } // namespace boost
 //------------------------------------------------------------------------------
-#endif // mapping_hpp
+#endif // error_hpp

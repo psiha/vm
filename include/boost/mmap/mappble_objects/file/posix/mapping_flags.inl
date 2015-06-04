@@ -18,6 +18,8 @@
 #pragma once
 //------------------------------------------------------------------------------
 #include "mapping_flags.hpp"
+
+#include "boost/mmap/detail/impl_inline.hpp"
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -31,7 +33,7 @@ file_mapping_flags<posix> file_mapping_flags<posix>::create
 (
     flags_t                const combined_handle_access_flags,
     share_mode::value_type const share_mode
-)
+) noexcept
 {
     file_mapping_flags<posix> flags;
 

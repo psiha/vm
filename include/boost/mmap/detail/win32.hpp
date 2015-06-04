@@ -3,7 +3,7 @@
 /// \file windows.hpp
 /// ------------------
 ///
-/// Copyright (c) Domagoj Saric 2011.-2013.
+/// Copyright (c) Domagoj Saric 2011 - 2015.
 ///
 ///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
 ///  (See accompanying file LICENSE_1_0.txt or copy at
@@ -17,6 +17,7 @@
 #define windows_hpp__886EAB51_B4AD_4246_9BE3_D5272EA7D59F
 #pragma once
 //------------------------------------------------------------------------------
+#if 1
 #ifndef BOOST_MMAP_HEADER_ONLY
     #ifndef WIN32_LEAN_AND_MEAN
         #define WIN32_LEAN_AND_MEAN
@@ -26,12 +27,18 @@
     #endif // NOMINMAX
 #endif // BOOST_MMAP_HEADER_ONLY
 #include "windows.h"
+#endif
 //------------------------------------------------------------------------------
 namespace boost
 {
 //------------------------------------------------------------------------------
+namespace mmap
+{
+//------------------------------------------------------------------------------
 
 
+//------------------------------------------------------------------------------
+} // namespace mmap
 //------------------------------------------------------------------------------
 } // namespace boost
 //------------------------------------------------------------------------------

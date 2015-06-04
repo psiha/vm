@@ -5,9 +5,10 @@
 ///
 /// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
-///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
-///  (See accompanying file LICENSE_1_0.txt or copy at
-///  http://www.boost.org/LICENSE_1_0.txt)
+/// Use, modification and distribution is subject to the
+/// Boost Software License, Version 1.0.
+/// (See accompanying file LICENSE_1_0.txt or copy at
+/// http://www.boost.org/LICENSE_1_0.txt)
 ///
 /// For more information, see http://www.boost.org
 ///
@@ -30,8 +31,7 @@ namespace mmap
 
 template <typename Impl> struct file_open_flags;
 
-typedef int flags_t;
-
+using flags_t = int;
 
 template <>
 struct file_open_flags<posix>
@@ -80,24 +80,24 @@ struct file_open_flags<posix>
         };
     };
 
-    static file_open_flags<posix> create
+    static file_open_flags<posix> BOOST_CC_REG create
     (
         flags_t handle_access_flags   ,
         open_policy::value_type       ,
         flags_t system_hints          ,
         flags_t on_construction_rights
-    );
+    ) noexcept;
 
-    static file_open_flags<posix> create_for_opening_existing_files
+    static file_open_flags<posix> BOOST_CC_REG create_for_opening_existing_files
     (
         flags_t handle_access_flags,
         bool    truncate           ,
         flags_t system_hints
-    );
+    ) noexcept;
 
     int oflag;
     int pmode;
-};
+}; // struct file_open_flags<posix>
 
 //------------------------------------------------------------------------------
 } // namespace mmap

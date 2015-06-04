@@ -5,9 +5,10 @@
 ///
 /// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
-///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
-///  (See accompanying file LICENSE_1_0.txt or copy at
-///  http://www.boost.org/LICENSE_1_0.txt)
+/// Use, modification and distribution is subject to the
+/// Boost Software License, Version 1.0.
+/// (See accompanying file LICENSE_1_0.txt or copy at
+/// http://www.boost.org/LICENSE_1_0.txt)
 ///
 /// For more information, see http://www.boost.org
 ///
@@ -19,7 +20,8 @@
 //------------------------------------------------------------------------------
 #include "mapping_flags.hpp"
 
-#include "../../../detail/windows.hpp"
+#include "boost/mmap/detail/impl_inline.hpp"
+#include "boost/mmap/detail/win32.hpp"
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -47,12 +49,12 @@ file_mapping_flags<win32> file_mapping_flags<win32>::create
     file_mapping_flags flags;
 
     flags.create_mapping_flags = ( combined_handle_access_flags & handle_access_rights::execute ) ? PAGE_EXECUTE : PAGE_NOACCESS;
-    static_assert( PAGE_READONLY          = PAGE_NOACCESS * 2, "" );
-    static_assert( PAGE_READWRITE         = PAGE_NOACCESS * 4, "" );
-    static_assert( PAGE_WRITECOPY         = PAGE_NOACCESS * 8, "" );
-    static_assert( PAGE_EXECUTE_READ      = PAGE_EXECUTE  * 2, "" );
-    static_assert( PAGE_EXECUTE_READWRITE = PAGE_EXECUTE  * 4, "" );
-    static_assert( PAGE_EXECUTE_WRITECOPY = PAGE_EXECUTE  * 8, "" );
+    static_assert( PAGE_READONLY          == PAGE_NOACCESS * 2, "" );
+    static_assert( PAGE_READWRITE         == PAGE_NOACCESS * 4, "" );
+    static_assert( PAGE_WRITECOPY         == PAGE_NOACCESS * 8, "" );
+    static_assert( PAGE_EXECUTE_READ      == PAGE_EXECUTE  * 2, "" );
+    static_assert( PAGE_EXECUTE_READWRITE == PAGE_EXECUTE  * 4, "" );
+    static_assert( PAGE_EXECUTE_WRITECOPY == PAGE_EXECUTE  * 8, "" );
     if ( share_mode == share_mode::hidden ) // WRITECOPY
         flags.create_mapping_flags *= 8;
     else
