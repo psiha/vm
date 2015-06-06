@@ -18,6 +18,7 @@
 
 #include "file.hpp"
 
+#include "boost/mmap/flags/flags.hpp"
 #include "boost/mmap/detail/impl_inline.hpp"
 #include "boost/mmap/detail/impl_selection.hpp"
 //------------------------------------------------------------------------------
@@ -30,29 +31,29 @@ namespace mmap
 
 namespace detail
 {
-    using open_flags          = file_open_flags<BOOST_MMAP_IMPL()>;
-    using default_file_handle = file_handle    <BOOST_MMAP_IMPL()>;
+    using opening             = flags::opening<BOOST_MMAP_IMPL()>;
+    using default_file_handle = file_handle   <BOOST_MMAP_IMPL()>;
 
     BOOST_IMPL_INLINE
-    open_flags create_rw_file_flags()
+    opening create_rw_file_flags()
     {
-        return open_flags::create
+        return opening::create
                (
-                   open_flags::handle_access_rights  ::read | open_flags::handle_access_rights::write,
-                   open_flags::open_policy           ::open_or_create,
-                   open_flags::system_hints          ::sequential_access,
-                   open_flags::on_construction_rights::read | open_flags::on_construction_rights::write
+                   opening::access_rights::read | opening::access_rights::write,
+                   opening::system_object_construction_policy::open_or_create,
+                   opening::system_hints::sequential_access,
+                   opening::new_system_object_public_access_rights::read | opening::new_system_object_public_access_rights::write
                );
     }
 
     BOOST_IMPL_INLINE
-    open_flags create_r_file_flags()
+    opening create_r_file_flags()
     {
-        return open_flags::create_for_opening_existing_files
+        return opening::create_for_opening_existing_files
                (
-                   open_flags::handle_access_rights::read,
-                   false,
-                   open_flags::system_hints        ::sequential_access
+                   opening::access_rights::read,
+                   opening::system_hints ::sequential_access,
+                   false
                );
     }
 
@@ -72,7 +73,7 @@ namespace detail
             desired_size = get_size( file_handle               );
     #endif // _WIN32
 
-        using flags = file_mapping_flags<BOOST_MMAP_IMPL()>;
+        using flags = flags::mapping<BOOST_MMAP_IMPL()>;
         return basic_mapped_view::map
         (
             create_mapping
@@ -80,7 +81,7 @@ namespace detail
                 file_handle,
                 flags::create
                 (
-                    flags::handle_access_rights::read | flags::handle_access_rights::write,
+                    flags::access_rights::read | flags::access_rights::write,
                     flags::share_mode          ::shared
                 )
             ),
@@ -94,13 +95,13 @@ namespace detail
     err::fallible_result<basic_read_only_mapped_view, mmap::error<>>
     map_read_only_file( default_file_handle::reference const file_handle ) noexcept
     {
-        using flags = file_mapping_flags<BOOST_MMAP_IMPL()>;
+        using flags = flags::mapping<BOOST_MMAP_IMPL()>;
         return basic_read_only_mapped_view::map
         (
             create_mapping
             (
                 file_handle,
-                flags::create( flags::handle_access_rights::read, flags::share_mode::shared )
+                flags::create( flags::access_rights::read, flags::share_mode::shared )
             ),
             0, // no offset
         #ifdef _WIN32

@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file mapping_flags.hpp
-/// -----------------------
+/// \file flags/win32/mapping.hpp
+/// -----------------------------
 ///
 /// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
@@ -14,10 +14,12 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef mapping_flags_hpp__CD518463_D4CB_4E18_8E35_E0FBBA8CA1D1
-#define mapping_flags_hpp__CD518463_D4CB_4E18_8E35_E0FBBA8CA1D1
+#ifndef mapping_hpp__4EF4F246_E244_40F1_A1C0_6D91EF1DA2EC
+#define mapping_hpp__4EF4F246_E244_40F1_A1C0_6D91EF1DA2EC
 #pragma once
 //------------------------------------------------------------------------------
+#include "boost/mmap/implementations.hpp"
+
 #include "boost/detail/winapi/security.hpp"
 
 #include <cstdint>
@@ -28,19 +30,20 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+namespace flags
+{
+//------------------------------------------------------------------------------
 
-template <typename Impl> struct file_mapping_flags;
-
-struct win32;
+template <typename Impl> struct mapping;
 
 using flags_t = std::uint32_t;
 
 template <>
-struct file_mapping_flags<win32>
+struct mapping<win32>
 {
-    struct handle_access_rights
+    struct access_rights
     {
-        enum values
+        enum flags
         {
             read    = 0x0004,
             write   = 0x0002,
@@ -49,27 +52,26 @@ struct file_mapping_flags<win32>
         };
     };
 
-    struct share_mode
+    enum struct share_mode
     {
-        enum value_type
-        {
-            shared = 0,
-            hidden = 0x0001
-        };
+        shared = 0,
+        hidden = 0x0001
     };
 
-    static file_mapping_flags<win32> BOOST_CC_REG create
+    static mapping<win32> BOOST_CC_REG create
     (
-        flags_t                combined_handle_access_rights,
-        share_mode::value_type share_mode
-    );
+        flags_t    combined_handle_access_rights,
+        share_mode
+    ) noexcept;
 
     flags_t create_mapping_flags;
     flags_t map_view_flags      ;
     /*...mrmlj...boost::detail::winapi::SECURITY_ATTRIBUTES_*/
-    void const * p_security_attributes = nullptr;
-}; // struct file_mapping_flags<win32>
+    void const * p_security_attributes /*= nullptr...mrmlj...otherwise MSVC14RC barfs at brace-initialisation*/;
+}; // struct mapping<win32>
 
+//------------------------------------------------------------------------------
+} // namespace flags
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------
@@ -77,7 +79,7 @@ struct file_mapping_flags<win32>
 //------------------------------------------------------------------------------
 
 #ifdef BOOST_MMAP_HEADER_ONLY
-    #include "mapping_flags.inl"
+    #include "mapping.inl"
 #endif
 
-#endif // mapping_flags.hpp
+#endif // mapping.hpp

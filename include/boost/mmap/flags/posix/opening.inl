@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file open_flags.inl
-/// --------------------
+/// \file flags/posix/opening.inl
+/// -----------------------------
 ///
 /// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
@@ -18,7 +18,7 @@
 #define open_flags_inl__0F422517_D9AA_4E3F_B3E4_B139021D068E
 #pragma once
 //------------------------------------------------------------------------------
-#include "open_flags.hpp"
+#include "opening.hpp"
 
 #include "boost/mmap/detail/impl_inline.hpp"
 
@@ -30,14 +30,17 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+namespace flags
+{
+//------------------------------------------------------------------------------
 
 BOOST_IMPL_INLINE
-file_open_flags<posix> file_open_flags<posix>::create
+opening<posix> opening<posix>::create
 (
-    flags_t                 const handle_access_flags   ,
-    open_policy::value_type const open_flags            ,
-    flags_t                 const system_hints          ,
-    flags_t                 const on_construction_rights
+    flags_t                           const handle_access_flags   ,
+    system_object_construction_policy const open_flags            ,
+    flags_t                           const system_hints          ,
+    flags_t                           const on_construction_rights
 ) noexcept
 {
     //...zzz...use fadvise...
@@ -47,41 +50,42 @@ file_open_flags<posix> file_open_flags<posix>::create
     (
         ( ( handle_access_flags == ( O_RDONLY | O_WRONLY ) ) ? O_RDWR : handle_access_flags )
                 |
-            open_flags
+            static_cast<flags_t>( open_flags )
                 |
             system_hints
     );
 
     unsigned int const pmode( on_construction_rights );
 
-    file_open_flags<posix> const flags =
+    return
     {
-        static_cast<flags_t>( oflag ),
-        static_cast<flags_t>( pmode )
+        .oflag = static_cast<flags_t>( oflag ),
+        .pmode = static_cast<flags_t>( pmode )
     };
-    return flags;
 }
 
 
 BOOST_IMPL_INLINE
-file_open_flags<posix> file_open_flags<posix>::create_for_opening_existing_files
+opening<posix> opening<posix>::create_for_opening_existing_files
 (
     flags_t const handle_access_flags,
-    bool    const truncate,
-    flags_t const system_hints
+    flags_t const system_hints,
+    bool    const truncate
 ) noexcept
 {
     return create
     (
         handle_access_flags,
          truncate
-            ? open_policy::open_and_truncate_existing
-            : open_policy::open_existing,
+            ? system_object_construction_policy::open_and_truncate_existing
+            : system_object_construction_policy::open_existing,
         system_hints,
         0
     );
 }
 
+//------------------------------------------------------------------------------
+} // flags
 //------------------------------------------------------------------------------
 } // mmap
 //------------------------------------------------------------------------------

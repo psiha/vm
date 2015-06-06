@@ -19,9 +19,8 @@
 #pragma once
 //------------------------------------------------------------------------------
 #include "boost/mmap/detail/impl_selection.hpp"
-
-#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /file.hpp  ) )
-#include "flags.hpp"
+#include "boost/mmap/flags/flags.hpp"
+#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /file.hpp ) )
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -30,7 +29,7 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-using native_file_open_flags = file_open_flags<BOOST_MMAP_IMPL()>;
+using native_file_open_flags = opening<BOOST_MMAP_IMPL()>;
 
 inline bool delete_file( char    const * const file_name ) noexcept { return delete_file( file_name, BOOST_MMAP_IMPL() () ); }
 inline bool delete_file( wchar_t const * const file_name ) noexcept { return delete_file( file_name, BOOST_MMAP_IMPL() () ); }

@@ -22,20 +22,25 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+namespace flags
+{
+//------------------------------------------------------------------------------
 
 BOOST_IMPL_INLINE
-shared_memory_flags<posix> shared_memory_flags<posix>::create
+shared_memory<posix> shared_memory<posix>::create
 (
     flags_t                  const combined_handle_access_flags,
     share_mode  ::value_type const share_mode,
     system_hints::value_type const system_hint
 )
 {
-    shared_memory_flags<posix> flags( file_mapping_flags<posix>::create( combined_handle_access_flags, share_mode ) );
+    shared_memory<posix> flags( mapping<posix>::create( combined_handle_access_flags, share_mode ) );
     flags.flags |= system_hint;
     return flags;
 }
 
+//------------------------------------------------------------------------------
+} // flags
 //------------------------------------------------------------------------------
 } // mmap
 //------------------------------------------------------------------------------

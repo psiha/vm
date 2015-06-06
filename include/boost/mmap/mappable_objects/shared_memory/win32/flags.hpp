@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file mapping_flags.hpp
-/// -----------------------
+/// \file shared_memory/win32/flags.hpp
+/// -----------------------------------
 ///
 /// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
@@ -20,7 +20,8 @@
 //------------------------------------------------------------------------------
 #include "boost/config.hpp"
 
-#include "boost/mmap/mappable_objects/file/win32/mapping_flags.hpp"
+#include "boost/mmap/flags/win32/mapping.hpp"
+#include "boost/mmap/implementations.hpp"
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -28,31 +29,31 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+namespace flags
+{
+//------------------------------------------------------------------------------
 
-template <typename Impl> struct shared_memory_flags;
-
-struct win32;
+template <typename Impl> struct shared_memory;
 
 template <>
-struct shared_memory_flags<win32> : file_mapping_flags<win32>
+struct shared_memory<win32> : mapping<win32>
 {
-    struct system_hints
+    enum struct system_hints
     {
-        enum value_type
-        {
-            default                    = 0x8000000,
-            only_reserve_address_space = 0x4000000
-        };
+        default                    = 0x8000000,
+        only_reserve_address_space = 0x4000000
     }; // struct system_hints
 
-    static shared_memory_flags<win32> BOOST_CC_REG create
+    static shared_memory<win32> BOOST_CC_REG create
     (
-        flags_t                  combined_handle_access_rights,
-        share_mode  ::value_type share_mode,
-        system_hints::value_type system_hint
+        flags_t      combined_handle_access_rights,
+        share_mode   sharing,
+        system_hints system_hint
     ) noexcept;
-}; // struct shared_memory_flags<win32>
+}; // struct shared_memory<win32>
 
+//------------------------------------------------------------------------------
+} // namespace flags
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file file.inl
-/// --------------
+/// \file mappable_objects/file.inl
+/// -------------------------------
 ///
 /// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
@@ -20,10 +20,10 @@
 //------------------------------------------------------------------------------
 #include "file.hpp"
 
-#include "open_flags.hpp"
-#include "../../../detail/impl_inline.hpp"
-#include "../../../detail/posix.hpp"
-#include "../../../mapping/posix/mapping.hpp"
+#include "boost/mmap/detail/impl_inline.hpp"
+#include "boost/mmap/detail/posix.hpp"
+#include "boost/mmap/flags/posix/opening.hpp"
+#include "boost/mmap/mapping/posix/mapping.hpp"
 
 #include "boost/assert.hpp"
 
@@ -41,7 +41,7 @@ namespace mmap
 //------------------------------------------------------------------------------
 
 BOOST_IMPL_INLINE
-file_handle<posix> BOOST_CC_REG create_file( char const * const file_name, file_open_flags<posix> const flags ) noexcept
+file_handle<posix> BOOST_CC_REG create_file( char const * const file_name, flags::opening<posix> const flags ) noexcept
 {
     BOOST_ASSERT( file_name );
 
@@ -55,7 +55,7 @@ file_handle<posix> BOOST_CC_REG create_file( char const * const file_name, file_
 
 #ifdef BOOST_MSVC
 BOOST_IMPL_INLINE
-file_handle<posix> BOOST_CC_REG create_file( wchar_t const * const file_name, file_open_flags<posix> const flags )
+file_handle<posix> BOOST_CC_REG create_file( wchar_t const * const file_name, flags::opening<posix> const flags )
 {
     BOOST_ASSERT( file_name );
 
@@ -90,7 +90,7 @@ std::size_t BOOST_CC_REG get_size( file_handle<posix>::reference const file_hand
 #ifdef BOOST_HAS_UNISTD_H
 // Apple guidelines http://developer.apple.com/library/mac/#documentation/Performance/Conceptual/FileSystem/Articles/MappingFiles.html
 BOOST_IMPL_INLINE
-mapping<posix> BOOST_CC_REG create_mapping( file_handle<posix>::reference const file, file_mapping_flags<posix> const flags ) noexcept
+mapping<posix> BOOST_CC_REG create_mapping( file_handle<posix>::reference const file, flags::mapping<posix> const flags ) noexcept
 {
     return mapping<posix>( file, flags );
 }

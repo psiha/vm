@@ -20,8 +20,17 @@
 //------------------------------------------------------------------------------
 #include "boost/mmap/detail/impl_selection.hpp"
 
-#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /mapping_flags.hpp ) )
-#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /open_flags.hpp    ) )
+#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /mapping.hpp ) )
+#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /opening.hpp ) )
+//------------------------------------------------------------------------------
+namespace boost
+{
+//------------------------------------------------------------------------------
+namespace mmap
+{
+//------------------------------------------------------------------------------
+namespace flags
+{
 //------------------------------------------------------------------------------
 
 #ifdef DOXYGEN_ONLY
@@ -35,7 +44,7 @@
 //                                            (10.10.2010.) (Domagoj Saric)
 
 template <typename Impl>
-struct file_mapping_flags
+struct mapping
 {
     struct handle_access_rights
     {
@@ -57,17 +66,17 @@ struct file_mapping_flags
         };
     };
 
-    static file_mapping_flags<Impl> create ///< Factory function
+    static mapping<Impl> create ///< Factory function
     (
         flags_t                combined_handle_access_rights,
         share_mode::value_type share_mode
     );
 
     unspecified-impl_specific public_data_members;
-};
+}; // struct mapping
 
 template <Impl>
-struct file_open_flags
+struct opening
 {
     /// Object access rights
     struct handle_access_rights
@@ -119,7 +128,7 @@ struct file_open_flags
     };
 
     /// Factory function
-    static file_open_flags<Impl> create
+    static opening<Impl> create
     (
         flags_t handle_access_flags,
         open_policy::value_type,
@@ -128,17 +137,25 @@ struct file_open_flags
     );
 
     /// Factory function
-    static file_open_flags<Impl> create_for_opening_existing_files
+    static opening<Impl> create_for_opening_existing_files
     (
         flags_t handle_access_flags,
-        bool    truncate,
         flags_t system_hints
+        bool    truncate,
     );
 
     unspecified-impl_specific public_data_members;
-}; // struct file_open_flags
+}; // struct opening
 
 #endif // DOXYGEN_ONLY
+
+//------------------------------------------------------------------------------
+} // namespace flags
+//------------------------------------------------------------------------------
+} // namespace mmap
+//------------------------------------------------------------------------------
+} // namespace boost
+//------------------------------------------------------------------------------
 
 #ifdef BOOST_MMAP_HEADER_ONLY
     #include "flags.inl"

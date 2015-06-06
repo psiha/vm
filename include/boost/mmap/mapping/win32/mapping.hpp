@@ -19,7 +19,7 @@
 #pragma once
 //------------------------------------------------------------------------------
 #include "boost/mmap/handles/win32/handle.hpp"
-#include "boost/mmap/mappable_objects/file/win32/mapping_flags.hpp"
+#include "boost/mmap/flags/win32/mapping.hpp"
 
 #include "boost/config.hpp"
 //#include "boost/detail/winapi/system.hpp" //...broken?
@@ -45,12 +45,12 @@ struct mapping<win32>
 
     static bool const owns_parent_handle = true;
 
-    mapping( native_handle_t const native_handle, std::uint32_t const view_mapping_flags_param )
+    mapping( native_handle_t const native_handle, flags::flags_t const view_mapping_flags_param )
         : handle<win32>( native_handle ), view_mapping_flags( view_mapping_flags_param ) {}
 
-    bool is_read_only() const { return ( view_mapping_flags & file_mapping_flags<win32>::handle_access_rights::write ) == 0; }
+    bool is_read_only() const { return ( view_mapping_flags & flags::mapping<win32>::access_rights::write ) == 0; }
 
-    std::uint32_t const view_mapping_flags;
+    flags::flags_t const view_mapping_flags;
 }; // struct mapping<win32>
 
 #ifdef PAGE_SIZE

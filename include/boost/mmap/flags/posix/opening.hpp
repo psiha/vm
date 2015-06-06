@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file open_flags.hpp
-/// --------------------
+/// \file flags/posix/opening.hpp
+/// -----------------------------
 ///
 /// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
@@ -14,11 +14,12 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef open_flags_hpp__0F422517_D9AA_4E3F_B3E4_B139021D068E
-#define open_flags_hpp__0F422517_D9AA_4E3F_B3E4_B139021D068E
+#ifndef opening_hpp__0F422517_D9AA_4E3F_B3E4_B139021D068E
+#define opening_hpp__0F422517_D9AA_4E3F_B3E4_B139021D068E
 #pragma once
 //------------------------------------------------------------------------------
-#include "../../../detail/posix.hpp"
+#include "boost/mmap/detail/posix.hpp"
+#include "boost/mmap/implementations.hpp"
 
 #include "fcntl.h"
 //------------------------------------------------------------------------------
@@ -28,49 +29,27 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+namespace flags
+{
+//------------------------------------------------------------------------------
 
-template <typename Impl> struct file_open_flags;
+template <typename Impl> struct opening;
 
 using flags_t = int;
 
 template <>
-struct file_open_flags<posix>
+struct opening<posix>
 {
-    struct handle_access_rights
+    enum struct system_object_construction_policy
     {
-        enum values
-        {
-            read    = O_RDONLY,
-            write   = O_WRONLY,
-            readwrite = read | write,
-            all     = readwrite
-        };
+        create_new                      = O_CREAT | O_EXCL ,
+        create_new_or_truncate_existing = O_CREAT | O_TRUNC,
+        open_existing                   = 0                ,
+        open_or_create                  = O_CREAT          ,
+        open_and_truncate_existing      = O_TRUNC
     };
 
-    struct open_policy
-    {
-        enum value_type
-        {
-            create_new                      = O_CREAT | O_EXCL ,
-            create_new_or_truncate_existing = O_CREAT | O_TRUNC,
-            open_existing                   = 0                ,
-            open_or_create                  = O_CREAT          ,
-            open_and_truncate_existing      = O_TRUNC
-        };
-    };
-
-    struct system_hints
-    {
-        enum values
-        {
-            random_access     = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0,        0, 0, O_RANDOM                     ),
-            sequential_access = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0,        0, 0, O_SEQUENTIAL                 ),
-            avoid_caching     = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0, O_DIRECT, 0, 0                            ),
-            temporary         = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0,        0, 0, O_TEMPORARY | _O_SHORT_LIVED ),
-        };
-    };
-
-    struct on_construction_rights
+    struct new_system_object_public_access_rights
     {
         enum values
         {
@@ -80,25 +59,51 @@ struct file_open_flags<posix>
         };
     };
 
-    static file_open_flags<posix> BOOST_CC_REG create
+    struct process_private_access_rights
+    {
+        enum flags
+        {
+            read      = O_RDONLY,
+            write     = O_WRONLY,
+            readwrite = read | write,
+            all       = readwrite
+        };
+    };
+    using access_rights = process_private_access_rights;
+
+    struct access_pattern_optimisation_hints
+    {
+        enum values
+        {
+            random_access     = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0,        0, 0, O_RANDOM                     ),
+            sequential_access = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0,        0, 0, O_SEQUENTIAL                 ),
+            avoid_caching     = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0, O_DIRECT, 0, 0                            ),
+            temporary         = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0,        0, 0, O_TEMPORARY | _O_SHORT_LIVED ),
+        };
+    };
+    using system_hints = access_pattern_optimisation_hints;
+
+    static opening<posix> BOOST_CC_REG create
     (
-        flags_t handle_access_flags   ,
-        open_policy::value_type       ,
-        flags_t system_hints          ,
+        flags_t handle_access_flags      ,
+        system_object_construction_policy,
+        flags_t system_hints             ,
         flags_t on_construction_rights
     ) noexcept;
 
-    static file_open_flags<posix> BOOST_CC_REG create_for_opening_existing_files
+    static opening<posix> BOOST_CC_REG create_for_opening_existing_files
     (
         flags_t handle_access_flags,
-        bool    truncate           ,
-        flags_t system_hints
+        flags_t system_hints,
+        bool    truncate
     ) noexcept;
 
-    int oflag;
-    int pmode;
-}; // struct file_open_flags<posix>
+    flags_t oflag;
+    flags_t pmode;
+}; // struct opening<posix>
 
+//------------------------------------------------------------------------------
+} // namespace flags
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------
@@ -106,7 +111,7 @@ struct file_open_flags<posix>
 //------------------------------------------------------------------------------
 
 #ifdef BOOST_MMAP_HEADER_ONLY
-    #include "open_flags.inl"
+    #include "opening.inl"
 #endif // BOOST_MMAP_HEADER_ONLY
 
-#endif // open_flags_hpp
+#endif // opening_hpp

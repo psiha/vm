@@ -20,7 +20,7 @@
 //------------------------------------------------------------------------------
 #include "file.hpp"
 
-#include "open_flags.hpp"
+#include "boost/mmap/flags/win32/opening.hpp"
 #include "boost/mmap/detail/impl_inline.hpp"
 #include "boost/mmap/detail/win32.hpp"
 
@@ -33,29 +33,26 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-namespace
-{
-    // http://en.wikipedia.org/wiki/File_locking#In_UNIX
-    DWORD const default_unix_shared_semantics( FILE_SHARE_READ | FILE_SHARE_WRITE );
-} // namespace
+// http://en.wikipedia.org/wiki/File_locking#In_UNIX
+DWORD const default_unix_shared_semantics( FILE_SHARE_READ | FILE_SHARE_WRITE );
 
 BOOST_IMPL_INLINE
-file_handle<win32> BOOST_CC_REG create_file( char const * const file_name, file_open_flags<win32> const flags ) noexcept
+file_handle<win32> BOOST_CC_REG create_file( char const * const file_name, flags::opening<win32> const flags ) noexcept
 {
     auto const handle
     (
         ::CreateFileA
         (
-            file_name, flags.desired_access, default_unix_shared_semantics, nullptr, flags.creation_disposition, flags.flags_and_attributes, nullptr
+            file_name, flags.desired_access, default_unix_shared_semantics, nullptr, static_cast<DWORD>( flags.creation_disposition ), flags.flags_and_attributes, nullptr
         )
     );
     BOOST_ASSERT( ( handle == handle_traits<win32>::invalid_value ) || ( ::GetLastError() == NO_ERROR ) || ( ::GetLastError() == ERROR_ALREADY_EXISTS ) );
-    
+
     return file_handle<win32>( handle );
 }
 
 BOOST_IMPL_INLINE
-file_handle<win32> BOOST_CC_REG create_file( wchar_t const * const file_name, file_open_flags<win32> const flags ) noexcept
+file_handle<win32> BOOST_CC_REG create_file( wchar_t const * const file_name, flags::opening<win32> const flags ) noexcept
 {
     BOOST_ASSERT( file_name );
 
@@ -63,11 +60,11 @@ file_handle<win32> BOOST_CC_REG create_file( wchar_t const * const file_name, fi
     (
         ::CreateFileW
         (
-            file_name, flags.desired_access, default_unix_shared_semantics, nullptr, flags.creation_disposition, flags.flags_and_attributes, nullptr
+            file_name, flags.desired_access, default_unix_shared_semantics, nullptr, static_cast<DWORD>( flags.creation_disposition ), flags.flags_and_attributes, nullptr
         )
     );
     BOOST_ASSERT( ( handle == handle_traits<win32>::invalid_value ) || ( ::GetLastError() == NO_ERROR ) || ( ::GetLastError() == ERROR_ALREADY_EXISTS ) );
-    
+
     return file_handle<win32>( handle );
 }
 
@@ -127,7 +124,7 @@ std::size_t BOOST_CC_REG get_size( file_handle<win32>::reference const file_hand
 
 
 BOOST_IMPL_INLINE
-mapping<win32> BOOST_CC_REG create_mapping( file_handle<win32>::reference const file, file_mapping_flags<win32> const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
+mapping<win32> BOOST_CC_REG create_mapping( file_handle<win32>::reference const file, flags::mapping<win32> const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
 {
     auto const & max_sz( reinterpret_cast<ULARGE_INTEGER const &>( maximum_size ) );
     auto const mapping_handle
@@ -146,7 +143,7 @@ mapping<win32> BOOST_CC_REG create_mapping( file_handle<win32>::reference const 
 // https://support.microsoft.com/en-us/kb/125713 Common File Mapping Problems and Platform Differences
 
 BOOST_IMPL_INLINE
-mapping<win32> BOOST_CC_REG create_mapping( handle<win32>::reference const file, file_mapping_flags<win32> const flags ) noexcept
+mapping<win32> BOOST_CC_REG create_mapping( handle<win32>::reference const file, flags::mapping<win32> const flags ) noexcept
 {
     auto const mapping_handle
     (

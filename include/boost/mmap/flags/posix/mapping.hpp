@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file mapping_flags.hpp
-/// -----------------------
+/// \file flags/posix/mapping.hpp
+/// -----------------------------
 ///
 /// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
@@ -14,11 +14,12 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef mapping_flags_hpp__79CF82B8_F71B_4C75_BE77_98F4FB8A7FFA
-#define mapping_flags_hpp__79CF82B8_F71B_4C75_BE77_98F4FB8A7FFA
+#ifndef mapping_hpp__79CF82B8_F71B_4C75_BE77_98F4FB8A7FFA
+#define mapping_hpp__79CF82B8_F71B_4C75_BE77_98F4FB8A7FFA
 #pragma once
 //------------------------------------------------------------------------------
-#include "../../../detail/posix.hpp"
+#include "boost/mmap/detail/posix.hpp"
+#include "boost/mmap/implementations.hpp"
 
 #include "sys/mman.h"
 //------------------------------------------------------------------------------
@@ -28,17 +29,18 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+namespace flags
+{
+//------------------------------------------------------------------------------
 
-template <typename Impl> struct file_mapping_flags;
-
-struct posix;
+template <typename Impl> struct mapping;
 
 using flags_t = int;
 
 template <>
-struct file_mapping_flags<posix>
+struct mapping<posix>
 {
-    struct handle_access_rights
+    struct access_rights
     {
         enum values
         {
@@ -49,25 +51,24 @@ struct file_mapping_flags<posix>
         };
     };
 
-    struct share_mode
+    enum struct share_mode
     {
-        enum value_type
-        {
-            shared = MAP_SHARED,
-            hidden = MAP_PRIVATE
-        };
+        shared = MAP_SHARED,
+        hidden = MAP_PRIVATE
     };
 
-    static file_mapping_flags<posix> BOOST_CC_REG create
+    static mapping<posix> BOOST_CC_REG create
     (
-        flags_t                combined_handle_access_rights,
-        share_mode::value_type share_mode
+        flags_t    combined_handle_access_rights,
+        share_mode
     ) noexcept;
 
     flags_t protection;
     flags_t flags     ;
-}; // struct file_mapping_flags<posix>
+}; // struct mapping<posix>
 
+//------------------------------------------------------------------------------
+} // namespace flags
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------
@@ -75,7 +76,7 @@ struct file_mapping_flags<posix>
 //------------------------------------------------------------------------------
 
 #ifdef BOOST_MMAP_HEADER_ONLY
-    #include "mapping_flags.inl"
+    #include "mapping.inl"
 #endif
 
-#endif // mapping_flags.hpp
+#endif // mapping.hpp

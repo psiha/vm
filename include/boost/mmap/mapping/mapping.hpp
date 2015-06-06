@@ -58,20 +58,20 @@ template <typename Impl>
 struct mapping;
 
 //template <typename Impl>
-//mapping<Impl> create_mapping( typename handle<Impl>::reference mappable_object, mapping_flags<Impl>, std::uint64_t maximum_size, char const * name ) noexcept;
+//mapping<Impl> create_mapping( typename handle<Impl>::reference mappable_object, mapping<Impl>, std::uint64_t maximum_size, char const * name ) noexcept;
 
 template <typename Impl>
-mapping<Impl> open_mapping( file_mapping_flags<Impl>, char const * name ) noexcept; //todo
+mapping<Impl> open_mapping( mapping<Impl>, char const * name ) noexcept; //todo
 
 
 template <typename Impl>
-mapping<Impl> create_mapping( FILE * const p_c_file_stream, file_mapping_flags<Impl> const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
+mapping<Impl> create_mapping( FILE * const p_c_file_stream, mapping<Impl> const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
 {
     return create_mapping<Impl>( *p_c_file_stream, flags, maximum_size, name );
 }
 
 template <typename Impl>
-mapping<Impl> create_mapping( FILE & c_file_stream, file_mapping_flags<Impl> const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
+mapping<Impl> create_mapping( FILE & c_file_stream, mapping<Impl> const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
 {
     return create_mapping<Impl>( /*std*/::fileno( &c_file_stream ), flags, maximum_size, name );
 }

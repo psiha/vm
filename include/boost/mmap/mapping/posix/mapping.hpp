@@ -19,7 +19,7 @@
 #pragma once
 //------------------------------------------------------------------------------
 #include "boost/mmap/handles/posix/handle.hpp"
-#include "boost/mmap/mappable_objects/file/posix/mapping_flags.hpp"
+#include "boost/mmap/flags/posix/mapping.hpp"
 
 #include "boost/config/suffix.hpp"
 //------------------------------------------------------------------------------
@@ -37,17 +37,17 @@ struct mapping<posix>
     :
     handle<posix>::reference
 {
-    typedef handle<posix>::native_handle_t         native_handle_t;
-    typedef mapping                        const & reference;
+    using native_handle_t = handle<posix>::native_handle_t        ;
+    using reference       = mapping                        const &;
 
     static bool const owns_parent_handle = false;
 
-    mapping( native_handle_t const native_handle, file_mapping_flags<posix> const & view_mapping_flags_param )
+    mapping( native_handle_t const native_handle, flags::mapping<posix> const & view_mapping_flags_param ) noexcept
         : handle<posix>::reference{ native_handle }, view_mapping_flags( view_mapping_flags_param ) {}
 
-    bool is_read_only() const { return ( view_mapping_flags.protection & file_mapping_flags<posix>::handle_access_rights::write ) == 0; }
+    bool is_read_only() const { return ( view_mapping_flags.protection & flags::mapping<posix>::access_rights::write ) == 0; }
 
-    file_mapping_flags<posix> const view_mapping_flags;
+    flags::mapping<posix> const view_mapping_flags;
 }; // struct mapping<posix>
 
 
@@ -58,7 +58,7 @@ BOOST_OVERRIDABLE_SYMBOL extern std::uint16_t const page_size
 (
     ([]()
     {
-        auto const size( ::sysconf( _SC_PAGE_SIZE ) );
+        auto const size( ::getpagesize()/*::sysconf( _SC_PAGE_SIZE )*/ );
         BOOST_LIKELY( size     == 4096 );
         BOOST_ASSUME( size % 2 == 0    );
         return static_cast<std::uint16_t>( size );

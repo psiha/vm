@@ -18,9 +18,10 @@
 #define file_hpp__1E2F9841_1C6C_40D9_9AA7_BAC0003CD909
 #pragma once
 //------------------------------------------------------------------------------
-#include "../handle.hpp"
-#include "../../../detail/posix.hpp"
-#include "../../../implementations.hpp"
+#include "boost/mmap/mappable_objects/file/handle.hpp"
+#include "boost/mmap/flags/posix/opening.hpp"
+#include "boost/mmap/detail/posix.hpp"
+#include "boost/mmap/implementations.hpp"
 
 #include <cstddef>
 //------------------------------------------------------------------------------
@@ -31,8 +32,8 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-template <typename Impl  > struct file_open_flags;
-template <typename Impl  > struct file_mapping_flags;
+template <typename Impl  > struct opening;
+template <typename Impl  > struct mapping;
 template <class    Handle> struct is_resizable;
 
 #ifdef BOOST_HAS_UNISTD_H
@@ -42,9 +43,9 @@ template <class    Handle> struct is_resizable;
 #endif // BOOST_HAS_UNISTD_H
 
 
-file_handle<posix> BOOST_CC_REG create_file( char    const * file_name, file_open_flags<posix> ) noexcept;
+file_handle<posix> BOOST_CC_REG create_file( char    const * file_name, flags::opening<posix> ) noexcept;
 #ifdef BOOST_MSVC
-file_handle<posix> BOOST_CC_REG create_file( wchar_t const * file_name, file_open_flags<posix> ) noexcept;
+file_handle<posix> BOOST_CC_REG create_file( wchar_t const * file_name, flags::opening<posix> ) noexcept;
 #endif // BOOST_MSVC
 
 bool BOOST_CC_REG delete_file( char    const * file_name, posix ) noexcept;
@@ -56,7 +57,8 @@ bool        BOOST_CC_REG set_size( file_handle<posix>::reference, std::size_t de
 #endif // BOOST_HAS_UNISTD_H
 std::size_t BOOST_CC_REG get_size( file_handle<posix>::reference                           ) noexcept;
 
-mapping<posix> BOOST_CC_REG create_mapping( file_handle<posix>::reference, file_mapping_flags<posix> ) noexcept;
+
+mapping<posix> BOOST_CC_REG create_mapping( file_handle<posix>::reference, flags::mapping<posix> ) noexcept;
 
 //------------------------------------------------------------------------------
 } // namespace mmap
