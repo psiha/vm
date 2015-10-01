@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file handle.hpp
-/// ----------------
+/// \file mappable_objects/file/posix/file.hpp
+/// ------------------------------------------
 ///
 /// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
@@ -58,7 +58,22 @@ bool        BOOST_CC_REG set_size( file_handle<posix>::reference, std::size_t de
 std::size_t BOOST_CC_REG get_size( file_handle<posix>::reference                           ) noexcept;
 
 
-mapping<posix> BOOST_CC_REG create_mapping( file_handle<posix>::reference, flags::mapping<posix> ) noexcept;
+#ifdef BOOST_HAS_UNISTD_H
+template <typename Handle>
+mapping<posix> BOOST_CC_REG create_mapping
+(
+    Handle                                         &&       file,
+    flags::access_privileges<posix>::object           const object_access,
+    flags::access_privileges<posix>::child_process    const child_access,
+    flags::mapping          <posix>::share_mode       const share_mode,
+    std::size_t                                       const size
+) noexcept
+{
+    // Apple guidelines http://developer.apple.com/library/mac/#documentation/Performance/Conceptual/FileSystem/Articles/MappingFiles.html
+    (void)child_access; //...mrmlj...figure out what to do with this...
+    return { std::forward<Handle>( file ), flags::viewing<posix>::create( object_access, share_mode ), size };
+}
+#endif // BOOST_HAS_UNISTD_H
 
 //------------------------------------------------------------------------------
 } // namespace mmap
@@ -67,7 +82,7 @@ mapping<posix> BOOST_CC_REG create_mapping( file_handle<posix>::reference, flags
 //------------------------------------------------------------------------------
 
 #ifdef BOOST_MMAP_HEADER_ONLY
-    #include "file.inl"
-#endif
+#   include "file.inl"
+#endif // BOOST_MMAP_HEADER_ONLY
 
 #endif // file_hpp

@@ -37,32 +37,42 @@ namespace detail
     BOOST_IMPL_INLINE
     opening create_rw_file_flags()
     {
+        using namespace flags;
+        using ap = access_privileges<BOOST_MMAP_IMPL()>;
         return opening::create
-               (
-                   opening::access_rights::read | opening::access_rights::write,
-                   opening::system_object_construction_policy::open_or_create,
-                   opening::system_hints::sequential_access,
-                   opening::new_system_object_public_access_rights::read | opening::new_system_object_public_access_rights::write
-               );
+        (
+            {
+                ap::object { ap::readwrite },
+                ap::child_process::does_not_inherit,
+                ap::system::process_default// ap::system::user( ap::readwrite ) | ap::system::group( ap::read )
+            },
+            named_object_construction_policy<BOOST_MMAP_IMPL()>::open_or_create,
+            system_hints                    <BOOST_MMAP_IMPL()>::sequential_access
+        );
     }
 
     BOOST_IMPL_INLINE
     opening create_r_file_flags()
     {
-        return opening::create_for_opening_existing_files
+        using namespace flags;
+        using ap = access_privileges<BOOST_MMAP_IMPL()>;
+        return opening::create_for_opening_existing_objects
                (
-                   opening::access_rights::read,
-                   opening::system_hints ::sequential_access,
+                   ap::object { ap::readwrite },
+                   ap::child_process::does_not_inherit,
+                   system_hints<BOOST_MMAP_IMPL()>::sequential_access,
                    false
                );
     }
 
     BOOST_IMPL_INLINE
-    err::fallible_result<basic_mapped_view, mmap::error<>>
+    err::fallible_result<basic_mapped_view, mmap::error<>> BOOST_CC_REG
     map_file( default_file_handle::reference const file_handle, std::size_t /*const*/ desired_size )
     {
         /// \note There is no need to call get/set_size() on the file_handle
-        /// as CreateFileMapping() automatically expands the file as necessary.
+        /// as CreateFileMapping() automatically expands the file as necessary
+        /// (but only if the file is opened with write access and the
+        /// share_mode::hidden flag is not specified).
         /// https://msdn.microsoft.com/en-us/library/aa366542(v=vs.85).aspx
         ///                                   (30.05.2015.) (Domagoj Saric)
         // memadv http://stackoverflow.com/questions/13126167/is-it-safe-to-ftruncate-a-shared-memory-object-after-it-has-ben-mmaped
@@ -73,20 +83,20 @@ namespace detail
             desired_size = get_size( file_handle               );
     #endif // _WIN32
 
+        using ap    = flags::access_privileges<BOOST_MMAP_IMPL()>;
         using flags = flags::mapping<BOOST_MMAP_IMPL()>;
         return basic_mapped_view::map
         (
             create_mapping
             (
                 file_handle,
-                flags::create
-                (
-                    flags::access_rights::read | flags::access_rights::write,
-                    flags::share_mode          ::shared
-                )
+                ap::object { ap::readwrite },
+                ap::child_process::does_not_inherit,
+                flags::share_mode::shared,
+                desired_size
             ),
             0, // no offset
-            desired_size
+            0/*desired_size*/
         );
     }
 
@@ -95,13 +105,17 @@ namespace detail
     err::fallible_result<basic_read_only_mapped_view, mmap::error<>>
     map_read_only_file( default_file_handle::reference const file_handle ) noexcept
     {
+        using ap    = flags::access_privileges<BOOST_MMAP_IMPL()>;
         using flags = flags::mapping<BOOST_MMAP_IMPL()>;
         return basic_read_only_mapped_view::map
         (
             create_mapping
             (
                 file_handle,
-                flags::create( flags::access_rights::read, flags::share_mode::shared )
+                ap::object { ap::read },
+                ap::child_process::does_not_inherit,
+                flags::share_mode::shared,
+                0
             ),
             0, // no offset
         #ifdef _WIN32

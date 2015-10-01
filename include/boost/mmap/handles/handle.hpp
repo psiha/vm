@@ -59,11 +59,12 @@ public:
              handle( handle          &&       other         ) noexcept : handle_( other.handle_         ) { other.handle_ = traits::invalid_value; }
             ~handle(                                        ) noexcept                                    { traits::close( handle_ );              }
 
-    handle && operator=( handle && BOOST_RESTRICTED_REF other ) noexcept
+    handle & operator=( handle && BOOST_RESTRICTED_REF other ) noexcept
     {
         close();
         this->handle_ = other.handle_;
         other.handle_ = traits::invalid_value;
+        return *this;
     }
 
     void close() noexcept { traits::close( release() ); }

@@ -32,9 +32,10 @@ struct detail::mapper<char, win32>
     basic_memory_range_t BOOST_CC_REG
     map
     (
-        mapping<win32> const & source_mapping,
-        std::uint64_t          offset        ,
-        std::size_t            desired_size
+        handle<win32>::reference const source_mapping,
+        flags::viewing<win32>    const flags         ,
+        std::uint64_t            const offset        , // ERROR_MAPPED_ALIGNMENT
+        std::size_t              const desired_size
     ) noexcept
     {
         // Implementation note:
@@ -45,8 +46,7 @@ struct detail::mapper<char, win32>
 
         using iterator = mapped_view<char, win32>::iterator;
 
-        ULARGE_INTEGER large_integer;
-        large_integer.QuadPart = offset;
+        auto const large_integer( reinterpret_cast<ULARGE_INTEGER const &>( offset ) );
 
         iterator const view_start
         (
@@ -55,7 +55,7 @@ struct detail::mapper<char, win32>
                 ::MapViewOfFile
                 (
                     source_mapping.get(),
-                    source_mapping.view_mapping_flags,
+                    flags.map_view_flags,
                     large_integer.HighPart,
                     large_integer.LowPart,
                     desired_size

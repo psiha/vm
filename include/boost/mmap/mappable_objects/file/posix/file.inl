@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file mappable_objects/file.inl
-/// -------------------------------
+/// \file mappable_objects/file/posix/file.inl
+/// ------------------------------------------
 ///
 /// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
@@ -85,16 +85,6 @@ std::size_t BOOST_CC_REG get_size( file_handle<posix>::reference const file_hand
     BOOST_VERIFY( ( ::fstat( file_handle, &file_info ) == 0 ) || ( file_handle == handle_traits<posix>::invalid_value ) );
     return file_info.st_size;
 }
-
-
-#ifdef BOOST_HAS_UNISTD_H
-// Apple guidelines http://developer.apple.com/library/mac/#documentation/Performance/Conceptual/FileSystem/Articles/MappingFiles.html
-BOOST_IMPL_INLINE
-mapping<posix> BOOST_CC_REG create_mapping( file_handle<posix>::reference const file, flags::mapping<posix> const flags ) noexcept
-{
-    return mapping<posix>( file, flags );
-}
-#endif // BOOST_HAS_UNISTD_H
 
 //------------------------------------------------------------------------------
 } // mmap

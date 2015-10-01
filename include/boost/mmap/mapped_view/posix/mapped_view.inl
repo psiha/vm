@@ -34,12 +34,20 @@ namespace detail
         basic_memory_range_t BOOST_CC_REG
         map
         (
-            mapping<posix> const & source_mapping,
-            std::uint64_t          offset        ,
-            std::size_t            desired_size
+            handle<posix>::reference const source_mapping,
+            flags::viewing<posix>    const flags         ,
+            std::uint64_t            const offset        ,
+            std::size_t              const desired_size
         ) noexcept
         {
             using iterator = mapped_view<char, posix>::iterator;
+
+            /// \note mmap() explicitly rejects a zero length/desired_size, IOW
+            /// unlike with MapViewOfFile() that approach cannot be used to
+            /// automatically map the entire object - a valid size must be
+            /// specified.
+            /// http://man7.org/linux/man-pages/man2/mmap.2.html
+            ///                               (30.09.2015.) (Domagoj Saric)
 
             iterator const view_start
             (
@@ -49,8 +57,8 @@ namespace detail
                     (
                         nullptr,
                         desired_size,
-                        source_mapping.view_mapping_flags.protection,
-                        source_mapping.view_mapping_flags.flags,
+                        flags.protection,
+                        flags.flags,
                         source_mapping,
                         offset
                     )

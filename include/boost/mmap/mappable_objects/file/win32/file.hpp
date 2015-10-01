@@ -22,6 +22,7 @@
 #include "boost/mmap/implementations.hpp"
 #include "boost/mmap/mapping/mapping.hpp"
 #include "boost/mmap/mappable_objects/file/handle.hpp"
+#include "boost/mmap/error/error.hpp"
 
 #include <cstddef>
 //------------------------------------------------------------------------------
@@ -47,8 +48,16 @@ bool               BOOST_CC_REG delete_file( wchar_t const * file_name, win32   
 bool        BOOST_CC_REG set_size( file_handle<win32>::reference, std::size_t desired_size ) noexcept;
 std::size_t BOOST_CC_REG get_size( file_handle<win32>::reference                           ) noexcept;
 
+// https://msdn.microsoft.com/en-us/library/ms810613.aspx Managing Memory-Mapped Files
 
-mapping<win32> BOOST_CC_REG create_mapping( handle<win32>::reference, flags::mapping<win32> ) noexcept;
+mapping<win32> BOOST_CC_REG create_mapping
+(
+    handle<win32>::reference,
+    flags::access_privileges<win32>::object,
+    flags::access_privileges<win32>::child_process,
+    flags::mapping          <win32>::share_mode,
+    std::size_t size
+) noexcept;
 
 //------------------------------------------------------------------------------
 } // namespace mmap

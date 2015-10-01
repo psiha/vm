@@ -19,6 +19,7 @@
 #pragma once
 //------------------------------------------------------------------------------
 #include "boost/mmap/implementations.hpp"
+#include "boost/mmap/flags/win32/flags.hpp"
 
 #include "boost/detail/winapi/security.hpp"
 
@@ -34,23 +35,12 @@ namespace flags
 {
 //------------------------------------------------------------------------------
 
-template <typename Impl> struct mapping;
-
-using flags_t = std::uint32_t;
+using flags_t = unsigned long; // DWORD
 
 template <>
-struct mapping<win32>
+struct viewing<win32>
 {
-    struct access_rights
-    {
-        enum flags
-        {
-            read    = 0x0004,
-            write   = 0x0002,
-            execute = 0x0020,
-            all     = read | write | execute
-        };
-    };
+    using access_rights = access_privileges<win32>;
 
     enum struct share_mode
     {
@@ -58,16 +48,55 @@ struct mapping<win32>
         hidden = 0x0001
     };
 
-    static mapping<win32> BOOST_CC_REG create
+    bool is_cow() const;
+    bool is_hidden() const { return is_cow(); }
+
+    static viewing<win32> BOOST_CC_REG create
     (
-        flags_t    combined_handle_access_rights,
+        access_privileges<win32>::object,
         share_mode
     ) noexcept;
 
-    flags_t create_mapping_flags;
-    flags_t map_view_flags      ;
-    /*...mrmlj...boost::detail::winapi::SECURITY_ATTRIBUTES_*/
-    void const * p_security_attributes /*= nullptr...mrmlj...otherwise MSVC14RC barfs at brace-initialisation*/;
+    bool operator< ( viewing<win32> const other ) const noexcept
+    {
+        return
+            ( ( other.map_view_flags & access_rights::write   ) && !( this->map_view_flags & access_rights::write   ) ) ||
+            ( ( other.map_view_flags & access_rights::execute ) && !( this->map_view_flags & access_rights::execute ) );
+    }
+
+    bool operator<=( viewing<win32> const other ) const noexcept
+    {
+        return ( this->map_view_flags == other.map_view_flags ) || ( *this < other );
+    }
+
+    flags_t map_view_flags;
+}; // struct viewing<win32>
+
+namespace detail
+{
+    flags_t BOOST_CC_REG object_access_to_page_access( access_privileges<win32>::object, viewing<win32>::share_mode );
+} // namespace detail
+
+template <>
+struct mapping<win32>
+{
+    using access_rights = viewing<win32>::access_rights;
+    using share_mode    = viewing<win32>::share_mode   ;
+
+    static mapping<win32> BOOST_CC_REG create
+    (
+        access_privileges<win32>,
+        named_object_construction_policy<win32>::value_type,
+        share_mode
+    ) noexcept;
+
+  //access_privileges<win32>                ap; //desired_access      ; // flProtect object child_process system
+    flags_t                                 create_mapping_flags;
+    access_privileges<win32>::object        object_access       ; // ...mrmlj...for file-based named_memory<win32>
+    access_privileges<win32>::child_process child_access        ;
+    access_privileges<win32>::system        system_access       ;
+    named_object_construction_policy<win32> creation_disposition;
+    viewing<win32>                          map_view_flags      ;
 }; // struct mapping<win32>
 
 //------------------------------------------------------------------------------
@@ -80,6 +109,6 @@ struct mapping<win32>
 
 #ifdef BOOST_MMAP_HEADER_ONLY
     #include "mapping.inl"
-#endif
+#endif // BOOST_MMAP_HEADER_ONLY
 
 #endif // mapping.hpp

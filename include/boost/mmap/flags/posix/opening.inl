@@ -14,8 +14,8 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef open_flags_inl__0F422517_D9AA_4E3F_B3E4_B139021D068E
-#define open_flags_inl__0F422517_D9AA_4E3F_B3E4_B139021D068E
+#ifndef opening_inl__0F422517_D9AA_4E3F_B3E4_B139021D068E
+#define opening_inl__0F422517_D9AA_4E3F_B3E4_B139021D068E
 #pragma once
 //------------------------------------------------------------------------------
 #include "opening.hpp"
@@ -35,52 +35,36 @@ namespace flags
 //------------------------------------------------------------------------------
 
 BOOST_IMPL_INLINE
-opening<posix> opening<posix>::create
+opening<posix> BOOST_CC_REG opening<posix>::create
 (
-    flags_t                           const handle_access_flags   ,
-    system_object_construction_policy const open_flags            ,
-    flags_t                           const system_hints          ,
-    flags_t                           const on_construction_rights
+    access_privileges<posix>                            const ap,
+    named_object_construction_policy<posix>::value_type const construction_policy,
+    flags_t                                             const system_hints
 ) noexcept
 {
-    //...zzz...use fadvise...
-    // http://stackoverflow.com/questions/2299402/how-does-one-do-raw-io-on-mac-os-x-ie-equivalent-to-linuxs-o-direct-flag
+    auto const oflag( ap.oflag() | construction_policy | system_hints );
+    auto const pmode( ap.pmode()                                      );
 
-    unsigned int const oflag
-    (
-        ( ( handle_access_flags == ( O_RDONLY | O_WRONLY ) ) ? O_RDWR : handle_access_flags )
-                |
-            static_cast<flags_t>( open_flags )
-                |
-            system_hints
-    );
-
-    unsigned int const pmode( on_construction_rights );
-
-    return
-    {
-        .oflag = static_cast<flags_t>( oflag ),
-        .pmode = static_cast<flags_t>( pmode )
-    };
+    return { .oflag = oflag, .pmode = pmode };
 }
 
 
 BOOST_IMPL_INLINE
-opening<posix> opening<posix>::create_for_opening_existing_files
+opening<posix> BOOST_CC_REG opening<posix>::create_for_opening_existing_objects
 (
-    flags_t const handle_access_flags,
-    flags_t const system_hints,
-    bool    const truncate
+    access_privileges<posix>::object        const object_access,
+    access_privileges<posix>::child_process const child_access,
+    flags_t                                 const system_hints,
+    bool                                    const truncate
 ) noexcept
 {
     return create
     (
-        handle_access_flags,
+        { object_access, child_access, 0 },
          truncate
-            ? system_object_construction_policy::open_and_truncate_existing
-            : system_object_construction_policy::open_existing,
-        system_hints,
-        0
+            ? named_object_construction_policy<posix>::open_and_truncate_existing
+            : named_object_construction_policy<posix>::open_existing,
+        system_hints
     );
 }
 
@@ -91,4 +75,4 @@ opening<posix> opening<posix>::create_for_opening_existing_files
 //------------------------------------------------------------------------------
 } // boost
 //------------------------------------------------------------------------------
-#endif // open_flags_inl
+#endif // opening_inl

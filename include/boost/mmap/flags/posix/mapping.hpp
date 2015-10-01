@@ -20,6 +20,7 @@
 //------------------------------------------------------------------------------
 #include "boost/mmap/detail/posix.hpp"
 #include "boost/mmap/implementations.hpp"
+#include "boost/mmap/flags/flags.hpp"
 
 #include "sys/mman.h"
 //------------------------------------------------------------------------------
@@ -34,38 +35,31 @@ namespace flags
 //------------------------------------------------------------------------------
 
 template <typename Impl> struct mapping;
+template <typename Impl> struct viewing;
 
 using flags_t = int;
 
 template <>
-struct mapping<posix>
+struct viewing<posix>
 {
-    struct access_rights
-    {
-        enum values
-        {
-            read    = PROT_READ ,
-            write   = PROT_WRITE,
-            execute = PROT_EXEC ,
-            all     = read | write | execute
-        };
-    };
-
     enum struct share_mode
     {
         shared = MAP_SHARED,
         hidden = MAP_PRIVATE
     };
 
-    static mapping<posix> BOOST_CC_REG create
+    static viewing<posix> BOOST_CC_REG create
     (
-        flags_t    combined_handle_access_rights,
+        access_privileges<posix>::object,
         share_mode
     ) noexcept;
 
-    flags_t protection;
-    flags_t flags     ;
-}; // struct mapping<posix>
+    flags_t protection; // PROT_*
+    flags_t flags     ; // MAP_*
+}; // struct viewing<posix>
+
+template <>
+struct mapping<posix> : viewing<posix> {};
 
 //------------------------------------------------------------------------------
 } // namespace flags
@@ -77,6 +71,6 @@ struct mapping<posix>
 
 #ifdef BOOST_MMAP_HEADER_ONLY
     #include "mapping.inl"
-#endif
+#endif // BOOST_MMAP_HEADER_ONLY
 
 #endif // mapping.hpp

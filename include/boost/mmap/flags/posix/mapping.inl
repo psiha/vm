@@ -5,9 +5,10 @@
 ///
 /// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
-///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
-///  (See accompanying file LICENSE_1_0.txt or copy at
-///  http://www.boost.org/LICENSE_1_0.txt)
+/// Use, modification and distribution is subject to the
+/// Boost Software License, Version 1.0.
+/// (See accompanying file LICENSE_1_0.txt or copy at
+/// http://www.boost.org/LICENSE_1_0.txt)
 ///
 /// For more information, see http://www.boost.org
 ///
@@ -32,16 +33,19 @@ namespace flags
 //------------------------------------------------------------------------------
 
 BOOST_IMPL_INLINE
-mapping<posix> mapping<posix>::create
+viewing<posix> viewing<posix>::create
 (
-    flags_t    const combined_handle_access_flags,
-    share_mode const share_mode
+    access_privileges<posix>::object const access_flags,
+    share_mode                       const share_mode
 ) noexcept
 {
     return
     {
-        .protection = combined_handle_access_flags,
+        .protection = access_flags.protection(),
         .flags      = static_cast<flags_t>( share_mode )
+        #ifdef MAP_UNINITIALIZED
+            | MAP_UNINITIALIZED
+        #endif // MAP_UNINITIALIZED
     };
 }
 

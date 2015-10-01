@@ -35,19 +35,21 @@ template <typename Impl> struct mapping;
 template <>
 struct mapping<posix>
     :
-    handle<posix>::reference
+    handle<posix>
 {
     using native_handle_t = handle<posix>::native_handle_t        ;
     using reference       = mapping                        const &;
 
     static bool const owns_parent_handle = false;
 
-    mapping( native_handle_t const native_handle, flags::mapping<posix> const & view_mapping_flags_param ) noexcept
-        : handle<posix>::reference{ native_handle }, view_mapping_flags( view_mapping_flags_param ) {}
+    template <typename FileHandle>
+    mapping( FileHandle && fd, flags::viewing<posix> const & view_mapping_flags_param, std::size_t const size ) noexcept
+        : handle<posix>( std::forward<FileHandle>( fd ) ), view_mapping_flags( view_mapping_flags_param ), maximum_size( size ) {}
 
-    bool is_read_only() const { return ( view_mapping_flags.protection & flags::mapping<posix>::access_rights::write ) == 0; }
+    bool is_read_only() const { return ( view_mapping_flags.protection & ( flags::access_privileges<posix>::write | flags::access_privileges<posix>::readwrite ) ) == 0; }
 
-    flags::mapping<posix> const view_mapping_flags;
+    flags::viewing<posix> const view_mapping_flags;
+    std::size_t           const maximum_size;
 }; // struct mapping<posix>
 
 

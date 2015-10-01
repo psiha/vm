@@ -21,11 +21,6 @@
 #include "opening.hpp"
 
 #include "boost/mmap/detail/impl_inline.hpp"
-
-#ifndef WIN32_LEAN_AND_MEAN
-    #define WIN32_LEAN_AND_MEAN
-#endif // WIN32_LEAN_AND_MEAN
-#include "windows.h"
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -37,59 +32,27 @@ namespace flags
 {
 //------------------------------------------------------------------------------
 
-static_assert( opening<win32>::access_rights::read    == GENERIC_READ   , "" );
-static_assert( opening<win32>::access_rights::write   == GENERIC_WRITE  , "" );
-static_assert( opening<win32>::access_rights::all     == GENERIC_ALL    , "" );
-
-static_assert( opening<win32>::system_hints::random_access     ==   FILE_FLAG_RANDOM_ACCESS                               , "" );
-static_assert( opening<win32>::system_hints::sequential_access ==   FILE_FLAG_SEQUENTIAL_SCAN                             , "" );
-static_assert( opening<win32>::system_hints::avoid_caching     == ( FILE_FLAG_NO_BUFFERING   | FILE_FLAG_WRITE_THROUGH   ), "" );
-static_assert( opening<win32>::system_hints::temporary         == ( FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE ), "" );
-
-static_assert( opening<win32>::new_system_object_public_access_rights::read    == FILE_ATTRIBUTE_READONLY, "" );
-static_assert( opening<win32>::new_system_object_public_access_rights::write   == FILE_ATTRIBUTE_NORMAL  , "" );
-static_assert( opening<win32>::new_system_object_public_access_rights::execute == FILE_ATTRIBUTE_READONLY, "" );
+static_assert( system_hints<win32>::random_access     ==   FILE_FLAG_RANDOM_ACCESS                               , "" );
+static_assert( system_hints<win32>::sequential_access ==   FILE_FLAG_SEQUENTIAL_SCAN                             , "" );
+static_assert( system_hints<win32>::avoid_caching     == ( FILE_FLAG_NO_BUFFERING   | FILE_FLAG_WRITE_THROUGH   ), "" );
+static_assert( system_hints<win32>::temporary         == ( FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE ), "" );
 
 BOOST_IMPL_INLINE
-opening<win32> opening<win32>::create
+opening<win32> BOOST_CC_REG opening<win32>::create_for_opening_existing_objects
 (
-    flags_t                           const handle_access_flags   ,
-    system_object_construction_policy const open_flags            ,
-    flags_t                           const system_hints          ,
-    flags_t                           const on_construction_rights
-)
-{
-    return
-    {
-        handle_access_flags, // desired_access
-        open_flags, // creation_disposition
-        system_hints
-            |
-        (
-            ( on_construction_rights & FILE_ATTRIBUTE_NORMAL )
-                ? FILE_ATTRIBUTE_NORMAL
-                : on_construction_rights
-        ) // flags_and_attributes
-    };
-}
-
-
-BOOST_IMPL_INLINE
-opening<win32> opening<win32>::create_for_opening_existing_files
-(
-    flags_t const handle_access_flags,
-    flags_t const system_hints,
-    bool    const truncate
+    access_privileges<win32>::object        const object_access,
+    access_privileges<win32>::child_process const child_access,
+    flags_t                                 const system_hints,
+    bool                                    const truncate
 )
 {
     return create
     (
-        handle_access_flags,
+        access_privileges<win32> { object_access, child_access, access_privileges<win32>::system() },
         truncate
-            ? system_object_construction_policy::open_and_truncate_existing
-            : system_object_construction_policy::open_existing,
-        system_hints,
-        0
+            ? named_object_construction_policy<win32>::open_and_truncate_existing
+            : named_object_construction_policy<win32>::open_existing,
+        system_hints
     );
 }
 

@@ -45,12 +45,12 @@ struct mapping<win32>
 
     static bool const owns_parent_handle = true;
 
-    mapping( native_handle_t const native_handle, flags::flags_t const view_mapping_flags_param )
+    mapping( native_handle_t const native_handle, flags::viewing<win32> const view_mapping_flags_param )
         : handle<win32>( native_handle ), view_mapping_flags( view_mapping_flags_param ) {}
 
-    bool is_read_only() const { return ( view_mapping_flags & flags::mapping<win32>::access_rights::write ) == 0; }
+    bool is_read_only() const { return ( view_mapping_flags.map_view_flags & flags::mapping<win32>::access_rights::write ) == 0; }
 
-    flags::flags_t const view_mapping_flags;
+    flags::viewing<win32> const view_mapping_flags;
 }; // struct mapping<win32>
 
 #ifdef PAGE_SIZE

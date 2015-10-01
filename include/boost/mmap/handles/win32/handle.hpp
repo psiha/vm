@@ -45,7 +45,7 @@ struct handle_traits<win32>
 {
     using native_t = boost::detail::winapi::HANDLE_;
 
-    static native_t constexpr invalid_value = boost::detail::winapi::invalid_handle_value;
+    static native_t constexpr invalid_value = boost::detail::winapi::invalid_handle_value; //...mrmlj...or nullptr eg. for CreateFileMapping
 
     static BOOST_ATTRIBUTES( BOOST_COLD BOOST_RESTRICTED_FUNCTION_L2 BOOST_EXCEPTIONLESS )
     void BOOST_CC_REG close( native_t const native_handle )
@@ -53,7 +53,7 @@ struct handle_traits<win32>
         BOOST_VERIFY
         (
             ( boost::detail::winapi::CloseHandle( native_handle ) != false ) ||
-            ( ( native_handle == 0 ) || ( native_handle == invalid_value ) )
+            ( ( native_handle == nullptr ) || ( native_handle == invalid_value ) )
         );
     }
 

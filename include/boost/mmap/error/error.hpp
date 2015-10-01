@@ -3,7 +3,7 @@
 /// \file error.hpp
 /// ---------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2015.
+/// Copyright (c) Domagoj Saric 2015.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -30,6 +30,9 @@ namespace mmap
 //------------------------------------------------------------------------------
 
 template <typename Impl = BOOST_MMAP_IMPL()> struct error;
+
+template <typename Result, typename Impl>
+using fallible_result = err::fallible_result<Result, error<Impl>>;
 
 //------------------------------------------------------------------------------
 } // namespace mmap

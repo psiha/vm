@@ -1,7 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file shared_memory/posix/flags.hpp
-/// -----------------------------------
+/// \file mapping.hpp
+/// -----------------
 ///
 /// Copyright (c) Domagoj Saric 2010 - 2015.
 ///
@@ -14,13 +14,11 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef flags_hpp__F9CD9C91_1F07_4107_A422_0D814F0FE487
-#define flags_hpp__F9CD9C91_1F07_4107_A422_0D814F0FE487
+#ifndef mapping_hpp__35B462C8_DB74_4F25_A9B7_6CAC69D9753B
+#define mapping_hpp__BFFC0541_21AC_4A80_A9EE_E0450B6D4D8A
 #pragma once
 //------------------------------------------------------------------------------
-#include "boost/mmap/detail/posix.hpp"
-#include "boost/mmap/implementations.hpp"
-#include "boost/mmap/flags/posix/mapping.hpp"
+#include "flags.hpp"
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -32,41 +30,37 @@ namespace flags
 {
 //------------------------------------------------------------------------------
 
-template <typename Impl> struct shared_memory;
+////////////////////////////////////////////////////////////////////////////////
+///
+/// \class mapping
+///
+/// \brief Flags for specifying access modes and usage patterns/hints when
+/// creating mapping objects.
+///
+////////////////////////////////////////////////////////////////////////////////
 
-typedef int flags_t;
-
-template <>
-struct shared_memory<posix>
+template <typename Impl>
+struct mapping
+#ifdef DOXYGEN_ONLY
 {
-    struct system_hints
+    enum struct share_mode
     {
-        enum value_type
-        {
-            default_                   = 0,
-            only_reserve_address_space = MAP_NORESERVE
-        };
-        value_type value;
+        shared, ///< Enable IPC access to the mapped region
+        hidden  ///< Map as process-private (i.e. w/ COW semantics)
     };
 
-    static shared_memory<posix> BOOST_CC_REG create
+    static mapping create ///< Factory function
     (
-        access_privileges               <posix>,
-        named_object_construction_policy<posix>::value_type,
-        system_hints                           ::value_type
-    ) noexcept;
+        flags_t    combined_handle_access_rights,
+        share_mode share_mode
+    );
 
-    operator mapping<posix> () const noexcept
-    {
-        auto flags( mapping<posix>::create( ap.object_access, viewing<posix>::share_mode::shared ) );
-        flags.flags |= hints.value;
-        return static_cast<mapping<posix> &>( flags );
-    }
+    unspecified-impl_specific public_data_members;
+}
+#endif // DOXYGEN_ONLY
+; // struct mapping
 
-    system_hints                            hints;
-    access_privileges               <posix> ap;
-    named_object_construction_policy<posix> nocp;
-}; // struct shared_memory<posix>
+template <typename Impl> struct viewing;
 
 //------------------------------------------------------------------------------
 } // namespace flags
@@ -76,8 +70,9 @@ struct shared_memory<posix>
 } // namespace boost
 //------------------------------------------------------------------------------
 
-#ifdef BOOST_MMAP_HEADER_ONLY
-    #include "flags.inl"
-#endif
+#ifndef DOXYGEN_ONLY
+#include "boost/mmap/detail/impl_selection.hpp"
+#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /mapping.hpp ) )
+#endif // DOXYGEN_ONLY
 
-#endif // flags.hpp
+#endif // opening_hpp

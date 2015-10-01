@@ -46,8 +46,8 @@ struct shared_memory<win32> : mapping<win32>
 
     static shared_memory<win32> BOOST_CC_REG create
     (
-        flags_t      combined_handle_access_rights,
-        share_mode   sharing,
+        access_privileges<win32>,
+        named_object_construction_policy<win32>::value_type,
         system_hints system_hint
     ) noexcept;
 }; // struct shared_memory<win32>

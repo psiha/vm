@@ -36,7 +36,8 @@ struct handle_ref
 {
     using native_handle_t = typename Handle::native_handle_t;
 
-    operator native_handle_t const & () const { return value; }
+             native_handle_t const & get() const noexcept { return value; }
+    operator native_handle_t const &    () const noexcept { return value; }
 
     native_handle_t const value;
 }; // struct handle_ref

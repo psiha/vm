@@ -19,8 +19,7 @@
 #pragma once
 //------------------------------------------------------------------------------
 #include "boost/mmap/implementations.hpp"
-
-#include <cstdint>
+#include "boost/mmap/flags/win32/flags.hpp"
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -32,75 +31,46 @@ namespace flags
 {
 //------------------------------------------------------------------------------
 
-template <typename Impl> struct opening;
+using flags_t = unsigned long; // DWORD
 
-using flags_t = std::uint32_t;
+template <>
+struct access_pattern_optimisation_hints<win32> // flags_and_attributes
+{
+    enum flags
+    {
+        generic           = 0,
+        random_access     = 0x10000000,
+        sequential_access = 0x08000000,
+        avoid_caching     = 0x20000000 | 0x80000000,
+        temporary         = 0x00000100 | 0x04000000
+    };
+}; // struct access_pattern_optimisation_hints<win32>
+
 
 template <>
 struct opening<win32>
 {
-    enum struct system_object_construction_policy // creation disposition
-    {
-        create_new                      = 1,
-        create_new_or_truncate_existing = 2,
-        open_existing                   = 3,
-        open_or_create                  = 4,
-        open_and_truncate_existing      = 5
-    };
-
-    struct new_system_object_public_access_rights
-    {
-        enum flags
-        {
-            read    = 0x00000001,
-            write   = 0x00000080,
-            execute = 0x00000001,
-        };
-    };
-
-    struct process_private_access_rights
-    {
-        enum flags
-        {
-            metaread  = 0,
-            read      = 0x80000000L,
-            write     = 0x40000000L,
-            readwrite = read | write,
-            all       = 0x10000000L
-        };
-    };
-    using access_rights = process_private_access_rights;
-
-    struct access_pattern_optimisation_hints
-    {
-        enum flags
-        {
-            random_access     = 0x10000000,
-            sequential_access = 0x08000000,
-            avoid_caching     = 0x20000000 | 0x80000000,
-            temporary         = 0x00000100 | 0x04000000
-        };
-    };
-    using system_hints = access_pattern_optimisation_hints;
-
     static opening<win32> BOOST_CC_REG create
     (
-        flags_t handle_access_flags      ,
-        system_object_construction_policy,
-        flags_t system_hints             ,
-        flags_t on_construction_rights
-    );
+        access_privileges               <win32>             const &       ap,
+        named_object_construction_policy<win32>::value_type         const construction_policy,
+        flags_t                                                     const system_hints
+    )
+    {
+        return { ap, construction_policy, system_hints };
+    }
 
-    static opening<win32> BOOST_CC_REG create_for_opening_existing_files
+    static opening<win32> BOOST_CC_REG create_for_opening_existing_objects
     (
-        flags_t handle_access_flags,
-        flags_t system_hints       ,
-        bool    truncate
+        access_privileges<win32>::object,
+        access_privileges<win32>::child_process,
+        flags_t system_hints,
+        bool truncate
     );
 
-    flags_t                           desired_access      ;
-    system_object_construction_policy creation_disposition;
-    flags_t                           flags_and_attributes;
+    access_privileges<win32>                ap; //desired_access; // flProtect object child_process system
+    named_object_construction_policy<win32> creation_disposition;
+    flags_t                                 flags_and_attributes; // access_pattern_optimisation_hints<win32>
 }; // struct opening<win32>
 
 //------------------------------------------------------------------------------

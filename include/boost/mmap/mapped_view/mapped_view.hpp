@@ -57,12 +57,13 @@ namespace detail
         BOOST_ATTRIBUTES( BOOST_COLD, BOOST_EXCEPTIONLESS )
         static memory_range_t BOOST_CC_REG map
         (
-            mapping<Impl> const & source_mapping,
-            std::uint64_t         offset        ,
-            std::size_t           desired_size
+            typename handle<Impl>::reference const source_mapping,
+                     flags::viewing<Impl>    const flags         ,
+                     std::uint64_t           const offset        ,
+                     std::size_t             const desired_size
         ) noexcept
         {
-            return make_typed_view( mapper<char, Impl>::map( source_mapping, offset, desired_size ) );
+            return make_typed_view( mapper<char, Impl>::map( source_mapping, flags, offset, desired_size ) );
         }
 
         BOOST_ATTRIBUTES( BOOST_COLD, BOOST_EXCEPTIONLESS )
@@ -116,9 +117,10 @@ namespace detail
     {
         static basic_memory_range_t map
         (
-            mapping<Impl> const & source_mapping,
-            std::uint64_t         offset        ,
-            std::size_t           desired_size
+            typename handle<Impl>::reference source_mapping,
+            flags::viewing<Impl>    flags         ,
+            std::uint64_t           offset        ,
+            std::size_t             desired_size
         );
 
         static void unmap( basic_memory_range_t );
@@ -150,6 +152,7 @@ public:
         std::size_t           desired_size = 0
     ) : mapped_view( map( source_mapping, offset, desired_size ) ) {}
      mapped_view( mapped_view && other ) noexcept : memory_range_t( other ) { static_cast<memory_range_t &>( other ) = memory_range_t(); }
+     mapped_view( mapped_view const &  ) = delete;
     ~mapped_view(                      ) noexcept                           { do_unmap(); }
 
     mapped_view & operator=( mapped_view && other ) noexcept
@@ -160,6 +163,8 @@ public:
         return *this;
     }
 
+    bool flush() const; // todo
+
     explicit operator bool() const noexcept { BOOST_ASSUME( memory_range_t::empty() == !memory_range_t::begin() ); return memory_range_t::begin() != nullptr; }
 
     /// \note This one still gets called in certain contexts.?.investigate...
@@ -168,12 +173,12 @@ public:
 
 public: // Factory methods.
     static
-    err::fallible_result<mapped_view, mmap::error<>> BOOST_CC_REG
+    err::fallible_result<mapped_view, mmap::error<Impl>> BOOST_CC_REG
     map
     (
-        mapping<Impl> const & source_mapping,
-        std::uint64_t         offset       = 0,
-        std::size_t           desired_size = 0
+        typename mapping<Impl>::reference const source_mapping,
+        std::uint64_t            const offset       = 0,
+        std::size_t              const desired_size = 0
     ) noexcept
     {
         BOOST_ASSERT_MSG
@@ -181,7 +186,30 @@ public: // Factory methods.
             !std::is_const<Element>::value || source_mapping.is_read_only(),
             "Use const element mapped view for read only mappings."
         );
-        return detail::mapper<Element, Impl>::map( source_mapping, offset, desired_size );
+        return detail::mapper<Element, Impl>::map( source_mapping, source_mapping.view_mapping_flags, offset, desired_size );
+    }
+
+    static
+    err::fallible_result<mapped_view, mmap::error<Impl>> BOOST_CC_REG
+    map
+    (
+        typename mapping<Impl>::reference const source_mapping,
+        flags::viewing<Impl>     const flags,
+        std::uint64_t            const offset       = 0,
+        std::size_t              const desired_size = 0
+    ) noexcept
+    {
+        BOOST_ASSERT_MSG
+        (
+            !std::is_const<Element>::value || source_mapping.is_read_only(),
+            "Use const element mapped view for read only mappings."
+        );
+        BOOST_ASSERT_MSG
+        (
+            flags <= source_mapping.view_mapping_flags,
+            "Requested mapped view access level is more lax than that of the source mapping."
+        );
+        return detail::mapper<Element, Impl>::map( source_mapping, flags, offset, desired_size );
     }
 
     void BOOST_CC_REG unmap() noexcept

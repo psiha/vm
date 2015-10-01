@@ -20,6 +20,9 @@
 //------------------------------------------------------------------------------
 #include "boost/mmap/detail/posix.hpp"
 #include "boost/mmap/implementations.hpp"
+#include "boost/mmap/flags/posix/flags.hpp"
+
+#include "boost/preprocessor/facilities/is_empty.hpp"
 
 #include "fcntl.h"
 //------------------------------------------------------------------------------
@@ -38,64 +41,40 @@ template <typename Impl> struct opening;
 using flags_t = int;
 
 template <>
+struct access_pattern_optimisation_hints<posix>
+{
+    //...mrmlj...clean/simplify this...
+    // https://ext4.wiki.kernel.org/index.php/Clarifying_Direct_IO's_Semantics
+    // https://www.reddit.com/r/linux/comments/1j7fxn/thanks_linus_for_keeping_o_direct
+    // http://stackoverflow.com/questions/5055859/how-are-the-o-sync-and-o-direct-flags-in-open2-different-alike
+    enum flags
+    {
+        //O_SYNC
+        //O_TMPFILE  Linux 3.11
+        random_access     = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0,        0, 0, O_RANDOM                     ),
+        sequential_access = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0,        0, 0, O_SEQUENTIAL                 ),
+        avoid_caching     = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0, O_DIRECT, 0, 0                            ),
+        temporary         = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0,        0, 0, O_TEMPORARY | _O_SHORT_LIVED ),
+    };
+}; // struct access_pattern_optimisation_hints<posix>
+
+
+template <>
 struct opening<posix>
 {
-    enum struct system_object_construction_policy
-    {
-        create_new                      = O_CREAT | O_EXCL ,
-        create_new_or_truncate_existing = O_CREAT | O_TRUNC,
-        open_existing                   = 0                ,
-        open_or_create                  = O_CREAT          ,
-        open_and_truncate_existing      = O_TRUNC
-    };
-
-    struct new_system_object_public_access_rights
-    {
-        enum values
-        {
-            read    = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( S_IRUSR, S_IRUSR, S_IRUSR, _S_IREAD  ),
-            write   = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( S_IWUSR, S_IWUSR, S_IWUSR, _S_IWRITE ),
-            execute = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( S_IXUSR, S_IXUSR, S_IXUSR, _S_IEXEC  )
-        };
-    };
-
-    struct process_private_access_rights
-    {
-        enum flags
-        {
-            read      = O_RDONLY,
-            write     = O_WRONLY,
-            readwrite = read | write,
-            all       = readwrite
-        };
-    };
-    using access_rights = process_private_access_rights;
-
-    struct access_pattern_optimisation_hints
-    {
-        enum values
-        {
-            random_access     = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0,        0, 0, O_RANDOM                     ),
-            sequential_access = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0,        0, 0, O_SEQUENTIAL                 ),
-            avoid_caching     = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0, O_DIRECT, 0, 0                            ),
-            temporary         = BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( 0,        0, 0, O_TEMPORARY | _O_SHORT_LIVED ),
-        };
-    };
-    using system_hints = access_pattern_optimisation_hints;
-
     static opening<posix> BOOST_CC_REG create
     (
-        flags_t handle_access_flags      ,
-        system_object_construction_policy,
-        flags_t system_hints             ,
-        flags_t on_construction_rights
+        access_privileges<posix>     ,
+        named_object_construction_policy<posix>::value_type,
+        flags_t system_hints
     ) noexcept;
 
-    static opening<posix> BOOST_CC_REG create_for_opening_existing_files
+    static opening<posix> BOOST_CC_REG create_for_opening_existing_objects
     (
-        flags_t handle_access_flags,
+        access_privileges<posix>::object,
+        access_privileges<posix>::child_process,
         flags_t system_hints,
-        bool    truncate
+        bool truncate
     ) noexcept;
 
     flags_t oflag;
