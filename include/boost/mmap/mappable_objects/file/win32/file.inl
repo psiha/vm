@@ -58,7 +58,7 @@ namespace detail
             (
                 call_create
                 (
-                    file_name, flags.ap.object_access.privileges, default_unix_shared_semantics, const_cast<LPSECURITY_ATTRIBUTES>( p_security_attributes ), static_cast<DWORD>( flags.creation_disposition.value ), flags.flags_and_attributes, nullptr
+                    file_name, flags.ap.object_access.privileges, default_unix_shared_semantics, const_cast<LPSECURITY_ATTRIBUTES>( p_security_attributes ), static_cast<DWORD>( flags.creation_disposition ), flags.flags_and_attributes, nullptr
                 )
             );
             BOOST_ASSERT( ( handle == handle_traits::invalid_value ) || ( ::GetLastError() == NO_ERROR ) || ( ::GetLastError() == ERROR_ALREADY_EXISTS ) );
@@ -181,9 +181,9 @@ namespace detail
                 "CreateFileMapping accepts INVALID_HANDLE_VALUE as valid input but only "
                 "if the size parameter is not zero."
             );
-            auto const creation_disposition( flags.creation_disposition.value );
-            auto const error               ( err::last_win32_error::get()     );
-            auto const preexisting         ( error == ERROR_ALREADY_EXISTS    );
+            auto const creation_disposition( flags.creation_disposition    );
+            auto const error               ( err::last_win32_error::get()  );
+            auto const preexisting         ( error == ERROR_ALREADY_EXISTS );
             using disposition = flags::named_object_construction_policy;
             switch ( creation_disposition )
             {

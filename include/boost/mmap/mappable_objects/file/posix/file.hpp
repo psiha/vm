@@ -31,7 +31,8 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
-inline namespace posix
+BOOST_MMAP_POSIX_INLINE
+namespace posix
 {
 //------------------------------------------------------------------------------
 

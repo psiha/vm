@@ -36,10 +36,15 @@
         #define BOOST_MMAP_IMPL() nt
     #elif defined( BOOST_HAS_UNISTD_H )
         #define BOOST_MMAP_IMPL() posix
+        #define BOOST_MMAP_POSIX_INLINE inline
     #else
         #define BOOST_MMAP_IMPL() xsi
     #endif
 #endif // !defined( BOOST_MMAP_IMPL )
+
+#ifndef BOOST_MMAP_POSIX_INLINE
+    #define BOOST_MMAP_POSIX_INLINE
+#endif // BOOST_MMAP_POSIX_INLINE
 
 #define BOOST_MMAP_IMPL_INCLUDE( prefix_path, include ) \
     BOOST_PP_STRINGIZE( prefix_path()BOOST_MMAP_IMPL()include() )
