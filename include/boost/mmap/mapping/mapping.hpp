@@ -54,20 +54,23 @@ template <> struct is_mappable<posix::handle::native_handle_t> : std::true_type 
 template <> struct is_mappable<std::iostream> : std::true_type{};
 #endif // disabled/todo
 
-//mapping create_mapping( handle::reference mappable_object, flags::mapping, std::uint64_t maximum_size, char const * name ) noexcept;
 
-mapping open_mapping( mapping, char const * name ) noexcept; //todo
+#if 0 // todo
 
+mapping create_mapping( handle::reference mappable_object, flags::mapping, std::uint64_t maximum_size, char const * name ) noexcept;
+
+mapping create_mapping( FILE & c_file_stream, flags::mapping const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
+{
+    return create_mapping( /*std::*/fileno( &c_file_stream ), flags, maximum_size, name );
+}
 
 mapping create_mapping( FILE * const p_c_file_stream, flags::mapping const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
 {
     return create_mapping( *p_c_file_stream, flags, maximum_size, name );
 }
 
-mapping create_mapping( FILE & c_file_stream, flags::mapping const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
-{
-    return create_mapping( /*std::*/fileno( &c_file_stream ), flags, maximum_size, name );
-}
+mapping open_mapping( mapping, char const * name ) noexcept;
+#endif // todo
 
 //------------------------------------------------------------------------------
 } // namespace mmap
