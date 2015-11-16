@@ -18,10 +18,10 @@
 #define flags_hpp__903375A7_70FF_43A0_81DF_4EA208D0FBDD
 #pragma once
 //------------------------------------------------------------------------------
-#include "boost/mmap/implementations.hpp"
+#include "boost/mmap/detail/impl_selection.hpp"
 #include "boost/mmap/flags/flags.hpp"
 
-#include "boost/utility/base_from_member.hpp"
+#include <boost/utility/base_from_member.hpp>
 
 #include <array>
 #include <cstdint>
@@ -30,6 +30,9 @@ namespace boost
 {
 //------------------------------------------------------------------------------
 namespace mmap
+{
+//------------------------------------------------------------------------------
+namespace win32
 {
 //------------------------------------------------------------------------------
 namespace flags
@@ -55,21 +58,14 @@ namespace detail
     }
 } // namespace detail
 
-template <>
-struct named_object_construction_policy<win32> // creation_disposition
+enum struct named_object_construction_policy : std::uint8_t // creation_disposition
 {
-    enum flags : std::uint8_t
-    {
-        create_new                      = 1,
-        create_new_or_truncate_existing = 2,
-        open_existing                   = 3,
-        open_or_create                  = 4,
-        open_and_truncate_existing      = 5
-    };
-    using value_type = flags;
-
-    value_type value;
-}; // struct named_object_construction_policy<win32>
+    create_new                      = 1,
+    create_new_or_truncate_existing = 2,
+    open_existing                   = 3,
+    open_or_create                  = 4,
+    open_and_truncate_existing      = 5
+}; // enum struct named_object_construction_policy
 
 namespace detail
 {
@@ -94,10 +90,9 @@ namespace detail
     dynamic_sd const * __restrict BOOST_CC_REG make_sd( scope_privileges );
 } // namespace detail
 
-template <>
-struct access_privileges<win32>
+struct access_privileges
 {
-    enum flags : std::uint32_t
+    enum value_type : std::uint32_t
     {
         /// \note Combine file and mapping flags/bits in order to be able to use
         /// the same flags for all objects (i.e. like on POSIX systems).
@@ -109,7 +104,6 @@ struct access_privileges<win32>
         execute   = 0x20000000L | 0x0020, // GENERIC_EXECUTE | FILE_MAP_EXECUTE,
         all       = 0x10000000L | FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE // GENERIC_ALL
     };
-    using value_type = flags;
 
     constexpr static bool unrestricted( flags_t const privileges ) { return ( ( privileges & all ) == all ) || ( ( privileges & ( readwrite | execute ) ) == ( readwrite | execute ) ); }
 
@@ -219,10 +213,12 @@ struct access_privileges<win32>
     object        /*const*/ object_access; // desired_access | flProtect
     child_process /*const*/ child_access ;
     system        /*const*/ system_access; // p_security_attributes
-}; // struct access_privileges<win32>
+}; // struct access_privileges
 
 //------------------------------------------------------------------------------
 } // namespace flags
+//------------------------------------------------------------------------------
+} // namespace win32
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------

@@ -18,15 +18,17 @@
 #define handle_hpp__1CEA6D65_D5C0_474E_833D_2CE927A1C74D
 #pragma once
 //------------------------------------------------------------------------------
+#include "../handle.hpp"
 #include "../handle_ref.hpp"
-#include "../../implementations.hpp"
 
-#include "boost/assert.hpp"
-#include "boost/detail/winapi/handles.hpp"
+#include <boost/mmap/detail/impl_selection.hpp>
+
+#include <boost/assert.hpp>
+#include <boost/detail/winapi/handles.hpp>
 
 #ifdef BOOST_MSVC
     #include "../posix/handle.hpp"
-    #include "io.h"
+    #include <io.h>
 #endif // BOOST_MSVC
 
 #include <cstdint>
@@ -37,17 +39,17 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+namespace win32
+{
+//------------------------------------------------------------------------------
 
-template <typename Impl> struct handle_traits;
-
-template <>
-struct handle_traits<win32>
+struct handle_traits
 {
     using native_t = boost::detail::winapi::HANDLE_;
 
     static native_t constexpr invalid_value = boost::detail::winapi::invalid_handle_value; //...mrmlj...or nullptr eg. for CreateFileMapping
 
-    static BOOST_ATTRIBUTES( BOOST_COLD BOOST_RESTRICTED_FUNCTION_L2 BOOST_EXCEPTIONLESS )
+    static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_RESTRICTED_FUNCTION_L2, BOOST_EXCEPTIONLESS )
     void BOOST_CC_REG close( native_t const native_handle )
     {
         BOOST_VERIFY
@@ -57,18 +59,22 @@ struct handle_traits<win32>
         );
     }
 
-    static BOOST_ATTRIBUTES( BOOST_COLD BOOST_RESTRICTED_FUNCTION_L2 BOOST_EXCEPTIONLESS )
+    static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_RESTRICTED_FUNCTION_L2, BOOST_EXCEPTIONLESS )
     native_t BOOST_CC_REG copy( native_t const native_handle ); //todo
-}; // handle_traits<win32>
+}; // handle_traits
 
 #ifdef BOOST_MSVC
 inline
-handle_traits<posix>::native_t make_posix_handle( handle_traits<win32>::native_t const native_handle, int const flags )
+posix::handle_traits::native_t get_posix_handle( handle_traits::native_t const native_handle, int const flags )
 {
-    return static_cast<handle_traits<posix>::native_t>( ::_open_osfhandle( reinterpret_cast<std::intptr_t>( native_handle ), flags ) );
+    return static_cast<posix::handle_traits::native_t>( ::_open_osfhandle( reinterpret_cast<std::intptr_t>( native_handle ), flags ) );
 }
 #endif // BOOST_MSVC
 
+using handle = handle_impl<handle_traits>;
+
+//------------------------------------------------------------------------------
+} // namespace win32
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------

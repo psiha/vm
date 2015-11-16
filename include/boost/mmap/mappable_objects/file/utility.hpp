@@ -32,12 +32,12 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-err::fallible_result<basic_mapped_view          , error<>> map_file          (    char const * file_name, std::size_t desired_size ) noexcept;
-err::fallible_result<basic_read_only_mapped_view, error<>> map_read_only_file(    char const * file_name                           ) noexcept;
+err::fallible_result<mapped_view          , error> map_file          (    char const * file_name, std::size_t desired_size ) noexcept;
+err::fallible_result<read_only_mapped_view, error> map_read_only_file(    char const * file_name                           ) noexcept;
 
 #ifdef _WIN32
-err::fallible_result<basic_mapped_view          , error<>> map_file          ( wchar_t const * file_name, std::size_t desired_size ) noexcept;
-err::fallible_result<basic_read_only_mapped_view, error<>> map_read_only_file( wchar_t const * file_name                           ) noexcept;
+err::fallible_result<mapped_view          , error> map_file          ( wchar_t const * file_name, std::size_t desired_size ) noexcept;
+err::fallible_result<read_only_mapped_view, error> map_read_only_file( wchar_t const * file_name                           ) noexcept;
 #endif // _WIN32
 
 //------------------------------------------------------------------------------

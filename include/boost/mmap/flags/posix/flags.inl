@@ -28,12 +28,15 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+inline namespace posix
+{
+//------------------------------------------------------------------------------
 namespace flags
 {
 //------------------------------------------------------------------------------
 
 BOOST_IMPL_INLINE
-flags_t BOOST_CC_REG access_privileges<posix>::oflag() const noexcept
+flags_t BOOST_CC_REG access_privileges::oflag() const noexcept
 {
     //...zzz...use fadvise...
     // http://stackoverflow.com/questions/2299402/how-does-one-do-raw-io-on-mac-os-x-ie-equivalent-to-linuxs-o-direct-flag
@@ -46,6 +49,8 @@ flags_t BOOST_CC_REG access_privileges<posix>::oflag() const noexcept
         result &= ~o_rdwr | O_RDWR;
     else
     {
+        /// \note Remove the "Undetectable combined O_RDONLY" workaround flag.
+        ///                                   (09.11.2015.) (Domagoj Saric)
     #if !O_RDONLY
         result &= ~O_RDONLY_;
     #endif // !O_RDONLY
@@ -59,6 +64,8 @@ flags_t BOOST_CC_REG access_privileges<posix>::oflag() const noexcept
 
 //------------------------------------------------------------------------------
 } // flags
+//------------------------------------------------------------------------------
+} // posix
 //------------------------------------------------------------------------------
 } // mmap
 //------------------------------------------------------------------------------

@@ -20,8 +20,8 @@
 //------------------------------------------------------------------------------
 #include "boost/config.hpp"
 
-#include "boost/mmap/flags/win32/mapping.hpp"
-#include "boost/mmap/implementations.hpp"
+#include <boost/mmap/detail/impl_selection.hpp>
+#include <boost/mmap/flags/win32/mapping.hpp>
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -29,14 +29,17 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+namespace win32
+{
+//------------------------------------------------------------------------------
 namespace flags
 {
 //------------------------------------------------------------------------------
 
-template <typename Impl> struct shared_memory;
+ struct shared_memory;
 
-template <>
-struct shared_memory<win32> : mapping<win32>
+
+struct shared_memory : mapping
 {
     enum struct system_hints
     {
@@ -44,16 +47,18 @@ struct shared_memory<win32> : mapping<win32>
         only_reserve_address_space = 0x4000000
     }; // struct system_hints
 
-    static shared_memory<win32> BOOST_CC_REG create
+    static shared_memory BOOST_CC_REG create
     (
-        access_privileges<win32>,
-        named_object_construction_policy<win32>::value_type,
+        access_privileges,
+        named_object_construction_policy,
         system_hints system_hint
     ) noexcept;
-}; // struct shared_memory<win32>
+}; // struct shared_memory
 
 //------------------------------------------------------------------------------
 } // namespace flags
+  //------------------------------------------------------------------------------
+} // namespace win32
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------
@@ -62,6 +67,6 @@ struct shared_memory<win32> : mapping<win32>
 
 #ifdef BOOST_MMAP_HEADER_ONLY
     #include "flags.inl"
-#endif
+#endif // BOOST_MMAP_HEADER_ONLY
 
 #endif // flags.hpp

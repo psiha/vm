@@ -28,15 +28,18 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+inline namespace posix
+{
+//------------------------------------------------------------------------------
 namespace flags
 {
 //------------------------------------------------------------------------------
 
 BOOST_IMPL_INLINE
-viewing<posix> viewing<posix>::create
+viewing viewing::create
 (
-    access_privileges<posix>::object const access_flags,
-    share_mode                       const share_mode
+    access_privileges::object const access_flags,
+    share_mode                const share_mode
 ) noexcept
 {
     return
@@ -51,6 +54,8 @@ viewing<posix> viewing<posix>::create
 
 //------------------------------------------------------------------------------
 } // flags
+//------------------------------------------------------------------------------
+} // posix
 //------------------------------------------------------------------------------
 } // mmap
 //------------------------------------------------------------------------------

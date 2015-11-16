@@ -29,22 +29,25 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+namespace win32
+{
+//------------------------------------------------------------------------------
 namespace flags
 {
 //------------------------------------------------------------------------------
 
-static_assert(         ( viewing<win32>::access_rights::read    & 0xFF ) == FILE_MAP_READ   , "Boost.MMAP internal inconsistency" );
-static_assert(         ( viewing<win32>::access_rights::write   & 0xFF ) == FILE_MAP_WRITE  , "Boost.MMAP internal inconsistency" );
-static_assert(         ( viewing<win32>::access_rights::execute & 0xFF ) == FILE_MAP_EXECUTE, "Boost.MMAP internal inconsistency" );
+static_assert(         ( viewing::access_rights::read    & 0xFF ) == FILE_MAP_READ   , "Boost.MMAP internal inconsistency" );
+static_assert(         ( viewing::access_rights::write   & 0xFF ) == FILE_MAP_WRITE  , "Boost.MMAP internal inconsistency" );
+static_assert(         ( viewing::access_rights::execute & 0xFF ) == FILE_MAP_EXECUTE, "Boost.MMAP internal inconsistency" );
 
-static_assert( (unsigned)viewing<win32>::share_mode   ::shared           == 0               , "Boost.MMAP internal inconsistency" );
-static_assert( (unsigned)viewing<win32>::share_mode   ::hidden           == FILE_MAP_COPY   , "Boost.MMAP internal inconsistency" );
+static_assert( (unsigned)viewing::share_mode   ::shared           == 0               , "Boost.MMAP internal inconsistency" );
+static_assert( (unsigned)viewing::share_mode   ::hidden           == FILE_MAP_COPY   , "Boost.MMAP internal inconsistency" );
 
 BOOST_IMPL_INLINE
-viewing<win32> viewing<win32>::create
+viewing viewing::create
 (
-    access_privileges<win32>::object const object_access,
-    share_mode                       const share_mode
+    access_privileges::object const object_access,
+    share_mode                const share_mode
 ) noexcept
 {
     /// \note According to the explicit documentation for the FILE_MAP_WRITE
@@ -63,7 +66,7 @@ viewing<win32> viewing<win32>::create
 
 
 BOOST_IMPL_INLINE
-bool viewing<win32>::is_cow() const
+bool viewing::is_cow() const
 {
     /// \note Mind the Win32+NativeNT flags mess: FILE_MAP_ALL_ACCESS maps to
     /// (NativeNT) SECTION_ALL_ACCESS which includes SECTION_QUERY which in
@@ -79,10 +82,10 @@ bool viewing<win32>::is_cow() const
 namespace detail
 {
     BOOST_IMPL_INLINE
-    flags_t BOOST_CC_REG object_access_to_page_access( access_privileges<win32>::object const object_access, viewing<win32>::share_mode const share_mode )
+    flags_t BOOST_CC_REG object_access_to_page_access( access_privileges::object const object_access, viewing::share_mode const share_mode )
     {
-        // Generate CreateFileMapping flags from access_privileges<win32>::object/MapViewOfFile flags
-        using access_rights = access_privileges<win32>;
+        // Generate CreateFileMapping flags from access_privileges::object/MapViewOfFile flags
+        using access_rights = access_privileges;
         auto const combined_handle_access_flags( object_access.privileges );
         flags_t create_mapping_flags
         (
@@ -94,7 +97,7 @@ namespace detail
         static_assert( PAGE_EXECUTE_READ      == PAGE_EXECUTE  * 2, "" );
         static_assert( PAGE_EXECUTE_READWRITE == PAGE_EXECUTE  * 4, "" );
         static_assert( PAGE_EXECUTE_WRITECOPY == PAGE_EXECUTE  * 8, "" );
-        if ( share_mode == viewing<win32>::share_mode::hidden ) // WRITECOPY
+        if ( share_mode == viewing::share_mode::hidden ) // WRITECOPY
             create_mapping_flags *= 8;
         else
         if ( combined_handle_access_flags & access_rights::write )
@@ -111,26 +114,28 @@ namespace detail
 
 
 BOOST_IMPL_INLINE
-mapping<win32> mapping<win32>::create
+mapping mapping::create
 (
-    access_privileges<win32>                            const ap,
-    named_object_construction_policy<win32>::value_type const construction_policy,
-    share_mode                                          const share_mode
+    access_privileges                const ap,
+    named_object_construction_policy const construction_policy,
+    share_mode                       const share_mode
 ) noexcept
 {
     return
     {
         detail::object_access_to_page_access( ap.object_access, share_mode ),
-        ap.object_access    ,
-        ap.child_access     ,
-        ap.system_access    ,
-        construction_policy ,
-        viewing<win32>::create( ap.object_access, share_mode )
+        ap.object_access   ,
+        ap.child_access    ,
+        ap.system_access   ,
+        construction_policy,
+        viewing::create( ap.object_access, share_mode )
     };
 }
 
 //------------------------------------------------------------------------------
 } // flags
+//------------------------------------------------------------------------------
+} // win32
 //------------------------------------------------------------------------------
 } // mmap
 //------------------------------------------------------------------------------

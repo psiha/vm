@@ -26,6 +26,7 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+#ifdef DOXYGEN_ONLY
 namespace flags
 {
 //------------------------------------------------------------------------------
@@ -39,9 +40,8 @@ namespace flags
 ///
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename Impl>
+
 struct mapping
-#ifdef DOXYGEN_ONLY
 {
     enum struct share_mode
     {
@@ -56,14 +56,13 @@ struct mapping
     );
 
     unspecified-impl_specific public_data_members;
-}
-#endif // DOXYGEN_ONLY
-; // struct mapping
+}; // struct mapping
 
-template <typename Impl> struct viewing;
+struct viewing;
 
 //------------------------------------------------------------------------------
 } // namespace flags
+#endif // DOXYGEN_ONLY
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------

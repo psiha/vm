@@ -29,10 +29,8 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-template <typename Impl = BOOST_MMAP_IMPL()> struct error;
-
-template <typename Result, typename Impl>
-using fallible_result = err::fallible_result<Result, error<Impl>>;
+template <typename Result>
+using fallible_result = err::fallible_result<Result, error>;
 
 //------------------------------------------------------------------------------
 } // namespace mmap

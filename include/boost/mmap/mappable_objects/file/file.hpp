@@ -29,11 +29,6 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-using native_file_open_flags = opening<BOOST_MMAP_IMPL()>;
-
-inline bool delete_file( char    const * const file_name ) noexcept { return delete_file( file_name, BOOST_MMAP_IMPL() () ); }
-inline bool delete_file( wchar_t const * const file_name ) noexcept { return delete_file( file_name, BOOST_MMAP_IMPL() () ); }
-
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------

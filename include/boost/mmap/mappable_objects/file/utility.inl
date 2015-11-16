@@ -29,16 +29,16 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-namespace detail
+namespace detail0
 {
-    using opening             = flags::opening<BOOST_MMAP_IMPL()>;
-    using default_file_handle = file_handle   <BOOST_MMAP_IMPL()>;
+    using opening             = flags::opening;
+    using default_file_handle = file_handle   ;
 
     BOOST_IMPL_INLINE
     opening create_rw_file_flags()
     {
         using namespace flags;
-        using ap = access_privileges<BOOST_MMAP_IMPL()>;
+        using ap = access_privileges;
         return opening::create
         (
             {
@@ -46,8 +46,8 @@ namespace detail
                 ap::child_process::does_not_inherit,
                 ap::system::process_default// ap::system::user( ap::readwrite ) | ap::system::group( ap::read )
             },
-            named_object_construction_policy<BOOST_MMAP_IMPL()>::open_or_create,
-            system_hints                    <BOOST_MMAP_IMPL()>::sequential_access
+            named_object_construction_policy::open_or_create,
+            system_hints                    ::sequential_access
         );
     }
 
@@ -55,18 +55,18 @@ namespace detail
     opening create_r_file_flags()
     {
         using namespace flags;
-        using ap = access_privileges<BOOST_MMAP_IMPL()>;
+        using ap = access_privileges;
         return opening::create_for_opening_existing_objects
                (
                    ap::object { ap::readwrite },
                    ap::child_process::does_not_inherit,
-                   system_hints<BOOST_MMAP_IMPL()>::sequential_access,
+                   system_hints::sequential_access,
                    false
                );
     }
 
     BOOST_IMPL_INLINE
-    err::fallible_result<basic_mapped_view, mmap::error<>> BOOST_CC_REG
+    fallible_result<mapped_view> BOOST_CC_REG
     map_file( default_file_handle::reference const file_handle, std::size_t /*const*/ desired_size )
     {
         /// \note There is no need to call get/set_size() on the file_handle
@@ -83,9 +83,9 @@ namespace detail
             desired_size = get_size( file_handle               );
     #endif // _WIN32
 
-        using ap    = flags::access_privileges<BOOST_MMAP_IMPL()>;
-        using flags = flags::mapping<BOOST_MMAP_IMPL()>;
-        return basic_mapped_view::map
+        using ap    = flags::access_privileges;
+        using flags = flags::mapping;
+        return mapped_view::map
         (
             create_mapping
             (
@@ -102,12 +102,12 @@ namespace detail
 
 
     BOOST_IMPL_INLINE
-    err::fallible_result<basic_read_only_mapped_view, mmap::error<>>
+    fallible_result<read_only_mapped_view>
     map_read_only_file( default_file_handle::reference const file_handle ) noexcept
     {
-        using ap    = flags::access_privileges<BOOST_MMAP_IMPL()>;
-        using flags = flags::mapping<BOOST_MMAP_IMPL()>;
-        return basic_read_only_mapped_view::map
+        using ap    = flags::access_privileges;
+        using flags = flags::mapping;
+        return read_only_mapped_view::map
         (
             create_mapping
             (
@@ -125,31 +125,31 @@ namespace detail
         #endif // OS
         );
     }
-} // namespace detail
+} // namespace detail0
 
-BOOST_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_COLD, BOOST_EXCEPTIONLESS )
-err::fallible_result<basic_mapped_view, mmap::error<>> map_file( char const * const file_name, std::size_t const desired_size ) noexcept
+BOOST_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
+fallible_result<mapped_view> map_file( char const * const file_name, std::size_t const desired_size ) noexcept
 {
-    return detail::map_file( create_file( file_name, detail::create_rw_file_flags() ), desired_size );
+    return detail0::map_file( create_file( file_name, detail0::create_rw_file_flags() ), desired_size );
 }
 
-BOOST_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_COLD, BOOST_EXCEPTIONLESS )
-err::fallible_result<basic_read_only_mapped_view, mmap::error<>> map_read_only_file( char const * const file_name ) noexcept
+BOOST_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
+fallible_result<read_only_mapped_view> map_read_only_file( char const * const file_name ) noexcept
 {
-    return detail::map_read_only_file( create_file( file_name, detail::create_r_file_flags() ) );
+    return detail0::map_read_only_file( create_file( file_name, detail0::create_r_file_flags() ) );
 }
 
 #ifdef _WIN32
-    BOOST_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_COLD, BOOST_EXCEPTIONLESS )
-    err::fallible_result<basic_mapped_view, mmap::error<>> map_file( wchar_t const * const file_name, std::size_t const desired_size )
+    BOOST_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
+    fallible_result<mapped_view> map_file( wchar_t const * const file_name, std::size_t const desired_size )
     {
-        return detail::map_file( create_file( file_name, detail::create_rw_file_flags() ), desired_size );
+        return detail0::map_file( create_file( file_name, detail0::create_rw_file_flags() ), desired_size );
     }
 
-    BOOST_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_COLD, BOOST_EXCEPTIONLESS )
-    err::fallible_result<basic_read_only_mapped_view, mmap::error<>> map_read_only_file( wchar_t const * const file_name )
+    BOOST_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
+    fallible_result<read_only_mapped_view> map_read_only_file( wchar_t const * const file_name )
     {
-        return detail::map_read_only_file( create_file( file_name, detail::create_r_file_flags() ) );
+        return detail0::map_read_only_file( create_file( file_name, detail0::create_r_file_flags() ) );
     }
 #endif // _WIN32
 

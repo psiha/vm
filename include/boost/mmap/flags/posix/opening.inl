@@ -22,7 +22,7 @@
 
 #include "boost/mmap/detail/impl_inline.hpp"
 
-#include "boost/assert.hpp"
+#include <boost/assert.hpp>
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -30,46 +30,50 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+inline namespace posix
+{
+//------------------------------------------------------------------------------
 namespace flags
 {
 //------------------------------------------------------------------------------
 
 BOOST_IMPL_INLINE
-opening<posix> BOOST_CC_REG opening<posix>::create
+opening BOOST_CC_REG opening::create
 (
-    access_privileges<posix>                            const ap,
-    named_object_construction_policy<posix>::value_type const construction_policy,
-    flags_t                                             const system_hints
+    access_privileges                const ap,
+    named_object_construction_policy const construction_policy,
+    flags_t                          const combined_system_hints
 ) noexcept
 {
-    auto const oflag( ap.oflag() | construction_policy | system_hints );
-    auto const pmode( ap.pmode()                                      );
+    auto const oflag( ap.oflag() | static_cast<flags_t>( construction_policy ) | combined_system_hints );
+    auto const pmode( ap.pmode()                                                                       );
 
     return { .oflag = oflag, .pmode = pmode };
 }
 
-
 BOOST_IMPL_INLINE
-opening<posix> BOOST_CC_REG opening<posix>::create_for_opening_existing_objects
+opening BOOST_CC_REG opening::create_for_opening_existing_objects
 (
-    access_privileges<posix>::object        const object_access,
-    access_privileges<posix>::child_process const child_access,
-    flags_t                                 const system_hints,
-    bool                                    const truncate
+    access_privileges::object        const object_access,
+    access_privileges::child_process const child_access,
+    flags_t                          const combined_system_hints,
+    bool                             const truncate
 ) noexcept
 {
     return create
     (
-        { object_access, child_access, 0 },
-         truncate
-            ? named_object_construction_policy<posix>::open_and_truncate_existing
-            : named_object_construction_policy<posix>::open_existing,
-        system_hints
+        access_privileges { object_access, child_access, {0} },
+        truncate
+            ? named_object_construction_policy::open_and_truncate_existing
+            : named_object_construction_policy::open_existing,
+        combined_system_hints
     );
 }
 
 //------------------------------------------------------------------------------
 } // flags
+//------------------------------------------------------------------------------
+} // posix
 //------------------------------------------------------------------------------
 } // mmap
 //------------------------------------------------------------------------------

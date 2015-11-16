@@ -28,36 +28,41 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+namespace win32
+{
+//------------------------------------------------------------------------------
 namespace flags
 {
 //------------------------------------------------------------------------------
 
-static_assert( system_hints<win32>::random_access     ==   FILE_FLAG_RANDOM_ACCESS                               , "" );
-static_assert( system_hints<win32>::sequential_access ==   FILE_FLAG_SEQUENTIAL_SCAN                             , "" );
-static_assert( system_hints<win32>::avoid_caching     == ( FILE_FLAG_NO_BUFFERING   | FILE_FLAG_WRITE_THROUGH   ), "" );
-static_assert( system_hints<win32>::temporary         == ( FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE ), "" );
+static_assert( system_hints::random_access     ==   FILE_FLAG_RANDOM_ACCESS                               , "" );
+static_assert( system_hints::sequential_access ==   FILE_FLAG_SEQUENTIAL_SCAN                             , "" );
+static_assert( system_hints::avoid_caching     == ( FILE_FLAG_NO_BUFFERING   | FILE_FLAG_WRITE_THROUGH   ), "" );
+static_assert( system_hints::temporary         == ( FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE ), "" );
 
 BOOST_IMPL_INLINE
-opening<win32> BOOST_CC_REG opening<win32>::create_for_opening_existing_objects
+opening BOOST_CC_REG opening::create_for_opening_existing_objects
 (
-    access_privileges<win32>::object        const object_access,
-    access_privileges<win32>::child_process const child_access,
+    access_privileges::object        const object_access,
+    access_privileges::child_process const child_access,
     flags_t                                 const system_hints,
     bool                                    const truncate
 )
 {
     return create
     (
-        access_privileges<win32> { object_access, child_access, access_privileges<win32>::system() },
+        access_privileges { object_access, child_access, access_privileges::system() },
         truncate
-            ? named_object_construction_policy<win32>::open_and_truncate_existing
-            : named_object_construction_policy<win32>::open_existing,
+            ? named_object_construction_policy::open_and_truncate_existing
+            : named_object_construction_policy::open_existing,
         system_hints
     );
 }
 
 //------------------------------------------------------------------------------
 } // flags
+//------------------------------------------------------------------------------
+} // win32
 //------------------------------------------------------------------------------
 } // mmap
 //------------------------------------------------------------------------------

@@ -24,29 +24,34 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+namespace win32
+{
+//------------------------------------------------------------------------------
 namespace flags
 {
 //------------------------------------------------------------------------------
 
-static_assert( (unsigned)shared_memory<win32>::system_hints::default                    == SEC_COMMIT , "Boost.MMAP internal inconsistency" );
-static_assert( (unsigned)shared_memory<win32>::system_hints::only_reserve_address_space == SEC_RESERVE, "Boost.MMAP internal inconsistency" );
+static_assert( (unsigned)shared_memory::system_hints::default                    == SEC_COMMIT , "Boost.MMAP internal inconsistency" );
+static_assert( (unsigned)shared_memory::system_hints::only_reserve_address_space == SEC_RESERVE, "Boost.MMAP internal inconsistency" );
 
 
 BOOST_IMPL_INLINE
-shared_memory<win32> BOOST_CC_REG shared_memory<win32>::create
+shared_memory BOOST_CC_REG shared_memory::create
 (
-    access_privileges<win32>                            const ap,
-    named_object_construction_policy<win32>::value_type const nocp,
-    system_hints                                        const system_hint
+    access_privileges                const ap,
+    named_object_construction_policy const nocp,
+    system_hints                     const system_hint
 ) noexcept
 {
-    auto flags( mapping<win32>::create( ap, nocp, share_mode::shared ) );
+    auto flags( mapping::create( ap, nocp, share_mode::shared ) );
     flags.create_mapping_flags |= static_cast<flags_t>( system_hint );
-    return static_cast<shared_memory<win32> &&>( flags );
+    return static_cast<shared_memory &&>( flags );
 }
 
 //------------------------------------------------------------------------------
 } // flags
+//------------------------------------------------------------------------------
+} // win32
 //------------------------------------------------------------------------------
 } // mmap
 //------------------------------------------------------------------------------

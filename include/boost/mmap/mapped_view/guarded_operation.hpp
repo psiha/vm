@@ -21,16 +21,16 @@
 #include "boost/mmap/mapped_view/mapped_view.hpp"
 
 #ifdef _WIN32
-#include "boost/mmap/detail/win32.hpp"
+#include <boost/mmap/detail/win32.hpp>
 
-#include "excpt.h"
+#include <excpt.h>
 #else
 #include "boost/assert.hpp"
 #include "boost/config.hpp"
 
 #include <csetjmp>
-#include "sys/signal.h"
-#include "signal.h"
+//#include <sys/signal.h> // requires Android NDK API 21
+#include <signal.h>
 #endif // _WIN32
 //------------------------------------------------------------------------------
 namespace boost
@@ -61,12 +61,12 @@ namespace mmap
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename Element, class Operation, class ErrorHandler>
-typename std::result_of<Operation( memory_range<Element> )>::type
+typename std::result_of<Operation( basic_memory_range<Element> )>::type
 guarded_operation
 (
-    memory_range<Element> const view,
-    Operation             const operation,
-    ErrorHandler          const error_handler
+    basic_memory_range<Element> const view,
+    Operation                   const operation,
+    ErrorHandler                const error_handler
 )
 {
 #ifdef _WIN32
@@ -89,18 +89,23 @@ guarded_operation
     static BOOST_THREAD_LOCAL_POD void const * exception_location;
 
     int const expected_signal_type( SIGBUS /*SIGSEGV*/ );
-    struct ::sigaction const action =
+    struct ::sigaction /*const*/ action =
     {
-        .sa_sigaction =
-            []( int const signal_code, siginfo_t * __restrict const p_info, void * /*context*/ )
-            {
-                // http://stackoverflow.com/questions/1715413/longjmp-from-signal-handler
-                BOOST_ASSERT( signal_code == expected_signal_type ); (void)signal_code;
-                exception_location = p_info->si_addr;
-                ::siglongjmp( bailout_context, true );
-            },
-        .sa_flags = SA_SIGINFO
+        // not yet supported by GCC in C++ :/
+        //.sa_sigaction = ...
+        //.sa_flags     = SA_SIGINFO
+        {0}
     };
+    action.sa_sigaction =
+        []( int const signal_code, siginfo_t * __restrict const p_info, void * /*context*/ )
+        {
+            // http://stackoverflow.com/questions/1715413/longjmp-from-signal-handler
+            BOOST_ASSERT( signal_code == expected_signal_type ); (void)signal_code;
+            exception_location = p_info->si_addr;
+            ::siglongjmp( bailout_context, true );
+        };
+    action.sa_flags = SA_SIGINFO;
+
     struct scope_exit
     {
         ~scope_exit() { BOOST_VERIFY( ::sigaction( expected_signal_type, &handler, nullptr ) == 0 ); }

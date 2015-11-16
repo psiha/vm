@@ -23,8 +23,8 @@
 
 #include "boost/mmap/detail/impl_inline.hpp"
 
-#include "accctrl.h"
-#include "aclapi.h"
+#include <accctrl.h>
+#include <aclapi.h>
 
 #include <memory>
 //------------------------------------------------------------------------------
@@ -34,20 +34,24 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+namespace win32
+{
+//------------------------------------------------------------------------------
 namespace flags
 {
 //------------------------------------------------------------------------------
 
-static_assert( named_object_construction_policy<win32>::create_new                      == CREATE_NEW       , "" );
-static_assert( named_object_construction_policy<win32>::create_new_or_truncate_existing == CREATE_ALWAYS    , "" );
-static_assert( named_object_construction_policy<win32>::open_existing                   == OPEN_EXISTING    , "" );
-static_assert( named_object_construction_policy<win32>::open_or_create                  == OPEN_ALWAYS      , "" );
-static_assert( named_object_construction_policy<win32>::open_and_truncate_existing      == TRUNCATE_EXISTING, "" );
 
-static_assert( access_privileges<win32>::read    == ( GENERIC_READ    | FILE_MAP_READ                          ), "" );
-static_assert( access_privileges<win32>::write   == ( GENERIC_WRITE   | FILE_MAP_WRITE                         ), "" );
-static_assert( access_privileges<win32>::execute == ( GENERIC_EXECUTE | FILE_MAP_EXECUTE                       ), "" );
-static_assert( access_privileges<win32>::all     == ( GENERIC_ALL     | FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE ), "" );
+static_assert( (flags_t)named_object_construction_policy::create_new                      == CREATE_NEW       , "" );
+static_assert( (flags_t)named_object_construction_policy::create_new_or_truncate_existing == CREATE_ALWAYS    , "" );
+static_assert( (flags_t)named_object_construction_policy::open_existing                   == OPEN_EXISTING    , "" );
+static_assert( (flags_t)named_object_construction_policy::open_or_create                  == OPEN_ALWAYS      , "" );
+static_assert( (flags_t)named_object_construction_policy::open_and_truncate_existing      == TRUNCATE_EXISTING, "" );
+
+static_assert( access_privileges::read    == ( GENERIC_READ    | FILE_MAP_READ                          ), "" );
+static_assert( access_privileges::write   == ( GENERIC_WRITE   | FILE_MAP_WRITE                         ), "" );
+static_assert( access_privileges::execute == ( GENERIC_EXECUTE | FILE_MAP_EXECUTE                       ), "" );
+static_assert( access_privileges::all     == ( GENERIC_ALL     | FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE ), "" );
 
 namespace detail
 {
@@ -186,20 +190,22 @@ namespace
     SECURITY_DESCRIPTOR const all_shall_pass( make_all_shall_pass() );
 } // anonymous namespace
 
-__declspec( selectany ) access_privileges<win32>::system const access_privileges<win32>::system::process_default = { nullptr        , false };
-__declspec( selectany ) access_privileges<win32>::system const access_privileges<win32>::system::unrestricted    = { &all_shall_pass, false };
-__declspec( selectany ) access_privileges<win32>::system const access_privileges<win32>::system::nix_default     = { detail::make_sd
+__declspec( selectany ) access_privileges::system const access_privileges::system::process_default = { nullptr        , false };
+__declspec( selectany ) access_privileges::system const access_privileges::system::unrestricted    = { &all_shall_pass, false };
+__declspec( selectany ) access_privileges::system const access_privileges::system::nix_default     = { detail::make_sd
                                                                                                                      (
-                                                                                                                        access_privileges<win32>::system::user ( access_privileges<win32>::all  ) |
-                                                                                                                        access_privileges<win32>::system::group( access_privileges<win32>::read ) |
-                                                                                                                        access_privileges<win32>::system::world( access_privileges<win32>::read )
+                                                                                                                        access_privileges::system::user ( access_privileges::all  ) |
+                                                                                                                        access_privileges::system::group( access_privileges::read ) |
+                                                                                                                        access_privileges::system::world( access_privileges::read )
                                                                                                                      ),
                                                                                                                      true
                                                                                                                    };
-__declspec( selectany ) access_privileges<win32>::system const access_privileges<win32>::system::_644            = { ( nix_default.get_dynamic_sd().add_ref(), nix_default.p_sd ), true }; //access_privileges<win32>::system::nix_default;
+__declspec( selectany ) access_privileges::system const access_privileges::system::_644            = { ( nix_default.get_dynamic_sd().add_ref(), nix_default.p_sd ), true }; //access_privileges::system::nix_default;
 
 //------------------------------------------------------------------------------
 } // flags
+//------------------------------------------------------------------------------
+} // win32
 //------------------------------------------------------------------------------
 } // mmap
 //------------------------------------------------------------------------------

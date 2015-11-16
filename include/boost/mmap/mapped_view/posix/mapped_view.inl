@@ -24,65 +24,70 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
-
-namespace detail
+inline namespace posix
 {
-    template <>
-    struct mapper<char, posix>
+//------------------------------------------------------------------------------
+
+struct mapper
+{
+    using error_t   = error;
+    using flags_t   = flags::mapping;
+    using mapping_t = mapping;
+
+    static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
+    memory_range BOOST_CC_REG
+    map
+    (
+        handle::reference const source_mapping,
+        flags ::viewing   const flags         ,
+        std   ::uint64_t  const offset        ,
+        std   ::size_t    const desired_size
+    ) noexcept
     {
-        static BOOST_ATTRIBUTES( BOOST_COLD, BOOST_EXCEPTIONLESS )
-        basic_memory_range_t BOOST_CC_REG
-        map
+        using iterator = mapped_view::iterator;
+
+        /// \note mmap() explicitly rejects a zero length/desired_size, IOW
+        /// unlike with MapViewOfFile() that approach cannot be used to
+        /// automatically map the entire object - a valid size must be
+        /// specified.
+        /// http://man7.org/linux/man-pages/man2/mmap.2.html
+        ///                               (30.09.2015.) (Domagoj Saric)
+
+        iterator const view_start
         (
-            handle<posix>::reference const source_mapping,
-            flags::viewing<posix>    const flags         ,
-            std::uint64_t            const offset        ,
-            std::size_t              const desired_size
-        ) noexcept
-        {
-            using iterator = mapped_view<char, posix>::iterator;
-
-            /// \note mmap() explicitly rejects a zero length/desired_size, IOW
-            /// unlike with MapViewOfFile() that approach cannot be used to
-            /// automatically map the entire object - a valid size must be
-            /// specified.
-            /// http://man7.org/linux/man-pages/man2/mmap.2.html
-            ///                               (30.09.2015.) (Domagoj Saric)
-
-            iterator const view_start
+            static_cast<iterator>
             (
-                static_cast<iterator>
+                ::mmap
                 (
-                    ::mmap
-                    (
-                        nullptr,
-                        desired_size,
-                        flags.protection,
-                        flags.flags,
-                        source_mapping,
-                        offset
-                    )
+                    nullptr,
+                    desired_size,
+                    flags.protection,
+                    flags.flags,
+                    source_mapping,
+                    offset
                 )
-            );
+            )
+        );
 
-            return
-                BOOST_LIKELY( view_start != MAP_FAILED )
-                    ? basic_memory_range_t{ view_start, view_start + desired_size }
-                    : basic_memory_range_t{ nullptr, nullptr };
-        }
+        return
+            BOOST_LIKELY( view_start != MAP_FAILED )
+                ? memory_range{ view_start, view_start + desired_size }
+                : memory_range{ nullptr, nullptr };
+    }
 
-        static BOOST_ATTRIBUTES( BOOST_COLD, BOOST_EXCEPTIONLESS )
-        void BOOST_CC_REG unmap( basic_memory_range_t const view )
-        {
-            BOOST_VERIFY
-            (
-                ( ::munmap( view.begin(), view.size() ) == 0 ) ||
-                ( view.empty() && !view.begin() )
-            );
-        }
-    }; // struct mapper<char, posix>
-} // namespace detail
+    static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
+    void BOOST_CC_REG unmap( memory_range const view )
+    {
+        BOOST_VERIFY
+        (
+            ( ::munmap( view.begin(), view.size() ) == 0 ) ||
+            ( view.empty() && !view.begin() )
+        );
+    }
+}; // struct mapper
 
+//------------------------------------------------------------------------------
+} // posix
 //------------------------------------------------------------------------------
 } // mmap
 //------------------------------------------------------------------------------

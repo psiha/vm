@@ -18,7 +18,9 @@
 #define error_hpp__F043103F_57C5_4EFA_A947_15EE812CF090
 #pragma once
 //------------------------------------------------------------------------------
-#include "boost/err/errno.hpp"
+#include "boost/mmap/detail/impl_selection.hpp"
+
+#include <boost/err/errno.hpp>
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -26,13 +28,14 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+inline namespace posix
+{
+//------------------------------------------------------------------------------
 
-template <typename Impl> struct error;
+using error = err::last_errno;
 
-struct posix;
-
-template <> struct error<posix> : err::last_errno {};
-
+//------------------------------------------------------------------------------
+} // namespace posix
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------

@@ -30,14 +30,13 @@ namespace flags
 {
 //------------------------------------------------------------------------------
 
-template <typename Impl>
-struct opening
 #ifdef DOXYGEN_ONLY
+struct opening
 {
     /// Access-pattern optimisation hints
     struct access_pattern_optimisation_hints
     {
-        enum flags
+        enum value_type
         {
             random_access,
             sequential_access,
@@ -48,7 +47,7 @@ struct opening
     using system_hints = access_pattern_optimisation_hints;
 
     /// Factory function
-    static opening<Impl> create
+    static opening create
     (
         flags_t handle_access_flags,
         open_policy,
@@ -57,7 +56,7 @@ struct opening
     );
 
     /// Factory function
-    static opening<Impl> create_for_opening_existing_files
+    static opening create_for_opening_existing_files
     (
         flags_t handle_access_flags,
         flags_t system_hints
@@ -65,9 +64,8 @@ struct opening
     );
 
     unspecified-impl_specific public_data_members;
-}
+}; // struct opening
 #endif // DOXYGEN_ONLY
-; // struct opening
 
 //------------------------------------------------------------------------------
 } // namespace flags

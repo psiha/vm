@@ -21,7 +21,7 @@
 #include "boost/mmap/handles/posix/handle.hpp"
 #include "boost/mmap/flags/posix/mapping.hpp"
 
-#include "boost/config/suffix.hpp"
+#include <boost/config/suffix.hpp>
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -29,28 +29,28 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
-
-template <typename Impl> struct mapping;
-
-template <>
-struct mapping<posix>
-    :
-    handle<posix>
+inline namespace posix
 {
-    using native_handle_t = handle<posix>::native_handle_t        ;
-    using reference       = mapping                        const &;
+//------------------------------------------------------------------------------
+
+struct mapping
+    :
+    handle
+{
+    using native_handle_t = handle::native_handle_t        ;
+    using reference       = mapping                 const &;
 
     static bool const owns_parent_handle = false;
 
     template <typename FileHandle>
-    mapping( FileHandle && fd, flags::viewing<posix> const & view_mapping_flags_param, std::size_t const size ) noexcept
-        : handle<posix>( std::forward<FileHandle>( fd ) ), view_mapping_flags( view_mapping_flags_param ), maximum_size( size ) {}
+    mapping( FileHandle && fd, flags::viewing const & view_mapping_flags_param, std::size_t const size ) noexcept
+        : handle( std::forward<FileHandle>( fd ) ), view_mapping_flags( view_mapping_flags_param ), maximum_size( size ) {}
 
-    bool is_read_only() const { return ( view_mapping_flags.protection & ( flags::access_privileges<posix>::write | flags::access_privileges<posix>::readwrite ) ) == 0; }
+    bool is_read_only() const { return ( view_mapping_flags.protection & ( flags::access_privileges::write | flags::access_privileges::readwrite ) ) == 0; }
 
-    flags::viewing<posix> const view_mapping_flags;
-    std::size_t           const maximum_size;
-}; // struct mapping<posix>
+    flags::viewing const view_mapping_flags;
+    std  ::size_t  const maximum_size;
+}; // struct mapping
 
 
 #ifdef PAGE_SIZE
@@ -69,6 +69,8 @@ BOOST_OVERRIDABLE_SYMBOL extern std::uint16_t const page_size
 #endif // PAGE_SIZE
 BOOST_OVERRIDABLE_SYMBOL extern std::uint32_t const allocation_granularity( page_size );
 
+//------------------------------------------------------------------------------
+} // namespace posix
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------

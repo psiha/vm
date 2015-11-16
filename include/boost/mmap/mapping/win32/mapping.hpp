@@ -21,9 +21,9 @@
 #include "boost/mmap/handles/win32/handle.hpp"
 #include "boost/mmap/flags/win32/mapping.hpp"
 
-#include "boost/config.hpp"
-//#include "boost/detail/winapi/system.hpp" //...broken?
-#include "boost/mmap/detail/win32.hpp"
+#include <boost/config.hpp>
+//#include <boost/detail/winapi/system.hpp> //...broken?
+#include <boost/mmap/detail/win32.hpp>
 
 #include <cstdint>
 //------------------------------------------------------------------------------
@@ -33,25 +33,25 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+namespace win32
+{
+//------------------------------------------------------------------------------
 
-template <typename Impl> struct mapping;
-
-template <>
-struct mapping<win32>
+struct mapping
     :
-    handle<win32>
+    handle
 {
     using reference = mapping const &;
 
     static bool const owns_parent_handle = true;
 
-    mapping( native_handle_t const native_handle, flags::viewing<win32> const view_mapping_flags_param )
-        : handle<win32>( native_handle ), view_mapping_flags( view_mapping_flags_param ) {}
+    mapping( native_handle_t const native_handle, flags::viewing const view_mapping_flags_param )
+        : handle( native_handle ), view_mapping_flags( view_mapping_flags_param ) {}
 
-    bool is_read_only() const { return ( view_mapping_flags.map_view_flags & flags::mapping<win32>::access_rights::write ) == 0; }
+    bool is_read_only() const { return ( view_mapping_flags.map_view_flags & flags::mapping::access_rights::write ) == 0; }
 
-    flags::viewing<win32> const view_mapping_flags;
-}; // struct mapping<win32>
+    flags::viewing const view_mapping_flags;
+}; // struct mapping
 
 #ifdef PAGE_SIZE
 std::uint16_t const page_size( PAGE_SIZE );
@@ -69,6 +69,10 @@ BOOST_OVERRIDABLE_SYMBOL std::uint16_t const page_size
     })()
 );
 #endif // PAGE_SIZE
+#if defined( BOOST_MSVC )
+#   pragma warning( push )
+#   pragma warning( disable : 4553 ) // "'==': operator has no effect; did you intend '='?"
+#endif // BOOST_MSVC
 BOOST_OVERRIDABLE_SYMBOL std::uint32_t const allocation_granularity
 (
     ([]()
@@ -79,7 +83,12 @@ BOOST_OVERRIDABLE_SYMBOL std::uint32_t const allocation_granularity
         return info.dwAllocationGranularity;
     })()
 );
+#if defined( BOOST_MSVC )
+#   pragma warning( pop )
+#endif // BOOST_MSVC
 
+//------------------------------------------------------------------------------
+} // namespace win32
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------

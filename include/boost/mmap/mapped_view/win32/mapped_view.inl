@@ -16,6 +16,7 @@
 //------------------------------------------------------------------------------
 #include "boost/mmap/mapped_view/mapped_view.hpp"
 
+#include "boost/mmap/detail/impl_selection.hpp"
 #include "boost/mmap/detail/win32.hpp"
 //------------------------------------------------------------------------------
 namespace boost
@@ -24,27 +25,33 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
-
-template <>
-struct detail::mapper<char, win32>
+namespace win32
 {
-    static BOOST_ATTRIBUTES( BOOST_COLD, BOOST_EXCEPTIONLESS )
-    basic_memory_range_t BOOST_CC_REG
+//------------------------------------------------------------------------------
+
+struct mapper
+{
+    using error_t   = error;
+    using flags_t   = flags::mapping;
+    using mapping_t = mapping;
+
+    static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
+    memory_range BOOST_CC_REG
     map
     (
-        handle<win32>::reference const source_mapping,
-        flags::viewing<win32>    const flags         ,
-        std::uint64_t            const offset        , // ERROR_MAPPED_ALIGNMENT
-        std::size_t              const desired_size
+        handle::reference const source_mapping,
+        flags ::viewing   const flags         ,
+        std   ::uint64_t  const offset        , // ERROR_MAPPED_ALIGNMENT
+        std   ::size_t    const desired_size
     ) noexcept
     {
         // Implementation note:
-        // Mapped views hold internal references to the following handles so we
-        // do not need to hold/store them ourselves:
+        // Mapped views hold internal references to the mapping handles so we do
+        // not need to hold/store them ourselves:
         // http://msdn.microsoft.com/en-us/library/aa366537(VS.85).aspx
-        //                                        (26.03.2010.) (Domagoj Saric)
+        //                                    (26.03.2010.) (Domagoj Saric)
 
-        using iterator = mapped_view<char, win32>::iterator;
+        using iterator = mapped_view::iterator;
 
         auto const large_integer( reinterpret_cast<ULARGE_INTEGER const &>( offset ) );
 
@@ -70,13 +77,15 @@ struct detail::mapper<char, win32>
         };
     }
 
-    static BOOST_ATTRIBUTES( BOOST_COLD, BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
-    void BOOST_CC_REG unmap( basic_memory_range_t const view )
+    static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
+    void BOOST_CC_REG unmap( memory_range const view )
     {
         BOOST_VERIFY( ::UnmapViewOfFile( view.begin() ) || view.empty() );
     }
-}; // struct detail::mapper<char, win32>
+}; // struct mapper
 
+//------------------------------------------------------------------------------
+} // win32
 //------------------------------------------------------------------------------
 } // mmap
 //------------------------------------------------------------------------------

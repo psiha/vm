@@ -37,13 +37,13 @@ namespace mmap
 template <typename Handle>
 struct is_mappable : std::false_type {};
 
-template <> struct is_mappable<filesystem::path const         &> : std::true_type {}; // c_str()
-template <> struct is_mappable<filesystem::path                > : std::true_type {};
-template <> struct is_mappable<::FILE                         &> : std::true_type {};
-template <> struct is_mappable<::FILE                         *> : std::true_type {};
-template <> struct is_mappable<handle<posix>::native_handle_t  > : std::true_type {};
+template <> struct is_mappable<filesystem::path const  &> : std::true_type {}; // c_str()
+template <> struct is_mappable<filesystem::path         > : std::true_type {};
+template <> struct is_mappable<::FILE                  &> : std::true_type {};
+template <> struct is_mappable<::FILE                  *> : std::true_type {};
+template <> struct is_mappable<handle::native_handle_t  > : std::true_type {};
 #ifdef _WIN32
-template <> struct is_mappable<handle<win32>::native_handle_t  > : std::true_type {};
+template <> struct is_mappable<posix::handle::native_handle_t> : std::true_type {};
 #endif // _WIN32
 #if 0 // todo std iostream
 // http://www.linuxquestions.org/questions/programming-9/%5Bcygwin%5D%5Bc-%5D-how-to-get-file-descriptor-using-istream-object-204737
@@ -54,26 +54,19 @@ template <> struct is_mappable<handle<win32>::native_handle_t  > : std::true_typ
 template <> struct is_mappable<std::iostream> : std::true_type{};
 #endif // disabled/todo
 
-template <typename Impl>
-struct mapping;
+//mapping create_mapping( handle::reference mappable_object, flags::mapping, std::uint64_t maximum_size, char const * name ) noexcept;
 
-//template <typename Impl>
-//mapping<Impl> create_mapping( typename handle<Impl>::reference mappable_object, mapping<Impl>, std::uint64_t maximum_size, char const * name ) noexcept;
-
-template <typename Impl>
-mapping<Impl> open_mapping( mapping<Impl>, char const * name ) noexcept; //todo
+mapping open_mapping( mapping, char const * name ) noexcept; //todo
 
 
-template <typename Impl>
-mapping<Impl> create_mapping( FILE * const p_c_file_stream, mapping<Impl> const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
+mapping create_mapping( FILE * const p_c_file_stream, flags::mapping const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
 {
-    return create_mapping<Impl>( *p_c_file_stream, flags, maximum_size, name );
+    return create_mapping( *p_c_file_stream, flags, maximum_size, name );
 }
 
-template <typename Impl>
-mapping<Impl> create_mapping( FILE & c_file_stream, mapping<Impl> const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
+mapping create_mapping( FILE & c_file_stream, flags::mapping const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
 {
-    return create_mapping<Impl>( /*std*/::fileno( &c_file_stream ), flags, maximum_size, name );
+    return create_mapping( /*std::*/fileno( &c_file_stream ), flags, maximum_size, name );
 }
 
 //------------------------------------------------------------------------------

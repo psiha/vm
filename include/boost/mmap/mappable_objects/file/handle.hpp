@@ -27,19 +27,17 @@ namespace mmap
 {
 //------------------------------------------------------------------------------
 
-template <typename Impl> class handle;
-
 #ifdef BOOST_MSVC
     #pragma warning( push )
     #pragma warning( disable : 4510 ) // Default constructor was implicitly defined as deleted.
 #endif // BOOST_MSVC
 
-template <typename Impl>
-struct file_handle : handle<Impl>
-{
-    using handle<Impl>::handle;
 
-    using reference = typename handle<Impl>::reference;
+struct file_handle : BOOST_MMAP_IMPL()::handle
+{
+    using handle::handle;
+
+    using reference = typename handle::reference;
 
     operator reference () const noexcept { return reference{ this->get() }; }
 }; // struct file_handle

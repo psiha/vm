@@ -17,14 +17,14 @@
 #define posix_hpp__8FC3F669_80D4_4455_829D_F72E8ABDE9D0
 #pragma once
 //------------------------------------------------------------------------------
-#include "boost/config.hpp"
+#include <boost/config.hpp>
 
 #if defined( BOOST_HAS_UNISTD_H )
-    #include "boost/config/posix_features.hpp"
+    #include <boost/config/posix_features.hpp>
 #elif defined( BOOST_MSVC )
     #pragma warning ( disable : 4996 ) // "The POSIX name for this item is deprecated. Instead, use the ISO C++ conformant name."
-    #include "io.h"
-    #include "wchar.h"
+    #include <io.h>
+    #include <wchar.h>
 #else
     #error no suitable POSIX implementation found
 #endif // BOOST_MSVC
@@ -38,6 +38,11 @@
 #else
     #define BOOST_MMAP_POSIX_STANDARD_LINUX_OSX_MSVC( standard, linux, osx, msvc ) standard
 #endif // POSIX impl
+
+#if !defined( __has_include )
+#   define __has_include( x ) 0
+#endif // __has_include
+
 //------------------------------------------------------------------------------
 namespace boost
 {

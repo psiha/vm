@@ -22,16 +22,19 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+inline namespace posix
+{
+//------------------------------------------------------------------------------
 namespace flags
 {
 //------------------------------------------------------------------------------
 
 BOOST_IMPL_INLINE
-shared_memory<posix> BOOST_CC_REG shared_memory<posix>::create
+shared_memory BOOST_CC_REG shared_memory::create
 (
-    access_privileges               <posix>             const ap,
-    named_object_construction_policy<posix>::value_type const nocp,
-    system_hints                           ::value_type const system_hint
+    access_privileges                const ap,
+    named_object_construction_policy const nocp,
+    system_hints                     const system_hint
 ) noexcept
 {
     return { system_hint, ap, nocp };
@@ -39,6 +42,8 @@ shared_memory<posix> BOOST_CC_REG shared_memory<posix>::create
 
 //------------------------------------------------------------------------------
 } // flags
+//------------------------------------------------------------------------------
+} // posix
 //------------------------------------------------------------------------------
 } // mmap
 //------------------------------------------------------------------------------

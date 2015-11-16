@@ -25,6 +25,7 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+#ifdef DOXYGEN_ONLY
 namespace flags
 {
 //------------------------------------------------------------------------------
@@ -39,9 +40,7 @@ namespace flags
 //                                            (10.10.2010.) (Domagoj Saric)
 
 
-#ifdef DOXYGEN_ONLY
 using flags_t = impl-specific;
-#endif // DOXYGEN_ONLY
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -53,24 +52,14 @@ using flags_t = impl-specific;
 ///
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename Impl>
-struct named_object_construction_policy
-#ifdef DOXYGEN_ONLY
+enum struct named_object_construction_policy
 {
-    enum struct flags : std::uint8_t
-    {
-        create_new                     , ///< Create a new object or fail if one already exists
-        create_new_or_truncate_existing, ///< Create a new object or truncate a possibly existing one (i.e. always-start-with-an-empty-object semantics)
-        open_existing                  , ///< Open an object iff it already exists or fail otherwise
-        open_or_create                 , ///< Open an object if it already exists or create it otherwise
-        open_and_truncate_existing       ///< Open an object, truncating it, iff it already exists or fail otherwise
-    };
-    using value_type = flags;
-
-    value_type value;
-}
-#endif // DOXYGEN_ONLY
-; // struct named_object_construction_policy
+    create_new                     , ///< Create a new object or fail if one already exists
+    create_new_or_truncate_existing, ///< Create a new object or truncate a possibly existing one (i.e. always-start-with-an-empty-object semantics)
+    open_existing                  , ///< Open an object iff it already exists or fail otherwise
+    open_or_create                 , ///< Open an object if it already exists or create it otherwise
+    open_and_truncate_existing       ///< Open an object, truncating it, iff it already exists or fail otherwise
+}; // enum struct named_object_construction_policy
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -81,11 +70,9 @@ struct named_object_construction_policy
 ///
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename Impl>
 struct access_privileges
-#ifdef DOXYGEN_ONLY
 {
-    enum flags : std::uint32_t
+    enum value_type : std::uint32_t
     {
         metaread                    ,
         read                        , ///< Allow reading from the mapped region
@@ -125,13 +112,11 @@ struct access_privileges
     object        /*const*/ object_access;
     child_process /*const*/ child_access ;
     system        /*const*/ system_access;
-}
-#endif // DOXYGEN_ONLY
-; // struct access_privileges<win32>
+}; // struct access_privileges
 
-template <typename Impl> using access_rights      = access_privileges<Impl>;
-template <typename Impl> using access_permissions = access_privileges<Impl>;
-template <typename Impl> using permissions        = access_privileges<Impl>;
+ using access_rights      = access_privileges;
+ using access_permissions = access_privileges;
+ using permissions        = access_privileges;
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -143,9 +128,7 @@ template <typename Impl> using permissions        = access_privileges<Impl>;
 ///
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename Impl>
 struct mapping
-#ifdef DOXYGEN_ONLY
 {
     enum struct share_mode
     {
@@ -160,11 +143,9 @@ struct mapping
     );
 
     unspecified-impl_specific public_data_members;
-}
-#endif // DOXYGEN_ONLY
-; // struct mapping
+}; // struct mapping
 
-template <typename Impl> struct viewing;
+ struct viewing;
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -176,17 +157,16 @@ template <typename Impl> struct viewing;
 ///
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename Impl> struct access_pattern_optimisation_hints;
-template <typename Impl> using system_hints = access_pattern_optimisation_hints<Impl>;
+struct access_pattern_optimisation_hints;
+using system_hints = access_pattern_optimisation_hints;
 
-template <typename Impl>
+
 struct opening
-#ifdef DOXYGEN_ONLY
 {
     /// Access-pattern optimisation hints
     struct access_pattern_optimisation_hints
     {
-        enum flags
+        enum value_type
         {
             random_access,
             sequential_access,
@@ -197,7 +177,7 @@ struct opening
     using system_hints = access_pattern_optimisation_hints;
 
     /// Factory function
-    static opening<Impl> create
+    static opening create
     (
         flags_t handle_access_flags,
         open_policy,
@@ -206,7 +186,7 @@ struct opening
     );
 
     /// Factory function
-    static opening<Impl> create_for_opening_existing_files
+    static opening create_for_opening_existing_files
     (
         flags_t handle_access_flags,
         flags_t system_hints
@@ -214,12 +194,11 @@ struct opening
     );
 
     unspecified-impl_specific public_data_members;
-}
-#endif // DOXYGEN_ONLY
-; // struct opening
+}; // struct opening
 
 //------------------------------------------------------------------------------
 } // namespace flags
+#endif // DOXYGEN_ONLY
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------

@@ -18,11 +18,11 @@
 #define flags_hpp__3E991311_2199_4C61_A484_B8b72C528B0F
 #pragma once
 //------------------------------------------------------------------------------
+#include "boost/mmap/detail/impl_selection.hpp"
 #include "boost/mmap/detail/posix.hpp"
-#include "boost/mmap/implementations.hpp"
 #include "boost/mmap/flags/flags.hpp"
 
-#include "sys/fcntl.h"
+#include "fcntl.h"
 #include "sys/mman.h" // PROT_* constants
 #include "sys/stat.h" // umask
 
@@ -35,29 +35,23 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------ 
+inline namespace posix
+{
+//------------------------------------------------------------------------------
 namespace flags
 {
 //------------------------------------------------------------------------------
 
-template <typename Impl> struct opening;
-
 using flags_t = int;
 
-template <>
-struct named_object_construction_policy<posix> // creation_disposition
+enum struct named_object_construction_policy : flags_t // creation_disposition
 {
-    enum /*struct*/ flags : flags_t
-    {
-        create_new                      = O_CREAT | O_EXCL ,
-        create_new_or_truncate_existing = O_CREAT | O_TRUNC,
-        open_existing                   = 0                ,
-        open_or_create                  = O_CREAT          ,
-        open_and_truncate_existing      = O_TRUNC
-    };
-    using value_type = flags;
-
-    value_type value;
-}; // struct named_object_construction_policy<posix>
+    create_new                      = O_CREAT | O_EXCL ,
+    create_new_or_truncate_existing = O_CREAT | O_TRUNC,
+    open_existing                   = 0                ,
+    open_or_create                  = O_CREAT          ,
+    open_and_truncate_existing      = O_TRUNC
+}; // struct named_object_construction_policy
 
 namespace detail
 {
@@ -92,8 +86,7 @@ namespace detail
 #endif
 } // namespace detail
 
-template <>
-struct access_privileges<posix>
+struct access_privileges
 {
 private:
     static std::uint8_t constexpr syssh  =  0;
@@ -114,7 +107,7 @@ private:
     using sys_flags = detail::rwx_flags;
 
 public:
-    enum flags : std::uint32_t
+    enum value_type : std::uint32_t
     {
         /// \note Combine file and mapping flags/bits in order to be able to use
         /// the same flags for all objects (i.e. like on POSIX systems).
@@ -127,7 +120,6 @@ public:
         readwrite = sys_flags::readwrite << syssh | O_RDWR    << procsh | ( PROT_READ | PROT_WRITE             ) << mapsh,
         all       = sys_flags::all       << syssh | O_RDWR    << procsh | ( PROT_READ | PROT_WRITE | PROT_EXEC ) << mapsh
     };
-    using value_type = flags;
 
     constexpr static bool unrestricted( flags_t const privileges ) { return ( ( privileges & all ) == all ); }
 
@@ -186,6 +178,8 @@ public:
             return mask;
         }
 
+        operator flags_t() const noexcept { return flags; }
+
         static system const process_default;
         static system const unrestricted   ;
         static system const nix_default    ;
@@ -200,16 +194,18 @@ public:
     object        object_access;
     child_process child_access ;
     system        system_access;
-}; // struct access_privileges<posix>
+}; // struct access_privileges
 
 
-constexpr access_privileges<posix>::system const access_privileges<posix>::system::process_default = { static_cast<flags_t>( sys_flags::all ) };
-constexpr access_privileges<posix>::system const access_privileges<posix>::system::unrestricted    = { static_cast<flags_t>( privilege_scopes::user ) | static_cast<flags_t>( privilege_scopes::group ) | static_cast<flags_t>( privilege_scopes::world ) };
-constexpr access_privileges<posix>::system const access_privileges<posix>::system::nix_default     = { S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH };
-constexpr access_privileges<posix>::system const access_privileges<posix>::system::_644            = { nix_default };
+constexpr access_privileges::system const access_privileges::system::process_default{ static_cast<flags_t>( sys_flags::all ) };
+constexpr access_privileges::system const access_privileges::system::unrestricted   { static_cast<flags_t>( privilege_scopes::user ) | static_cast<flags_t>( privilege_scopes::group ) | static_cast<flags_t>( privilege_scopes::world ) };
+constexpr access_privileges::system const access_privileges::system::nix_default    { S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH };
+constexpr access_privileges::system const access_privileges::system::_644           ( nix_default );
 
 //------------------------------------------------------------------------------
 } // namespace flags
+//------------------------------------------------------------------------------
+} // namespace posix
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------

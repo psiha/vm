@@ -18,27 +18,44 @@
 #define impl_selection_hpp__05AF14B5_B23B_4CB8_A253_FD2D07B37ECF
 #pragma once
 //------------------------------------------------------------------------------
-#include "boost/config.hpp"
-#include "boost/preprocessor/cat.hpp"
-#include "boost/preprocessor/stringize.hpp"
+#include <boost/config.hpp>
+#include <boost/preprocessor/cat.hpp>
+#include <boost/preprocessor/stringize.hpp>
 
 // Implementation note:
 //   "Anti-pattern" forward includes to reduce the verbosity of files that
 // include this header.
 //                                            (26.08.2011.) (Domagoj Saric)
-#include "boost/preprocessor/facilities/empty.hpp"
-#include "boost/preprocessor/facilities/identity.hpp"
+#include <boost/preprocessor/facilities/empty.hpp>
+#include <boost/preprocessor/facilities/identity.hpp>
 //------------------------------------------------------------------------------
-#if defined( _WIN32 )
-    #define BOOST_MMAP_IMPL() win32
-#elif defined( _WIN32_WINNT )
-    #define BOOST_MMAP_IMPL() nt
-#elif defined( BOOST_HAS_UNISTD_H )
-    #define BOOST_MMAP_IMPL() posix
-#endif
+#if !defined( BOOST_MMAP_IMPL )
+    #if defined( _WIN32 )
+        #define BOOST_MMAP_IMPL() win32
+    #elif defined( _WIN32_WINNT )
+        #define BOOST_MMAP_IMPL() nt
+    #elif defined( BOOST_HAS_UNISTD_H )
+        #define BOOST_MMAP_IMPL() posix
+    #else
+        #define BOOST_MMAP_IMPL() xsi
+    #endif
+#endif // !defined( BOOST_MMAP_IMPL )
 
 #define BOOST_MMAP_IMPL_INCLUDE( prefix_path, include ) \
     BOOST_PP_STRINGIZE( prefix_path()BOOST_MMAP_IMPL()include() )
+//------------------------------------------------------------------------------
+namespace boost
+{
+//------------------------------------------------------------------------------
+namespace mmap
+{
+//------------------------------------------------------------------------------
 
+inline namespace BOOST_MMAP_IMPL() {}
+
+//------------------------------------------------------------------------------
+} // namespace mmap
+//------------------------------------------------------------------------------
+} // namespace boost
 //------------------------------------------------------------------------------
 #endif // impl_selection_hpp

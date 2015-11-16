@@ -18,8 +18,8 @@
 #define mapping_hpp__79CF82B8_F71B_4C75_BE77_98F4FB8A7FFA
 #pragma once
 //------------------------------------------------------------------------------
+#include "boost/mmap/detail/impl_selection.hpp"
 #include "boost/mmap/detail/posix.hpp"
-#include "boost/mmap/implementations.hpp"
 #include "boost/mmap/flags/flags.hpp"
 
 #include "sys/mman.h"
@@ -30,17 +30,16 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+inline namespace posix
+{
+//------------------------------------------------------------------------------
 namespace flags
 {
 //------------------------------------------------------------------------------
 
-template <typename Impl> struct mapping;
-template <typename Impl> struct viewing;
-
 using flags_t = int;
 
-template <>
-struct viewing<posix>
+struct viewing
 {
     enum struct share_mode
     {
@@ -48,21 +47,34 @@ struct viewing<posix>
         hidden = MAP_PRIVATE
     };
 
-    static viewing<posix> BOOST_CC_REG create
+    static viewing BOOST_CC_REG create
     (
-        access_privileges<posix>::object,
+        access_privileges::object,
         share_mode
     ) noexcept;
 
+    bool operator< ( viewing const other ) const noexcept
+    {
+        return
+            ( ( other.protection & access_privileges::write   ) && !( this->protection & access_privileges::write   ) ) ||
+            ( ( other.protection & access_privileges::execute ) && !( this->protection & access_privileges::execute ) );
+    }
+
+    bool operator<=( viewing const other ) const noexcept
+    {
+        return ( this->protection == other.protection ) || ( *this < other );
+    }
+
     flags_t protection; // PROT_*
     flags_t flags     ; // MAP_*
-}; // struct viewing<posix>
+}; // struct viewing
 
-template <>
-struct mapping<posix> : viewing<posix> {};
+using mapping = viewing;
 
 //------------------------------------------------------------------------------
 } // namespace flags
+//------------------------------------------------------------------------------
+} // namespace posix
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------

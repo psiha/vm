@@ -21,8 +21,6 @@
 #include "handle_ref.hpp"
 
 #include "boost/mmap/detail/impl_selection.hpp"
-
-#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /handle.hpp ) )
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -30,10 +28,6 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
-
-template <typename Impl>
-struct handle_traits;
-
 
 ////////////////////////////////////////////////////////////////////////////////
 ///
@@ -46,20 +40,20 @@ struct handle_traits;
 ///                                           (30.05.2015.) (Domagoj Saric)
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename Impl>
-class handle
+template <typename ImplTraits>
+class handle_impl
 {
 public:
-    using traits          = handle_traits<Impl>;
+    using traits          = ImplTraits;
     using native_handle_t = typename traits::native_t;
-    using reference       = handle_ref<handle<Impl>>;
+    using reference       = handle_ref<handle_impl>;
 
-             handle(                                        ) noexcept : handle_( traits::invalid_value ) {                                        }
-    explicit handle( native_handle_t    const native_handle ) noexcept : handle_( native_handle         ) {                                        }
-             handle( handle          &&       other         ) noexcept : handle_( other.handle_         ) { other.handle_ = traits::invalid_value; }
-            ~handle(                                        ) noexcept                                    { traits::close( handle_ );              }
+             handle_impl(                                        ) noexcept : handle_( traits::invalid_value ) {                                        }
+    explicit handle_impl( native_handle_t    const native_handle ) noexcept : handle_( native_handle         ) {                                        }
+             handle_impl( handle_impl          &&       other         ) noexcept : handle_( other.handle_         ) { other.handle_ = traits::invalid_value; }
+            ~handle_impl(                                        ) noexcept                                    { traits::close( handle_ );              }
 
-    handle & operator=( handle && BOOST_RESTRICTED_REF other ) noexcept
+    handle_impl & operator=( handle_impl && BOOST_RESTRICTED_REF other ) noexcept
     {
         close();
         this->handle_ = other.handle_;
@@ -84,11 +78,12 @@ public:
 
 private:
     native_handle_t handle_;
-}; // class handle
+}; // class handle_impl
 
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------
 } // namespace boost
 //------------------------------------------------------------------------------
+#include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /handle.hpp ) )
 #endif // handle_hpp

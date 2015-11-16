@@ -18,10 +18,10 @@
 #define mapping_hpp__4EF4F246_E244_40F1_A1C0_6D91EF1DA2EC
 #pragma once
 //------------------------------------------------------------------------------
-#include "boost/mmap/implementations.hpp"
+#include "boost/mmap/detail/impl_selection.hpp"
 #include "boost/mmap/flags/win32/flags.hpp"
 
-#include "boost/detail/winapi/security.hpp"
+#include <boost/detail/winapi/security.hpp>
 
 #include <cstdint>
 //------------------------------------------------------------------------------
@@ -31,16 +31,19 @@ namespace boost
 namespace mmap
 {
 //------------------------------------------------------------------------------
+namespace win32
+{
+//------------------------------------------------------------------------------
 namespace flags
 {
 //------------------------------------------------------------------------------
 
 using flags_t = unsigned long; // DWORD
 
-template <>
-struct viewing<win32>
+
+struct viewing
 {
-    using access_rights = access_privileges<win32>;
+    using access_rights = access_privileges;    
 
     enum struct share_mode
     {
@@ -51,56 +54,58 @@ struct viewing<win32>
     bool is_cow() const;
     bool is_hidden() const { return is_cow(); }
 
-    static viewing<win32> BOOST_CC_REG create
+    static viewing BOOST_CC_REG create
     (
-        access_privileges<win32>::object,
+        access_privileges::object,
         share_mode
     ) noexcept;
 
-    bool operator< ( viewing<win32> const other ) const noexcept
+    bool operator< ( viewing const other ) const noexcept
     {
         return
-            ( ( other.map_view_flags & access_rights::write   ) && !( this->map_view_flags & access_rights::write   ) ) ||
-            ( ( other.map_view_flags & access_rights::execute ) && !( this->map_view_flags & access_rights::execute ) );
+            ( ( other.map_view_flags & access_privileges::write   ) && !( this->map_view_flags & access_privileges::write   ) ) ||
+            ( ( other.map_view_flags & access_privileges::execute ) && !( this->map_view_flags & access_privileges::execute ) );
     }
 
-    bool operator<=( viewing<win32> const other ) const noexcept
+    bool operator<=( viewing const other ) const noexcept
     {
         return ( this->map_view_flags == other.map_view_flags ) || ( *this < other );
     }
 
     flags_t map_view_flags;
-}; // struct viewing<win32>
+}; // struct viewing
 
 namespace detail
 {
-    flags_t BOOST_CC_REG object_access_to_page_access( access_privileges<win32>::object, viewing<win32>::share_mode );
+    flags_t BOOST_CC_REG object_access_to_page_access( access_privileges::object, viewing::share_mode );
 } // namespace detail
 
-template <>
-struct mapping<win32>
-{
-    using access_rights = viewing<win32>::access_rights;
-    using share_mode    = viewing<win32>::share_mode   ;
 
-    static mapping<win32> BOOST_CC_REG create
+struct mapping
+{
+    using access_rights = viewing::access_rights;
+    using share_mode    = viewing::share_mode   ;
+
+    static mapping BOOST_CC_REG create
     (
-        access_privileges<win32>,
-        named_object_construction_policy<win32>::value_type,
+        access_privileges,
+        named_object_construction_policy,
         share_mode
     ) noexcept;
 
-  //access_privileges<win32>                ap; //desired_access      ; // flProtect object child_process system
-    flags_t                                 create_mapping_flags;
-    access_privileges<win32>::object        object_access       ; // ...mrmlj...for file-based named_memory<win32>
-    access_privileges<win32>::child_process child_access        ;
-    access_privileges<win32>::system        system_access       ;
-    named_object_construction_policy<win32> creation_disposition;
-    viewing<win32>                          map_view_flags      ;
-}; // struct mapping<win32>
+  //access_privileges                ap; //desired_access      ; // flProtect object child_process system
+    flags_t                          create_mapping_flags;
+    access_privileges::object        object_access       ; // ...mrmlj...for file-based named_memory
+    access_privileges::child_process child_access        ;
+    access_privileges::system        system_access       ;
+    named_object_construction_policy creation_disposition;
+    viewing                          map_view_flags      ;
+}; // struct mapping
 
 //------------------------------------------------------------------------------
 } // namespace flags
+//------------------------------------------------------------------------------
+} // namespace win32
 //------------------------------------------------------------------------------
 } // namespace mmap
 //------------------------------------------------------------------------------

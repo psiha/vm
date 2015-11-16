@@ -25,13 +25,16 @@
 #include "boost/mmap/detail/nt.hpp"
 #include "boost/mmap/detail/win32.hpp"
 
-#include "boost/assert.hpp"
-#include "boost/err/win32.hpp"
+#include <boost/assert.hpp>
+#include <boost/err/win32.hpp>
 //------------------------------------------------------------------------------
 namespace boost
 {
 //------------------------------------------------------------------------------
 namespace mmap
+{
+//------------------------------------------------------------------------------
+namespace win32
 {
 //------------------------------------------------------------------------------
 
@@ -47,7 +50,7 @@ namespace detail
 
         template <typename char_t>
         BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_FORCEINLINE
-        static HANDLE BOOST_CC_REG do_create( char_t const * __restrict const file_name, flags::opening<win32> const & __restrict flags ) noexcept
+        static HANDLE BOOST_CC_REG do_create( char_t const * __restrict const file_name, flags::opening const & __restrict flags ) noexcept
         {
             ::SECURITY_ATTRIBUTES sa;
             auto const p_security_attributes( flags::detail::make_sa_ptr( sa, flags.ap.system_access.p_sd, reinterpret_cast<bool const &>/*static_cast<bool>*/( flags.ap.child_access ) ) );
@@ -58,7 +61,7 @@ namespace detail
                     file_name, flags.ap.object_access.privileges, default_unix_shared_semantics, const_cast<LPSECURITY_ATTRIBUTES>( p_security_attributes ), static_cast<DWORD>( flags.creation_disposition.value ), flags.flags_and_attributes, nullptr
                 )
             );
-            BOOST_ASSERT( ( handle == handle_traits<win32>::invalid_value ) || ( ::GetLastError() == NO_ERROR ) || ( ::GetLastError() == ERROR_ALREADY_EXISTS ) );
+            BOOST_ASSERT( ( handle == handle_traits::invalid_value ) || ( ::GetLastError() == NO_ERROR ) || ( ::GetLastError() == ERROR_ALREADY_EXISTS ) );
 
             return handle;
         }
@@ -66,17 +69,17 @@ namespace detail
 } // namespace detail
 
 BOOST_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
-file_handle<win32> BOOST_CC_REG create_file( char    const * const file_name, flags::opening<win32> const flags ) noexcept { return file_handle<win32>{ detail::create_file::do_create( file_name, flags ) }; }
+file_handle BOOST_CC_REG create_file( char    const * const file_name, flags::opening const flags ) noexcept { return file_handle{ detail::create_file::do_create( file_name, flags ) }; }
 BOOST_IMPL_INLINE
-file_handle<win32> BOOST_CC_REG create_file( wchar_t const * const file_name, flags::opening<win32> const flags ) noexcept { return file_handle<win32>{ detail::create_file::do_create( file_name, flags ) }; }
+file_handle BOOST_CC_REG create_file( wchar_t const * const file_name, flags::opening const flags ) noexcept { return file_handle{ detail::create_file::do_create( file_name, flags ) }; }
 
 
-BOOST_IMPL_INLINE bool BOOST_CC_REG delete_file( char    const * const file_name, win32 ) noexcept { return ::DeleteFileA( file_name ) != false; }
-BOOST_IMPL_INLINE bool BOOST_CC_REG delete_file( wchar_t const * const file_name, win32 ) noexcept { return ::DeleteFileW( file_name ) != false; }
+BOOST_IMPL_INLINE bool BOOST_CC_REG delete_file( char    const * const file_name ) noexcept { return ::DeleteFileA( file_name ) != false; }
+BOOST_IMPL_INLINE bool BOOST_CC_REG delete_file( wchar_t const * const file_name ) noexcept { return ::DeleteFileW( file_name ) != false; }
 
 
 BOOST_IMPL_INLINE
-bool BOOST_CC_REG set_size( file_handle<win32>::reference const file_handle, std::size_t const desired_size ) noexcept
+bool BOOST_CC_REG set_size( file_handle::reference const file_handle, std::size_t const desired_size ) noexcept
 {
     // It is 'OK' to send null/invalid handles to Windows functions (they will
     // simply fail), this simplifies error handling (it is enough to go through
@@ -85,11 +88,11 @@ bool BOOST_CC_REG set_size( file_handle<win32>::reference const file_handle, std
     BOOST_VERIFY
     (
         ::SetFilePointerEx( file_handle, reinterpret_cast<LARGE_INTEGER const &>( desired_size ), nullptr, FILE_BEGIN ) ||
-        ( file_handle == handle_traits<win32>::invalid_value )
+        ( file_handle == handle_traits::invalid_value )
     );
 #else // _WIN32/64
     DWORD const new_size( ::SetFilePointer( file_handle, desired_size, nullptr, FILE_BEGIN ) );
-    BOOST_ASSERT( ( new_size == desired_size ) || ( file_handle == handle_traits<win32>::invalid_value ) );
+    BOOST_ASSERT( ( new_size == desired_size ) || ( file_handle == handle_traits::invalid_value ) );
     ignore_unused_variable_warning( new_size );
 #endif // _WIN32/64
 
@@ -100,10 +103,10 @@ bool BOOST_CC_REG set_size( file_handle<win32>::reference const file_handle, std
     BOOST_VERIFY
     (
         ::SetFilePointerEx( file_handle, offset, nullptr, FILE_BEGIN ) ||
-        ( file_handle == handle_traits<win32>::invalid_value )
+        ( file_handle == handle_traits::invalid_value )
     );
 #else // _WIN32/64
-    BOOST_VERIFY( ( ::SetFilePointer( file_handle, 0, nullptr, FILE_BEGIN ) == 0 ) || ( file_handle == handle_traits<win32>::invalid_value ) );
+    BOOST_VERIFY( ( ::SetFilePointer( file_handle, 0, nullptr, FILE_BEGIN ) == 0 ) || ( file_handle == handle_traits::invalid_value ) );
 #endif // _WIN32/64
 
     return success != false;
@@ -111,15 +114,15 @@ bool BOOST_CC_REG set_size( file_handle<win32>::reference const file_handle, std
 
 
 BOOST_IMPL_INLINE
-std::size_t BOOST_CC_REG get_size( file_handle<win32>::reference const file_handle ) noexcept
+std::size_t BOOST_CC_REG get_size( file_handle::reference const file_handle ) noexcept
 {
 #ifdef _WIN64
     LARGE_INTEGER file_size;
-    BOOST_VERIFY( ::GetFileSizeEx( file_handle, &file_size ) || ( file_handle == handle_traits<win32>::invalid_value ) );
+    BOOST_VERIFY( ::GetFileSizeEx( file_handle, &file_size ) || ( file_handle == handle_traits::invalid_value ) );
     return file_size.QuadPart;
 #else // _WIN32/64
     DWORD const file_size( ::GetFileSize( file_handle, nullptr ) );
-    BOOST_ASSERT( ( file_size != INVALID_FILE_SIZE ) || ( file_handle == handle_traits<win32>::invalid_value ) || ( ::GetLastError() == NO_ERROR ) );
+    BOOST_ASSERT( ( file_size != INVALID_FILE_SIZE ) || ( file_handle == handle_traits::invalid_value ) || ( ::GetLastError() == NO_ERROR ) );
     return file_size;
 #endif // _WIN32/64
 }
@@ -130,8 +133,9 @@ namespace detail
     inline
     std::size_t get_section_size( HANDLE const mapping_handle )
     {
-        detail::SECTION_BASIC_INFORMATION info;
-        auto const result( detail::NtQuerySection( mapping_handle, detail::SECTION_INFORMATION_CLASS::SectionBasicInformation, &info, sizeof( info ), nullptr ) );
+        using namespace nt::detail;
+        SECTION_BASIC_INFORMATION info;
+        auto const result( NtQuerySection( mapping_handle, SECTION_INFORMATION_CLASS::SectionBasicInformation, &info, sizeof( info ), nullptr ) );
         BOOST_ASSERT( NT_SUCCESS( result ) );
         return static_cast<std::size_t>( info.SectionSize.QuadPart );
     }
@@ -146,23 +150,23 @@ namespace detail
         template <typename ... T> static BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_FORCEINLINE HANDLE call_open  ( wchar_t const * __restrict const file_name, T const ... args ) { return ::OpenFileMappingW  ( args..., file_name ); }
 
         static BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )/* BOOST_FORCEINLINE*/
-        HANDLE map_file( handle<win32>::reference const file, flags::flags_t const flags, std::uint64_t const size )
+        HANDLE map_file( handle::reference const file, flags::flags_t const flags, std::uint64_t const size )
         {
             auto const & sz( reinterpret_cast<ULARGE_INTEGER const &>( size ) );
             return call_create( static_cast<wchar_t const *>( nullptr ), file, nullptr, flags, sz.HighPart, sz.LowPart );
         }
         static
-        HANDLE map_file( handle<win32>::reference const file, flags::flags_t const flags ) { return map_file( file, flags, 0 ); }
+        HANDLE map_file( handle::reference const file, flags::flags_t const flags ) { return map_file( file, flags, 0 ); }
 
         static void clear( HANDLE & mapping_handle )
         {
-            handle<win32>::traits::close( mapping_handle );
+            handle::traits::close( mapping_handle );
             mapping_handle = nullptr;
         }
 
         template <typename char_t>
         BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_FORCEINLINE
-        static mapping<win32> BOOST_CC_REG do_map( file_handle<win32>::reference const file, flags::mapping<win32> const flags, std::uint64_t const maximum_size, char_t const * __restrict const name ) noexcept
+        static mapping BOOST_CC_REG do_map( file_handle::reference const file, flags::mapping const flags, std::uint64_t const maximum_size, char_t const * __restrict const name ) noexcept
         {
             ::SECURITY_ATTRIBUTES sa;
             auto const p_security_attributes( flags::detail::make_sa_ptr( sa, flags.system_access.p_sd, reinterpret_cast<bool const &>/*static_cast<bool>*/( flags.child_access ) ) );
@@ -173,14 +177,14 @@ namespace detail
             );
             BOOST_ASSERT_MSG
             (
-                ( file != handle_traits<win32>::invalid_value ) || maximum_size,
+                ( file != handle_traits::invalid_value ) || maximum_size,
                 "CreateFileMapping accepts INVALID_HANDLE_VALUE as valid input but only "
                 "if the size parameter is not zero."
             );
             auto const creation_disposition( flags.creation_disposition.value );
             auto const error               ( err::last_win32_error::get()     );
             auto const preexisting         ( error == ERROR_ALREADY_EXISTS    );
-            using disposition = flags::named_object_construction_policy<win32>;
+            using disposition = flags::named_object_construction_policy;
             switch ( creation_disposition )
             {
                 case disposition::open_existing                  : if ( !preexisting ) clear( mapping_handle );
@@ -204,14 +208,14 @@ namespace detail
 } // namespace detail
 
 BOOST_IMPL_INLINE
-mapping<win32> BOOST_CC_REG create_mapping( file_handle<win32>::reference const file, flags::mapping<win32> const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
+mapping BOOST_CC_REG create_mapping( file_handle::reference const file, flags::mapping const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
 {
     return detail::create_mapping_impl::do_map( file, flags, maximum_size, name );
 }
 
 #if 0
 BOOST_IMPL_INLINE
-mapping<win32> BOOST_CC_REG create_mapping( handle<win32>::reference const file, flags::mapping<win32> const flags ) noexcept
+mapping BOOST_CC_REG create_mapping( handle::reference const file, flags::mapping const flags ) noexcept
 {
     auto const mapping_handle
     (
@@ -222,22 +226,24 @@ mapping<win32> BOOST_CC_REG create_mapping( handle<win32>::reference const file,
 #endif
 
 BOOST_IMPL_INLINE
-mapping<win32> BOOST_CC_REG create_mapping
+mapping BOOST_CC_REG create_mapping
 (
-    handle                  <win32>::reference     const file,
-    flags::access_privileges<win32>::object        const object_access,
-    flags::access_privileges<win32>::child_process const child_access,
-    flags::mapping          <win32>::share_mode    const share_mode,
-    std::size_t                                    const size
+    handle                  ::reference     const file,
+    flags::access_privileges::object        const object_access,
+    flags::access_privileges::child_process const child_access,
+    flags::mapping          ::share_mode    const share_mode,
+    std  ::size_t                           const size
 ) noexcept
 {
     auto const mapping_handle
     (
         detail::create_mapping_impl::map_file( file, flags::detail::object_access_to_page_access( object_access, share_mode ), size )
     );
-    return { mapping_handle, flags::viewing<win32>::create( object_access, share_mode ) };
+    return { mapping_handle, flags::viewing::create( object_access, share_mode ) };
 }
 
+//------------------------------------------------------------------------------
+} // win32
 //------------------------------------------------------------------------------
 } // mmap
 //------------------------------------------------------------------------------
