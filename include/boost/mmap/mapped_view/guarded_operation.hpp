@@ -3,7 +3,7 @@
 /// \file guarded_operation.hpp
 /// ---------------------------
 ///
-/// Copyright (c) Domagoj Saric 2015.
+/// Copyright (c) Domagoj Saric 2015 - 2016.
 ///
 /// Use, modification and distribution is subject to
 /// the Boost Software License, Version 1.0.
@@ -27,6 +27,8 @@
 #else
 #include "boost/assert.hpp"
 #include "boost/config.hpp"
+
+#include "boost/err/detail/thread_singleton.hpp"
 
 #include <csetjmp>
 //#include <sys/signal.h> // requires Android NDK API 21
@@ -60,6 +62,17 @@ namespace mmap
 ///
 ////////////////////////////////////////////////////////////////////////////////
 
+#ifndef _WIN32
+namespace detail
+{
+    struct bailout_context
+    {
+        ::jmp_buf    jump_buffer;
+        void const * exception_location;
+    }; // struct bailout_context
+} // namespace detail
+#endif // !_WIN32
+
 template <typename Element, class Operation, class ErrorHandler>
 typename std::result_of<Operation( basic_memory_range<Element> )>::type
 guarded_operation
@@ -85,8 +98,7 @@ guarded_operation
         return error_handler( exception_location );
     }
 #else
-    static BOOST_THREAD_LOCAL_POD ::jmp_buf bailout_context;
-    static BOOST_THREAD_LOCAL_POD void const * exception_location;
+    using bailout_context = err::detail::thread_singleton<detail::bailout_context>;
 
     int const expected_signal_type( SIGBUS /*SIGSEGV*/ );
     struct ::sigaction /*const*/ action =
@@ -101,8 +113,8 @@ guarded_operation
         {
             // http://stackoverflow.com/questions/1715413/longjmp-from-signal-handler
             BOOST_ASSERT( signal_code == expected_signal_type ); (void)signal_code;
-            exception_location = p_info->si_addr;
-            ::siglongjmp( bailout_context, true );
+            bailout_context::instance().exception_location = p_info->si_addr;
+            ::siglongjmp( bailout_context::instance().jump_buffer, true );
         };
     action.sa_flags = SA_SIGINFO;
 
@@ -112,9 +124,9 @@ guarded_operation
         struct ::sigaction handler;
     } previous_handler;
     BOOST_VERIFY( ::sigaction( expected_signal_type, &action, &previous_handler.handler ) == 0 );
-    if ( BOOST_UNLIKELY( ::/*sig*/setjmp( bailout_context ) ) )
+    if ( BOOST_UNLIKELY( ::/*sig*/setjmp( bailout_context::instance().jump_buffer ) ) )
     {
-        return error_handler( exception_location );
+        return error_handler( bailout_context::instance().exception_location );
     }
     return operation( view );
 #endif // OS
