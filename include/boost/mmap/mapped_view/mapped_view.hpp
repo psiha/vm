@@ -153,7 +153,6 @@ public: // Factory methods.
         return map( source_mapping, source_mapping.view_mapping_flags, offset, desired_size );
     }
 
-
     //static memory_range_t BOOST_CC_REG map( T ... args ) noexcept { return make_typed_view( mapper::map( args ) ); }
     
     //static void BOOST_CC_REG unmap( memory_range_t const & view ) noexcept { mapper::unmap( make_basic_view( view ) ); }
