@@ -63,14 +63,53 @@ namespace mmap
 ////////////////////////////////////////////////////////////////////////////////
 
 #ifndef _WIN32
-namespace detail
+namespace details
 {
     struct bailout_context
     {
         ::jmp_buf    jump_buffer;
         void const * exception_location;
     }; // struct bailout_context
-} // namespace detail
+
+    using local_bailout_context = err::detail::thread_singleton<bailout_context>;
+
+    struct ::sigaction const handler
+    (([](){
+        struct ::sigaction /*const*/ action =
+        {
+            // not yet supported by GCC in C++ :/
+            //.sa_sigaction = ...
+            //.sa_flags     = SA_SIGINFO
+            {0}
+        };
+        action.sa_sigaction =
+            []( int const signal_code, siginfo_t * __restrict const p_info, void * /*context*/ )
+            {
+                // "Use of a mapped region can result in these signals:
+                // SIGSEGV, SIGBUS.
+                // http://man7.org/linux/man-pages/man2/mmap.2.html
+                // http://stackoverflow.com/questions/1715413/longjmp-from-signal-handler
+                BOOST_ASSERT( signal_code == SIGSEGV || signal_code == SIGBUS );
+                auto & context( local_bailout_context::instance() );
+                context.exception_location = p_info->si_addr;
+                ::siglongjmp( context.jump_buffer, true );
+            };
+        action.sa_flags = SA_SIGINFO;
+        return action;
+    })());
+
+    class scoped_signal_handler
+    {
+    public:
+         scoped_signal_handler( int const signal_type ) noexcept : signal_type_( signal_type ) { BOOST_VERIFY( ::sigaction( signal_type_, &handler         , &original_handler_ ) == 0 ); }
+        ~scoped_signal_handler(                       ) noexcept                               { BOOST_VERIFY( ::sigaction( signal_type_, &original_handler_, nullptr           ) == 0 ); }
+
+    private:
+        scoped_signal_handler( scoped_signal_handler const & ) = delete;
+        int const signal_type_;
+        struct ::sigaction original_handler_;
+    };
+} // namespace details
 #endif // !_WIN32
 
 template <typename Element, class Operation, class ErrorHandler>
@@ -98,36 +137,11 @@ guarded_operation
         return error_handler( exception_location );
     }
 #else
-    using bailout_context = err::detail::thread_singleton<detail::bailout_context>;
-
-    int const expected_signal_type( SIGBUS /*SIGSEGV*/ );
-    struct ::sigaction /*const*/ action =
-    {
-        // not yet supported by GCC in C++ :/
-        //.sa_sigaction = ...
-        //.sa_flags     = SA_SIGINFO
-        {0}
-    };
-    action.sa_sigaction =
-        []( int const signal_code, siginfo_t * __restrict const p_info, void * /*context*/ )
-        {
-            // http://stackoverflow.com/questions/1715413/longjmp-from-signal-handler
-            BOOST_ASSERT( signal_code == expected_signal_type ); (void)signal_code;
-            bailout_context::instance().exception_location = p_info->si_addr;
-            ::siglongjmp( bailout_context::instance().jump_buffer, true );
-        };
-    action.sa_flags = SA_SIGINFO;
-
-    struct scope_exit
-    {
-        ~scope_exit() { BOOST_VERIFY( ::sigaction( expected_signal_type, &handler, nullptr ) == 0 ); }
-        struct ::sigaction handler;
-    } previous_handler;
-    BOOST_VERIFY( ::sigaction( expected_signal_type, &action, &previous_handler.handler ) == 0 );
-    if ( BOOST_UNLIKELY( ::/*sig*/setjmp( bailout_context::instance().jump_buffer ) ) )
-    {
-        return error_handler( bailout_context::instance().exception_location );
-    }
+    details::scoped_signal_handler const handler0( SIGSEGV );
+    details::scoped_signal_handler const handler1( SIGBUS  );
+    auto & context( details::local_bailout_context::instance() );
+    if ( BOOST_UNLIKELY( ::sigsetjmp( context.jump_buffer, 0 ) ) )
+        return error_handler( context.exception_location );
     return operation( view );
 #endif // OS
 }
