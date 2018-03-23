@@ -230,6 +230,7 @@ mapping BOOST_CC_REG create_mapping
 (
     handle                  ::reference     const file,
     flags::access_privileges::object        const object_access,
+    [[ maybe_unused ]]
     flags::access_privileges::child_process const child_access,
     flags::mapping          ::share_mode    const share_mode,
     std  ::size_t                           const size

@@ -39,6 +39,7 @@ namespace win32
 template <typename> struct is_resizable;
 template <        > struct is_resizable<file_handle> : std::true_type {};
 
+BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
 file_handle BOOST_CC_REG create_file( char    const * file_name, flags::opening ) noexcept;
 file_handle BOOST_CC_REG create_file( wchar_t const * file_name, flags::opening ) noexcept;
 bool        BOOST_CC_REG delete_file( char    const * file_name                 ) noexcept;
