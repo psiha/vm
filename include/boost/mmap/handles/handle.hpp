@@ -50,7 +50,7 @@ public:
 
              handle_impl(                                        ) noexcept : handle_( traits::invalid_value ) {                                        }
     explicit handle_impl( native_handle_t    const native_handle ) noexcept : handle_( native_handle         ) {                                        }
-             handle_impl( handle_impl          &&       other         ) noexcept : handle_( other.handle_         ) { other.handle_ = traits::invalid_value; }
+             handle_impl( handle_impl     &&       other         ) noexcept : handle_( other.handle_         ) { other.handle_ = traits::invalid_value; }
             ~handle_impl(                                        ) noexcept                                    { traits::close( handle_ );              }
 
     handle_impl & operator=( handle_impl && BOOST_RESTRICTED_REF other ) noexcept
