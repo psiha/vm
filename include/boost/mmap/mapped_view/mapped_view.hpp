@@ -177,7 +177,10 @@ public: // Factory methods.
             flags <= source_mapping.view_mapping_flags,
             "Requested mapped view access level is more lax than that of the source mapping."
         );
-        return detail0::make_typed_view<Element>( mapper::map( source_mapping, flags, offset, desired_size ) );
+        auto const mapped_memory_range( mapper::map( source_mapping, flags, offset, desired_size ) );
+        if ( BOOST_UNLIKELY( !mapped_memory_range ) )
+            return error_t{};
+        return detail0::make_typed_view<Element>( mapped_memory_range );
     }
 
 private:

@@ -69,19 +69,27 @@ namespace detail0
     fallible_result<mapped_view> BOOST_CC_REG
     map_file( default_file_handle::reference const file_handle, std::size_t /*const*/ desired_size )
     {
-        /// \note There is no need to call get/set_size() on the file_handle
-        /// as CreateFileMapping() automatically expands the file as necessary
+        if ( BOOST_UNLIKELY( file_handle == default_file_handle::traits::invalid_value ) )
+            return error{};
+        /// \note There is no need to call set_size() on the file_handle as
+        /// CreateFileMapping() automatically expands the file as necessary
         /// (but only if the file is opened with write access and the
         /// share_mode::hidden flag is not specified).
         /// https://msdn.microsoft.com/en-us/library/aa366542(v=vs.85).aspx
         ///                                   (30.05.2015.) (Domagoj Saric)
+        /// \note Even though Windows will map the entire file if 0 is passed
+        /// here, we still have to get the file's size in order to know
+        /// the size of the mapping/mapped view.
+        ///                                   (23.03.2018.) (Domagoj Saric)
         // memadv http://stackoverflow.com/questions/13126167/is-it-safe-to-ftruncate-a-shared-memory-object-after-it-has-ben-mmaped
-    #ifndef _WIN32
+    #ifdef _WIN32
+        if ( !desired_size )
+    #else
         if ( desired_size )
                            set_size( file_handle, desired_size );
         else
-            desired_size = get_size( file_handle               );
     #endif // _WIN32
+            desired_size = get_size( file_handle               );
 
         using ap    = flags::access_privileges;
         using flags = flags::mapping;
@@ -96,7 +104,7 @@ namespace detail0
                 desired_size
             ),
             0, // no offset
-            0/*desired_size*/
+            desired_size
         );
     }
 
@@ -105,6 +113,9 @@ namespace detail0
     fallible_result<read_only_mapped_view>
     map_read_only_file( default_file_handle::reference const file_handle ) noexcept
     {
+        if ( BOOST_UNLIKELY( file_handle == default_file_handle::traits::invalid_value ) )
+            return error{};
+
         using ap    = flags::access_privileges;
         using flags = flags::mapping;
         return read_only_mapped_view::map
@@ -118,11 +129,11 @@ namespace detail0
                 0
             ),
             0, // no offset
-        #ifdef _WIN32
-            0
-        #else
+            /// \note Even though Windows will map the entire file if 0 is
+            /// passed here, we still have to get the file's size in order to
+            /// know the size of the mapping/mapped view.
+            ///                               (23.03.2018.) (Domagoj Saric)
             get_size( file_handle )
-        #endif // OS
         );
     }
 } // namespace detail0
