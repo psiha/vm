@@ -3,7 +3,7 @@
 /// \file error.hpp
 /// ---------------
 ///
-/// Copyright (c) Domagoj Saric 2015.
+/// Copyright (c) Domagoj Saric 2015 - 2018.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -21,6 +21,8 @@
 #include "boost/mmap/detail/impl_selection.hpp"
 
 #include BOOST_MMAP_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /error.hpp ) )
+
+#include <boost/err/fallible_result.hpp>
 //------------------------------------------------------------------------------
 namespace boost
 {
