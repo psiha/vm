@@ -3,7 +3,7 @@
 /// \file flags/win32/mapping.hpp
 /// -----------------------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2015.
+/// Copyright (c) Domagoj Saric 2010 - 2018.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -21,7 +21,7 @@
 #include "boost/mmap/detail/impl_selection.hpp"
 #include "boost/mmap/flags/win32/flags.hpp"
 
-#include <boost/detail/winapi/security.hpp>
+#include <boost/winapi/security.hpp>
 
 #include <cstdint>
 //------------------------------------------------------------------------------

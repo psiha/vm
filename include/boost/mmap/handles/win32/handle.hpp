@@ -24,7 +24,7 @@
 #include <boost/mmap/detail/impl_selection.hpp>
 
 #include <boost/assert.hpp>
-#include <boost/detail/winapi/handles.hpp>
+#include <boost/winapi/handles.hpp>
 
 #ifdef BOOST_MSVC
     #include "../posix/handle.hpp"
@@ -45,16 +45,16 @@ namespace win32
 
 struct handle_traits
 {
-    using native_t = boost::detail::winapi::HANDLE_;
+    using native_t = boost::winapi::HANDLE_;
 
-    static native_t constexpr invalid_value = boost::detail::winapi::invalid_handle_value; //...mrmlj...or nullptr eg. for CreateFileMapping
+    inline static native_t const invalid_value = boost::winapi::invalid_handle_value; //...mrmlj...or nullptr eg. for CreateFileMapping
 
     static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_RESTRICTED_FUNCTION_L2, BOOST_EXCEPTIONLESS )
     void BOOST_CC_REG close( native_t const native_handle )
     {
         BOOST_VERIFY
         (
-            ( boost::detail::winapi::CloseHandle( native_handle ) != false ) ||
+            ( boost::winapi::CloseHandle( native_handle ) != false ) ||
             ( ( native_handle == nullptr ) || ( native_handle == invalid_value ) )
         );
     }

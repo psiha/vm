@@ -3,7 +3,7 @@
 /// \file win32/mem.hpp
 /// -------------------
 ///
-/// Copyright (c) Domagoj Saric 2015.
+/// Copyright (c) Domagoj Saric 2015 - 2018.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -28,7 +28,7 @@
 #include <boost/mmap/mappable_objects/shared_memory/policies.hpp>
 
 #include <boost/core/ignore_unused.hpp>
-#include <boost/detail/winapi/system.hpp>
+#include <boost/winapi/system.hpp>
 #include <boost/utility/string_ref.hpp>
 
 #include <cstddef>

@@ -22,7 +22,7 @@
 #include "boost/mmap/flags/win32/mapping.hpp"
 
 #include <boost/config.hpp>
-//#include <boost/detail/winapi/system.hpp> //...broken?
+//#include <boost/winapi/system.hpp> //...broken?
 #include <boost/mmap/detail/win32.hpp>
 
 #include <cstdint>
@@ -60,9 +60,9 @@ BOOST_OVERRIDABLE_SYMBOL std::uint16_t const page_size
 (
     ([]()
     {
-        //boost::detail::winapi::GetSystemInfo broken?
-        //boost::detail::winapi::SYSTEM_INFO_ info;
-        //boost::detail::winapi::GetNativeSystemInfo( &info );
+        //boost::winapi::GetSystemInfo broken?
+        //boost::winapi::SYSTEM_INFO_ info;
+        //boost::winapi::GetNativeSystemInfo( &info );
         ::SYSTEM_INFO info; ::GetSystemInfo( &info );
         BOOST_ASSUME( info.dwPageSize == 4096 );
         return static_cast<std::uint16_t>( info.dwPageSize );
