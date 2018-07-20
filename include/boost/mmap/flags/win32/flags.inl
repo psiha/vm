@@ -55,6 +55,9 @@ static_assert( access_privileges::all     == ( GENERIC_ALL     | FILE_MAP_ALL_AC
 
 namespace detail
 {
+#ifdef BOOST_MMAP_HEADER_ONLY
+    inline
+#endif // BOOST_MMAP_HEADER_ONLY
     BOOST_ATTRIBUTES( BOOST_DOES_NOT_RETURN, BOOST_RESTRICTED_FUNCTION_L3 )
     void BOOST_COLD throw_bad_alloc()
     {
@@ -74,7 +77,7 @@ namespace detail
     // https://www.osronline.com/article.cfm?article=56 Keeping Secrets - Windows NT Security (Part I)
     // http://blogs.technet.com/b/askds/archive/2009/06/01/null-and-empty-dacls.aspx
     // SECURITY_MAX_SID_SIZE
-    BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1, BOOST_RESTRICTED_FUNCTION_RETURN )
+    inline BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1, BOOST_RESTRICTED_FUNCTION_RETURN )
     dynamic_sd const * __restrict make_sd( EXPLICIT_ACCESSW const * __restrict const p_ea_entries, std::uint8_t const number_of_entries ) //KEY_READ
     {
         ACL * p_acl;
@@ -116,6 +119,7 @@ namespace detail
         return p_dsd;
     }
 
+    inline
     dynamic_sd const * __restrict make_sd( std::uint32_t const permissions, wchar_t const * __restrict const trustee )
     {
         EXPLICIT_ACCESSW ea;
@@ -128,6 +132,9 @@ namespace detail
         return make_sd( &ea, 1 );
     }
 
+#ifdef BOOST_MMAP_HEADER_ONLY
+    inline
+#endif // BOOST_MMAP_HEADER_ONLY
     BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L3, BOOST_RESTRICTED_FUNCTION_RETURN )
     dynamic_sd const * __restrict BOOST_CC_REG make_sd( scope_privileges const permissions )
     {
@@ -165,7 +172,7 @@ namespace detail
 
 namespace
 {
-    BOOST_CXX14_CONSTEXPR
+    inline BOOST_CXX14_CONSTEXPR
     SECURITY_DESCRIPTOR BOOST_CC_REG make_all_shall_pass()
     {
         SECURITY_DESCRIPTOR constexpr sd = { SECURITY_DESCRIPTOR_REVISION, 0, SE_DACL_PRESENT, nullptr, nullptr, nullptr, nullptr };

@@ -3,7 +3,7 @@
 /// \file win32/flags.hpp
 /// ---------------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2015.
+/// Copyright (c) Domagoj Saric 2010 - 2018.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -49,6 +49,7 @@ namespace detail
         return { sizeof( SECURITY_ATTRIBUTES ), const_cast<SECURITY_DESCRIPTOR *>( p_sd ), inheritable };
     }
 
+    inline
     SECURITY_ATTRIBUTES const * make_sa_ptr( SECURITY_ATTRIBUTES & __restrict sa, SECURITY_DESCRIPTOR const * __restrict const p_sd, bool const inheritable )
     {
         if ( BOOST_LIKELY( !inheritable ) && !p_sd )

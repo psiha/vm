@@ -49,7 +49,7 @@ namespace detail
 {
     BOOST_OVERRIDABLE_SYMBOL HMODULE const ntdll( ::GetModuleHandleW( L"ntdll.dll" ) );
     
-    BOOST_ATTRIBUTES( BOOST_COLD, BOOST_RESTRICTED_FUNCTION_L3, BOOST_RESTRICTED_FUNCTION_RETURN )
+    inline BOOST_ATTRIBUTES( BOOST_COLD, BOOST_RESTRICTED_FUNCTION_L3, BOOST_RESTRICTED_FUNCTION_RETURN )
     void * BOOST_CC_REG get_nt_proc( char const * const proc_name )
     {
         BOOST_ASSERT( ntdll );
