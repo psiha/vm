@@ -172,7 +172,10 @@ namespace detail
 
 namespace
 {
-    inline BOOST_CXX14_CONSTEXPR
+    inline
+#ifdef NDEBUG
+    BOOST_CXX14_CONSTEXPR
+#endif // NDEBUG
     SECURITY_DESCRIPTOR BOOST_CC_REG make_all_shall_pass()
     {
         SECURITY_DESCRIPTOR constexpr sd = { SECURITY_DESCRIPTOR_REVISION, 0, SE_DACL_PRESENT, nullptr, nullptr, nullptr, nullptr };
