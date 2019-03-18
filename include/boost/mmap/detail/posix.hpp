@@ -3,7 +3,7 @@
 /// \file posix.hpp
 /// ---------------
 ///
-/// Copyright (c) Domagoj Saric 2011.-2013.
+/// Copyright (c) Domagoj Saric 2011 - 2019.
 ///
 ///  Use, modification and distribution is subject to the Boost Software License, Version 1.0.
 ///  (See accompanying file LICENSE_1_0.txt or copy at
@@ -20,7 +20,7 @@
 #include <boost/config.hpp>
 
 #if defined( BOOST_HAS_UNISTD_H )
-    #include <boost/config/posix_features.hpp>
+    #include <boost/config/detail/posix_features.hpp>
 #elif defined( BOOST_MSVC )
     #pragma warning ( disable : 4996 ) // "The POSIX name for this item is deprecated. Instead, use the ISO C++ conformant name."
     #include <io.h>

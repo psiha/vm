@@ -3,7 +3,7 @@
 /// \file mapping.hpp
 /// -----------------
 ///
-/// Copyright (c) Domagoj Saric 2011 - 2015.
+/// Copyright (c) Domagoj Saric 2011 - 2019.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -21,7 +21,7 @@
 #include "boost/mmap/handles/posix/handle.hpp"
 #include "boost/mmap/flags/posix/mapping.hpp"
 
-#include <boost/config/suffix.hpp>
+#include <boost/config/detail/suffix.hpp>
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -68,7 +68,7 @@ BOOST_OVERRIDABLE_SYMBOL extern std::uint16_t const page_size
     })()
 );
 #endif // PAGE_SIZE
-BOOST_OVERRIDABLE_SYMBOL extern std::uint32_t const allocation_granularity( page_size );
+BOOST_OVERRIDABLE_SYMBOL std::uint32_t const allocation_granularity( page_size );
 
 //------------------------------------------------------------------------------
 } // namespace posix
