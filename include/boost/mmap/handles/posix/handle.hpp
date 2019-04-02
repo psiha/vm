@@ -3,7 +3,7 @@
 /// \file handle.hpp
 /// ----------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2015.
+/// Copyright (c) Domagoj Saric 2010 - 2019.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -51,7 +51,7 @@ struct handle_traits
 
     static native_t const invalid_value = -1;
 
-    static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_RESTRICTED_FUNCTION_L2, BOOST_EXCEPTIONLESS )
+    static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_RESTRICTED_FUNCTION_L1, BOOST_EXCEPTIONLESS )
     void BOOST_CC_REG close( native_t const native_handle )
     {
         BOOST_VERIFY
@@ -64,7 +64,7 @@ struct handle_traits
         );
     }
 
-    static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_RESTRICTED_FUNCTION_L2, BOOST_EXCEPTIONLESS )
+    static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_RESTRICTED_FUNCTION_L1, BOOST_EXCEPTIONLESS )
     native_t BOOST_CC_REG copy( native_t const native_handle ); //todo
 }; // handle_traits
 

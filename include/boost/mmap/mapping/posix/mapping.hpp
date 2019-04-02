@@ -57,7 +57,7 @@ struct mapping
 #ifdef PAGE_SIZE
 std::uint16_t const page_size( PAGE_SIZE );
 #else
-BOOST_OVERRIDABLE_SYMBOL extern std::uint16_t const page_size
+BOOST_OVERRIDABLE_SYMBOL std::uint16_t const page_size
 (
     ([]()
     {
