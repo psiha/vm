@@ -63,11 +63,11 @@ std::size_t BOOST_CC_REG get_size( file_handle::reference                       
 template <typename Handle>
 mapping BOOST_CC_REG create_mapping
 (
-    Handle                                         &&       file,
+    Handle                                  &&       file,
     flags::access_privileges::object           const object_access,
     flags::access_privileges::child_process    const child_access,
     flags::mapping          ::share_mode       const share_mode,
-    std::size_t                                       const size
+    std::size_t                                const size
 ) noexcept
 {
     // Apple guidelines http://developer.apple.com/library/mac/#documentation/Performance/Conceptual/FileSystem/Articles/MappingFiles.html
