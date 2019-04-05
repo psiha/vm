@@ -3,7 +3,7 @@
 /// \file flags/posix/opening.inl
 /// -----------------------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2015.
+/// Copyright (c) Domagoj Saric 2010 - 2019.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -48,7 +48,7 @@ opening BOOST_CC_REG opening::create
     auto const oflag( ap.oflag() | static_cast<flags_t>( construction_policy ) | combined_system_hints );
     auto const pmode( ap.pmode()                                                                       );
 
-    return { .oflag = oflag, .pmode = pmode };
+    return { .oflag = oflag, .pmode = static_cast<flags_t>( pmode ) };
 }
 
 BOOST_IMPL_INLINE
