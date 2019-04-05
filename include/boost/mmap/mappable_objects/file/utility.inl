@@ -3,7 +3,7 @@
 /// \file mapped_view.inl
 /// ---------------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2015.
+/// Copyright (c) Domagoj Saric 2010 - 2019.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -42,7 +42,7 @@ namespace detail0
         return opening::create
         (
             {
-                ap::object { ap::readwrite },
+                ap::object{ ap::readwrite },
                 ap::child_process::does_not_inherit,
                 ap::system::process_default// ap::system::user( ap::readwrite ) | ap::system::group( ap::read )
             },
@@ -58,7 +58,7 @@ namespace detail0
         using ap = access_privileges;
         return opening::create_for_opening_existing_objects
                (
-                   ap::object { ap::readwrite },
+                   ap::object{ ap::read },
                    ap::child_process::does_not_inherit,
                    system_hints::sequential_access,
                    false
@@ -67,9 +67,9 @@ namespace detail0
 
     BOOST_IMPL_INLINE
     fallible_result<mapped_view> BOOST_CC_REG
-    map_file( default_file_handle::reference const file_handle, std::size_t /*const*/ desired_size )
+    map_file( default_file_handle && file_handle, std::size_t /*const*/ desired_size ) noexcept
     {
-        if ( BOOST_UNLIKELY( file_handle == default_file_handle::traits::invalid_value ) )
+        if ( BOOST_UNLIKELY( file_handle.get() == default_file_handle::traits::invalid_value ) )
             return error{};
         /// \note There is no need to call set_size() on the file_handle as
         /// CreateFileMapping() automatically expands the file as necessary
@@ -97,8 +97,8 @@ namespace detail0
         (
             create_mapping
             (
-                file_handle,
-                ap::object { ap::readwrite },
+                std::move( file_handle ),
+                ap::object{ ap::readwrite },
                 ap::child_process::does_not_inherit,
                 flags::share_mode::shared,
                 desired_size
@@ -111,10 +111,16 @@ namespace detail0
 
     BOOST_IMPL_INLINE
     fallible_result<read_only_mapped_view>
-    map_read_only_file( default_file_handle::reference const file_handle ) noexcept
+    map_read_only_file( default_file_handle && file_handle ) noexcept
     {
-        if ( BOOST_UNLIKELY( file_handle == default_file_handle::traits::invalid_value ) )
+        if ( BOOST_UNLIKELY( file_handle.get() == default_file_handle::traits::invalid_value ) )
             return error{};
+
+        /// \note Even though Windows will map the entire file if 0 is
+        /// passed here, we still have to get the file's size in order to
+        /// know the size of the mapping/mapped view.
+        ///                               (23.03.2018.) (Domagoj Saric)
+        auto const size( get_size( file_handle ) );
 
         using ap    = flags::access_privileges;
         using flags = flags::mapping;
@@ -122,18 +128,14 @@ namespace detail0
         (
             create_mapping
             (
-                file_handle,
-                ap::object { ap::read },
+                std::move( file_handle ),
+                ap::object{ ap::read },
                 ap::child_process::does_not_inherit,
                 flags::share_mode::shared,
                 0
             ),
             0, // no offset
-            /// \note Even though Windows will map the entire file if 0 is
-            /// passed here, we still have to get the file's size in order to
-            /// know the size of the mapping/mapped view.
-            ///                               (23.03.2018.) (Domagoj Saric)
-            get_size( file_handle )
+            size
         );
     }
 } // namespace detail0
