@@ -3,7 +3,7 @@
 /// \file detail/nt.hpp
 /// -------------------
 ///
-/// Copyright (c) Domagoj Saric 2015 - 2018.
+/// Copyright (c) Domagoj Saric 2015 - 2019.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -47,7 +47,7 @@ namespace nt
 
 namespace detail
 {
-    BOOST_OVERRIDABLE_SYMBOL HMODULE const ntdll( ::GetModuleHandleW( L"ntdll.dll" ) );
+    inline HMODULE const ntdll( ::GetModuleHandleW( L"ntdll.dll" ) );
     
     inline BOOST_ATTRIBUTES( BOOST_COLD, BOOST_RESTRICTED_FUNCTION_L3, BOOST_RESTRICTED_FUNCTION_RETURN )
     void * BOOST_CC_REG get_nt_proc( char const * const proc_name )

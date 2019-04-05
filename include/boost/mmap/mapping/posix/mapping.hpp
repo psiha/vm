@@ -55,11 +55,11 @@ struct mapping
 
 
 #ifdef PAGE_SIZE
-std::uint16_t const page_size( PAGE_SIZE );
+inline std::uint16_t const page_size( PAGE_SIZE );
 #else
-BOOST_OVERRIDABLE_SYMBOL std::uint16_t const page_size
+inline std::uint16_t const page_size
 (
-    ([]()
+    ([]() noexcept
     {
         auto const size( ::getpagesize()/*::sysconf( _SC_PAGE_SIZE )*/ );
         BOOST_LIKELY( size     == 4096 );
@@ -68,7 +68,7 @@ BOOST_OVERRIDABLE_SYMBOL std::uint16_t const page_size
     })()
 );
 #endif // PAGE_SIZE
-BOOST_OVERRIDABLE_SYMBOL std::uint32_t const allocation_granularity( page_size );
+inline std::uint32_t const allocation_granularity( page_size );
 
 //------------------------------------------------------------------------------
 } // namespace posix

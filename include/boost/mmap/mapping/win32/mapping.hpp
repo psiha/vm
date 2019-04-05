@@ -3,7 +3,7 @@
 /// \file mapping.hpp
 /// -----------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2015.
+/// Copyright (c) Domagoj Saric 2010 - 2019.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -56,9 +56,9 @@ struct mapping
 #ifdef PAGE_SIZE
 std::uint16_t const page_size( PAGE_SIZE );
 #else
-BOOST_OVERRIDABLE_SYMBOL std::uint16_t const page_size
+inline std::uint16_t const page_size
 (
-    ([]()
+    ([]() noexcept
     {
         //boost::winapi::GetSystemInfo broken?
         //boost::winapi::SYSTEM_INFO_ info;
@@ -73,9 +73,9 @@ BOOST_OVERRIDABLE_SYMBOL std::uint16_t const page_size
 #   pragma warning( push )
 #   pragma warning( disable : 4553 ) // "'==': operator has no effect; did you intend '='?"
 #endif // BOOST_MSVC
-BOOST_OVERRIDABLE_SYMBOL std::uint32_t const allocation_granularity
+inline std::uint32_t const allocation_granularity
 (
-    ([]()
+    ([]() noexcept
     {
         ::SYSTEM_INFO info; ::GetSystemInfo( &info );
         BOOST_LIKELY( info.dwAllocationGranularity     == 65536 );
