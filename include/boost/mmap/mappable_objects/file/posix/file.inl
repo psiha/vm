@@ -3,7 +3,7 @@
 /// \file mappable_objects/file/posix/file.inl
 /// ------------------------------------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2015.
+/// Copyright (c) Domagoj Saric 2010 - 2019.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -47,12 +47,11 @@ BOOST_IMPL_INLINE
 file_handle BOOST_CC_REG create_file( char const * const file_name, flags::opening const flags ) noexcept
 {
     BOOST_ASSERT( file_name );
-
-    int const current_mask ( ::umask( 0 ) );
+    // POSIX specific - flags.pmode gets umasked - however this cannot be
+    // automatically overridden locally in a thread-safe manner
+    // http://man7.org/linux/man-pages/man2/umask.2.html
     int const c_file_handle( ::open( file_name, flags.oflag, flags.pmode ) );
     //...zzz...investigate posix_fadvise_madvise, fcntl for the system hints...
-    BOOST_VERIFY( ::umask( current_mask ) == 0 );
-
     return file_handle( c_file_handle );
 }
 
@@ -61,11 +60,7 @@ BOOST_IMPL_INLINE
 file_handle BOOST_CC_REG create_file( wchar_t const * const file_name, flags::opening const flags )
 {
     BOOST_ASSERT( file_name );
-
-    int const current_mask( ::umask( 0 ) );
-    int const file_handle ( ::_wopen( file_name, flags.oflag, flags.pmode ) );
-    BOOST_VERIFY( ::umask( current_mask ) == 0 );
-
+    int const file_handle( ::_wopen( file_name, flags.oflag, flags.pmode ) );
     return file_handle( file_handle );
 }
 #endif // BOOST_MSVC

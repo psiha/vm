@@ -3,7 +3,7 @@
 /// \file posix/flags.hpp
 /// ---------------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2015.
+/// Copyright (c) Domagoj Saric 2010 - 2019.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -174,6 +174,10 @@ public:
 
         flags_t read_umask()
         {
+            // Broken/not thread safe
+            // http://man7.org/linux/man-pages/man2/umask.2.html @ notes
+            // https://groups.google.com/forum/#!topic/comp.unix.programmer/v6nv-oP9IJQ
+            // https://stackoverflow.com/questions/53227072/reading-umask-thread-safe/53288382
             auto const mask( ::umask( 0 ) );
             BOOST_VERIFY( ::umask( mask ) == 0 );
             return mask;
