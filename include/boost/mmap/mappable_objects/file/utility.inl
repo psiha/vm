@@ -71,10 +71,12 @@ namespace detail0
     {
         if ( BOOST_UNLIKELY( file_handle.get() == default_file_handle::traits::invalid_value ) )
             return error{};
-        /// \note There is no need to call set_size() on the file_handle as
-        /// CreateFileMapping() automatically expands the file as necessary
-        /// (but only if the file is opened with write access and the
-        /// share_mode::hidden flag is not specified).
+        /// \note CreateFileMapping() automatically expands the file as
+        /// necessary (but only if the file is opened with write access and the
+        /// share_mode::hidden flag is not specified) so there is no need to
+        /// call set_size() on the file_handle in case the file is to be
+        /// enlarged or mapped whole - but this does cover the case when the
+        /// file is to be shrinked.
         /// https://msdn.microsoft.com/en-us/library/aa366542(v=vs.85).aspx
         ///                                   (30.05.2015.) (Domagoj Saric)
         /// \note Even though Windows will map the entire file if 0 is passed
@@ -82,14 +84,8 @@ namespace detail0
         /// the size of the mapping/mapped view.
         ///                                   (23.03.2018.) (Domagoj Saric)
         // memadv http://stackoverflow.com/questions/13126167/is-it-safe-to-ftruncate-a-shared-memory-object-after-it-has-ben-mmaped
-    #ifdef _WIN32
-        if ( !desired_size )
-    #else
-        if ( desired_size )
-                           set_size( file_handle, desired_size );
-        else
-    #endif // _WIN32
-            desired_size = get_size( file_handle               );
+        if ( desired_size ) set_size( file_handle, desired_size );
+        else desired_size = get_size( file_handle               );
 
         using ap    = flags::access_privileges;
         using flags = flags::mapping;
