@@ -34,7 +34,7 @@ namespace boost
 //------------------------------------------------------------------------------
 namespace mmap
 {
-//------------------------------------------------------------------------------ 
+//------------------------------------------------------------------------------
 BOOST_MMAP_POSIX_INLINE
 namespace posix
 {
@@ -95,6 +95,13 @@ private:
     static std::uint8_t constexpr mapsh  = 24;
 
 #ifndef O_EXEC
+    static std::uint8_t constexpr O_EXEC = O_RDONLY;
+#elif defined( __EMSCRIPTEN__ )
+    // emscripten defines O_EXEC as O_PATH, which is 010000000, which causes compile error
+    //  error: enumerator value is not a constant expression
+    // due to a
+    // note: signed left shift discards bits
+    #undef O_EXEC
     static std::uint8_t constexpr O_EXEC = O_RDONLY;
 #endif // O_EXEC
 
