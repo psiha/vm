@@ -122,7 +122,7 @@ public:
     ) : basic_mapped_view( map( source_mapping, offset, desired_size ) ) {}
      basic_mapped_view( basic_mapped_view && other ) noexcept : memory_range_t( other ) { static_cast<memory_range_t &>( other ) = memory_range_t(); }
      basic_mapped_view( basic_mapped_view const &  ) = delete;
-    ~basic_mapped_view(                      ) noexcept                           { do_unmap(); }
+    ~basic_mapped_view(                            ) noexcept                           { do_unmap(); }
 
     basic_mapped_view & operator=( basic_mapped_view && other ) noexcept
     {
