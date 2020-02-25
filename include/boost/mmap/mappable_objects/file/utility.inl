@@ -3,7 +3,7 @@
 /// \file mapped_view.inl
 /// ---------------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2019.
+/// Copyright (c) Domagoj Saric 2010 - 2020.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -84,8 +84,15 @@ namespace detail0
         /// the size of the mapping/mapped view.
         ///                                   (23.03.2018.) (Domagoj Saric)
         // memadv http://stackoverflow.com/questions/13126167/is-it-safe-to-ftruncate-a-shared-memory-object-after-it-has-ben-mmaped
-        if ( desired_size ) set_size( file_handle, desired_size );
-        else desired_size = get_size( file_handle               );
+        if ( desired_size )
+        {
+            if ( !set_size( file_handle, desired_size ) )
+                return error{};
+        }
+        else
+        {
+            desired_size = get_size( file_handle );
+        }
 
         using ap    = flags::access_privileges;
         using flags = flags::mapping;
