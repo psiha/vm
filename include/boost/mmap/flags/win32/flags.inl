@@ -3,7 +3,7 @@
 /// \file flags/win32/flags.inl
 /// ---------------------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2015.
+/// Copyright (c) Domagoj Saric 2010 - 2019.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -104,7 +104,7 @@ namespace detail
             boost::make_iterator_range_n( static_cast<TOKEN_GROUPS *>( ::_alloca( required_size ) ), required_size / sizeof( TOKEN_GROUPS ) )
         );
         BOOST_VERIFY( ::GetTokenInformation( token, TokenGroups, groups.begin(), required_size, &required_size ) );
-    #endif // _DEBUG
+    #endif // disabled
         //RtlAbsoluteToSelfRelativeSD
         DWORD length( 0 );
         BOOST_VERIFY( ::MakeSelfRelativeSD( &sd, nullptr, &length ) == false && ::GetLastError() == ERROR_INSUFFICIENT_BUFFER );
@@ -174,7 +174,7 @@ namespace
 {
     inline
 #ifdef NDEBUG
-    BOOST_CXX14_CONSTEXPR
+    constexpr
 #endif // NDEBUG
     SECURITY_DESCRIPTOR BOOST_CC_REG make_all_shall_pass()
     {
@@ -200,17 +200,17 @@ namespace
     SECURITY_DESCRIPTOR const all_shall_pass( make_all_shall_pass() );
 } // anonymous namespace
 
-__declspec( selectany ) access_privileges::system const access_privileges::system::process_default = { nullptr        , false };
-__declspec( selectany ) access_privileges::system const access_privileges::system::unrestricted    = { &all_shall_pass, false };
-__declspec( selectany ) access_privileges::system const access_privileges::system::nix_default     = { detail::make_sd
-                                                                                                                     (
-                                                                                                                        access_privileges::system::user ( access_privileges::all  ) |
-                                                                                                                        access_privileges::system::group( access_privileges::read ) |
-                                                                                                                        access_privileges::system::world( access_privileges::read )
-                                                                                                                     ),
-                                                                                                                     true
-                                                                                                                   };
-__declspec( selectany ) access_privileges::system const access_privileges::system::_644            = { ( nix_default.get_dynamic_sd().add_ref(), nix_default.p_sd ), true }; //access_privileges::system::nix_default;
+inline access_privileges::system const access_privileges::system::process_default = { nullptr        , false };
+inline access_privileges::system const access_privileges::system::unrestricted    = { &all_shall_pass, false };
+inline access_privileges::system const access_privileges::system::nix_default     = { detail::make_sd
+                                                                                      (
+                                                                                        access_privileges::system::user ( access_privileges::all  ) |
+                                                                                        access_privileges::system::group( access_privileges::read ) |
+                                                                                        access_privileges::system::world( access_privileges::read )
+                                                                                      ),
+                                                                                      true
+                                                                                    };
+inline access_privileges::system const access_privileges::system::_644            = { ( nix_default.get_dynamic_sd().add_ref(), nix_default.p_sd ), true }; //access_privileges::system::nix_default;
 
 //------------------------------------------------------------------------------
 } // flags

@@ -3,7 +3,7 @@
 /// \file win32/flags.hpp
 /// ---------------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2018.
+/// Copyright (c) Domagoj Saric 2010 - 2019.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -21,6 +21,7 @@
 #include "boost/mmap/detail/impl_selection.hpp"
 #include "boost/mmap/flags/flags.hpp"
 
+#include <boost/config_ex.hpp>
 #include <boost/utility/base_from_member.hpp>
 
 #include <array>
@@ -111,7 +112,7 @@ struct access_privileges
     struct object
     {
         flags_t /*const*/ privileges;
-    }; // struct process
+    }; // struct object
 
     // https://msdn.microsoft.com/en-us/library/windows/desktop/ms683463(v=vs.85).aspx handle inheritance
     enum struct child_process : bool
