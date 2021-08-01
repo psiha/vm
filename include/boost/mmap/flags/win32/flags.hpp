@@ -3,7 +3,7 @@
 /// \file win32/flags.hpp
 /// ---------------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2019.
+/// Copyright (c) Domagoj Saric 2010 - 2021.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -195,7 +195,8 @@ struct access_privileges
                 BOOST_ASSUME( p_sd != process_default.p_sd );
                 BOOST_ASSUME( p_sd != unrestricted   .p_sd );
                 auto & sd( get_dynamic_sd() );
-                if ( BOOST_UNLIKELY( sd.release() ) == 0 ) delete &sd;
+                if ( BOOST_UNLIKELY( sd.release() ) == 0 )
+                    delete static_cast<void const *>( &sd ); // delete through void to silence new-delete-(size-)mismatch sanitizers
             }
         }
 
