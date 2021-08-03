@@ -55,7 +55,7 @@ struct mapping
 
 
 #ifdef PAGE_SIZE
-inline std::uint16_t const page_size( PAGE_SIZE );
+constexpr std::uint32_t const page_size{ PAGE_SIZE };
 #else
 inline std::uint16_t const page_size
 (
