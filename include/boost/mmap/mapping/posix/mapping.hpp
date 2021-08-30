@@ -3,7 +3,7 @@
 /// \file mapping.hpp
 /// -----------------
 ///
-/// Copyright (c) Domagoj Saric 2011 - 2019.
+/// Copyright (c) Domagoj Saric 2011 - 2021.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -55,7 +55,7 @@ struct mapping
 
 
 #ifdef PAGE_SIZE
-constexpr std::uint32_t const page_size{ PAGE_SIZE };
+constexpr std::uint32_t const page_size{ PAGE_SIZE }; // Under Emscripten PAGE_SIZE is 64k/does not fit into a std::uint16_t
 #else
 inline std::uint16_t const page_size
 (

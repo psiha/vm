@@ -3,7 +3,7 @@
 /// \file mapped_view.inl
 /// ---------------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2015.
+/// Copyright (c) Domagoj Saric 2010 - 2021.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -51,13 +51,11 @@ struct mapper
         // http://msdn.microsoft.com/en-us/library/aa366537(VS.85).aspx
         //                                    (26.03.2010.) (Domagoj Saric)
 
-        using iterator = mapped_view::iterator;
+        auto const large_integer{ reinterpret_cast<ULARGE_INTEGER const &>( offset ) };
 
-        auto const large_integer( reinterpret_cast<ULARGE_INTEGER const &>( offset ) );
-
-        iterator const view_start
-        (
-            static_cast<iterator>
+        auto const view_start
+        {
+            static_cast<memory_range::value_type *>
             (
                 ::MapViewOfFile
                 (
@@ -68,19 +66,19 @@ struct mapper
                     desired_size
                 )
             )
-        );
+        };
 
         return
         {
             view_start,
-            view_start + ( view_start ? desired_size : 0 )
+            view_start ? desired_size : 0
         };
     }
 
     static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
     void BOOST_CC_REG unmap( memory_range const view )
     {
-        BOOST_VERIFY( ::UnmapViewOfFile( view.begin() ) || view.empty() );
+        BOOST_VERIFY( ::UnmapViewOfFile( view.data() ) || view.empty() );
     }
 }; // struct mapper
 

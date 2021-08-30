@@ -27,6 +27,7 @@
 #include <aclapi.h>
 
 #include <memory>
+#include <span>
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -99,10 +100,10 @@ namespace detail
 
         DWORD required_size;
         BOOST_VERIFY( ::GetTokenInformation( token, TokenGroups, nullptr, 0, &required_size ) );
-        auto const groups
-        (
-            boost::make_iterator_range_n( static_cast<TOKEN_GROUPS *>( ::_alloca( required_size ) ), required_size / sizeof( TOKEN_GROUPS ) )
-        );
+        std::span const groups
+        {
+            static_cast<TOKEN_GROUPS *>( ::_alloca( required_size ) ), required_size / sizeof( TOKEN_GROUPS ) )
+        };
         BOOST_VERIFY( ::GetTokenInformation( token, TokenGroups, groups.begin(), required_size, &required_size ) );
     #endif // disabled
         //RtlAbsoluteToSelfRelativeSD

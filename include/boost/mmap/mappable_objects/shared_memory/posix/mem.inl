@@ -3,7 +3,7 @@
 /// \file posix/mem.inl
 /// -------------------
 ///
-/// Copyright (c) Domagoj Saric 2015.
+/// Copyright (c) Domagoj Saric 2015 - 2021.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -19,8 +19,6 @@
 
 #include "boost/mmap/detail/posix.hpp"
 
-#include <boost/utility/string_ref.hpp>
-
 // semaphores
 #include <semaphore.h>
 #include <sys/sem.h>
@@ -28,6 +26,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <string_view>
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -70,14 +69,14 @@ namespace detail
             /// properly handle the specified creation_disposition.
             ///                                   (17.11.2015.) (Domagoj Saric)
             static char constexpr key_file_prefix[] = "/var/tmp/boost_mmap_";
-            auto const length( std::strlen( name ) );
+            auto const length{ std::strlen( name ) };
             char prefixed_name[ sizeof( key_file_prefix ) + length + 1 ];
             std::strcpy( prefixed_name, key_file_prefix );
             std::strcat( prefixed_name, name            );
             auto const key_file( create_file( prefixed_name, flags::opening::create( {{},{},access_privileges}, flags::named_object_construction_policy::open_or_create, 0 ) ) );
             if ( BOOST_UNLIKELY( !key_file ) )
                 return;
-            char seed( 0 ); for ( auto const character : string_ref( name ) ) seed ^= character;
+            char seed( 0 ); for ( auto const character : std::string_view{ name } ) seed ^= character;
             sem_key = ::ftok( prefixed_name, seed );
             if ( BOOST_UNLIKELY( sem_key == -1 ) )
                 return;

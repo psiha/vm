@@ -3,7 +3,7 @@
 /// \file detail/nt.hpp
 /// -------------------
 ///
-/// Copyright (c) Domagoj Saric 2015 - 2019.
+/// Copyright (c) Domagoj Saric 2015 - 2021.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -25,13 +25,13 @@
 #define nt_hpp__532C3d08_E487_4548_B51D_1E64CD74dE9B
 #pragma once
 //------------------------------------------------------------------------------
-#include "boost/assert.hpp"
-#include "boost/config.hpp"
+#include <boost/assert.hpp>
+#include <boost/config.hpp>
 
 #ifndef _WIN32_WINNT
 #   define _WIN32_WINNT 0x0700
 #endif // _WIN32_WINNT
-#include "winternl.h"
+#include <winternl.h>
 
 #pragma comment( lib, "ntdll.lib" )
 //------------------------------------------------------------------------------
