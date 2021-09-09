@@ -133,7 +133,7 @@ public:
 
     bool flush() const { return mapper::flush( detail0::make_basic_view( *this ) ); }
 
-    explicit operator bool() const noexcept { /*BOOST_ASSUME( memory_range_t::empty() == !memory_range_t::begin() );*/ return memory_range_t::begin() != nullptr; }
+    explicit operator bool() const noexcept { /*BOOST_ASSUME( memory_range_t::empty() == !memory_range_t::begin() );*/ return !memory_range_t::empty(); }
 
 public: // Factory methods.
     static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
@@ -149,7 +149,7 @@ public: // Factory methods.
     }
 
     //static memory_range_t BOOST_CC_REG map( T ... args ) noexcept { return make_typed_view( mapper::map( args ) ); }
-    
+
     //static void BOOST_CC_REG unmap( memory_range_t const & view ) noexcept { mapper::unmap( make_basic_view( view ) ); }
 
     static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
