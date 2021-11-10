@@ -135,7 +135,7 @@ namespace detail
     {
         using namespace nt::detail;
         SECTION_BASIC_INFORMATION info;
-        auto const result( NtQuerySection( mapping_handle, SECTION_INFORMATION_CLASS::SectionBasicInformation, &info, sizeof( info ), nullptr ) );
+        [[ maybe_unused ]] auto const result( NtQuerySection( mapping_handle, SECTION_INFORMATION_CLASS::SectionBasicInformation, &info, sizeof( info ), nullptr ) );
         BOOST_ASSERT( NT_SUCCESS( result ) );
         return static_cast<std::size_t>( info.SectionSize.QuadPart );
     }
