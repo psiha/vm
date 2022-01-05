@@ -26,6 +26,12 @@
 
 #include <array>
 #include <cstdint>
+
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winline-namespace-reopened-noninline"
+#endif
+
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -77,11 +83,11 @@ namespace detail
 
     struct dynamic_sd
         :
-        base_from_member<mutable std::uint8_t>,
+        base_from_member<std::uint8_t>,
         ::SECURITY_DESCRIPTOR
     {
         /*constexpr...base_from_member...*/
-        dynamic_sd() noexcept : base_from_member<mutable std::uint8_t>( std::uint8_t( 0 ) ) {}
+        dynamic_sd() noexcept : base_from_member<std::uint8_t>( std::uint8_t( 0 ) ) {}
         dynamic_sd( dynamic_sd const & ) = delete;
         void reset() noexcept { member = 0; }
         std::uint8_t add_ref() const noexcept { return ++const_cast<std::uint8_t &>( member ); }
@@ -89,7 +95,14 @@ namespace detail
     }; // struct dynamic_sd
 
     BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L3, BOOST_RESTRICTED_FUNCTION_RETURN )
+#ifdef __clang__
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wignored-qualifiers"
+#endif
     dynamic_sd const * __restrict BOOST_CC_REG make_sd( scope_privileges );
+#ifdef __clang__
+    #pragma clang diagnostic pop
+#endif
 } // namespace detail
 
 struct access_privileges
@@ -136,9 +149,9 @@ struct access_privileges
             constexpr scoped_privileges( flags_t          const flag        ) : flags{ ( scope == privilege_scopes::user ) * flag, ( scope == privilege_scopes::group ) * flag, ( scope == privilege_scopes::world ) * flag } {}
             constexpr scoped_privileges( scope_privileges const flags_param ) : flags( flags_param ) {}
 
-            template <privilege_scopes scope>
+            template <privilege_scopes local_scope>
             constexpr
-            scoped_privileges<privilege_scopes::combined> operator | ( scoped_privileges<scope> const scope_flags ) const
+            scoped_privileges<privilege_scopes::combined> operator | ( scoped_privileges<local_scope> const scope_flags ) const
             {
                 return
                 {
@@ -195,8 +208,15 @@ struct access_privileges
                 BOOST_ASSUME( p_sd != process_default.p_sd );
                 BOOST_ASSUME( p_sd != unrestricted   .p_sd );
                 auto & sd( get_dynamic_sd() );
+        #ifdef __clang__
+            #pragma clang diagnostic push
+            #pragma clang diagnostic ignored "-Wdelete-incomplete"
+        #endif
                 if ( BOOST_UNLIKELY( sd.release() ) == 0 )
                     delete static_cast<void const *>( &sd ); // delete through void to silence new-delete-(size-)mismatch sanitizers
+        #ifdef __clang__
+            #pragma clang diagnostic pop
+        #endif
             }
         }
 
@@ -231,5 +251,9 @@ struct access_privileges
 #ifdef BOOST_MMAP_HEADER_ONLY
     #include "flags.inl"
 #endif // BOOST_MMAP_HEADER_ONLY
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 #endif // opening_hpp

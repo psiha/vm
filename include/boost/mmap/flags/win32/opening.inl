@@ -21,6 +21,12 @@
 #include "opening.hpp"
 
 #include "boost/mmap/detail/impl_inline.hpp"
+
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winline-namespace-reopened-noninline"
+#endif
+
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -68,4 +74,9 @@ opening BOOST_CC_REG opening::create_for_opening_existing_objects
 //------------------------------------------------------------------------------
 } // boost
 //------------------------------------------------------------------------------
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+
 #endif // opening_inl

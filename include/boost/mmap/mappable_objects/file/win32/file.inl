@@ -99,7 +99,15 @@ bool BOOST_CC_REG set_size( file_handle::reference const file_handle, std::size_
     BOOL const success( ::SetEndOfFile( file_handle ) );
 
 #ifdef _WIN64
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-field-initializers"
+#pragma clang diagnostic ignored "-Wmissing-braces"
+#endif
     LARGE_INTEGER const offset = { 0 };
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
     BOOST_VERIFY
     (
         ::SetFilePointerEx( file_handle, offset, nullptr, FILE_BEGIN ) ||

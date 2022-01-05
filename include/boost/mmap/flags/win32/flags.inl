@@ -42,6 +42,10 @@ namespace flags
 {
 //------------------------------------------------------------------------------
 
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wignored-qualifiers"
+#endif
 
 static_assert( (flags_t)named_object_construction_policy::create_new                      == CREATE_NEW       , "" );
 static_assert( (flags_t)named_object_construction_policy::create_new_or_truncate_existing == CREATE_ALWAYS    , "" );
@@ -59,8 +63,12 @@ namespace detail
 #ifdef BOOST_MMAP_HEADER_ONLY
     inline
 #endif // BOOST_MMAP_HEADER_ONLY
-    BOOST_ATTRIBUTES( BOOST_DOES_NOT_RETURN, BOOST_RESTRICTED_FUNCTION_L3 )
-    void BOOST_COLD throw_bad_alloc()
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wignored-attributes"
+#endif
+    BOOST_ATTRIBUTES( BOOST_DOES_NOT_RETURN, BOOST_RESTRICTED_FUNCTION_L3, BOOST_COLD )
+    void throw_bad_alloc()
     {
     #ifdef _MSC_VER
         __if_exists    ( std::_Xbad_alloc ) { std::_Xbad_alloc(); }
@@ -68,6 +76,9 @@ namespace detail
     #endif // _MSC_VER
         { BOOST_THROW_EXCEPTION( std::bad_alloc() ); }
     }
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
     // https://msdn.microsoft.com/en-us/library/windows/desktop/aa446595(v=vs.85).aspx Creating a Security Descriptor for a New Object in C++
     // https://msdn.microsoft.com/en-us/library/windows/desktop/aa379602(v=vs.85).aspx SID strings
@@ -212,6 +223,10 @@ inline access_privileges::system const access_privileges::system::nix_default   
                                                                                       true
                                                                                     };
 inline access_privileges::system const access_privileges::system::_644            = { ( nix_default.get_dynamic_sd().add_ref(), nix_default.p_sd ), true }; //access_privileges::system::nix_default;
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 //------------------------------------------------------------------------------
 } // flags

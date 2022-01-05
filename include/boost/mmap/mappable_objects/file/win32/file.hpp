@@ -25,6 +25,12 @@
 #include "boost/mmap/error/error.hpp"
 
 #include <cstddef>
+
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winline-namespace-reopened-noninline"
+#endif
+
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -71,5 +77,9 @@ mapping BOOST_CC_REG create_mapping
 #ifdef BOOST_MMAP_HEADER_ONLY
     #include "file.inl"
 #endif // BOOST_MMAP_HEADER_ONLY
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 #endif // file_hpp

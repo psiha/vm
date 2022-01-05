@@ -26,12 +26,15 @@
 #include <boost/assert.hpp>
 #include <boost/winapi/handles.hpp>
 
-#ifdef BOOST_MSVC
-    #include "../posix/handle.hpp"
-    #include <io.h>
-#endif // BOOST_MSVC
+#include "../posix/handle.hpp"
+#include <io.h>
 
 #include <cstdint>
+
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winline-namespace-reopened-noninline"
+#endif
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -80,4 +83,7 @@ using handle = handle_impl<handle_traits>;
 //------------------------------------------------------------------------------
 } // namespace boost
 //------------------------------------------------------------------------------
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 #endif // handle_hpp

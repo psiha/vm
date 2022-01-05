@@ -26,6 +26,12 @@
 #include <boost/mmap/detail/win32.hpp>
 
 #include <cstdint>
+
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winline-namespace-reopened-noninline"
+#endif
+
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -94,4 +100,9 @@ inline std::uint32_t const allocation_granularity
 //------------------------------------------------------------------------------
 } // namespace boost
 //------------------------------------------------------------------------------
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+
 #endif // mapping_hpp

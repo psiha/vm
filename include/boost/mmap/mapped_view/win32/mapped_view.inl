@@ -18,6 +18,12 @@
 
 #include "boost/mmap/detail/impl_selection.hpp"
 #include "boost/mmap/detail/win32.hpp"
+
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winline-namespace-reopened-noninline"
+#endif
+
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -89,3 +95,7 @@ struct mapper
 //------------------------------------------------------------------------------
 } // boost
 //------------------------------------------------------------------------------
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
