@@ -55,7 +55,11 @@ struct mapping
 
 
 #ifdef PAGE_SIZE
+#   ifdef __APPLE__
+inline std::uint32_t const page_size{ PAGE_SIZE }; // Not a constant expression on Apple platform
+#   else
 constexpr std::uint32_t const page_size{ PAGE_SIZE }; // Under Emscripten PAGE_SIZE is 64k/does not fit into a std::uint16_t
+#endif
 #else
 inline std::uint16_t const page_size
 (
