@@ -70,7 +70,7 @@ struct mapper
         return
             BOOST_LIKELY( view_start != MAP_FAILED )
                 ? memory_range{ view_start, desired_size }
-                : memory_range{ nullptr   , nullptr      };
+                : memory_range{                          };
     }
 
     static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
