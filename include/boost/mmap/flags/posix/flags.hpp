@@ -121,12 +121,12 @@ public:
         /// the same flags for all objects (i.e. like on POSIX systems).
         ///                                   (08.09.2015.) (Domagoj Saric)
         //          SYSTEM                        | PROCESS             | MAPPING
-        metaread  = 0                    << syssh | 0         << procsh | PROT_NONE  << mapsh,
-        read      = sys_flags::read      << syssh | O_RDONLY_ << procsh | PROT_READ  << mapsh,
-        write     = sys_flags::write     << syssh | O_WRONLY  << procsh | PROT_WRITE << mapsh,
-        execute   = sys_flags::execute   << syssh | O_EXEC    << procsh | PROT_EXEC  << mapsh,
-        readwrite = sys_flags::readwrite << syssh | O_RDWR    << procsh | ( PROT_READ | PROT_WRITE             ) << mapsh,
-        all       = sys_flags::all       << syssh | O_RDWR    << procsh | ( PROT_READ | PROT_WRITE | PROT_EXEC ) << mapsh
+        metaread  = 0                    << syssh | static_cast< std::uint32_t >( 0         ) << procsh | static_cast< std::uint32_t >(  PROT_NONE  ) << mapsh,
+        read      = sys_flags::read      << syssh | static_cast< std::uint32_t >( O_RDONLY_ ) << procsh | static_cast< std::uint32_t >(  PROT_READ  ) << mapsh,
+        write     = sys_flags::write     << syssh | static_cast< std::uint32_t >( O_WRONLY  ) << procsh | static_cast< std::uint32_t >(  PROT_WRITE ) << mapsh,
+        execute   = sys_flags::execute   << syssh | static_cast< std::uint32_t >( O_EXEC    ) << procsh | static_cast< std::uint32_t >(  PROT_EXEC  ) << mapsh,
+        readwrite = sys_flags::readwrite << syssh | static_cast< std::uint32_t >( O_RDWR    ) << procsh | static_cast< std::uint32_t >(  ( PROT_READ | PROT_WRITE             ) ) << mapsh,
+        all       = sys_flags::all       << syssh | static_cast< std::uint32_t >( O_RDWR    ) << procsh | static_cast< std::uint32_t >(  ( PROT_READ | PROT_WRITE | PROT_EXEC ) ) << mapsh
     };
 
     constexpr static bool unrestricted( flags_t const privileges ) { return ( ( privileges & all ) == all ); }
