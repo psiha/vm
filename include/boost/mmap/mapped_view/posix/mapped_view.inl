@@ -76,11 +76,14 @@ struct mapper
     static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
     void BOOST_CC_REG unmap( memory_range const view )
     {
+        [[ maybe_unused ]] auto munmap_result{ ::munmap( view.data(), view.size() ) };
+#   ifndef __EMSCRIPTEN__
         BOOST_VERIFY
         (
-            ( ::munmap( view.data(), view.size() ) == 0 ) ||
+            ( munmap_result == 0 ) ||
             ( view.empty() && !view.data() )
         );
+#   endif
     }
 }; // struct mapper
 
