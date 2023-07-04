@@ -50,7 +50,7 @@ file_handle BOOST_CC_REG create_file( char const * const file_name, flags::openi
     // POSIX specific - flags.pmode gets umasked - however this cannot be
     // automatically overridden locally in a thread-safe manner
     // http://man7.org/linux/man-pages/man2/umask.2.html
-    int const c_file_handle( ::open( file_name, flags.oflag, flags.pmode ) );
+    int const c_file_handle( ::open( file_name, flags.oflag, static_cast< mode_t >( flags.pmode ) ) );
     //...zzz...investigate posix_fadvise_madvise, fcntl for the system hints...
     return file_handle( c_file_handle );
 }
