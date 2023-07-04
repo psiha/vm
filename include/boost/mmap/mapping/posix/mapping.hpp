@@ -47,7 +47,7 @@ struct mapping
     mapping( FileHandle && fd, flags::viewing const & view_mapping_flags_param, std::size_t const size ) noexcept
         : handle( std::forward<FileHandle>( fd ) ), view_mapping_flags( view_mapping_flags_param ), maximum_size( size ) {}
 
-    bool is_read_only() const { return ( view_mapping_flags.protection & ( flags::access_privileges::write | flags::access_privileges::readwrite ) ) == 0; }
+    bool is_read_only() const { return ( static_cast< std::uint32_t >( view_mapping_flags.protection ) & ( flags::access_privileges::write | flags::access_privileges::readwrite ) ) == 0; }
 
     flags::viewing const view_mapping_flags;
     std  ::size_t  const maximum_size;

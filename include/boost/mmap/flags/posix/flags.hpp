@@ -108,7 +108,7 @@ private:
 #if O_RDONLY
     static std::uint8_t constexpr O_RDONLY_ = O_RDONLY;
 #else // "Undetectable combined O_RDONLY" http://linux.die.net/man/3/open
-    static std::uint8_t constexpr O_RDONLY_ = O_RDONLY + O_WRONLY + O_RDWR + O_EXEC + 1;
+    static std::uint8_t constexpr O_RDONLY_ = static_cast< std::uint8_t >( O_RDONLY + O_WRONLY + O_RDWR + O_EXEC + 1 );
     static_assert( ( O_RDONLY_ & ( O_RDONLY | O_WRONLY | O_RDWR | O_EXEC ) ) == 0, "" );
 #endif // O_RDONLY
 
@@ -129,7 +129,7 @@ public:
         all       = sys_flags::all       << syssh | static_cast< std::uint32_t >( O_RDWR    ) << procsh | static_cast< std::uint32_t >(  ( PROT_READ | PROT_WRITE | PROT_EXEC ) ) << mapsh
     };
 
-    constexpr static bool unrestricted( flags_t const privileges ) { return ( ( privileges & all ) == all ); }
+    constexpr static bool unrestricted( flags_t const privileges ) { return ( ( static_cast< std::uint32_t >( privileges ) & all ) == all ); }
 
     struct object
     {
@@ -201,7 +201,7 @@ public:
     }; // struct system
 
     flags_t BOOST_CC_REG oflag() const noexcept;
-    mode_t  BOOST_CC_REG pmode() const noexcept { return system_access.flags; }
+    mode_t  BOOST_CC_REG pmode() const noexcept { return static_cast< mode_t >( system_access.flags ); }
 
     object        object_access;
     child_process child_access ;

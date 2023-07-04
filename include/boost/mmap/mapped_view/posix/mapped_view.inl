@@ -62,7 +62,7 @@ struct mapper
                     flags.protection,
                     flags.flags,
                     source_mapping,
-                    offset
+                    static_cast< off_t >( offset )
                 )
             )
         };
