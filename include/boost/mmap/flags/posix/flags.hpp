@@ -187,7 +187,7 @@ public:
             // https://stackoverflow.com/questions/53227072/reading-umask-thread-safe/53288382
             auto const mask( ::umask( 0 ) );
             BOOST_VERIFY( ::umask( mask ) == 0 );
-            return mask;
+            return static_cast< flags_t >( mask );
         }
 
         operator flags_t() const noexcept { return flags; }
