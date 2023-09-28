@@ -3,7 +3,7 @@
 /// \file mapped_view.hpp
 /// ---------------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2015.
+/// Copyright (c) Domagoj Saric 2010 - 2021.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -23,12 +23,12 @@
 #include "boost/mmap/handles/handle.hpp"
 #include "boost/mmap/mapping/mapping.hpp"
 
-#include "boost/assert.hpp"
-#include "boost/config.hpp"
-#include "boost/noncopyable.hpp"
-#include "boost/range/iterator_range_core.hpp"
+#include <boost/assert.hpp>
+#include <boost/config.hpp>
 
+#include <cstddef>
 #include <cstdint>
+#include <span>
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -40,10 +40,10 @@ namespace mmap
 inline namespace BOOST_MMAP_IMPL() { struct mapper; }
 
 template <typename Element>
-using basic_memory_range = iterator_range<Element * /*const...mrmlj...iterator_traits fail*/>;
+using basic_memory_range = std::span<Element>;
 
-using           memory_range = basic_memory_range<char      >;
-using read_only_memory_range = basic_memory_range<char const>;
+using           memory_range = basic_memory_range<std::byte      >;
+using read_only_memory_range = basic_memory_range<std::byte const>;
 
 template <typename Element, typename Mapper = BOOST_MMAP_IMPL()::mapper>
 class basic_mapped_view;
@@ -58,14 +58,14 @@ namespace detail0
     make_basic_view( basic_memory_range<Element> const & range )
     {
         return
-        #ifdef BOOST_NO_STRICT_ALIASING
+#       ifdef BOOST_NO_STRICT_ALIASING
             reinterpret_cast<memory_range const &>( range );
-        #else // compiler might care about strict aliasing rules
+#       else // compiler might care about strict aliasing rules
             {
-                static_cast<char *>( const_cast<void *>( static_cast<void const *>( range.begin() ) ) ),
-                static_cast<char *>( const_cast<void *>( static_cast<void const *>( range.end  () ) ) )
+                static_cast<std::byte *>( const_cast<void *>( static_cast<void const *>( range.data() ) ) ),
+                range.size() * sizeof( memory_range::value_type ) / sizeof( Element )
             };
-        #endif // BOOST_NO_STRICT_ALIASING
+#       endif // BOOST_NO_STRICT_ALIASING
     }
 
     template <typename Element>
@@ -76,18 +76,17 @@ namespace detail0
     make_typed_view( memory_range const & range )
     {
         //...zzz...add proper error handling...
-        BOOST_ASSERT( reinterpret_cast<std::size_t>( range.begin() ) % sizeof( Element ) == 0 );
-        BOOST_ASSERT( reinterpret_cast<std::size_t>( range.end  () ) % sizeof( Element ) == 0 );
-        BOOST_ASSERT(                                range.size ()   % sizeof( Element ) == 0 );
+        BOOST_ASSERT( reinterpret_cast<std::size_t>( range.data() ) % sizeof( Element ) == 0 );
+        BOOST_ASSERT(                                range.size()   % sizeof( Element ) == 0 );
         return
-        #ifdef BOOST_NO_STRICT_ALIASING
+#       ifdef BOOST_NO_STRICT_ALIASING
             reinterpret_cast<basic_memory_range<Element> const &>( range );
-        #else // compiler might care about strict aliasing rules
+#       else // compiler might care about strict aliasing rules
             {
-                static_cast<Element *>( static_cast<void *>( range.begin() ) ),
-                static_cast<Element *>( static_cast<void *>( range.end  () ) )
+                static_cast<Element *>( static_cast<void *>( range.data() ) ),
+                range.size() * sizeof( memory_range::value_type ) / sizeof( Element )
             };
-        #endif // BOOST_NO_STRICT_ALIASING
+#       endif // BOOST_NO_STRICT_ALIASING
     }
 } // namespace detail0
 
@@ -96,8 +95,8 @@ namespace detail0
 ///
 /// \class basic_mapped_view
 ///
-/// \brief RAII wrapper around an immutable boost::iterator_range that 'points
-/// to' a mapped memory region.
+/// \brief RAII wrapper around an immutable span that 'points to' a mapped
+/// memory region.
 ///
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -116,11 +115,11 @@ public:
     basic_mapped_view() noexcept {}
     basic_mapped_view
     (
-        mapping_t const & source_mapping,
+        mapping_t     const & source_mapping,
         std::uint64_t         offset       = 0,
         std::size_t           desired_size = 0
-    ) : basic_mapped_view( map( source_mapping, offset, desired_size ) ) {}
-     basic_mapped_view( basic_mapped_view && other ) noexcept : memory_range_t( other ) { static_cast<memory_range_t &>( other ) = memory_range_t(); }
+    ) : basic_mapped_view{ map( source_mapping, offset, desired_size ) } {}
+     basic_mapped_view( basic_mapped_view && other ) noexcept : memory_range_t{ other } { static_cast<memory_range_t &>( other ) = memory_range_t(); }
      basic_mapped_view( basic_mapped_view const &  ) = delete;
     ~basic_mapped_view(                            ) noexcept                           { do_unmap(); }
 
@@ -134,11 +133,7 @@ public:
 
     bool flush() const { return mapper::flush( detail0::make_basic_view( *this ) ); }
 
-    explicit operator bool() const noexcept { /*BOOST_ASSUME( memory_range_t::empty() == !memory_range_t::begin() );*/ return memory_range_t::begin() != nullptr; }
-
-    /// \note This one still gets called in certain contexts.?.investigate...
-    ///                                       (28.05.2015.) (Domagoj Saric)
-    operator typename memory_range_t::unspecified_bool_type() const noexcept { return this->operator bool(); }
+    explicit operator bool() const noexcept { /*BOOST_ASSUME( memory_range_t::empty() == !memory_range_t::begin() );*/ return !memory_range_t::empty(); }
 
 public: // Factory methods.
     static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
@@ -154,7 +149,7 @@ public: // Factory methods.
     }
 
     //static memory_range_t BOOST_CC_REG map( T ... args ) noexcept { return make_typed_view( mapper::map( args ) ); }
-    
+
     //static void BOOST_CC_REG unmap( memory_range_t const & view ) noexcept { mapper::unmap( make_basic_view( view ) ); }
 
     static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
@@ -177,8 +172,8 @@ public: // Factory methods.
             flags <= source_mapping.view_mapping_flags,
             "Requested mapped view access level is more lax than that of the source mapping."
         );
-        auto const mapped_memory_range( mapper::map( source_mapping, flags, offset, desired_size ) );
-        if ( BOOST_UNLIKELY( !mapped_memory_range ) )
+        auto const mapped_memory_range{ mapper::map( source_mapping, flags, offset, desired_size ) };
+        if ( BOOST_UNLIKELY( mapped_memory_range.empty() ) )
             return error_t{};
         return detail0::make_typed_view<Element>( mapped_memory_range );
     }
@@ -195,22 +190,15 @@ private:
     friend class  err::result_or_error<basic_mapped_view, error_t>;
     friend struct std::is_constructible<basic_mapped_view, memory_range_t &&>;
     friend struct std::is_constructible<basic_mapped_view, memory_range_t const &>;
-    basic_mapped_view( memory_range_t const & mapped_range            ) noexcept : memory_range_t( mapped_range   ) {}
-    basic_mapped_view( Element * const p_begin, Element * const p_end ) noexcept : memory_range_t( p_begin, p_end ) {}
+    basic_mapped_view( memory_range_t const & mapped_range            ) noexcept : memory_range_t{ mapped_range   } {}
+    basic_mapped_view( Element * const p_begin, Element * const p_end ) noexcept : memory_range_t{ p_begin, p_end } {}
 
     BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
     void do_unmap() noexcept { mapper::unmap( detail0::make_basic_view( *this ) ); }
-
-private: // Hide mutable members
-    using memory_range_t::advance_begin;
-    using memory_range_t::advance_end  ;
-
-    using memory_range_t::pop_front;
-    using memory_range_t::pop_back ;
 }; // class basic_mapped_view
 
-using mapped_view           = basic_mapped_view<char      >;
-using read_only_mapped_view = basic_mapped_view<char const>;
+using mapped_view           = basic_mapped_view<std::byte      >;
+using read_only_mapped_view = basic_mapped_view<std::byte const>;
 
 //------------------------------------------------------------------------------
 } // namespace mmap
@@ -223,8 +211,8 @@ using read_only_mapped_view = basic_mapped_view<char const>;
 ///                                           (04.06.2015.) (Domagoj Saric)
 namespace std
 {
-    template <typename Element, typename Impl> struct is_constructible        <boost::mmap::basic_mapped_view<Element, Impl>, boost::iterator_range<Element *> &&> : std::true_type {};
-    template <typename Element, typename Impl> struct is_nothrow_constructible<boost::mmap::basic_mapped_view<Element, Impl>, boost::iterator_range<Element *> &&> : std::true_type {};
+    template <typename Element, typename Impl> struct is_constructible        <boost::mmap::basic_mapped_view<Element, Impl>, std::span<Element> &&> : std::true_type {};
+    template <typename Element, typename Impl> struct is_nothrow_constructible<boost::mmap::basic_mapped_view<Element, Impl>, std::span<Element> &&> : std::true_type {};
 } // namespace std
 
 #ifdef BOOST_MMAP_HEADER_ONLY

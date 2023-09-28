@@ -20,6 +20,11 @@
 //------------------------------------------------------------------------------
 #include "boost/mmap/detail/impl_selection.hpp"
 #include "boost/mmap/flags/win32/flags.hpp"
+
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winline-namespace-reopened-noninline"
+#endif
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -89,5 +94,9 @@ struct opening
 #ifdef BOOST_MMAP_HEADER_ONLY
     #include "opening.inl"
 #endif // BOOST_MMAP_HEADER_ONLY
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 #endif // opening_hpp

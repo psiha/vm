@@ -3,7 +3,7 @@
 /// \file android/mem.hpp
 /// ---------------------
 ///
-/// Copyright (c) Domagoj Saric 2015.
+/// Copyright (c) Domagoj Saric 2015 - 2021.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -26,8 +26,6 @@
 #include <boost/mmap/handles/handle.hpp>
 #include <boost/mmap/mappable_objects/shared_memory/policies.hpp>
 
-#include <boost/utility/string_ref.hpp>
-
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
@@ -38,6 +36,7 @@
 
 #include <climits>
 #include <cstddef>
+#include <string_view>
 #include <type_traits>
 //------------------------------------------------------------------------------
 namespace boost
@@ -62,9 +61,9 @@ namespace detail
     /// http://stackoverflow.com/questions/12864778/shared-memory-region-in-ndk
     /// http://stackoverflow.com/questions/17744108/cutils-not-included-in-ndk?rq=1
     ///                                       (03.10.2015.) (Domagoj Saric)
-    static string_ref constexpr shm_prefix( ASHMEM_NAME_DEF "/", sizeof( ASHMEM_NAME_DEF "/" ) - 1 );
-    static string_ref           shm_emulated_path = "/mnt/sdcard/shm";
-    void BOOST_CC_REG prefix_shm_name( char const * const name, char * const prefixed_name, std::uint8_t const name_length, string_ref const prefix ) noexcept
+    static std::string_view constexpr shm_prefix{ ASHMEM_NAME_DEF "/", sizeof( ASHMEM_NAME_DEF "/" ) - 1 };
+    static std::string_view           shm_emulated_path{ "/mnt/sdcard/shm" };
+    void BOOST_CC_REG prefix_shm_name( char const * const name, char * const prefixed_name, std::uint8_t const name_length, std::string_view const prefix ) noexcept
     {
         std::copy  ( prefix.begin(), prefix.end(), prefixed_name );
         std::memcpy( prefixed_name + prefix.size(), name, name_length + 1 );

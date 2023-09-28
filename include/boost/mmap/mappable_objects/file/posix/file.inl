@@ -50,7 +50,7 @@ file_handle BOOST_CC_REG create_file( char const * const file_name, flags::openi
     // POSIX specific - flags.pmode gets umasked - however this cannot be
     // automatically overridden locally in a thread-safe manner
     // http://man7.org/linux/man-pages/man2/umask.2.html
-    int const c_file_handle( ::open( file_name, flags.oflag, flags.pmode ) );
+    int const c_file_handle( ::open( file_name, flags.oflag, static_cast< mode_t >( flags.pmode ) ) );
     //...zzz...investigate posix_fadvise_madvise, fcntl for the system hints...
     return file_handle( c_file_handle );
 }
@@ -73,7 +73,7 @@ BOOST_IMPL_INLINE bool BOOST_CC_REG delete_file( wchar_t const * const file_name
 
 
 #ifdef BOOST_HAS_UNISTD_H
-BOOST_IMPL_INLINE bool BOOST_CC_REG set_size( file_handle::reference const file_handle, std::size_t const desired_size ) noexcept { return ::ftruncate( file_handle, desired_size ) != -1; }
+BOOST_IMPL_INLINE bool BOOST_CC_REG set_size( file_handle::reference const file_handle, std::size_t const desired_size ) noexcept { return ::ftruncate( file_handle, static_cast< off_t >( desired_size ) ) != -1; }
 #endif // BOOST_HAS_UNISTD_H
 
 BOOST_IMPL_INLINE
@@ -81,7 +81,7 @@ std::size_t BOOST_CC_REG get_size( file_handle::reference const file_handle ) no
 {
     struct stat file_info;
     BOOST_VERIFY( ( ::fstat( file_handle, &file_info ) == 0 ) || ( file_handle == handle_traits::invalid_value ) );
-    return file_info.st_size;
+    return static_cast< std::size_t >( file_info.st_size );
 }
 
 //------------------------------------------------------------------------------

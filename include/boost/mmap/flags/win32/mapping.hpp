@@ -24,6 +24,11 @@
 #include <boost/winapi/security.hpp>
 
 #include <cstdint>
+
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winline-namespace-reopened-noninline"
+#endif
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -43,7 +48,7 @@ using flags_t = unsigned long; // DWORD
 
 struct viewing
 {
-    using access_rights = access_privileges;    
+    using access_rights = access_privileges;
 
     enum struct share_mode
     {
@@ -115,5 +120,9 @@ struct mapping
 #ifdef BOOST_MMAP_HEADER_ONLY
     #include "mapping.inl"
 #endif // BOOST_MMAP_HEADER_ONLY
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 #endif // mapping.hpp

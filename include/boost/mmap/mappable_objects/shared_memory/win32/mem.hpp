@@ -3,7 +3,7 @@
 /// \file win32/mem.hpp
 /// -------------------
 ///
-/// Copyright (c) Domagoj Saric 2015 - 2018.
+/// Copyright (c) Domagoj Saric 2015 - 2021.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -29,9 +29,9 @@
 
 #include <boost/core/ignore_unused.hpp>
 #include <boost/winapi/system.hpp>
-#include <boost/utility/string_ref.hpp>
 
 #include <cstddef>
+#include <string_view>
 #include <type_traits>
 //------------------------------------------------------------------------------
 namespace boost
@@ -126,14 +126,16 @@ namespace detail
                 return {};
             }
 
-            auto new_mapping =
+            auto new_mapping
+            {
                 create_mapping
                 (
                     file,
                     flags,
                     size,
                     name.name()
-                );
+                )
+            };
             auto const creation_disposition( flags.creation_disposition );
             auto const preexisting_mapping ( err::last_win32_error::is<ERROR_ALREADY_EXISTS>() );
             BOOST_ASSERT( preexisting_file == preexisting_mapping );
@@ -216,7 +218,7 @@ namespace detail
             if ( !file_path_length )
                 return error();
             BOOST_ASSERT( file_path_length < file_path.size() );
-            auto const p_name( &file_path[ string_ref( &file_path[ 0 ], file_path_length ).rfind( '\\' ) + 1 ] );
+            auto const p_name( &file_path[ std::string_view{ &file_path[ 0 ], file_path_length }.rfind( '\\' ) + 1 ] );
 
             // * security attributes
             ::SECURITY_ATTRIBUTES sa = { sizeof( sa ), nullptr, child_access };

@@ -3,7 +3,7 @@
 /// \file detail/nt.hpp
 /// -------------------
 ///
-/// Copyright (c) Domagoj Saric 2015 - 2019.
+/// Copyright (c) Domagoj Saric 2015 - 2021.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -25,13 +25,13 @@
 #define nt_hpp__532C3d08_E487_4548_B51D_1E64CD74dE9B
 #pragma once
 //------------------------------------------------------------------------------
-#include "boost/assert.hpp"
-#include "boost/config.hpp"
+#include <boost/assert.hpp>
+#include <boost/config.hpp>
 
 #ifndef _WIN32_WINNT
 #   define _WIN32_WINNT 0x0700
 #endif // _WIN32_WINNT
-#include "winternl.h"
+#include <winternl.h>
 
 #pragma comment( lib, "ntdll.lib" )
 //------------------------------------------------------------------------------
@@ -48,7 +48,11 @@ namespace nt
 namespace detail
 {
     inline HMODULE const ntdll( ::GetModuleHandleW( L"ntdll.dll" ) );
-    
+
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmicrosoft-cast"
+#endif
     inline BOOST_ATTRIBUTES( BOOST_COLD, BOOST_RESTRICTED_FUNCTION_L3, BOOST_RESTRICTED_FUNCTION_RETURN )
     void * BOOST_CC_REG get_nt_proc( char const * const proc_name )
     {
@@ -57,6 +61,9 @@ namespace detail
         BOOST_ASSERT( result );
         return result;
     }
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
     template <typename Proc>
     Proc * get_nt_proc( char const * const proc_name )
@@ -67,6 +74,10 @@ namespace detail
     typedef
     NTSTATUS (WINAPI BaseGetNamedObjectDirectory_t)( HANDLE * phDir );
 
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wignored-attributes"
+#endif
     typedef
     NTSYSAPI NTSTATUS (NTAPI NtCreateSection_t)
     (
@@ -106,6 +117,10 @@ namespace detail
         IN HANDLE         SectionHandle,
         IN PLARGE_INTEGER NewSectionSize
     );
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 } // namespace detail
 
 //------------------------------------------------------------------------------

@@ -3,7 +3,7 @@
 /// \file flags/win32/opening.inl
 /// -----------------------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2015.
+/// Copyright (c) Domagoj Saric 2010 - 2021.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -21,6 +21,12 @@
 #include "opening.hpp"
 
 #include "boost/mmap/detail/impl_inline.hpp"
+
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winline-namespace-reopened-noninline"
+#endif
+
 //------------------------------------------------------------------------------
 namespace boost
 {
@@ -45,8 +51,8 @@ opening BOOST_CC_REG opening::create_for_opening_existing_objects
 (
     access_privileges::object        const object_access,
     access_privileges::child_process const child_access,
-    flags_t                                 const system_hints,
-    bool                                    const truncate
+    flags_t                          const system_hints,
+    bool                             const truncate
 )
 {
     return create
@@ -68,4 +74,9 @@ opening BOOST_CC_REG opening::create_for_opening_existing_objects
 //------------------------------------------------------------------------------
 } // boost
 //------------------------------------------------------------------------------
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+
 #endif // opening_inl

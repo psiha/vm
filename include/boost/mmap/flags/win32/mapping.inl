@@ -3,7 +3,7 @@
 /// \file flags/win32/mapping.inl
 /// -----------------------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2015.
+/// Copyright (c) Domagoj Saric 2010 - 2021.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -55,7 +55,7 @@ viewing viewing::create
     /// implicit from the definition of the FILE_MAP_ALL_ACCESS value).
     /// https://msdn.microsoft.com/en-us/library/aa366542(v=vs.85).aspx
     ///                                       (11.08.2015.) (Domagoj Saric)
-    flags_t combined_handle_access_flags( object_access.privileges & 0xFF );
+    flags_t combined_handle_access_flags{ object_access.privileges & 0xFF };
     if ( BOOST_UNLIKELY( share_mode == share_mode::hidden ) )
     {
         combined_handle_access_flags &= ~access_rights::write;

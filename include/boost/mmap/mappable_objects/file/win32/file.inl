@@ -3,7 +3,7 @@
 /// \file file.inl
 /// --------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2015.
+/// Copyright (c) Domagoj Saric 2010 - 2021.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -39,7 +39,7 @@ namespace win32
 //------------------------------------------------------------------------------
 
 // http://en.wikipedia.org/wiki/File_locking#In_UNIX
-DWORD const default_unix_shared_semantics( FILE_SHARE_READ | FILE_SHARE_WRITE );
+DWORD const default_unix_shared_semantics{ FILE_SHARE_READ | FILE_SHARE_WRITE };
 
 namespace detail
 {
@@ -99,7 +99,15 @@ bool BOOST_CC_REG set_size( file_handle::reference const file_handle, std::size_
     BOOL const success( ::SetEndOfFile( file_handle ) );
 
 #ifdef _WIN64
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-field-initializers"
+#pragma clang diagnostic ignored "-Wmissing-braces"
+#endif
     LARGE_INTEGER const offset = { 0 };
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
     BOOST_VERIFY
     (
         ::SetFilePointerEx( file_handle, offset, nullptr, FILE_BEGIN ) ||
@@ -135,7 +143,7 @@ namespace detail
     {
         using namespace nt::detail;
         SECTION_BASIC_INFORMATION info;
-        auto const result( NtQuerySection( mapping_handle, SECTION_INFORMATION_CLASS::SectionBasicInformation, &info, sizeof( info ), nullptr ) );
+        [[ maybe_unused ]] auto const result( NtQuerySection( mapping_handle, SECTION_INFORMATION_CLASS::SectionBasicInformation, &info, sizeof( info ), nullptr ) );
         BOOST_ASSERT( NT_SUCCESS( result ) );
         return static_cast<std::size_t>( info.SectionSize.QuadPart );
     }

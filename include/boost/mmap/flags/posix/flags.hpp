@@ -34,7 +34,7 @@ namespace boost
 //------------------------------------------------------------------------------
 namespace mmap
 {
-//------------------------------------------------------------------------------ 
+//------------------------------------------------------------------------------
 BOOST_MMAP_POSIX_INLINE
 namespace posix
 {
@@ -96,12 +96,19 @@ private:
 
 #ifndef O_EXEC
     static std::uint8_t constexpr O_EXEC = O_RDONLY;
+#elif defined( __EMSCRIPTEN__ )
+    // emscripten defines O_EXEC as O_PATH, which is 010000000, which causes compile error
+    //  error: enumerator value is not a constant expression
+    // due to a
+    // note: signed left shift discards bits
+    #undef O_EXEC
+    static std::uint8_t constexpr O_EXEC = O_RDONLY;
 #endif // O_EXEC
 
 #if O_RDONLY
     static std::uint8_t constexpr O_RDONLY_ = O_RDONLY;
 #else // "Undetectable combined O_RDONLY" http://linux.die.net/man/3/open
-    static std::uint8_t constexpr O_RDONLY_ = O_RDONLY + O_WRONLY + O_RDWR + O_EXEC + 1;
+    static std::uint8_t constexpr O_RDONLY_ = static_cast< std::uint8_t >( O_RDONLY + O_WRONLY + O_RDWR + O_EXEC + 1 );
     static_assert( ( O_RDONLY_ & ( O_RDONLY | O_WRONLY | O_RDWR | O_EXEC ) ) == 0, "" );
 #endif // O_RDONLY
 
@@ -114,15 +121,15 @@ public:
         /// the same flags for all objects (i.e. like on POSIX systems).
         ///                                   (08.09.2015.) (Domagoj Saric)
         //          SYSTEM                        | PROCESS             | MAPPING
-        metaread  = 0                    << syssh | 0         << procsh | PROT_NONE  << mapsh,
-        read      = sys_flags::read      << syssh | O_RDONLY_ << procsh | PROT_READ  << mapsh,
-        write     = sys_flags::write     << syssh | O_WRONLY  << procsh | PROT_WRITE << mapsh,
-        execute   = sys_flags::execute   << syssh | O_EXEC    << procsh | PROT_EXEC  << mapsh,
-        readwrite = sys_flags::readwrite << syssh | O_RDWR    << procsh | ( PROT_READ | PROT_WRITE             ) << mapsh,
-        all       = sys_flags::all       << syssh | O_RDWR    << procsh | ( PROT_READ | PROT_WRITE | PROT_EXEC ) << mapsh
+        metaread  = 0                    << syssh | static_cast< std::uint32_t >( 0         ) << procsh | static_cast< std::uint32_t >(  PROT_NONE  ) << mapsh,
+        read      = sys_flags::read      << syssh | static_cast< std::uint32_t >( O_RDONLY_ ) << procsh | static_cast< std::uint32_t >(  PROT_READ  ) << mapsh,
+        write     = sys_flags::write     << syssh | static_cast< std::uint32_t >( O_WRONLY  ) << procsh | static_cast< std::uint32_t >(  PROT_WRITE ) << mapsh,
+        execute   = sys_flags::execute   << syssh | static_cast< std::uint32_t >( O_EXEC    ) << procsh | static_cast< std::uint32_t >(  PROT_EXEC  ) << mapsh,
+        readwrite = sys_flags::readwrite << syssh | static_cast< std::uint32_t >( O_RDWR    ) << procsh | static_cast< std::uint32_t >(  ( PROT_READ | PROT_WRITE             ) ) << mapsh,
+        all       = sys_flags::all       << syssh | static_cast< std::uint32_t >( O_RDWR    ) << procsh | static_cast< std::uint32_t >(  ( PROT_READ | PROT_WRITE | PROT_EXEC ) ) << mapsh
     };
 
-    constexpr static bool unrestricted( flags_t const privileges ) { return ( ( privileges & all ) == all ); }
+    constexpr static bool unrestricted( flags_t const privileges ) { return ( ( static_cast< std::uint32_t >( privileges ) & all ) == all ); }
 
     struct object
     {
@@ -180,7 +187,7 @@ public:
             // https://stackoverflow.com/questions/53227072/reading-umask-thread-safe/53288382
             auto const mask( ::umask( 0 ) );
             BOOST_VERIFY( ::umask( mask ) == 0 );
-            return mask;
+            return static_cast< flags_t >( mask );
         }
 
         operator flags_t() const noexcept { return flags; }
@@ -194,7 +201,7 @@ public:
     }; // struct system
 
     flags_t BOOST_CC_REG oflag() const noexcept;
-    mode_t  BOOST_CC_REG pmode() const noexcept { return system_access.flags; }
+    mode_t  BOOST_CC_REG pmode() const noexcept { return static_cast< mode_t >( system_access.flags ); }
 
     object        object_access;
     child_process child_access ;
