@@ -1,5 +1,5 @@
 
-### mmap - portable, lightweight, powerful, near-zero-overhead memory mapping and virtual memory management.
+### vm - portable, lightweight, powerful, near-zero-overhead memory mapping and virtual memory management.
 
 
 https://svn.boost.org/trac/boost/ticket/4827
@@ -12,4 +12,4 @@ http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2006/n2044.html
  * err
 
 ##### C++ In-The-Kernel Now!
-##### Copyright � 2011 - 2015. Domagoj Saric. All rights reserved.
+##### Copyright © 2011 - 2024. Domagoj Šarić. All rights reserved.
