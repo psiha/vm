@@ -43,7 +43,7 @@ static_assert(         ( viewing::access_rights::execute & 0xFF ) == FILE_MAP_EX
 static_assert( (unsigned)viewing::share_mode   ::shared           == 0               , "Boost.MMAP internal inconsistency" );
 static_assert( (unsigned)viewing::share_mode   ::hidden           == FILE_MAP_COPY   , "Boost.MMAP internal inconsistency" );
 
-BOOST_IMPL_INLINE
+PSI_VM_IMPL_INLINE
 viewing viewing::create
 (
     access_privileges::object const object_access,
@@ -65,7 +65,7 @@ viewing viewing::create
 }
 
 
-BOOST_IMPL_INLINE
+PSI_VM_IMPL_INLINE
 bool viewing::is_cow() const
 {
     /// \note Mind the Win32+NativeNT flags mess: FILE_MAP_ALL_ACCESS maps to
@@ -81,7 +81,7 @@ bool viewing::is_cow() const
 
 namespace detail
 {
-    BOOST_IMPL_INLINE
+    PSI_VM_IMPL_INLINE
     flags_t BOOST_CC_REG object_access_to_page_access( access_privileges::object const object_access, viewing::share_mode const share_mode )
     {
         // Generate CreateFileMapping flags from access_privileges::object/MapViewOfFile flags
@@ -113,7 +113,7 @@ namespace detail
 } // namespace detail
 
 
-BOOST_IMPL_INLINE
+PSI_VM_IMPL_INLINE
 mapping mapping::create
 (
     access_privileges                const ap,

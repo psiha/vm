@@ -43,7 +43,7 @@ inline namespace posix
 {
 //------------------------------------------------------------------------------
 
-BOOST_IMPL_INLINE
+PSI_VM_IMPL_INLINE
 file_handle BOOST_CC_REG create_file( char const * const file_name, flags::opening const flags ) noexcept
 {
     BOOST_ASSERT( file_name );
@@ -56,7 +56,7 @@ file_handle BOOST_CC_REG create_file( char const * const file_name, flags::openi
 }
 
 #ifdef BOOST_MSVC
-BOOST_IMPL_INLINE
+PSI_VM_IMPL_INLINE
 file_handle BOOST_CC_REG create_file( wchar_t const * const file_name, flags::opening const flags )
 {
     BOOST_ASSERT( file_name );
@@ -66,17 +66,17 @@ file_handle BOOST_CC_REG create_file( wchar_t const * const file_name, flags::op
 #endif // BOOST_MSVC
 
 
-BOOST_IMPL_INLINE bool BOOST_CC_REG delete_file(    char const * const file_name ) noexcept { return ::  unlink( file_name ) == 0; }
+PSI_VM_IMPL_INLINE bool BOOST_CC_REG delete_file(    char const * const file_name ) noexcept { return ::  unlink( file_name ) == 0; }
 #ifdef BOOST_MSVC
-BOOST_IMPL_INLINE bool BOOST_CC_REG delete_file( wchar_t const * const file_name ) noexcept { return ::_wunlink( file_name ) == 0; }
+PSI_VM_IMPL_INLINE bool BOOST_CC_REG delete_file( wchar_t const * const file_name ) noexcept { return ::_wunlink( file_name ) == 0; }
 #endif // BOOST_MSVC
 
 
 #ifdef BOOST_HAS_UNISTD_H
-BOOST_IMPL_INLINE bool BOOST_CC_REG set_size( file_handle::reference const file_handle, std::size_t const desired_size ) noexcept { return ::ftruncate( file_handle, static_cast< off_t >( desired_size ) ) != -1; }
+PSI_VM_IMPL_INLINE bool BOOST_CC_REG set_size( file_handle::reference const file_handle, std::size_t const desired_size ) noexcept { return ::ftruncate( file_handle, static_cast< off_t >( desired_size ) ) != -1; }
 #endif // BOOST_HAS_UNISTD_H
 
-BOOST_IMPL_INLINE
+PSI_VM_IMPL_INLINE
 std::size_t BOOST_CC_REG get_size( file_handle::reference const file_handle ) noexcept
 {
     struct stat file_info;

@@ -35,7 +35,7 @@ static_assert( (unsigned)shared_memory::system_hints::default                   
 static_assert( (unsigned)shared_memory::system_hints::only_reserve_address_space == SEC_RESERVE, "Boost.MMAP internal inconsistency" );
 
 
-BOOST_IMPL_INLINE
+PSI_VM_IMPL_INLINE
 shared_memory BOOST_CC_REG shared_memory::create
 (
     access_privileges                const ap,

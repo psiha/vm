@@ -83,11 +83,11 @@ namespace detail
 
     struct dynamic_sd
         :
-        base_from_member<std::uint8_t>,
+        boost::base_from_member<std::uint8_t>,
         ::SECURITY_DESCRIPTOR
     {
-        /*constexpr...base_from_member...*/
-        dynamic_sd() noexcept : base_from_member<std::uint8_t>( std::uint8_t( 0 ) ) {}
+        /*constexpr...boost::base_from_member...*/
+        dynamic_sd() noexcept : boost::base_from_member<std::uint8_t>( std::uint8_t( 0 ) ) {}
         dynamic_sd( dynamic_sd const & ) = delete;
         void reset() noexcept { member = 0; }
         std::uint8_t add_ref() const noexcept { return ++const_cast<std::uint8_t &>( member ); }

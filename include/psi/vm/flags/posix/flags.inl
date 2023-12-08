@@ -35,7 +35,7 @@ namespace flags
 {
 //------------------------------------------------------------------------------
 
-BOOST_IMPL_INLINE
+PSI_VM_IMPL_INLINE
 flags_t BOOST_CC_REG access_privileges::oflag() const noexcept
 {
     //...zzz...use fadvise...

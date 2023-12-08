@@ -37,7 +37,7 @@ namespace flags
 {
 //------------------------------------------------------------------------------
 
-BOOST_IMPL_INLINE
+PSI_VM_IMPL_INLINE
 opening BOOST_CC_REG opening::create
 (
     access_privileges                const ap,
@@ -51,7 +51,7 @@ opening BOOST_CC_REG opening::create
     return { .oflag = oflag, .pmode = static_cast<flags_t>( pmode ) };
 }
 
-BOOST_IMPL_INLINE
+PSI_VM_IMPL_INLINE
 opening BOOST_CC_REG opening::create_for_opening_existing_objects
 (
     access_privileges::object        const object_access,

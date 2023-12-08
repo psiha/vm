@@ -89,10 +89,10 @@ namespace detail
         static
         named_memory_base BOOST_CC_REG create
         (
-            shm_path    const & BOOST_RESTRICTED_REF       name,
-            std::size_t                              const size,
-            mflags                                   const flags,
-            DWORD                                    const extra_hints
+            shm_path    const & __restrict       name,
+            std::size_t                    const size,
+            mflags                         const flags,
+            DWORD                          const extra_hints
         ) noexcept
         {
             flags::access_privileges const ap = { flags.object_access, flags.child_access, flags.system_access };
@@ -142,7 +142,7 @@ namespace detail
             switch ( creation_disposition )
             {
                 using disposition = flags::named_object_construction_policy;
-                case disposition::open_existing                  : 
+                case disposition::open_existing                  :
                 case disposition::open_or_create                 : break;
                 case disposition::create_new_or_truncate_existing: break;
                 case disposition::open_and_truncate_existing     : if ( preexisting_mapping && get_section_size( new_mapping.get() ) != size ) return {};
@@ -196,7 +196,7 @@ namespace detail
             // https://msdn.microsoft.com/en-us/library/windows/desktop/aa365531(v=vs.85).aspx "erratum comment" SetEndOfFile can be used to enlarge a mapped file...
             // http://blogs.msdn.com/b/oldnewthing/archive/2015/01/30/10589818.aspx            TONT Creating a shared memory block that can grow in size
             // http://blogs.technet.com/b/markrussinovich/archive/2008/11/17/3155406.aspx      Pushing the Limits of Windows: Virtual Memory
-            // 
+            //
             // Unix2Win32 migration guides
             // http://www.microsoft.com/en-us/download/details.aspx?id=6904
             // https://msdn.microsoft.com/en-us/library/y23kc048.aspx
@@ -209,7 +209,7 @@ namespace detail
             // * child process inheritance
             DWORD flags; BOOST_VERIFY( ::GetHandleInformation( this_mapping.get(), &flags ) );
             auto const child_access( ( flags & HANDLE_FLAG_INHERIT ) != 0 );
-           
+
             // * file name
             // Obtaining a File Name From a File Handle
             // https://msdn.microsoft.com/en-us/library/windows/desktop/aa366789(v=vs.85).aspx

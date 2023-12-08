@@ -68,17 +68,17 @@ namespace detail
     }; // struct create_file
 } // namespace detail
 
-BOOST_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
+PSI_VM_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
 file_handle BOOST_CC_REG create_file( char    const * const file_name, flags::opening const flags ) noexcept { return file_handle{ detail::create_file::do_create( file_name, flags ) }; }
-BOOST_IMPL_INLINE
+PSI_VM_IMPL_INLINE
 file_handle BOOST_CC_REG create_file( wchar_t const * const file_name, flags::opening const flags ) noexcept { return file_handle{ detail::create_file::do_create( file_name, flags ) }; }
 
 
-BOOST_IMPL_INLINE bool BOOST_CC_REG delete_file( char    const * const file_name ) noexcept { return ::DeleteFileA( file_name ) != false; }
-BOOST_IMPL_INLINE bool BOOST_CC_REG delete_file( wchar_t const * const file_name ) noexcept { return ::DeleteFileW( file_name ) != false; }
+PSI_VM_IMPL_INLINE bool BOOST_CC_REG delete_file( char    const * const file_name ) noexcept { return ::DeleteFileA( file_name ) != false; }
+PSI_VM_IMPL_INLINE bool BOOST_CC_REG delete_file( wchar_t const * const file_name ) noexcept { return ::DeleteFileW( file_name ) != false; }
 
 
-BOOST_IMPL_INLINE
+PSI_VM_IMPL_INLINE
 bool BOOST_CC_REG set_size( file_handle::reference const file_handle, std::size_t const desired_size ) noexcept
 {
     // It is 'OK' to send null/invalid handles to Windows functions (they will
@@ -121,7 +121,7 @@ bool BOOST_CC_REG set_size( file_handle::reference const file_handle, std::size_
 }
 
 
-BOOST_IMPL_INLINE
+PSI_VM_IMPL_INLINE
 std::size_t BOOST_CC_REG get_size( file_handle::reference const file_handle ) noexcept
 {
 #ifdef _WIN64
@@ -139,12 +139,12 @@ std::size_t BOOST_CC_REG get_size( file_handle::reference const file_handle ) no
 namespace detail
 {
     inline
-    std::size_t get_section_size( HANDLE const mapping_handle )
+    std::size_t get_section_size( HANDLE const mapping_handle ) noexcept
     {
         using namespace nt::detail;
         SECTION_BASIC_INFORMATION info;
-        [[ maybe_unused ]] auto const result( NtQuerySection( mapping_handle, SECTION_INFORMATION_CLASS::SectionBasicInformation, &info, sizeof( info ), nullptr ) );
-        BOOST_ASSERT( NT_SUCCESS( result ) );
+        auto const result( NtQuerySection( mapping_handle, SECTION_INFORMATION_CLASS::SectionBasicInformation, &info, sizeof( info ), nullptr ) );
+        BOOST_VERIFY( NT_SUCCESS( result ) );
         return static_cast<std::size_t>( info.SectionSize.QuadPart );
     }
 
@@ -189,9 +189,9 @@ namespace detail
                 "CreateFileMapping accepts INVALID_HANDLE_VALUE as valid input but only "
                 "if the size parameter is not zero."
             );
-            auto const creation_disposition( flags.creation_disposition    );
-            auto const error               ( err::last_win32_error::get()  );
-            auto const preexisting         ( error == ERROR_ALREADY_EXISTS );
+            auto const creation_disposition{ flags.creation_disposition    };
+            auto const error               { err::last_win32_error::get()  };
+            auto const preexisting         { error == ERROR_ALREADY_EXISTS };
             using disposition = flags::named_object_construction_policy;
             switch ( creation_disposition )
             {
@@ -215,14 +215,14 @@ namespace detail
     }; // struct create_mapping_impl
 } // namespace detail
 
-BOOST_IMPL_INLINE
+PSI_VM_IMPL_INLINE
 mapping BOOST_CC_REG create_mapping( file_handle::reference const file, flags::mapping const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
 {
     return detail::create_mapping_impl::do_map( file, flags, maximum_size, name );
 }
 
 #if 0
-BOOST_IMPL_INLINE
+PSI_VM_IMPL_INLINE
 mapping BOOST_CC_REG create_mapping( handle::reference const file, flags::mapping const flags ) noexcept
 {
     auto const mapping_handle
@@ -233,7 +233,7 @@ mapping BOOST_CC_REG create_mapping( handle::reference const file, flags::mappin
 }
 #endif
 
-BOOST_IMPL_INLINE
+PSI_VM_IMPL_INLINE
 mapping BOOST_CC_REG create_mapping
 (
     handle                  ::reference     const file,

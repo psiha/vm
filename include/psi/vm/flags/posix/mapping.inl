@@ -35,7 +35,7 @@ namespace flags
 {
 //------------------------------------------------------------------------------
 
-BOOST_IMPL_INLINE
+PSI_VM_IMPL_INLINE
 viewing viewing::create
 (
     access_privileges::object const access_flags,

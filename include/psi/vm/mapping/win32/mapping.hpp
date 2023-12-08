@@ -51,10 +51,10 @@ struct mapping
 
     static bool const owns_parent_handle = true;
 
-    mapping( native_handle_t const native_handle, flags::viewing const view_mapping_flags_param )
+    constexpr mapping( native_handle_t const native_handle, flags::viewing const view_mapping_flags_param ) noexcept
         : handle( native_handle ), view_mapping_flags( view_mapping_flags_param ) {}
 
-    bool is_read_only() const { return ( view_mapping_flags.map_view_flags & flags::mapping::access_rights::write ) == 0; }
+    bool is_read_only() const noexcept { return ( view_mapping_flags.map_view_flags & flags::mapping::access_rights::write ) == 0; }
 
     flags::viewing const view_mapping_flags;
 }; // struct mapping

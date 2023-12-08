@@ -29,7 +29,7 @@ namespace flags
 {
 //------------------------------------------------------------------------------
 
-BOOST_IMPL_INLINE
+PSI_VM_IMPL_INLINE
 shared_memory BOOST_CC_REG shared_memory::create
 (
     access_privileges                const ap,

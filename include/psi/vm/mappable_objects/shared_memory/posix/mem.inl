@@ -45,7 +45,7 @@ namespace detail
     // http://stackoverflow.com/questions/13377982/remove-posix-shared-memory-when-not-in-use
     // http://rhaas.blogspot.hr/2012/06/absurd-shared-memory-limits.html
 
-    BOOST_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_MINSIZE )
+    PSI_VM_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_MINSIZE )
     named_semaphore::named_semaphore
     (
         char                                            const * const name,

@@ -111,8 +111,7 @@ public:
     using memory_range_t = basic_memory_range<Element>;
 
 public:
-  //basic_mapped_view() noexcept = default; // Clang 3.6 error : exception specification of explicitly defaulted default constructor does not match the calculated one
-    basic_mapped_view() noexcept {}
+    constexpr basic_mapped_view() noexcept = default;
     basic_mapped_view
     (
         mapping_t     const & source_mapping,
@@ -127,13 +126,26 @@ public:
     {
         do_unmap();
         static_cast<memory_range_t &>( *this ) = other;
-        static_cast<memory_range_t &>( other ) = memory_range_t();
+        static_cast<memory_range_t &>( other ) = memory_range_t{};
         return *this;
     }
 
     bool flush() const { return mapper::flush( detail0::make_basic_view( *this ) ); }
 
     explicit operator bool() const noexcept { /*BOOST_ASSUME( memory_range_t::empty() == !memory_range_t::begin() );*/ return !memory_range_t::empty(); }
+
+    void BOOST_CC_REG unmap() noexcept
+    {
+        do_unmap();
+        static_cast<memory_range_t &>( *this ) = {};
+    } 
+
+    memory_range_t release() noexcept
+    {
+        memory_range_t span{ *this };
+        static_cast<memory_range_t &>( *this ) = memory_range_t{};
+        return span;
+    }
 
 public: // Factory methods.
     static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
@@ -179,11 +191,6 @@ public: // Factory methods.
     }
 
 private:
-    void BOOST_CC_REG unmap() noexcept
-    {
-        do_unmap();
-        static_cast<memory_range_t &>( *this ) = memory_range_t();
-    }
     /// \note Required to enable the emplacement constructors of boost::err
     /// wrappers. To be solved in a cleaner way...
     ///                                       (28.05.2015.) (Domagoj Saric)

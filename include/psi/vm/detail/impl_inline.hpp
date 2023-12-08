@@ -19,9 +19,9 @@
 //------------------------------------------------------------------------------
 
 #ifdef PSI_VM_HEADER_ONLY
-    #define BOOST_IMPL_INLINE inline
+#   define PSI_VM_IMPL_INLINE inline
 #else
-    #define BOOST_IMPL_INLINE
+#   define PSI_VM_IMPL_INLINE
 #endif // PSI_VM_HEADER_ONLY
 
 //------------------------------------------------------------------------------

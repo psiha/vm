@@ -25,10 +25,10 @@
 #include <cstdint>
 #include <cstdio>
 //------------------------------------------------------------------------------
+namespace std { class path; }
+//------------------------------------------------------------------------------
 namespace psi
 {
-//------------------------------------------------------------------------------
-namespace filesystem { class path; }
 //------------------------------------------------------------------------------
 namespace vm
 {
@@ -37,11 +37,11 @@ namespace vm
 template <typename Handle>
 struct is_mappable : std::false_type {};
 
-template <> struct is_mappable<filesystem::path const  &> : std::true_type {}; // c_str()
-template <> struct is_mappable<filesystem::path         > : std::true_type {};
-template <> struct is_mappable<::FILE                  &> : std::true_type {};
-template <> struct is_mappable<::FILE                  *> : std::true_type {};
-template <> struct is_mappable<handle::native_handle_t  > : std::true_type {};
+template <> struct is_mappable<std::filesystem::path const  &> : std::true_type {}; // c_str()
+template <> struct is_mappable<std::filesystem::path         > : std::true_type {};
+template <> struct is_mappable<::FILE                       &> : std::true_type {};
+template <> struct is_mappable<::FILE                       *> : std::true_type {};
+template <> struct is_mappable<handle::native_handle_t       > : std::true_type {};
 #ifdef _WIN32
 template <> struct is_mappable<posix::handle::native_handle_t> : std::true_type {};
 #endif // _WIN32

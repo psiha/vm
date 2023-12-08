@@ -46,7 +46,7 @@ static_assert( system_hints::sequential_access ==   FILE_FLAG_SEQUENTIAL_SCAN   
 static_assert( system_hints::avoid_caching     == ( FILE_FLAG_NO_BUFFERING   | FILE_FLAG_WRITE_THROUGH   ), "" );
 static_assert( system_hints::temporary         == ( FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE ), "" );
 
-BOOST_IMPL_INLINE
+PSI_VM_IMPL_INLINE
 opening BOOST_CC_REG opening::create_for_opening_existing_objects
 (
     access_privileges::object        const object_access,

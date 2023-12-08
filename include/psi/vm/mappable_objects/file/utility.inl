@@ -3,7 +3,7 @@
 /// \file mapped_view.inl
 /// ---------------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2020.
+/// Copyright (c) Domagoj Saric 2010 - 2024.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -34,7 +34,7 @@ namespace detail0
     using opening             = flags::opening;
     using default_file_handle = file_handle   ;
 
-    BOOST_IMPL_INLINE
+    PSI_VM_IMPL_INLINE
     opening create_rw_file_flags()
     {
         using namespace flags;
@@ -51,7 +51,7 @@ namespace detail0
         );
     }
 
-    BOOST_IMPL_INLINE
+    PSI_VM_IMPL_INLINE
     opening create_r_file_flags()
     {
         using namespace flags;
@@ -65,7 +65,7 @@ namespace detail0
                );
     }
 
-    BOOST_IMPL_INLINE
+    PSI_VM_IMPL_INLINE
     fallible_result<mapped_view> BOOST_CC_REG
     map_file( default_file_handle && file_handle, std::size_t /*const*/ desired_size ) noexcept
     {
@@ -112,7 +112,7 @@ namespace detail0
     }
 
 
-    BOOST_IMPL_INLINE
+    PSI_VM_IMPL_INLINE
     fallible_result<read_only_mapped_view>
     map_read_only_file( default_file_handle && file_handle ) noexcept
     {
@@ -143,26 +143,26 @@ namespace detail0
     }
 } // namespace detail0
 
-BOOST_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
+PSI_VM_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
 fallible_result<mapped_view> map_file( char const * const file_name, std::size_t const desired_size ) noexcept
 {
     return detail0::map_file( create_file( file_name, detail0::create_rw_file_flags() ), desired_size );
 }
 
-BOOST_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
+PSI_VM_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
 fallible_result<read_only_mapped_view> map_read_only_file( char const * const file_name ) noexcept
 {
     return detail0::map_read_only_file( create_file( file_name, detail0::create_r_file_flags() ) );
 }
 
 #ifdef _WIN32
-    BOOST_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
+    PSI_VM_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
     fallible_result<mapped_view> map_file( wchar_t const * const file_name, std::size_t const desired_size )
     {
         return detail0::map_file( create_file( file_name, detail0::create_rw_file_flags() ), desired_size );
     }
 
-    BOOST_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
+    PSI_VM_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
     fallible_result<read_only_mapped_view> map_read_only_file( wchar_t const * const file_name )
     {
         return detail0::map_read_only_file( create_file( file_name, detail0::create_r_file_flags() ) );
