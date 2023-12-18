@@ -40,11 +40,15 @@ namespace flags
 
 using flags_t = int;
 
-struct viewing
+struct [[ clang::trivial_abi ]] viewing
 {
     enum struct share_mode
     {
+#   if defined( MAP_SHARED_VALIDATE ) && !defined( NDEBUG )
+        shared = MAP_SHARED_VALIDATE,
+#   else
         shared = MAP_SHARED,
+#   endif
         hidden = MAP_PRIVATE
     };
 
