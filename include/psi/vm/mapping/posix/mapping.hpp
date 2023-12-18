@@ -45,7 +45,8 @@ struct [[ clang::trivial_abi ]] mapping
     using const_reference = mapping const &;
     using       reference = mapping       &;
 
-    static bool const retains_parent_handle = false;
+    static bool constexpr retains_parent_handle              = false;
+    static bool constexpr create_mapping_can_set_source_size = false;
 
     constexpr mapping(            ) noexcept = default;
     constexpr mapping( mapping && ) noexcept = default;
