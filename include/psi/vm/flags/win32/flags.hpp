@@ -27,11 +27,7 @@
 #include <array>
 #include <cstdint>
 
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Winline-namespace-reopened-noninline"
-#endif
-
+#include <windows.h>
 //------------------------------------------------------------------------------
 namespace psi
 {
@@ -51,13 +47,13 @@ using flags_t = unsigned long; // DWORD
 namespace detail
 {
     constexpr inline BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L3 )
-    SECURITY_ATTRIBUTES make_sa( SECURITY_DESCRIPTOR const * __restrict const p_sd, bool const inheritable )
+    SECURITY_ATTRIBUTES make_sa( SECURITY_DESCRIPTOR const * __restrict const p_sd, bool const inheritable ) noexcept
     {
         return { sizeof( SECURITY_ATTRIBUTES ), const_cast<SECURITY_DESCRIPTOR *>( p_sd ), inheritable };
     }
 
     inline
-    SECURITY_ATTRIBUTES const * make_sa_ptr( SECURITY_ATTRIBUTES & __restrict sa, SECURITY_DESCRIPTOR const * __restrict const p_sd, bool const inheritable )
+    SECURITY_ATTRIBUTES const * make_sa_ptr( SECURITY_ATTRIBUTES & __restrict sa, SECURITY_DESCRIPTOR const * __restrict const p_sd, bool const inheritable ) noexcept
     {
         if ( BOOST_LIKELY( !inheritable ) && !p_sd )
             return nullptr;
@@ -252,8 +248,4 @@ struct access_privileges
     #include "flags.inl"
 #endif // PSI_VM_HEADER_ONLY
 
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
-
-#endif // opening_hpp
+#endif // flags_hpp

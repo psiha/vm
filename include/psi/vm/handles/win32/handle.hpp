@@ -31,10 +31,6 @@
 
 #include <cstdint>
 
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Winline-namespace-reopened-noninline"
-#endif
 //------------------------------------------------------------------------------
 namespace psi
 {
@@ -42,7 +38,7 @@ namespace psi
 namespace vm
 {
 //------------------------------------------------------------------------------
-namespace win32
+inline namespace win32
 {
 //------------------------------------------------------------------------------
 
@@ -83,7 +79,4 @@ using handle = handle_impl<handle_traits>;
 //------------------------------------------------------------------------------
 } // namespace psi
 //------------------------------------------------------------------------------
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
 #endif // handle_hpp

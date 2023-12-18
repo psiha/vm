@@ -52,7 +52,7 @@ struct handle_traits
     static native_t const invalid_value = -1;
 
     static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_RESTRICTED_FUNCTION_L1, BOOST_EXCEPTIONLESS )
-    void BOOST_CC_REG close( native_t const native_handle )
+    void BOOST_CC_REG close( native_t const native_handle ) noexcept
     {
         BOOST_VERIFY
         (

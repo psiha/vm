@@ -55,7 +55,7 @@ namespace detail
         char const * name () const { return &buffer_[ name_offset_ ]; }
 
     private:
-        void BOOST_CC_REG apply( char const * BOOST_RESTRICTED_PTR const name )
+        void BOOST_CC_REG apply( char const * __restrict const name )
         {
             auto const length( static_cast<std::uint8_t>( ::GetWindowsDirectoryA( &buffer_[ 0 ], static_cast<std::uint16_t>( buffer_.size() ) ) ) );
             BOOST_ASSUME( length );
@@ -367,7 +367,7 @@ public:
     }
 
 private:
-    /// \note Required to enable the emplacement constructors of boost::err
+    /// \note Required to enable the emplacement constructors of err
     /// wrappers. To be solved in a cleaner way...
     ///                                       (28.05.2015.) (Domagoj Saric)
     friend class  err::result_or_error<native_named_memory, error>;

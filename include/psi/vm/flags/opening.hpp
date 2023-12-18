@@ -26,11 +26,11 @@ namespace psi
 namespace vm
 {
 //------------------------------------------------------------------------------
+#ifdef DOXYGEN_ONLY
 namespace flags
 {
 //------------------------------------------------------------------------------
 
-#ifdef DOXYGEN_ONLY
 struct opening
 {
     /// Access-pattern optimisation hints
@@ -65,10 +65,10 @@ struct opening
 
     unspecified-impl_specific public_data_members;
 }; // struct opening
-#endif // DOXYGEN_ONLY
 
 //------------------------------------------------------------------------------
 } // namespace flags
+#endif // DOXYGEN_ONLY
 //------------------------------------------------------------------------------
 } // namespace vm
 //------------------------------------------------------------------------------

@@ -107,7 +107,7 @@ namespace detail
             {
                 BOOST_VERIFY( ::shm_unlink( slashed_name   ) == 0 );
                 BOOST_VERIFY( ::close     ( file_descriptor) == 0 );
-                file_descriptor = -1;
+                file_descriptor = file_handle::invalid_handle;
             }
         }
         return { file_descriptor };
@@ -190,7 +190,7 @@ public:
         return true;
     }
 
-    fallible_result<std::size_t> size() const noexcept { return get_size( *this ); }
+    auto size() const noexcept { return get_size( *this ); }
 
 private:
 }; // class native_named_memory
@@ -312,7 +312,7 @@ namespace detail
             }
         }
 
-        fallible_result<std::size_t> size() const noexcept { return get_size( *this ); }
+        auto size() const noexcept { return get_size( *this ); }
 
         using base_t::operator bool;
 

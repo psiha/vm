@@ -19,13 +19,13 @@
 #pragma once
 //------------------------------------------------------------------------------
 #include "psi/vm/detail/impl_selection.hpp"
+#include "psi/vm/handles/handle.hpp"
 
 #include PSI_VM_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /mapping.hpp ) )
 
 #include <cstdint>
 #include <cstdio>
-//------------------------------------------------------------------------------
-namespace std { class path; }
+#include <filesystem> // merely for the (fwd) decl std::filesystem::path
 //------------------------------------------------------------------------------
 namespace psi
 {
@@ -37,11 +37,11 @@ namespace vm
 template <typename Handle>
 struct is_mappable : std::false_type {};
 
-template <> struct is_mappable<std::filesystem::path const  &> : std::true_type {}; // c_str()
-template <> struct is_mappable<std::filesystem::path         > : std::true_type {};
-template <> struct is_mappable<::FILE                       &> : std::true_type {};
-template <> struct is_mappable<::FILE                       *> : std::true_type {};
-template <> struct is_mappable<handle::native_handle_t       > : std::true_type {};
+template <> struct is_mappable<std::filesystem::path const &> : std::true_type {}; // c_str()
+template <> struct is_mappable<std::filesystem::path        > : std::true_type {};
+template <> struct is_mappable<::FILE                      &> : std::true_type {};
+template <> struct is_mappable<::FILE                      *> : std::true_type {};
+template <> struct is_mappable<handle::native_handle_t      > : std::true_type {};
 #ifdef _WIN32
 template <> struct is_mappable<posix::handle::native_handle_t> : std::true_type {};
 #endif // _WIN32

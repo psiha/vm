@@ -30,7 +30,7 @@ namespace psi
 namespace vm
 {
 //------------------------------------------------------------------------------
-inline namespace posix
+PSI_VM_POSIX_INLINE namespace posix
 {
 //------------------------------------------------------------------------------
 namespace flags
