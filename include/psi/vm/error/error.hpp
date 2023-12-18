@@ -22,7 +22,7 @@
 
 #include PSI_VM_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /error.hpp ) )
 
-#include <boost/err/fallible_result.hpp>
+#include <psi/err/fallible_result.hpp>
 //------------------------------------------------------------------------------
 namespace psi
 {

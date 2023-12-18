@@ -20,7 +20,7 @@
 //------------------------------------------------------------------------------
 #include "psi/vm/detail/impl_selection.hpp"
 
-#include <boost/err/errno.hpp>
+#include <psi/err/errno.hpp>
 //------------------------------------------------------------------------------
 namespace psi
 {
