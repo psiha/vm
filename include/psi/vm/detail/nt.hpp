@@ -26,7 +26,7 @@
 #pragma once
 //------------------------------------------------------------------------------
 #include <boost/assert.hpp>
-#include <boost/config.hpp>
+#include <boost/config_ex.hpp>
 
 #ifndef _WIN32_WINNT
 #   define _WIN32_WINNT 0x0A00 // _WIN32_WINNT_WIN10
@@ -35,15 +35,17 @@
 
 #pragma comment( lib, "ntdll.lib" )
 //------------------------------------------------------------------------------
-namespace psi
+namespace psi::vm::nt
 {
 //------------------------------------------------------------------------------
-namespace vm
-{
-//------------------------------------------------------------------------------
-namespace nt
-{
-//------------------------------------------------------------------------------
+
+#ifndef STATUS_SUCCESS
+using NTSTATUS = long;
+NTSTATUS constexpr STATUS_SUCCESS{ 0 };
+#endif // STATUS_SUCCESS
+#ifndef STATUS_CONFLICTING_ADDRESSES
+auto constexpr STATUS_CONFLICTING_ADDRESSES{ NTSTATUS( 0xC0000018 ) };
+#endif
 
 namespace detail
 {
@@ -65,62 +67,61 @@ namespace detail
     template <typename Proc>
     Proc * get_nt_proc( char const * const proc_name )
     {
-        return reinterpret_cast<Proc *>( get_nt_proc( proc_name ) );
+        return reinterpret_cast<Proc *>( detail::get_nt_proc( proc_name ) );
     }
 #ifdef __clang__
 #   pragma clang diagnostic pop
 #endif
-
-    typedef
-    NTSTATUS (WINAPI BaseGetNamedObjectDirectory_t)( HANDLE * phDir );
-
-    typedef
-    NTSYSAPI NTSTATUS (NTAPI NtCreateSection_t)
-    (
-        OUT PHANDLE            SectionHandle,
-        IN ULONG               DesiredAccess,
-        IN POBJECT_ATTRIBUTES  ObjectAttributes OPTIONAL,
-        IN PLARGE_INTEGER      MaximumSize OPTIONAL,
-        IN ULONG               PageAttributess,
-        IN ULONG               SectionAttributes,
-        IN HANDLE              FileHandle OPTIONAL
-    );
-    inline auto const NtCreateSection{ get_nt_proc<NtCreateSection_t>( "NtCreateSection" ) };
-
-    enum SECTION_INFORMATION_CLASS { SectionBasicInformation, SectionImageInformation };
-
-    struct SECTION_BASIC_INFORMATION
-    {
-        PVOID         BaseAddress;
-        ULONG         SectionAttributes;
-        LARGE_INTEGER SectionSize;
-    };
-
-    typedef
-    NTSYSAPI NTSTATUS (NTAPI NtQuerySection_t)
-    (
-        IN  HANDLE                    SectionHandle,
-        IN  SECTION_INFORMATION_CLASS InformationClass,
-        OUT PVOID                     InformationBuffer,
-        IN  ULONG                     InformationBufferSize,
-        OUT PULONG                    ResultLength OPTIONAL
-    );
-    inline auto const NtQuerySection{ get_nt_proc<NtQuerySection_t>( "NtQuerySection" ) };
-
-    typedef
-    NTSYSAPI NTSTATUS (NTAPI NtExtendSection_t)
-    (
-        IN HANDLE         SectionHandle,
-        IN PLARGE_INTEGER NewSectionSize
-    );
-    inline auto const NtExtendSection{ get_nt_proc<NtExtendSection_t>( "NtExtendSection" ) };
 } // namespace detail
 
+using BaseGetNamedObjectDirectory_t = NTSTATUS (WINAPI)( HANDLE * phDir );
+
+using NtCreateSection_t = NTSYSAPI NTSTATUS (NTAPI)
+(
+    OUT PHANDLE            SectionHandle,
+    IN ULONG               DesiredAccess,
+    IN POBJECT_ATTRIBUTES  ObjectAttributes OPTIONAL,
+    IN PLARGE_INTEGER      MaximumSize OPTIONAL,
+    IN ULONG               PageAttributess,
+    IN ULONG               SectionAttributes,
+    IN HANDLE              FileHandle OPTIONAL
+);
+inline auto const NtCreateSection{ detail::get_nt_proc<NtCreateSection_t>( "NtCreateSection" ) };
+
+enum SECTION_INFORMATION_CLASS { SectionBasicInformation, SectionImageInformation };
+
+struct SECTION_BASIC_INFORMATION
+{
+    PVOID         BaseAddress;
+    ULONG         SectionAttributes;
+    LARGE_INTEGER SectionSize;
+};
+
+using NtQuerySection_t = NTSYSAPI NTSTATUS (NTAPI)
+(
+    IN  HANDLE                    SectionHandle,
+    IN  SECTION_INFORMATION_CLASS InformationClass,
+    OUT PVOID                     InformationBuffer,
+    IN  ULONG                     InformationBufferSize,
+    OUT PULONG                    ResultLength OPTIONAL
+);
+inline auto const NtQuerySection{ detail::get_nt_proc<NtQuerySection_t>( "NtQuerySection" ) };
+
+using NtExtendSection_t = NTSYSAPI NTSTATUS (NTAPI)
+(
+    IN HANDLE         SectionHandle,
+    IN PLARGE_INTEGER NewSectionSize
+);
+inline auto const NtExtendSection{ detail::get_nt_proc<NtExtendSection_t>( "NtExtendSection" ) };
+
+using NtAllocateVirtualMemory_t = NTSTATUS (NTAPI)( IN HANDLE ProcessHandle, IN OUT PVOID * BaseAddress, ULONG_PTR ZeroBits, PSIZE_T RegionSize, ULONG allocation_type, ULONG Protect );
+using NtFreeVirtualMemory_t     = NTSTATUS (NTAPI)( IN HANDLE ProcessHandle, IN     PVOID * BaseAddress, PSIZE_T RegionSize, ULONG FreeType );
+using NtProtectVirtualMemory_t  = NTSTATUS (NTAPI)( IN HANDLE ProcessHandle, IN OUT PVOID * BaseAddress, IN OUT PULONG NumberOfBytesToProtect, IN ULONG NewAccessProtection, OUT PULONG OldAccessProtection );
+
+inline auto const NtAllocateVirtualMemory{ detail::get_nt_proc<NtAllocateVirtualMemory_t>( "NtAllocateVirtualMemory" ) };
+inline auto const NtFreeVirtualMemory    { detail::get_nt_proc<NtFreeVirtualMemory_t    >( "NtFreeVirtualMemory"     ) };
+
 //------------------------------------------------------------------------------
-} // nt
-//------------------------------------------------------------------------------
-} // namespace vm
-//------------------------------------------------------------------------------
-} // namespace psi
+} // psi::vm::nt
 //------------------------------------------------------------------------------
 #endif // nt_hpp

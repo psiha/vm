@@ -132,7 +132,7 @@ namespace detail
             LARGE_INTEGER maximum_size{ .QuadPart = static_cast<LONGLONG>( std::max( 1ULL, size ) ) };
             auto const nt_result
             {
-                nt::detail::NtCreateSection // TODO use it for named sections also
+                nt::NtCreateSection // TODO use it for named sections also
                 (
                     &handle,
                     SECTION_EXTEND_SIZE | SECTION_MAP_READ | SECTION_MAP_WRITE | SECTION_QUERY | STANDARD_RIGHTS_REQUIRED,

@@ -65,7 +65,7 @@ struct [[ clang::trivial_abi ]] mapping
 
 inline std::uint64_t get_size( mapping::const_handle const mapping_handle ) noexcept
 {
-    using namespace nt::detail;
+    using namespace nt;
     SECTION_BASIC_INFORMATION info;
     auto const result{ NtQuerySection( mapping_handle.value, SECTION_INFORMATION_CLASS::SectionBasicInformation, &info, sizeof( info ), nullptr ) };
     BOOST_VERIFY( NT_SUCCESS( result ) );
@@ -74,7 +74,7 @@ inline std::uint64_t get_size( mapping::const_handle const mapping_handle ) noex
 
 inline err::fallible_result<void, nt::error> set_size( mapping::handle const mapping_handle, std::uint64_t const new_size ) noexcept
 {
-    using namespace nt::detail;
+    using namespace nt;
     LARGE_INTEGER ntsz{ .QuadPart = static_cast<LONGLONG>( new_size ) };
     auto const result{ NtExtendSection( mapping_handle.value, &ntsz ) };
     if ( !NT_SUCCESS( result ) ) [[ unlikely ]]

@@ -19,12 +19,29 @@
     #error this file is meant for non header only builds
 #endif // PSI_VM_HEADER_ONLY
 
-#include "handles/handle.inl"
+//...mrmlj...ugh...to be cleaned up
+#ifdef _WIN32
+#include "allocation/impl/allocation.win32.cpp"
+#include "flags/win32/flags.inl"
+#include "flags/win32/mapping.inl"
+#include "flags/win32/opening.inl"
+#include "mappable_objects/shared_memory/win32/flags.inl"
+#else
+#include "allocation/impl/allocation.posix.cpp"
+#include "flags/posix/flags.inl"
+#include "flags/posix/mapping.inl"
+#include "flags/posix/opening.inl"
+#include "mappable_objects/shared_memory/posix/flags.inl"
+#endif
+
 //..zzz...by utility.inl...#include "mappable_objects/file/file.inl"
-#include "mappable_objects/file/flags.inl"
 #include "mappable_objects/file/utility.inl"
-//#include "mappable_objects/shared_memory/posix/flags.inl"
-//#include "mappable_objects/shared_memory/win32/flags.inl"
+
 #include "mapped_view/mapped_view.inl"
-#include "mapping/mapping.inl"
+//------------------------------------------------------------------------------
+namespace psi::vm
+{
+    template class basic_mapped_view<true >;
+    template class basic_mapped_view<false>;
+}
 //------------------------------------------------------------------------------
