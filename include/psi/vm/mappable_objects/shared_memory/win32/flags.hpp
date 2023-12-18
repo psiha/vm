@@ -36,14 +36,13 @@ namespace flags
 {
 //------------------------------------------------------------------------------
 
- struct shared_memory;
-
+struct shared_memory;
 
 struct shared_memory : mapping
 {
     enum struct system_hints
     {
-        default                    = 0x8000000,
+        default_                   = 0x8000000,
         only_reserve_address_space = 0x4000000
     }; // struct system_hints
 
@@ -57,7 +56,7 @@ struct shared_memory : mapping
 
 //------------------------------------------------------------------------------
 } // namespace flags
-  //------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
 } // namespace win32
 //------------------------------------------------------------------------------
 } // namespace vm
