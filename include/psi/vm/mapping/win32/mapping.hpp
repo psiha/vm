@@ -20,89 +20,76 @@
 //------------------------------------------------------------------------------
 #include "psi/vm/handles/win32/handle.hpp"
 #include "psi/vm/flags/win32/mapping.hpp"
+#include "psi/vm/error/error.hpp"
+#include "psi/vm/error/nt/error.hpp"
 
 #include <boost/config.hpp>
 //#include <boost/winapi/system.hpp> //...broken?
+#include <psi/vm/detail/nt.hpp>
 #include <psi/vm/detail/win32.hpp>
 
 #include <cstdint>
-
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Winline-namespace-reopened-noninline"
-#endif
-
 //------------------------------------------------------------------------------
-namespace psi
-{
-//------------------------------------------------------------------------------
-namespace vm
-{
-//------------------------------------------------------------------------------
-namespace win32
+namespace psi::vm::win32
 {
 //------------------------------------------------------------------------------
 
-struct mapping
+struct [[ clang::trivial_abi ]] mapping
     :
     handle
 {
-    using reference = mapping const &;
+    using       reference = mapping       &;
+    using const_reference = mapping const &;
 
-    static bool const owns_parent_handle = true;
+    using       handle = handle_ref<mapping, false>;
+    using const_handle = handle_ref<mapping, true >;
 
+    static bool const retains_parent_handle = true;
+
+    constexpr mapping() = default;
     constexpr mapping( native_handle_t const native_handle, flags::viewing const view_mapping_flags_param ) noexcept
-        : handle( native_handle ), view_mapping_flags( view_mapping_flags_param ) {}
+        : vm::handle( native_handle ), view_mapping_flags( view_mapping_flags_param ) {}
 
     bool is_read_only() const noexcept { return ( view_mapping_flags.map_view_flags & flags::mapping::access_rights::write ) == 0; }
 
-    flags::viewing const view_mapping_flags;
+    void operator=( mapping && source ) noexcept
+    {
+        vm::handle::operator=( std::move( source ) );
+        view_mapping_flags = source.view_mapping_flags;
+        source.view_mapping_flags = {};
+    }
+
+    flags::viewing view_mapping_flags{};
 }; // struct mapping
 
-#ifdef PAGE_SIZE
-std::uint16_t const page_size( PAGE_SIZE );
-#else
-inline std::uint16_t const page_size
-(
-    ([]() noexcept
+
+inline std::uint64_t get_size( mapping::const_handle const mapping_handle ) noexcept
+{
+    using namespace nt::detail;
+    SECTION_BASIC_INFORMATION info;
+    auto const result{ NtQuerySection( mapping_handle.value, SECTION_INFORMATION_CLASS::SectionBasicInformation, &info, sizeof( info ), nullptr ) };
+    BOOST_VERIFY( NT_SUCCESS( result ) );
+    return info.SectionSize.QuadPart;
+}
+
+inline err::fallible_result<void, nt::error> set_size( mapping::handle const mapping_handle, std::uint64_t const new_size ) noexcept
+{
+    using namespace nt::detail;
+    LARGE_INTEGER ntsz{ .QuadPart = static_cast<LONGLONG>( new_size ) };
+    auto const result{ NtExtendSection( mapping_handle.value, &ntsz ) };
+    if ( !NT_SUCCESS( result ) ) [[ unlikely ]]
+        return result;
+
+    BOOST_ASSERT( ntsz.QuadPart >= new_size );
+    if ( ntsz.QuadPart > new_size )
     {
-        //boost::winapi::GetSystemInfo broken?
-        //boost::winapi::SYSTEM_INFO_ info;
-        //boost::winapi::GetNativeSystemInfo( &info );
-        ::SYSTEM_INFO info; ::GetSystemInfo( &info );
-        BOOST_ASSUME( info.dwPageSize == 4096 );
-        return static_cast<std::uint16_t>( info.dwPageSize );
-    })()
-);
-#endif // PAGE_SIZE
-#if defined( BOOST_MSVC )
-#   pragma warning( push )
-#   pragma warning( disable : 4553 ) // "'==': operator has no effect; did you intend '='?"
-#endif // BOOST_MSVC
-inline std::uint32_t const allocation_granularity
-(
-    ([]() noexcept
-    {
-        ::SYSTEM_INFO info; ::GetSystemInfo( &info );
-        BOOST_LIKELY( info.dwAllocationGranularity     == 65536 );
-        BOOST_ASSUME( info.dwAllocationGranularity % 2 == 0     );
-        return info.dwAllocationGranularity;
-    })()
-);
-#if defined( BOOST_MSVC )
-#   pragma warning( pop )
-#endif // BOOST_MSVC
+        BOOST_ASSERT( ntsz.QuadPart == get_size( mapping_handle ) );
+        BOOST_ASSERT( ntsz.QuadPart - new_size < 8 /*what!?!*/ );
+    }
+    return err::success;
+}
 
 //------------------------------------------------------------------------------
-} // namespace win32
+} // namespace psi::vm::win32
 //------------------------------------------------------------------------------
-} // namespace vm
-//------------------------------------------------------------------------------
-} // namespace psi
-//------------------------------------------------------------------------------
-
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
-
 #endif // mapping_hpp

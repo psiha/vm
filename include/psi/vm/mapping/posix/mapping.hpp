@@ -18,8 +18,9 @@
 #define mapping_hpp__99837E03_86B1_42F5_A57D_69A6E828DD08
 #pragma once
 //------------------------------------------------------------------------------
-#include "psi/vm/handles/posix/handle.hpp"
+#include "psi/vm/error/error.hpp"
 #include "psi/vm/flags/posix/mapping.hpp"
+#include "psi/vm/handles/posix/handle.hpp"
 
 #include <boost/config/detail/suffix.hpp>
 //------------------------------------------------------------------------------
@@ -34,18 +35,24 @@ namespace posix
 {
 //------------------------------------------------------------------------------
 
-struct mapping
+struct [[ clang::trivial_abi ]] mapping
     :
     handle
 {
-    using native_handle_t = handle::native_handle_t        ;
-    using reference       = mapping                 const &;
+    using const_handle = posix::handle::const_reference;
+    using       handle = posix::handle::      reference;
 
-    static bool const owns_parent_handle = false;
+    using const_reference = mapping const &;
+    using       reference = mapping       &;
+
+    static bool const retains_parent_handle = false;
+
+    constexpr mapping(            ) noexcept = default;
+    constexpr mapping( mapping && ) noexcept = default;
 
     template <typename FileHandle>
     constexpr mapping( FileHandle && fd, flags::viewing const & view_mapping_flags_param, std::size_t const size ) noexcept
-        : handle( std::forward<FileHandle>( fd ) ), view_mapping_flags( view_mapping_flags_param ), maximum_size( size ) {}
+        : vm::handle{ std::forward<FileHandle>( fd ) }, view_mapping_flags{ view_mapping_flags_param }, maximum_size{ size } {}
 
     bool is_read_only() const noexcept
     {
@@ -56,30 +63,23 @@ struct mapping
         ) == 0;
     }
 
-    flags::viewing const view_mapping_flags;
-    std  ::size_t  const maximum_size;
+    constexpr mapping & operator=( mapping && source ) noexcept
+    {
+        vm::handle::operator=( std::move( source ) );
+        view_mapping_flags = source.view_mapping_flags;
+        maximum_size       = source.maximum_size;
+        source.view_mapping_flags = {};
+        source.maximum_size       = {};
+        return *this;
+    }
+
+    flags::viewing view_mapping_flags{};
+    std  ::size_t  maximum_size      {};
 }; // struct mapping
 
-
-#ifdef PAGE_SIZE
-#   ifdef __APPLE__
-inline std::uint32_t const page_size{ PAGE_SIZE }; // Not a constant expression on Apple platform
-#   else
-constexpr std::uint32_t const page_size{ PAGE_SIZE }; // Under Emscripten PAGE_SIZE is 64k/does not fit into a std::uint16_t
-#endif
-#else
-inline std::uint16_t const page_size
-(
-    ([]() noexcept
-    {
-        auto const size( ::getpagesize()/*::sysconf( _SC_PAGE_SIZE )*/ );
-        BOOST_LIKELY( size     == 4096 );
-        BOOST_ASSUME( size % 2 == 0    );
-        return static_cast<std::uint16_t>( size );
-    })()
-);
-#endif // PAGE_SIZE
-inline std::uint32_t const allocation_granularity( page_size );
+// fwd declarations for file_handle functions which work for mappings as well ('everything is a file')
+err::fallible_result<void, error> BOOST_CC_REG set_size( handle::      reference, std::uint64_t desired_size ) noexcept;
+std::uint64_t                     BOOST_CC_REG get_size( handle::const_reference                             ) noexcept;
 
 //------------------------------------------------------------------------------
 } // namespace posix
