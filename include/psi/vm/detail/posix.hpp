@@ -42,14 +42,17 @@
 #if !defined( __has_include )
 #   define __has_include( x ) 0
 #endif // __has_include
-
 //------------------------------------------------------------------------------
-namespace psi
+namespace psi::vm
 {
 //------------------------------------------------------------------------------
-
-
+#ifndef _WIN32 //...mrmlj...
+inline namespace posix
+{
+    void * mmap( void * target_address, std::size_t size, int protection, int flags, int file_handle, std::uint64_t offset ) noexcept;
+}
+#endif
 //------------------------------------------------------------------------------
-} // namespace psi
+} // namespace psi::vm
 //------------------------------------------------------------------------------
 #endif // posix_hpp

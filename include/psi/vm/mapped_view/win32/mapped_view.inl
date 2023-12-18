@@ -18,20 +18,9 @@
 
 #include "psi/vm/detail/impl_selection.hpp"
 #include "psi/vm/detail/win32.hpp"
-
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Winline-namespace-reopened-noninline"
-#endif
-
+#include "psi/vm/align.hpp"
 //------------------------------------------------------------------------------
-namespace psi
-{
-//------------------------------------------------------------------------------
-namespace vm
-{
-//------------------------------------------------------------------------------
-namespace win32
+namespace psi::vm::win32
 {
 //------------------------------------------------------------------------------
 
@@ -42,13 +31,13 @@ struct mapper
     using mapping_t = mapping;
 
     static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
-    memory_range BOOST_CC_REG
+    mapped_span BOOST_CC_REG
     map
     (
-        handle::reference const source_mapping,
-        flags ::viewing   const flags         ,
-        std   ::uint64_t  const offset        , // ERROR_MAPPED_ALIGNMENT
-        std   ::size_t    const desired_size
+        mapping::handle  const source_mapping,
+        flags ::viewing  const flags         ,
+        std   ::uint64_t const offset        , // ERROR_MAPPED_ALIGNMENT
+        std   ::size_t   const desired_size
     ) noexcept
     {
         // Implementation note:
@@ -57,18 +46,17 @@ struct mapper
         // http://msdn.microsoft.com/en-us/library/aa366537(VS.85).aspx
         //                                    (26.03.2010.) (Domagoj Saric)
 
-        auto const large_integer{ reinterpret_cast<ULARGE_INTEGER const &>( offset ) };
-
+        ULARGE_INTEGER const win32_offset{ .QuadPart = offset };
         auto const view_start
         {
-            static_cast<memory_range::value_type *>
+            static_cast<mapped_span::value_type *>
             (
                 ::MapViewOfFile
                 (
-                    source_mapping.get(),
+                    source_mapping,
                     flags.map_view_flags,
-                    large_integer.HighPart,
-                    large_integer.LowPart,
+                    win32_offset.HighPart,
+                    win32_offset.LowPart,
                     desired_size
                 )
             )
@@ -82,20 +70,27 @@ struct mapper
     }
 
     static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
-    void BOOST_CC_REG unmap( memory_range const view )
+    void BOOST_CC_REG unmap( mapped_span const view )
     {
         BOOST_VERIFY( ::UnmapViewOfFile( view.data() ) || view.empty() );
+    }
+
+    static void shrink( mapped_span const view, std::size_t const target_size ) noexcept
+    {
+        // TODO OfferVirtualMemory, VirtualUnlock
+        decommit
+        (
+            align_up  ( view.data() + target_size, commit_granularity ),
+            align_down( view.size() - target_size, commit_granularity )
+        );
+    }
+
+    static void flush( mapped_span const view ) noexcept
+    {
+        BOOST_VERIFY( ::FlushViewOfFile( view.data(), view.size() ) == 0 );
     }
 }; // struct mapper
 
 //------------------------------------------------------------------------------
-} // win32
+} // psi::vm::win32
 //------------------------------------------------------------------------------
-} // vm
-//------------------------------------------------------------------------------
-} // psi
-//------------------------------------------------------------------------------
-
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif

@@ -28,7 +28,7 @@
 #include "boost/assert.hpp"
 #include "boost/config.hpp"
 
-#include "boost/err/detail/thread_singleton.hpp"
+#include "psi/err/detail/thread_singleton.hpp"
 
 #include <csetjmp>
 //#include <sys/signal.h> // requires Android NDK API 21
@@ -113,10 +113,10 @@ namespace details
 #endif // !_WIN32
 
 template <typename Element, class Operation, class ErrorHandler>
-typename std::result_of<Operation( basic_memory_range<Element> )>::type
+typename std::result_of<Operation( basic_mapped_span<Element> )>::type
 guarded_operation
 (
-    basic_memory_range<Element> const view,
+    basic_mapped_span<Element> const view,
     Operation                   const operation,
     ErrorHandler                const error_handler
 )

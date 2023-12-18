@@ -16,6 +16,7 @@
 //------------------------------------------------------------------------------
 #include "psi/vm/mapped_view/mapped_view.hpp"
 
+#include "psi/vm/align.hpp"
 #include "psi/vm/detail/posix.hpp"
 //------------------------------------------------------------------------------
 namespace psi
@@ -27,6 +28,46 @@ namespace vm
 inline namespace posix
 {
 //------------------------------------------------------------------------------
+namespace
+{
+#if defined( MAP_SHARED_VALIDATE ) && !defined( NDEBUG )
+    auto constexpr MAP_SHARED_PSI{ MAP_SHARED_VALIDATE };
+#else
+    auto constexpr MAP_SHARED_PSI{ MAP_SHARED };
+#endif
+#if !defined( MAP_UNINITIALIZED )
+    auto constexpr MAP_UNINITIALIZED{ 0 };
+#endif // MAP_UNINITIALIZED
+#if !defined( MAP_ALIGNED_SUPER )
+    auto constexpr MAP_ALIGNED_SUPER{ 0 }; // FreeBSD specfic hint for large pages https://man.freebsd.org/cgi/man.cgi?sektion=2&query=mmap
+#endif // MAP_ALIGNED_SUPER
+} // anonymous namespace
+
+PSI_VM_IMPL_INLINE
+void * mmap( void * const target_address, std::size_t const size, int const protection, int const flags, int const file_handle, std::uint64_t const offset ) noexcept
+{
+    BOOST_ASSUME( is_aligned( target_address, reserve_granularity )                      );
+    BOOST_ASSUME( is_aligned( size          , reserve_granularity ) || file_handle != -1 );
+
+    auto const actual_address{ ::mmap( target_address, size, protection,
+#   if defined( __linux__ ) && !defined( __ANDROID__ ) && 0 // investigate whether always wired
+        MAP_HUGETLB |
+#   endif
+        MAP_UNINITIALIZED | MAP_ALIGNED_SUPER | flags,
+        file_handle,
+        static_cast< off_t >( offset )
+    ) };
+    auto const succeeded{ actual_address != MAP_FAILED };
+    if ( succeeded ) [[ likely ]]
+    {
+        BOOST_ASSUME( !target_address || ( actual_address == target_address ) || ( ( flags & MAP_FIXED ) == 0 ) );
+        BOOST_ASSUME( is_aligned( actual_address, reserve_granularity ) );
+        return actual_address;
+    }
+
+    return nullptr;
+}
+
 
 struct mapper
 {
@@ -35,7 +76,7 @@ struct mapper
     using mapping_t = mapping;
 
     static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
-    memory_range BOOST_CC_REG
+    mapped_span BOOST_CC_REG
     map
     (
         handle::reference const source_mapping,
@@ -53,28 +94,25 @@ struct mapper
 
         auto const view_start
         {
-            static_cast<memory_range::value_type *>
+            static_cast<mapped_span::value_type *>
             (
-                ::mmap
+                posix::mmap
                 (
                     nullptr,
                     desired_size,
                     flags.protection,
                     flags.flags,
                     source_mapping,
-                    static_cast< off_t >( offset )
+                    offset
                 )
             )
         };
 
-        return
-            BOOST_LIKELY( view_start != MAP_FAILED )
-                ? memory_range{ view_start, desired_size }
-                : memory_range{                          };
+        return mapped_span{ view_start, view_start ? desired_size : 0 };
     }
 
     static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
-    void BOOST_CC_REG unmap( memory_range const view )
+    void BOOST_CC_REG unmap( mapped_span const view ) noexcept
     {
         [[ maybe_unused ]] auto munmap_result{ ::munmap( view.data(), view.size() ) };
 #   ifndef __EMSCRIPTEN__
@@ -84,6 +122,20 @@ struct mapper
             ( view.empty() && !view.data() )
         );
 #   endif
+    }
+
+    static void shrink( mapped_span const view, std::size_t const target_size ) noexcept
+    {
+        free
+        (
+            align_up  ( view.data() + target_size, commit_granularity ),
+            align_down( view.size() - target_size, commit_granularity )
+        );
+    }
+
+    static void flush( mapped_span const view ) noexcept
+    {
+        BOOST_VERIFY( ::msync( view.data(), view.size(), MS_ASYNC /*?: | MS_INVALIDATE*/ ) == 0 );
     }
 }; // struct mapper
 
