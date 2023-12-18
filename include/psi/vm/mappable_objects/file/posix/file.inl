@@ -39,7 +39,7 @@ namespace psi
 namespace vm
 {
 //------------------------------------------------------------------------------
-inline namespace posix
+PSI_VM_POSIX_INLINE namespace posix
 {
 //------------------------------------------------------------------------------
 
@@ -73,15 +73,20 @@ PSI_VM_IMPL_INLINE bool BOOST_CC_REG delete_file( wchar_t const * const file_nam
 
 
 #ifdef BOOST_HAS_UNISTD_H
-PSI_VM_IMPL_INLINE bool BOOST_CC_REG set_size( file_handle::reference const file_handle, std::size_t const desired_size ) noexcept { return ::ftruncate( file_handle, static_cast< off_t >( desired_size ) ) != -1; }
+PSI_VM_IMPL_INLINE err::fallible_result<void, error> BOOST_CC_REG set_size( file_handle::reference const file_handle, std::uint64_t const desired_size ) noexcept
+{
+    if ( ::ftruncate( file_handle, static_cast<off_t>( desired_size ) ) == 0 ) [[ likely ]]
+        return err::success;
+    return error{};
+}
 #endif // BOOST_HAS_UNISTD_H
 
 PSI_VM_IMPL_INLINE
-std::size_t BOOST_CC_REG get_size( file_handle::reference const file_handle ) noexcept
+std::uint64_t BOOST_CC_REG get_size( file_handle::const_reference const file_handle ) noexcept
 {
-    struct stat file_info;
-    BOOST_VERIFY( ( ::fstat( file_handle, &file_info ) == 0 ) || ( file_handle == handle_traits::invalid_value ) );
-    return static_cast< std::size_t >( file_info.st_size );
+    struct stat file_info{ .st_size = 0 }; // ensure zero is returned for invalid handles (in unchecked/release builds)
+    BOOST_VERIFY( ( ::fstat( file_handle.value, &file_info ) == 0 ) || ( file_handle == handle_traits::invalid_value ) );
+    return static_cast< std::uint64_t >( file_info.st_size );
 }
 
 //------------------------------------------------------------------------------

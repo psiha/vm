@@ -25,12 +25,6 @@
 #include "psi/vm/error/error.hpp"
 
 #include <cstddef>
-
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Winline-namespace-reopened-noninline"
-#endif
-
 //------------------------------------------------------------------------------
 namespace psi
 {
@@ -52,14 +46,14 @@ bool        BOOST_CC_REG delete_file( char    const * file_name                 
 bool        BOOST_CC_REG delete_file( wchar_t const * file_name                 ) noexcept;
 
 
-bool        BOOST_CC_REG set_size( file_handle::reference, std::size_t desired_size ) noexcept;
-std::size_t BOOST_CC_REG get_size( file_handle::reference                           ) noexcept;
+err::fallible_result<void, error> BOOST_CC_REG set_size( file_handle::reference, std::uint64_t desired_size ) noexcept;
+std::uint64_t                     BOOST_CC_REG get_size( file_handle::reference                             ) noexcept;
 
 // https://msdn.microsoft.com/en-us/library/ms810613.aspx Managing Memory-Mapped Files
 
 mapping BOOST_CC_REG create_mapping
 (
-    handle::reference,
+    file_handle::reference,
     flags::access_privileges::object,
     flags::access_privileges::child_process,
     flags::mapping          ::share_mode,
@@ -77,9 +71,5 @@ mapping BOOST_CC_REG create_mapping
 #ifdef PSI_VM_HEADER_ONLY
     #include "file.inl"
 #endif // PSI_VM_HEADER_ONLY
-
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
 
 #endif // file_hpp

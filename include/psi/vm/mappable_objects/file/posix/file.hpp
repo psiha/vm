@@ -49,14 +49,14 @@ file_handle BOOST_CC_REG create_file( char    const * file_name, flags::opening 
 file_handle BOOST_CC_REG create_file( wchar_t const * file_name, flags::opening ) noexcept;
 #endif // BOOST_MSVC
 
-bool BOOST_CC_REG delete_file( char    const * file_nam ) noexcept;
-bool BOOST_CC_REG delete_file( wchar_t const * file_nam ) noexcept;
+bool BOOST_CC_REG delete_file( char    const * path ) noexcept;
+bool BOOST_CC_REG delete_file( wchar_t const * path ) noexcept;
 
 
 #ifdef BOOST_HAS_UNISTD_H
-bool        BOOST_CC_REG set_size( file_handle::reference, std::size_t desired_size ) noexcept;
+err::fallible_result<void, error> BOOST_CC_REG set_size( file_handle::reference      , std::uint64_t desired_size ) noexcept;
 #endif // BOOST_HAS_UNISTD_H
-std::size_t BOOST_CC_REG get_size( file_handle::reference                           ) noexcept;
+std::uint64_t                     BOOST_CC_REG get_size( file_handle::const_reference                             ) noexcept;
 
 
 #ifdef BOOST_HAS_UNISTD_H

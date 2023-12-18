@@ -27,24 +27,17 @@ namespace vm
 {
 //------------------------------------------------------------------------------
 
-#ifdef BOOST_MSVC
-    #pragma warning( push )
-    #pragma warning( disable : 4510 ) // Default constructor was implicitly defined as deleted.
-#endif // BOOST_MSVC
-
-
+#ifdef BOOST_HAS_UNISTD_H
+using file_handle = handle; // "Everything is a file" unofficial *nix philosophy
+#else
 struct file_handle : PSI_VM_IMPL()::handle
 {
     using handle::handle;
 
-    using reference = typename handle::reference;
-
-    operator reference () const noexcept { return reference{ this->get() }; }
+    using       reference = handle_ref<file_handle, false>;
+    using const_reference = handle_ref<file_handle, true >;
 }; // struct file_handle
-
-#ifdef BOOST_MSVC
-    #pragma warning( pop )
-#endif // BOOST_MSVC
+#endif
 
 //------------------------------------------------------------------------------
 } // namespace vm
