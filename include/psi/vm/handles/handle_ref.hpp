@@ -31,13 +31,23 @@ namespace vm
     #pragma warning( disable : 4512 ) // Assignment operator could not be generated.
 #endif // _MSC_VER
 
-template <typename Handle>
+template <typename Handle, bool read_only>
 struct handle_ref
 {
     using native_handle_t = typename Handle::native_handle_t;
 
-             native_handle_t const & get() const noexcept { return value; }
-    operator native_handle_t const &    () const noexcept { return value; }
+    constexpr handle_ref( native_handle_t         const native ) noexcept                       : value{ native       } {}
+    constexpr handle_ref( Handle          const &       handle ) noexcept requires( read_only ) : value{ handle.get() } {}
+    constexpr handle_ref( Handle                &       handle ) noexcept                       : value{ handle.get() } {}
+    constexpr handle_ref( Handle                &&      handle ) noexcept                       : value{ handle.get() } {}
+
+    template < bool other_read_only >
+    constexpr handle_ref( handle_ref<Handle, other_read_only> const mutable_ref ) noexcept requires( !other_read_only && read_only ) : value{ mutable_ref.value } {}
+
+    constexpr          native_handle_t get() const noexcept requires( !read_only ) { return value; }
+    constexpr operator native_handle_t    () const noexcept requires( !read_only ) { return value; }
+
+    [[ gnu::pure ]] constexpr bool operator==( native_handle_t const other ) const noexcept { return value == other; }
 
     native_handle_t const value;
 }; // struct handle_ref

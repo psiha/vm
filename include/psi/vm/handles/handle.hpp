@@ -41,16 +41,17 @@ namespace vm
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename ImplTraits>
-class handle_impl
+class [[ clang::trivial_abi ]] handle_impl
 {
 public:
     using traits          = ImplTraits;
     using native_handle_t = typename traits::native_t;
-    using reference       = handle_ref<handle_impl>;
+    using       reference = handle_ref<handle_impl, false>;
+    using const_reference = handle_ref<handle_impl, true >;
 
-             constexpr handle_impl(                                        ) noexcept : handle_( traits::invalid_value ) {                                        }
-    explicit constexpr handle_impl( native_handle_t    const native_handle ) noexcept : handle_( native_handle         ) {                                        }
-             constexpr handle_impl( handle_impl     &&       other         ) noexcept : handle_( other.handle_         ) { other.handle_ = traits::invalid_value; }
+             constexpr handle_impl(                                        ) noexcept : handle_{ traits::invalid_value } {                                        }
+    explicit constexpr handle_impl( native_handle_t    const native_handle ) noexcept : handle_{ native_handle         } {                                        }
+             constexpr handle_impl( handle_impl     &&       other         ) noexcept : handle_{ other.handle_         } { other.handle_ = traits::invalid_value; }
                       ~handle_impl(                                        ) noexcept                                    { traits::close( handle_ );              }
 
     handle_impl & operator=( handle_impl && __restrict other ) noexcept
@@ -65,15 +66,14 @@ public:
 
     native_handle_t release() noexcept
     {
-        auto const result( handle_ );
+        auto const result{ handle_ };
         handle_ = traits::invalid_value;
         return result;
     }
 
-    native_handle_t const & get() const noexcept { return handle_; }
+    native_handle_t get() const noexcept { return handle_; }
 
-    explicit operator bool     () const noexcept { return handle_ != traits::invalid_value; }
-             operator reference() const noexcept { return reference{ this->get() }; }
+    explicit operator       bool     () const noexcept { return handle_ != traits::invalid_value; }
 
 private:
     native_handle_t handle_;
