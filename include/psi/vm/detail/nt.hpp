@@ -29,7 +29,7 @@
 #include <boost/config.hpp>
 
 #ifndef _WIN32_WINNT
-#   define _WIN32_WINNT 0x0700
+#   define _WIN32_WINNT 0x0A00 // _WIN32_WINNT_WIN10
 #endif // _WIN32_WINNT
 #include <winternl.h>
 
@@ -47,37 +47,33 @@ namespace nt
 
 namespace detail
 {
-    inline HMODULE const ntdll( ::GetModuleHandleW( L"ntdll.dll" ) );
+    inline HMODULE const ntdll{ ::GetModuleHandleW( L"ntdll.dll" ) };
 
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wmicrosoft-cast"
-#endif
     inline BOOST_ATTRIBUTES( BOOST_COLD, BOOST_RESTRICTED_FUNCTION_L3, BOOST_RESTRICTED_FUNCTION_RETURN )
-    void * BOOST_CC_REG get_nt_proc( char const * const proc_name )
+    void * BOOST_CC_REG get_nt_proc( char const * const proc_name ) noexcept
     {
         BOOST_ASSERT( ntdll );
         auto const result( ::GetProcAddress( ntdll, proc_name ) );
         BOOST_ASSERT( result );
         return result;
     }
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
 
+#ifdef __clang__
+#   pragma clang diagnostic push
+#   pragma clang diagnostic ignored "-Wmicrosoft-cast" // cast between pointer-to-function and pointer-to-object is a Microsoft extension
+#endif
     template <typename Proc>
     Proc * get_nt_proc( char const * const proc_name )
     {
         return reinterpret_cast<Proc *>( get_nt_proc( proc_name ) );
     }
+#ifdef __clang__
+#   pragma clang diagnostic pop
+#endif
 
     typedef
     NTSTATUS (WINAPI BaseGetNamedObjectDirectory_t)( HANDLE * phDir );
 
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wignored-attributes"
-#endif
     typedef
     NTSYSAPI NTSTATUS (NTAPI NtCreateSection_t)
     (
@@ -89,6 +85,7 @@ namespace detail
         IN ULONG               SectionAttributes,
         IN HANDLE              FileHandle OPTIONAL
     );
+    inline auto const NtCreateSection{ get_nt_proc<NtCreateSection_t>( "NtCreateSection" ) };
 
     enum SECTION_INFORMATION_CLASS { SectionBasicInformation, SectionImageInformation };
 
@@ -108,8 +105,7 @@ namespace detail
         IN  ULONG                     InformationBufferSize,
         OUT PULONG                    ResultLength OPTIONAL
     );
-
-    __declspec( selectany ) extern auto const NtQuerySection( get_nt_proc<NtQuerySection_t>( "NtQuerySection" ) );
+    inline auto const NtQuerySection{ get_nt_proc<NtQuerySection_t>( "NtQuerySection" ) };
 
     typedef
     NTSYSAPI NTSTATUS (NTAPI NtExtendSection_t)
@@ -117,10 +113,7 @@ namespace detail
         IN HANDLE         SectionHandle,
         IN PLARGE_INTEGER NewSectionSize
     );
-
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
+    inline auto const NtExtendSection{ get_nt_proc<NtExtendSection_t>( "NtExtendSection" ) };
 } // namespace detail
 
 //------------------------------------------------------------------------------
