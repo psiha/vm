@@ -68,7 +68,7 @@ namespace detail
             /// processes. The opening/creation of the semaphore object should
             /// properly handle the specified creation_disposition.
             ///                                   (17.11.2015.) (Domagoj Saric)
-            static char constexpr key_file_prefix[] = "/var/tmp/boost_mmap_";
+            static char constexpr key_file_prefix[] = "/var/tmp/psi_vm_";
             auto const length{ std::strlen( name ) };
             char prefixed_name[ sizeof( key_file_prefix ) + length + 1 ];
             std::strcpy( prefixed_name, key_file_prefix );

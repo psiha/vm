@@ -36,12 +36,12 @@ namespace flags
 {
 //------------------------------------------------------------------------------
 
-static_assert(         ( viewing::access_rights::read    & 0xFF ) == FILE_MAP_READ   , "Boost.MMAP internal inconsistency" );
-static_assert(         ( viewing::access_rights::write   & 0xFF ) == FILE_MAP_WRITE  , "Boost.MMAP internal inconsistency" );
-static_assert(         ( viewing::access_rights::execute & 0xFF ) == FILE_MAP_EXECUTE, "Boost.MMAP internal inconsistency" );
+static_assert(         ( viewing::access_rights::read    & 0xFF ) == FILE_MAP_READ   , "Psi.VM internal inconsistency" );
+static_assert(         ( viewing::access_rights::write   & 0xFF ) == FILE_MAP_WRITE  , "Psi.VM internal inconsistency" );
+static_assert(         ( viewing::access_rights::execute & 0xFF ) == FILE_MAP_EXECUTE, "Psi.VM internal inconsistency" );
 
-static_assert( (unsigned)viewing::share_mode   ::shared           == 0               , "Boost.MMAP internal inconsistency" );
-static_assert( (unsigned)viewing::share_mode   ::hidden           == FILE_MAP_COPY   , "Boost.MMAP internal inconsistency" );
+static_assert( (unsigned)viewing::share_mode   ::shared           == 0               , "Psi.VM internal inconsistency" );
+static_assert( (unsigned)viewing::share_mode   ::hidden           == FILE_MAP_COPY   , "Psi.VM internal inconsistency" );
 
 PSI_VM_IMPL_INLINE
 viewing viewing::create

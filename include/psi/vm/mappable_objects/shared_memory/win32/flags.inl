@@ -31,8 +31,8 @@ namespace flags
 {
 //------------------------------------------------------------------------------
 
-static_assert( (unsigned)shared_memory::system_hints::default                    == SEC_COMMIT , "Boost.MMAP internal inconsistency" );
-static_assert( (unsigned)shared_memory::system_hints::only_reserve_address_space == SEC_RESERVE, "Boost.MMAP internal inconsistency" );
+static_assert( (unsigned)shared_memory::system_hints::default_                   == SEC_COMMIT , "Psi.VM internal inconsistency" );
+static_assert( (unsigned)shared_memory::system_hints::only_reserve_address_space == SEC_RESERVE, "Psi.VM internal inconsistency" );
 
 
 PSI_VM_IMPL_INLINE
