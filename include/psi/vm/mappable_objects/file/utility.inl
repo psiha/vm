@@ -29,41 +29,41 @@ namespace vm
 {
 //------------------------------------------------------------------------------
 
+PSI_VM_IMPL_INLINE [[ gnu::const ]]
+flags::opening create_rw_file_flags() noexcept
+{
+    using namespace flags;
+    using ap = access_privileges;
+    return opening::create
+    (
+        {
+            ap::object{ ap::readwrite },
+            ap::child_process::does_not_inherit,
+            ap::system::process_default// ap::system::user( ap::readwrite ) | ap::system::group( ap::read )
+        },
+        named_object_construction_policy::open_or_create,
+        system_hints                    ::sequential_access
+    );
+}
+
+PSI_VM_IMPL_INLINE [[ gnu::const ]]
+flags::opening create_r_file_flags() noexcept
+{
+    using namespace flags;
+    using ap = access_privileges;
+    return opening::create_for_opening_existing_objects
+            (
+                ap::object{ ap::read },
+                ap::child_process::does_not_inherit,
+                system_hints::sequential_access,
+                false
+            );
+}
+
 namespace detail0
 {
     using opening             = flags::opening;
     using default_file_handle = file_handle   ;
-
-    PSI_VM_IMPL_INLINE
-    opening create_rw_file_flags()
-    {
-        using namespace flags;
-        using ap = access_privileges;
-        return opening::create
-        (
-            {
-                ap::object{ ap::readwrite },
-                ap::child_process::does_not_inherit,
-                ap::system::process_default// ap::system::user( ap::readwrite ) | ap::system::group( ap::read )
-            },
-            named_object_construction_policy::open_or_create,
-            system_hints                    ::sequential_access
-        );
-    }
-
-    PSI_VM_IMPL_INLINE
-    opening create_r_file_flags()
-    {
-        using namespace flags;
-        using ap = access_privileges;
-        return opening::create_for_opening_existing_objects
-               (
-                   ap::object{ ap::read },
-                   ap::child_process::does_not_inherit,
-                   system_hints::sequential_access,
-                   false
-               );
-    }
 
     PSI_VM_IMPL_INLINE
     fallible_result<mapped_view> BOOST_CC_REG
@@ -86,8 +86,8 @@ namespace detail0
         // memadv http://stackoverflow.com/questions/13126167/is-it-safe-to-ftruncate-a-shared-memory-object-after-it-has-ben-mmaped
         if ( desired_size )
         {
-            if ( !set_size( file_handle, desired_size ) )
-                return error{};
+            if ( auto resize_result{ set_size( file_handle, desired_size )() }; !resize_result )
+                return resize_result.error();
         }
         else
         {
@@ -146,26 +146,26 @@ namespace detail0
 PSI_VM_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
 fallible_result<mapped_view> map_file( char const * const file_name, std::size_t const desired_size ) noexcept
 {
-    return detail0::map_file( create_file( file_name, detail0::create_rw_file_flags() ), desired_size );
+    return detail0::map_file( create_file( file_name, create_rw_file_flags() ), desired_size );
 }
 
 PSI_VM_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
 fallible_result<read_only_mapped_view> map_read_only_file( char const * const file_name ) noexcept
 {
-    return detail0::map_read_only_file( create_file( file_name, detail0::create_r_file_flags() ) );
+    return detail0::map_read_only_file( create_file( file_name, create_r_file_flags() ) );
 }
 
 #ifdef _WIN32
     PSI_VM_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
     fallible_result<mapped_view> map_file( wchar_t const * const file_name, std::size_t const desired_size )
     {
-        return detail0::map_file( create_file( file_name, detail0::create_rw_file_flags() ), desired_size );
+        return detail0::map_file( create_file( file_name, create_rw_file_flags() ), desired_size );
     }
 
     PSI_VM_IMPL_INLINE BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
     fallible_result<read_only_mapped_view> map_read_only_file( wchar_t const * const file_name )
     {
-        return detail0::map_read_only_file( create_file( file_name, detail0::create_r_file_flags() ) );
+        return detail0::map_read_only_file( create_file( file_name, create_r_file_flags() ) );
     }
 #endif // _WIN32
 

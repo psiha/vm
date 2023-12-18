@@ -18,10 +18,11 @@
 #define utility_hpp__3713A8AF_A516_4A23_BE6A_2BB79EBF7B5F
 #pragma once
 //------------------------------------------------------------------------------
-#include "psi/vm/mapped_view/mapped_view.hpp"
 #include "psi/vm/error/error.hpp"
+#include "psi/vm/flags/opening.hpp"
+#include "psi/vm/mapped_view/mapped_view.hpp"
 
-#include "boost/err/fallible_result.hpp"
+#include "psi/err/fallible_result.hpp"
 
 #include <cstddef>
 //------------------------------------------------------------------------------
@@ -31,6 +32,9 @@ namespace psi
 namespace vm
 {
 //------------------------------------------------------------------------------
+
+[[ gnu::const ]] flags::opening create_rw_file_flags() noexcept;
+[[ gnu::const ]] flags::opening create_r_file_flags () noexcept;
 
 err::fallible_result<mapped_view          , error> map_file          (    char const * file_name, std::size_t desired_size ) noexcept;
 err::fallible_result<read_only_mapped_view, error> map_read_only_file(    char const * file_name                           ) noexcept;
