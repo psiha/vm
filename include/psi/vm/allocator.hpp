@@ -121,6 +121,7 @@ private:
 // copying actually taking place (a safe operation for trivial_abi types).
 // Similarily the expand_fwd allocation has a similar expectation which again
 // need not hold.
+// https://github.com/boostorg/container/issues/260
 //
 // https://arxiv.org/pdf/2108.07223.pdf Metall: A Persistent Memory Allocator For Data-Centric Analytics
 // https://my.eng.utah.edu/~cs4400/malloc.pdf

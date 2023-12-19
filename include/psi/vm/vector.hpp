@@ -844,7 +844,7 @@ public:
             auto const new_end      { std::move( mutable_end, end(), mutable_start ) };
             for ( auto & element : { new_end, end() } )
                 std::destroy_at( &element );
-            shrink_storage_to( new_end - begin() );
+            shrink_storage_to( static_cast<size_type>( new_end - begin() ) );
         }
         return nth( first_index );
     }
@@ -913,7 +913,7 @@ private:
 
 
 template < typename T, typename sz_t = std::size_t >
-#if defined( _MSC_VER ) && !defined( NDEBUG ) // Boost.Container flat_set is bugged: tries to get the reference from end iterators - asserts at runtime with secure/checked STL/containers
+#if defined( _MSC_VER ) && !defined( NDEBUG ) // Boost.Container flat_set is bugged: tries to get the reference from end iterators - asserts at runtime with secure/checked STL/containers https://github.com/boostorg/container/issues/261
 requires is_trivially_moveable< T >
 class unchecked_vector : public vector< T, sz_t >
 {
@@ -938,7 +938,17 @@ public:
 
     iterator erase( const_iterator const first, const_iterator const last ) noexcept
     {
-        return begin() + base::index_of( base::erase( base::nth( first - begin() ), base::nth( last - begin() ) ) );
+        return
+            begin()
+                +
+            base::index_of
+            (
+                base::erase
+                (
+                    base::nth( static_cast<typename base::size_type>( first - begin() ) ),
+                    base::nth( static_cast<typename base::size_type>( last  - begin() ) )
+                )
+            );
     }
 };
 #else

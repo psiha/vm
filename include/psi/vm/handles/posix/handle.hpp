@@ -27,9 +27,11 @@
 #include <boost/config.hpp>
 
 #ifdef _MSC_VER
-    #pragma warning ( disable : 4996 ) // "The POSIX name for this item is deprecated. Instead, use the ISO C++ conformant name."
-    #include <io.h>
-#endif // BOOST_MSVC
+#   pragma warning ( disable : 4996 ) // "The POSIX name for this item is deprecated. Instead, use the ISO C++ conformant name."
+#   include <io.h>
+#else
+#   include <unistd.h>
+#endif
 #include <fcntl.h>
 
 #include <cerrno>

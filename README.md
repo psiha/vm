@@ -10,6 +10,7 @@ http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2006/n2044.html
 ##### Submodule requirements
  * config_ex
  * err
+ * std_fix
 
 ##### C++ In-The-Kernel Now!
 ##### Copyright © 2011 - 2024. Domagoj Šarić. All rights reserved.

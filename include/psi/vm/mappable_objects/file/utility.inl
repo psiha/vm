@@ -106,7 +106,7 @@ namespace detail0
                 flags::share_mode::shared,
                 desired_size
             ),
-            0, // no offset
+            0U, // no offset
             desired_size
         );
     }
@@ -135,9 +135,9 @@ namespace detail0
                 ap::object{ ap::read },
                 ap::child_process::does_not_inherit,
                 flags::share_mode::shared,
-                0
+                0U
             ),
-            0, // no offset
+            0U, // no offset
             size
         );
     }
