@@ -29,6 +29,11 @@ namespace vm
 {
 //------------------------------------------------------------------------------
 
+#ifdef _MSC_VER
+#   pragma warning( push )
+#   pragma warning( disable : 5030 ) // Unrecognized attribute
+#endif // _MSC_VER
+
 ////////////////////////////////////////////////////////////////////////////////
 ///
 /// \class handle
@@ -73,11 +78,15 @@ public:
 
     native_handle_t get() const noexcept { return handle_; }
 
-    explicit operator       bool     () const noexcept { return handle_ != traits::invalid_value; }
+    explicit operator bool() const noexcept { return handle_ != traits::invalid_value; }
 
 private:
     native_handle_t handle_;
 }; // class handle_impl
+
+#ifdef _MSC_VER
+#   pragma warning( pop )
+#endif // _MSC_VER
 
 //------------------------------------------------------------------------------
 } // namespace vm

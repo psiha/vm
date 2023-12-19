@@ -81,10 +81,10 @@ inline err::fallible_result<void, nt::error> set_size( mapping::handle const map
     if ( !NT_SUCCESS( result ) ) [[ unlikely ]]
         return result;
 
-    BOOST_ASSERT( ntsz.QuadPart >= new_size );
-    if ( ntsz.QuadPart > new_size )
+    BOOST_ASSERT( ntsz.QuadPart >= static_cast<LONGLONG>( new_size ) );
+    if ( ntsz.QuadPart > static_cast<LONGLONG>( new_size ) )
     {
-        BOOST_ASSERT( ntsz.QuadPart == get_size( mapping_handle ) );
+        BOOST_ASSERT( ntsz.QuadPart == static_cast<LONGLONG>( get_size( mapping_handle ) ) );
         BOOST_ASSERT( ntsz.QuadPart - new_size < 8 /*what!?!*/ );
     }
     return err::success;

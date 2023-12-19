@@ -29,6 +29,7 @@ namespace vm
     #pragma warning( push )
     #pragma warning( disable : 4510 ) // Default constructor was implicitly defined as deleted.
     #pragma warning( disable : 4512 ) // Assignment operator could not be generated.
+    #pragma warning( disable : 5030 ) // Unrecognized attribute
 #endif // _MSC_VER
 
 template <typename Handle, bool read_only>

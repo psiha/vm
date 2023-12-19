@@ -34,6 +34,11 @@ namespace vm
 {
 //------------------------------------------------------------------------------
 
+#ifdef _MSC_VER
+#   pragma warning( push )
+#   pragma warning( disable : 5030 ) // Unrecognized attribute
+#endif // _MSC_VER
+
 #if defined( _WIN32 )
 
 enum class allocation_type : std::uint32_t
@@ -139,6 +144,10 @@ expand_result expand
     allocation_type,
     reallocation_type
 ) noexcept;
+
+#ifdef _MSC_VER
+#   pragma warning( pop )
+#endif // _MSC_VER
 
 //------------------------------------------------------------------------------
 } // namespace vm

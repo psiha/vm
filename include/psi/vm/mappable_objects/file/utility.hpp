@@ -33,6 +33,11 @@ namespace vm
 {
 //------------------------------------------------------------------------------
 
+#ifdef _MSC_VER
+#   pragma warning( push )
+#   pragma warning( disable : 5030 ) // Unrecognized attribute
+#endif // _MSC_VER
+
 [[ gnu::const ]] flags::opening create_rw_file_flags() noexcept;
 [[ gnu::const ]] flags::opening create_r_file_flags () noexcept;
 
@@ -43,6 +48,10 @@ err::fallible_result<read_only_mapped_view, error> map_read_only_file(    char c
 err::fallible_result<mapped_view          , error> map_file          ( wchar_t const * file_name, std::size_t desired_size ) noexcept;
 err::fallible_result<read_only_mapped_view, error> map_read_only_file( wchar_t const * file_name                           ) noexcept;
 #endif // _WIN32
+
+#ifdef _MSC_VER
+#   pragma warning( pop )
+#endif // _MSC_VER
 
 //------------------------------------------------------------------------------
 } // namespace vm
