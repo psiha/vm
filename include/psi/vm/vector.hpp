@@ -729,13 +729,9 @@ public:
     template<class ...Args>
     iterator emplace( const_iterator const position, Args && ...args )
     {
-        verify_iterator( position );
-        auto const position_index{ index_of( position ) };
-        storage_.expand( to_byte_sz( size() + 1 ) );
-        std::uninitialized_move_n( end() - 1 - 1, 1, end() - 1 );
-        std::move( nth( position_index ), end() - 1, nth( position_index + 1 ) );
-        std::construct_at( &(*this)[ position_index ], std::forward< Args >( args )... );
-        return nth( position_index );
+        auto const iter{ make_space_for_insert( position, 1 ) };
+        std::construct_at( &*iter, std::forward< Args >( args )... );
+        return iter;
     }
 
     //! <b>Effects</b>: Inserts a copy of x at the end of the vector.
@@ -786,13 +782,9 @@ public:
     //! <b>Complexity</b>: Linear to n.
     iterator insert( const_iterator const position, size_type const n, param_const_ref x )
     {
-        verify_iterator( position );
-        auto const position_index{ index_of( position ) };
-        storage_.expand( to_byte_sz( size() + n ) );
-        std::uninitialized_move_n( end() - n - n, n, end() - n );
-        std::move                ( nth( position_index ), end() - n, nth( position_index + n ) );
-        std::              fill_n( nth( position_index ), n, x );
-        return nth( position_index );
+        auto const iter{ make_space_for_insert( position, n ) };
+        std::fill_n( iter, n, x );
+        return iter;
     }
 
     //! <b>Requires</b>: position must be a valid iterator of *this.
@@ -806,16 +798,12 @@ public:
     //!
     //! <b>Complexity</b>: Linear to boost::container::iterator_distance [first, last).
     template <std::input_iterator InIt>
-    iterator insert( const_iterator const position, InIt first, InIt last )
+    iterator insert( const_iterator const position, InIt const first, InIt const last )
     {
-        verify_iterator( position );
-        auto const n             { static_cast<size_type>( std::distance( first, last ) ) };
-        auto const position_index{ index_of( position ) };
-        storage_.expand( to_byte_sz( size() + n ) );
-        std::uninitialized_move_n( end() - n - n, n, end() - n );
-        std::              move  ( nth( position_index ), end() - n, nth( position_index + n ) );
-        std::              copy  ( first, last, nth( position_index ) );
-        return nth( position_index );
+        auto const n{ static_cast<size_type>( std::distance( first, last ) ) };
+        auto const iter{ make_space_for_insert( position, n ) };
+        std::copy_n( first, n, iter );
+        return iter;
     }
 
     //! <b>Requires</b>: position must be a valid iterator of *this.
@@ -960,6 +948,20 @@ private:
     {
         BOOST_ASSERT( iter >= begin() );
         BOOST_ASSERT( iter <= end  () );
+    }
+
+    iterator make_space_for_insert( const_iterator const position, size_type const n )
+    {
+        verify_iterator( position );
+        auto const position_index{ index_of( position ) };
+        auto const current_size  { size() };
+        auto const new_size      { current_size + n };
+        storage_.expand( to_byte_sz( new_size ) );
+        auto const elements_to_move_uninitialized_space{ current_size - position_index };
+        auto const elements_to_move_to_the_current_end { n - elements_to_move_uninitialized_space };
+        std::uninitialized_move_n( nth( current_size - elements_to_move_uninitialized_space ),                       elements_to_move_uninitialized_space , nth( new_size - elements_to_move_uninitialized_space ) );
+        std::move                ( nth( position_index                                      ), nth( position_index + elements_to_move_to_the_current_end ), nth( new_size - n                                    ) );
+        return nth( position_index );
     }
 }; // class vector
 
