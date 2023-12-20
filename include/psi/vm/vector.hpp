@@ -18,6 +18,8 @@
 #include "mappable_objects/file/file.hpp"
 #include "mappable_objects/file/utility.hpp"
 
+#include <psi/build/disable_warnings.hpp>
+
 #include <algorithm>
 #include <concepts>
 #include <cstdint>
@@ -40,10 +42,15 @@ namespace detail
 class contiguous_container_storage_base
 {
 public:
+    contiguous_container_storage_base( contiguous_container_storage_base && ) = default;
+    contiguous_container_storage_base & operator=( contiguous_container_storage_base && ) = default;
+
     auto data()       noexcept { BOOST_ASSERT_MSG( !view_.empty(), "Paging file not attached" ); return view_.data(); }
     auto data() const noexcept { return const_cast< contiguous_container_storage_base & >( *this ).data(); }
 
     void unmap() noexcept { view_.unmap(); }
+
+    explicit operator bool() const noexcept { return static_cast<bool>( mapping_ ); }
 
 protected:
     static std::uint8_t constexpr header_size{ 64 };
@@ -220,6 +227,8 @@ bool constexpr is_trivially_moveable
     std::is_trivially_move_constructible_v< T >
 };
 
+struct default_init_t {}; inline constexpr default_init_t default_init;
+struct value_init_t   {}; inline constexpr value_init_t   value_init  ;
 
 // Standard-vector-like/compatible _presistent_ container class template
 // which uses VM/a mapped object for its backing storage. Currently limited
@@ -238,12 +247,12 @@ public:
     using const_span_t = std::span<T const>;
 
     using value_type             = T;
-    using pointer                = T       *;
+    using       pointer          = T       *;
     using const_pointer          = T const *;
-    using reference              = T       &;
+    using       reference        = T       &;
     using const_reference        = T const &;
     using param_const_ref        = std::conditional_t< std::is_trivial_v< T > && ( sizeof( T ) <= 2 * sizeof( void * ) ), T, const_reference >;
-    using size_type              = sz_t;
+    using       size_type        = sz_t;
     using difference_type        = std::make_signed_t<size_type>;
     using         iterator       = typename span_t::      iterator;
     using reverse_iterator       = typename span_t::      reverse_iterator;
@@ -256,7 +265,7 @@ public:
 #endif
 
     // not really a standard allocator: providing the alias simply to have boost::container::flat* compileable with this container.
-    using allocator_type = contiguous_container_storage<sz_t>;
+    using allocator_type = std::allocator<value_type>;
 
 public:
     vector() noexcept {}
@@ -271,11 +280,9 @@ public:
     vector( vector const & ) = delete;
     vector( vector && ) = default;
 
-    ~vector() noexcept { shrink_to_fit(); }
+    ~vector() noexcept = default;
 
-    auto open( auto const file ) { return storage_.open( file ); }
-
-    vector & operator=( vector && other ) = default;
+    vector & operator=( vector && ) = default;
     vector & operator=( vector const & x )
     {
         BOOST_ASSUME( &x != this ); // not going to support self assignment
@@ -304,12 +311,12 @@ public:
         {
             //There are no more elements in the sequence, erase remaining
             while ( cur != end_it )
-                *cur++.~value_type();
+                (*cur++).~value_type();
         }
         else
         {
             //There are more elements in the range, insert the remaining ones
-            this->append_range( first, last );
+            this->append_range( std::span{ first, last } );
         }
     }
 
@@ -342,8 +349,13 @@ public:
     //!
     //! <b>Complexity</b>: Constant.
     [[ nodiscard ]] auto  begin()       noexcept { return span().begin(); }
-    [[ nodiscard ]] auto  begin() const noexcept { return static_cast< span_t const & >( const_cast< vector & >( *this ).span() ).begin(); }
-    [[ nodiscard ]] auto cbegin() const noexcept { return        begin(); }
+    [[ nodiscard ]] auto  begin() const noexcept { return cbegin(); }
+    [[ nodiscard ]] auto cbegin() const noexcept
+#if defined( _MSC_VER )
+    { return const_cast<vector &>( *this ).span().cbegin(); } // wrkrnd for span<T> and span<T const> iterators not being compatible w/ MS STL
+#else
+    { return span().begin(); }
+#endif
 
     //! <b>Effects</b>: Returns an iterator to the end of the vector.
     //!
@@ -351,9 +363,13 @@ public:
     //!
     //! <b>Complexity</b>: Constant.
     [[ nodiscard ]] auto  end()       noexcept { return span().end(); }
-  //[[ nodiscard ]] auto  end() const noexcept { return span().end(); } //...mrmlj...wrkrnd for span<T> and span<T const> iterators not being compatible w/ 'secure MS STL'
-    [[ nodiscard ]] auto  end() const noexcept { return static_cast<span_t const &>( const_cast<vector &>( *this ).span() ).end(); }
-    [[ nodiscard ]] auto cend() const noexcept { return        end(); }
+    [[ nodiscard ]] auto  end() const noexcept { return cend(); }
+    [[ nodiscard ]] auto cend() const noexcept
+#if defined( _MSC_VER )
+    { return const_cast<vector &>( *this ).span().cend(); }
+#else
+    { return span().end(); }
+#endif
 
     //! <b>Effects</b>: Returns a reverse_iterator pointing to the beginning
     //! of the reversed vector.
@@ -403,20 +419,37 @@ public:
     [[ nodiscard ]] static constexpr size_type max_size() noexcept { return static_cast< size_type >( std::numeric_limits< size_type >::max() / sizeof( value_type ) ); }
 
     //! <b>Effects</b>: Inserts or erases elements at the end such that
-    //!   the size becomes n. New elements are value initialized.
+    //!   the size becomes n. New elements can be default or value initialized.
     //!
     //! <b>Throws</b>: If memory allocation throws, or T's copy/move or value initialization throws.
     //!
     //! <b>Complexity</b>: Linear to the difference between size() and new_size.
-    void resize( size_type const new_size )
+    void resize( size_type const new_size, default_init_t ) requires( std::is_trivial_v< T > )
+    {
+        storage_.resize( to_byte_sz( new_size ) );
+    }
+    PSI_WARNING_DISABLE_PUSH()
+    PSI_WARNING_MSVC_DISABLE( 4702 ) // unreachable code
+    void resize( size_type const new_size, value_init_t )
     {
         auto const current_size{ size() };
-        storage_.resize( to_byte_sz( new_size ) ); 
+        if ( new_size < current_size && !std::is_trivially_destructible_v< T > )
+        {
+            for ( auto & element : span().subspan( current_size ) )
+                std::destroy_at( &element );
+        }
+        storage_.resize( to_byte_sz( new_size ) );
+        if ( new_size < current_size )
+            return;
         if constexpr ( std::is_trivially_constructible_v< value_type > )
-            return; // default init (skip zeroing) for trivial types
-        for ( auto & element : span().subspan( current_size ) )
-            std::construct_at( &element );
+            std::memset( data() + current_size, 0, new_size - current_size * sizeof( T ) );
+        else
+        {
+            for ( auto & element : span().subspan( current_size ) )
+                std::construct_at( &element );
+        }
     }
+    PSI_WARNING_DISABLE_POP()
 
     //! <b>Effects</b>: Inserts or erases elements at the end such that
     //!   the size becomes n. New elements are copy constructed from x.
@@ -424,7 +457,14 @@ public:
     //! <b>Throws</b>: If memory allocation throws, or T's copy/move constructor throws.
     //!
     //! <b>Complexity</b>: Linear to the difference between size() and new_size.
-    void resize( size_type const new_size, param_const_ref x ) = delete;
+    void resize( size_type const new_size, param_const_ref x )
+    {
+        auto const current_size{ size() };
+        BOOST_ASSUME( new_size >= current_size );
+        storage_.resize( to_byte_sz( new_size ) );
+        auto uninitialized_span{ span().subspan( current_size ) };
+        std::uninitialized_fill( uninitialized_span.begin(), uninitialized_span.end(), x );
+    }
 
     //! <b>Effects</b>: Number of elements for which memory has been allocated.
     //!   capacity() is always greater than or equal to size().
@@ -883,6 +923,16 @@ public:
     //! <b>Complexity</b>: Constant.
     friend void swap( vector & x, vector & y ) noexcept { x.swap( y ); }
 
+    ///////////////////////////////////////////////////////////////////////////
+    // Extensions
+    ///////////////////////////////////////////////////////////////////////////
+
+    auto open( auto const file ) { return storage_.open( file ); }
+
+    bool is_open() const noexcept { return static_cast<bool>( storage_ ); }
+
+    decltype( auto ) user_header_data() noexcept { return storage_.hdr_storage(); }
+
     //! <b>Effects</b>: If n is less than or equal to capacity(), this call has no
     //!   effect. Otherwise, it is a request for allocation of additional memory
     //!   (memory expansion) that will not invalidate iterators.
@@ -894,6 +944,8 @@ public:
     //! <b>Note</b>: Non-standard extension.
     bool stable_reserve( size_type new_cap ) = /*TODO*/ delete;
 
+    // TODO grow shrink
+
 private:
     static T *  to_t_ptr  ( mapped_view::value_type * const ptr     ) noexcept {                                             return reinterpret_cast< T * >( ptr ); }
     static sz_t to_t_sz   ( auto                      const byte_sz ) noexcept { BOOST_ASSUME( byte_sz % sizeof( T ) == 0 ); return static_cast< sz_t >( byte_sz / sizeof( T ) ); }
@@ -904,7 +956,7 @@ private:
         storage_.shrink( to_byte_sz( target_size ) );
     }
 
-    void verify_iterator( const_iterator const iter ) const noexcept
+    void verify_iterator( [[ maybe_unused ]] const_iterator const iter ) const noexcept
     {
         BOOST_ASSERT( iter >= begin() );
         BOOST_ASSERT( iter <= end  () );
@@ -913,7 +965,9 @@ private:
 
 
 template < typename T, typename sz_t = std::size_t >
-#if defined( _MSC_VER ) && !defined( NDEBUG ) // Boost.Container flat_set is bugged: tries to get the reference from end iterators - asserts at runtime with secure/checked STL/containers https://github.com/boostorg/container/issues/261
+#if defined( _MSC_VER ) && !defined( NDEBUG )
+// Boost.Container flat_set is bugged: tries to get the reference from end iterators - asserts at runtime with secure/checked STL/containers
+// https://github.com/boostorg/container/issues/261
 requires is_trivially_moveable< T >
 class unchecked_vector : public vector< T, sz_t >
 {
@@ -927,11 +981,6 @@ public:
     [[ nodiscard ]] auto  begin() const noexcept { return base::data(); }
     [[ nodiscard ]] auto cbegin() const noexcept { return begin(); }
 
-    //! <b>Effects</b>: Returns an iterator to the end of the vector.
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
     [[ nodiscard ]] auto  end()       noexcept { return begin() + base::size(); }
     [[ nodiscard ]] auto  end() const noexcept { return begin() + base::size(); }
     [[ nodiscard ]] auto cend() const noexcept { return end(); }
@@ -950,10 +999,43 @@ public:
                 )
             );
     }
+
+    iterator erase( const_iterator const position ) noexcept
+    {
+        return
+            begin()
+                +
+            base::index_of
+            (
+                base::erase
+                (
+                    base::nth( static_cast<typename base::size_type>( position - begin() ) )
+                )
+            );
+    }
+
+    template < typename ... Args >
+    iterator insert( const_iterator const position, Args &&... args ) noexcept
+    {
+        return
+            begin()
+                +
+            base::index_of
+            (
+                base::insert
+                (
+                    base::nth( static_cast<typename base::size_type>( position - begin() ) ),
+                    std::forward< Args >( args )...
+                )
+            );
+    }
 };
 #else
 using unchecked_vector = vector< T, sz_t >;
 #endif
+
+template < typename Vector >
+using unchecked = unchecked_vector< typename Vector::value_type, typename Vector::size_type >;
 
 //------------------------------------------------------------------------------
 } // namespace vm

@@ -47,7 +47,9 @@ struct [[ clang::trivial_abi ]] mapping
     static bool constexpr retains_parent_handle              = true;
     static bool constexpr create_mapping_can_set_source_size = true;
 
-    constexpr mapping() = default;
+    constexpr mapping(            ) noexcept = default;
+    constexpr mapping( mapping && ) noexcept = default;
+
     constexpr mapping( native_handle_t const native_handle, flags::viewing const view_mapping_flags_param ) noexcept
         : vm::handle( native_handle ), view_mapping_flags( view_mapping_flags_param ) {}
 
