@@ -79,7 +79,7 @@ inline std::uint16_t constexpr page_size{ 16 * 1024 };
 // TODO AArch64 https://www.kernel.org/doc/html/next/arm64/memory.html
 inline std::uint16_t constexpr page_size{ 4 * 1024 };
 #endif
-#ifdef PAGE_SIZE
+#if defined( PAGE_SIZE ) && !defined( __APPLE__ ) // not a constant under OSX
 static_assert( page_size == PAGE_SIZE );
 #endif
 
