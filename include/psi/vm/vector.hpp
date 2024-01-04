@@ -146,7 +146,7 @@ public:
         auto const stored_size{ hdr().size };
         BOOST_ASSERT_MSG( stored_size <= *sz - header_size, "Corrupted file: stored size larger than the file itself?" );
         // Clamp bogus/too large sizes (implicitly handles possible garbage on file creation).
-        hdr().size = std::min( stored_size, static_cast<size_type>( *sz ) - header_size );
+        hdr().size = std::min( stored_size, static_cast<size_type>( *sz - header_size ) );
         return err::success;
     }
 
