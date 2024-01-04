@@ -570,7 +570,7 @@ public:
     [[ nodiscard ]] iterator nth( size_type const n ) noexcept
     {
         BOOST_ASSERT( n <= size() );
-        return begin() + n;
+        return begin() + static_cast<difference_type>( n );
     }
 
     //! <b>Requires</b>: size() >= n.
@@ -587,7 +587,7 @@ public:
     [[ nodiscard ]] const_iterator nth( size_type const n ) const noexcept
     {
         BOOST_ASSERT( n <= size() );
-        return begin() + n;
+        return begin() + static_cast<difference_type>( n );
     }
 
     //! <b>Requires</b>: begin() <= p <= end().
