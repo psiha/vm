@@ -70,8 +70,8 @@ protected:
 
     void shrink( std::size_t const target_size ) noexcept
     {
-        set_size( mapping_, target_size )().assume_succeeded();
         view_.shrink( target_size );
+        set_size( mapping_, target_size )().assume_succeeded();
     }
 
     void resize( std::size_t const target_size )

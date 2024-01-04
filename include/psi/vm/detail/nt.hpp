@@ -14,6 +14,7 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 /// http://undocumented.ntinternals.net
+/// https://www.i.u-tokyo.ac.jp/edu/training/ss/lecture/new-documents/Lectures/02-VirtualMemory/VirtualMemory.pdf
 /// http://ultradefrag.sourceforge.net/doc/man/Windows%20NT(2000)%20Native%20API%20Reference.pdf
 /// https://webdiis.unizar.es/~spd/pub/windows/ntdll.htm
 /// https://technet.microsoft.com/en-us/sysinternals/bb896657.aspx WinObj
