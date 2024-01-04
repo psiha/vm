@@ -935,9 +935,12 @@ public:
     // TODO grow shrink
 
 private:
+    PSI_WARNING_DISABLE_PUSH()
+    PSI_WARNING_GCC_OR_CLANG_DISABLE( -Wsign-conversion )
     static T *  to_t_ptr  ( mapped_view::value_type * const ptr     ) noexcept {                                             return reinterpret_cast< T * >( ptr ); }
     static sz_t to_t_sz   ( auto                      const byte_sz ) noexcept { BOOST_ASSUME( byte_sz % sizeof( T ) == 0 ); return static_cast< sz_t >( byte_sz / sizeof( T ) ); }
     static sz_t to_byte_sz( auto                      const sz      ) noexcept {                                             return static_cast< sz_t >(      sz * sizeof( T ) ); }
+    PSI_WARNING_DISABLE_POP()
 
     void shrink_storage_to( size_type const target_size ) noexcept
     {
@@ -957,10 +960,10 @@ private:
         auto const current_size  { size() };
         auto const new_size      { current_size + n };
         storage_.expand( to_byte_sz( new_size ) );
-        auto const elements_to_move_uninitialized_space{ current_size - position_index };
-        auto const elements_to_move_to_the_current_end { n - elements_to_move_uninitialized_space };
-        std::uninitialized_move_n( nth( current_size - elements_to_move_uninitialized_space ),                       elements_to_move_uninitialized_space , nth( new_size - elements_to_move_uninitialized_space ) );
-        std::move                ( nth( position_index                                      ), nth( position_index + elements_to_move_to_the_current_end ), nth( new_size - n                                    ) );
+        auto const elements_to_move_uninitialized_space{ static_cast<size_type>( current_size - position_index            ) };
+        auto const elements_to_move_to_the_current_end { static_cast<size_type>( n - elements_to_move_uninitialized_space ) };
+        std::uninitialized_move_n( nth( current_size - elements_to_move_uninitialized_space ),                       elements_to_move_uninitialized_space , nth( static_cast<size_type>( new_size - elements_to_move_uninitialized_space ) ) );
+        std::move                ( nth( position_index                                      ), nth( position_index + elements_to_move_to_the_current_end ), nth( static_cast<size_type>( new_size - n                                    ) ) );
         return nth( position_index );
     }
 }; // class vector
