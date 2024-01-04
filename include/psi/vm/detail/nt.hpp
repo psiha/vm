@@ -74,7 +74,7 @@ namespace detail
 #endif
 } // namespace detail
 
-using BaseGetNamedObjectDirectory_t = NTSTATUS (WINAPI)( HANDLE * phDir );
+using BaseGetNamedObjectDirectory_t = NTSTATUS (WINAPI*)( HANDLE * phDir );
 
 using NtCreateSection_t = NTSYSAPI NTSTATUS (NTAPI)
 (
