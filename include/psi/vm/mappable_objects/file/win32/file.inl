@@ -27,6 +27,8 @@
 
 #include <boost/assert.hpp>
 #include <psi/err/win32.hpp>
+
+#undef max
 //------------------------------------------------------------------------------
 namespace psi
 {

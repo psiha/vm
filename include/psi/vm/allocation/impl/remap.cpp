@@ -12,6 +12,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 #include "allocation.impl.hpp"
+#include "psi/vm/align.hpp"
+
+#include <cstddef>
 
 #include <boost/assert.hpp>
 #include <boost/config_ex.hpp>
@@ -49,10 +52,10 @@ expand_result expand
     BOOST_ASSUME( current_size <  required_size_for_end_expansion );
     BOOST_ASSUME( current_size >= used_capacity                   );
 
-    BOOST_ASSUME( is_aligned( address                          , reserve_granularity ) );
-    BOOST_ASSUME( is_aligned( current_size                     , reserve_granularity ) );
-    BOOST_ASSUME( is_aligned( required_size_for_end_expansion  , reserve_granularity ) );
-    BOOST_ASSUME( is_aligned( required_size_for_front_expansion, reserve_granularity ) );
+    BOOST_ASSUME( is_aligned( reinterpret_cast<uintptr_t>(address)  , reserve_granularity ) );
+    BOOST_ASSUME( is_aligned( current_size                          , reserve_granularity ) );
+    BOOST_ASSUME( is_aligned( required_size_for_end_expansion       , reserve_granularity ) );
+    BOOST_ASSUME( is_aligned( required_size_for_front_expansion     , reserve_granularity ) );
 
     BOOST_ASSUME( ( alloc_type == allocation_type::commit ) || !used_capacity );
 
@@ -91,7 +94,7 @@ expand_result expand
             BOOST_ASSERT_MSG( false, "mremap failed but an appending mmap succeeded!?" ); // behaviour investigation
 #       endif
             BOOST_ASSUME( current_size + additional_end_size == required_size_for_end_expansion );
-            return { address, required_size_for_end_expansion, expand_result::back_extended };
+            return { address, required_size_for_end_expansion, expand_result::method::back_extended };
         }
     }
 
@@ -104,21 +107,21 @@ expand_result expand
         if ( allocate_fixed( pre_address, additional_front_size, allocation_type::commit ) ) // avoid having a non-committed range before a committed range
         {
             BOOST_VERIFY( current_size + additional_front_size == required_size_for_front_expansion );
-            return { static_cast< std::byte * >( pre_address ), required_size_for_front_expansion, expand_result::FrontExtended };
+            return { static_cast< std::byte * >( pre_address ), /*required_size_for_front_expansion,*/ expand_result::method::front_extended };
         }
     }
 
     if ( realloc_type == reallocation_type::moveable )
     {
         // Everything else failed: fallback to the classic allocate new->copy->free old dance.
-        auto const requested_size{ required_size_for_end_expansion }; //...mrmlj...TODO respect front-expand-only requests
+        auto       requested_size{ required_size_for_end_expansion }; //...mrmlj...TODO respect front-expand-only requests
         auto const new_location  { allocate( requested_size )      };
         if ( new_location )
         {
             BOOST_ASSUME( requested_size == required_size_for_end_expansion );
             std::memcpy( new_location, address, used_capacity );
             free( address, current_size );
-            return { static_cast< std::byte * >( new_location ), required_size_for_end_expansion, expand_result::moved };
+            return { static_cast< std::byte * >( new_location ), /*required_size_for_end_expansion,*/ expand_result::method::moved };
         }
     }
 

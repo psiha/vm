@@ -10,6 +10,9 @@
 /// For more information, see http://www.boost.org
 ///
 ////////////////////////////////////////////////////////////////////////////////
+
+#if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
+
 //------------------------------------------------------------------------------
 #include "allocation.impl.hpp"
 #include "psi/vm/align.hpp"
@@ -61,13 +64,13 @@ void * mmap( void * const target_address, std::size_t const size, int const prot
 }
 
 
-void * allocate( std::size_t & size ) noexcept
+void * allocate( std::size_t const & size ) noexcept
 {
     size = __builtin_align_up( size, reserve_granularity );
     return mmap( nullptr, size, PROT_READ | PROT_WRITE, /*TODO rethink*/ MAP_NORESERVE );
 }
 
-void * reserve( std::size_t & size ) noexcept
+void * reserve( std::size_t const & size ) noexcept
 {
     size = __builtin_align_up( size, reserve_granularity );
     return mmap( nullptr, size, PROT_NONE, /*TODO rethink*/ MAP_NORESERVE );
@@ -137,3 +140,5 @@ bool allocate_fixed( void * const address, std::size_t const size, allocation_ty
 //------------------------------------------------------------------------------
 } // namespace psi
 //------------------------------------------------------------------------------
+
+#endif

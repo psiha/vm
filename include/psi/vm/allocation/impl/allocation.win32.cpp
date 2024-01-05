@@ -10,6 +10,9 @@
 /// For more information, see http://www.boost.org
 ///
 ////////////////////////////////////////////////////////////////////////////////
+
+#ifdef WIN32
+
 //------------------------------------------------------------------------------
 #include "allocation.impl.hpp"
 #include "psi/vm/detail/nt.hpp"
@@ -20,6 +23,7 @@
 #include <algorithm> // for std::min
 
 #include <windows.h>
+#undef min           // Make std::min not broken
 //------------------------------------------------------------------------------
 namespace psi
 {
@@ -192,3 +196,6 @@ bool allocate_fixed( void * const address, std::size_t const size, allocation_ty
 //------------------------------------------------------------------------------
 } // namespace psi
 //------------------------------------------------------------------------------
+
+
+#endif
