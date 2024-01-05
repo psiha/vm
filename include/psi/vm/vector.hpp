@@ -26,6 +26,7 @@
 #include <climits>
 #include <span>
 #include <type_traits>
+#include <stdexcept>
 //------------------------------------------------------------------------------
 namespace psi
 {
