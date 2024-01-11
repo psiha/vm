@@ -14,18 +14,15 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef mem_hpp__448C1250_E77A_4945_87A2_087793290E07
-#define mem_hpp__448C1250_E77A_4945_87A2_087793290E07
 #pragma once
-//------------------------------------------------------------------------------
+
 #include "flags.hpp"
 
-#include <cstring>
-
 #include <psi/vm/detail/impl_selection.hpp>
-#include <psi/vm/mapping/mapping.hpp>
 #include <psi/vm/error/error.hpp>
 #include <psi/vm/handles/handle.hpp>
+#include <psi/vm/mapping/mapping.hpp>
+#include <psi/vm/mappable_objects/file/handle.hpp>
 #include <psi/vm/mappable_objects/shared_memory/policies.hpp>
 
 #include <sys/mman.h>
@@ -46,12 +43,10 @@
 
 #include <climits>
 #include <cstddef>
+#include <cstring>
 #include <type_traits>
 //------------------------------------------------------------------------------
-namespace psi
-{
-//------------------------------------------------------------------------------
-namespace vm
+namespace psi::vm
 {
 //------------------------------------------------------------------------------
 PSI_VM_POSIX_INLINE
@@ -66,7 +61,7 @@ namespace detail
 {
     // http://lists.apple.com/archives/darwin-development/2003/Mar/msg00242.html
     // http://insanecoding.blogspot.hr/2007/11/pathmax-simply-isnt.html
-    std::size_t constexpr max_shm_name =
+    inline std::uint32_t constexpr max_shm_name =
     #if defined( SHM_NAME_MAX ) // OSX
         SHM_NAME_MAX;
     #elif defined( PSHMNAMLEN ) // OSX, BSD
@@ -75,7 +70,8 @@ namespace detail
         NAME_MAX;
     #endif // SHM_NAME_MAX
 
-    void BOOST_CC_REG slash_name( char const * const name, char * const slashed_name, std::uint8_t const name_length )
+    inline
+    void preslash_name( char const * const name, char * const slashed_name, std::uint8_t const name_length ) noexcept
     {
         slashed_name[ 0 ] = '/';
         BOOST_ASSUME( name[ name_length ] == '\0' );
@@ -83,7 +79,7 @@ namespace detail
     }
 
     // FreeBSD extension SHM_ANON http://www.freebsd.org/cgi/man.cgi?query=shm_open
-    file_handle::reference BOOST_CC_REG shm_open_slashed
+    file_handle::reference shm_open_slashed
     (
         char                 const * const slashed_name,
         std::size_t                  const size,
@@ -98,31 +94,31 @@ namespace detail
         // strange OSX behaviour (+ O_TRUNC does not seem to work at all -> EINVAL)
         // http://lists.apple.com/archives/darwin-development/2003/Oct/msg00187.html
 
-        auto const oflags         ( flags.ap.oflag() | static_cast<flags::flags_t>( flags.nocp ) );
-        auto const mode           ( flags.ap.pmode()                                             );
-        auto       file_descriptor( ::shm_open( slashed_name, oflags, mode )                     );
-        if ( BOOST_LIKELY( file_descriptor != -1 ) )
+        auto const oflags         { flags.ap.oflag() | static_cast<flags::flags_t>( flags.nocp ) };
+        auto const mode           { flags.ap.pmode()                                             };
+        auto       file_descriptor{ ::shm_open( slashed_name, oflags, mode ) };
+        if ( file_descriptor != -1 ) [[ likely ]]
         {
-            if ( BOOST_UNLIKELY( ::ftruncate( file_descriptor, size ) != 0 ) )
+            if ( ::ftruncate( file_descriptor, size ) != 0 ) [[ unlikely ]]
             {
                 BOOST_VERIFY( ::shm_unlink( slashed_name   ) == 0 );
                 BOOST_VERIFY( ::close     ( file_descriptor) == 0 );
-                file_descriptor = file_handle::invalid_handle;
+                file_descriptor = file_handle::invalid_value;
             }
         }
         return { file_descriptor };
     }
 
-    file_handle::reference BOOST_CC_REG shm_open
+    file_handle::reference shm_open
     (
         char const * const name,
         std::size_t const size,
         flags::shared_memory const & flags
     )
     {
-        auto const length( std::strlen( name ) ); //...todo...constexpr...https://www.daniweb.com/software-development/cpp/code/482276/c-11-compile-time-string-concatenation-with-constexpr
+        auto const length{ std::strlen( name ) }; //...todo...constexpr
         char slashed_name[ 1 + length + 1 ];
-        slash_name( name, slashed_name, length );
+        preslash_name( name, slashed_name, length );
         return shm_open_slashed( slashed_name, size, flags );
     }
 } // namespace detail
@@ -149,8 +145,8 @@ public:
         std::size_t         const size,
         mflags              const flags,
         std::nothrow_t
-    ) noexcept( true )
-        : base_t( detail::shm_open( name, size, flags ), flags, size )
+    ) noexcept
+        : base_t{ detail::shm_open( name, size, flags ), flags, size }
     {}
 
     native_named_memory
@@ -159,14 +155,14 @@ public:
         std::size_t         const size,
         mflags              const flags
     )
-        : base_t( detail::shm_open( name, size, flags ), flags, size )
+        : native_named_memory{ name, size, flags, std::nothrow }
     {
-        if ( BOOST_UNLIKELY( !*this ) )
+        if ( !*this ) [[ unlikely ]]
             err::make_and_throw_exception<error>();
     }
 
     static
-    fallible_result<native_named_memory> BOOST_CC_REG create
+    fallible_result<native_named_memory> create
     (
         char        const * const name,
         std::size_t         const size,
@@ -176,11 +172,11 @@ public:
         return native_named_memory{ name, size, flags, std::nothrow };
     }
 
-    static bool BOOST_CC_REG cleanup( char const * const name ) noexcept
+    static bool cleanup( char const * const name ) noexcept
     {
         auto const length( std::strlen( name ) );
         char slashed_name[ 1 + length + 1 ];
-        detail::slash_name( name, slashed_name, length );
+        detail::preslash_name( name, slashed_name, length );
         auto const result( ::shm_unlink( slashed_name ) );
         if ( result != error::no_error )
         {
@@ -191,8 +187,6 @@ public:
     }
 
     auto size() const noexcept { return get_size( *this ); }
-
-private:
 }; // class native_named_memory
 
 
@@ -212,22 +206,22 @@ namespace detail
         //named_semaphore & operator++() { BOOST_VERIFY( semadd( +1 ) ); return *this; }
         //named_semaphore & operator--() { BOOST_VERIFY( semadd( -1 ) ); return *this; }
 
-        void BOOST_CC_REG remove() noexcept;
+        void remove() noexcept;
 
-        bool BOOST_CC_REG semadd( int value, bool nowait = false ) noexcept;
-        bool BOOST_CC_REG try_wait() { return semadd( -1, true ); }
+        bool semadd( int value, bool nowait = false ) noexcept;
+        bool try_wait() { return semadd( -1, true ); }
 
-        std::uint16_t BOOST_CC_REG value() const noexcept;
+        std::uint16_t value() const noexcept;
 
     public:
-        explicit operator bool() const { return semid_ != -1; }
+        explicit operator bool() const __restrict noexcept { return semid_ != -1; }
 
     private:
         named_semaphore( int const id ) : semid_( id ) {}
 
-        bool BOOST_CC_REG is_initialised() const noexcept;
+        bool is_initialised() const noexcept;
 
-        bool BOOST_CC_REG semop( int opcode, bool nowait = false ) noexcept;
+        bool semop( int opcode, bool nowait = false ) noexcept;
 
     private:
         int semid_;
@@ -261,9 +255,9 @@ namespace detail
             std::nothrow_t
         ) noexcept
             :
-            named_memory_guard( name, flags.ap.system_access, flags.nocp ),
-            shm_name_t        ( conditional_make_slashed_name( name ) ),
-            base_t            ( conditional_make_shm_fd      ( size, flags ), flags, size )
+            named_memory_guard{ name, flags.ap.system_access, flags.nocp                  },
+            shm_name_t        { conditional_make_slashed_name( name )                     },
+            base_t            { conditional_make_shm_fd      ( size, flags ), flags, size }
         {}
 
         scoped_named_memory
@@ -274,7 +268,7 @@ namespace detail
         ) noexcept( false )
             : scoped_named_memory( name, size, flags, std::nothrow_t() )
         {
-            if ( BOOST_UNLIKELY( !*this ) )
+            if ( !*this ) [[ unlikely ]]
                 err::make_and_throw_exception<error>();
         }
 
@@ -284,7 +278,7 @@ namespace detail
         scoped_named_memory( scoped_named_memory const & ) = delete;
 
         static
-        fallible_result<scoped_named_memory> BOOST_CC_REG create
+        fallible_result<scoped_named_memory> create
         (
             char        const * const name,
             std::size_t         const size,
@@ -295,9 +289,9 @@ namespace detail
         }
 
         static
-        fallible_result<scoped_named_memory> BOOST_CC_REG open( char const * const name, mflags const flags, std::size_t const size ) noexcept; // todo
+        fallible_result<scoped_named_memory> open( char const * const name, mflags const flags, std::size_t const size ) noexcept; // todo
 
-        ~scoped_named_memory()
+        ~scoped_named_memory() noexcept
         {
             if ( static_cast<handle const &>( *this ) )
             {
@@ -319,22 +313,22 @@ namespace detail
     private:
         detail::shm_name_t conditional_make_slashed_name( char const * const name ) const __restrict
         {
-            if ( BOOST_UNLIKELY( !static_cast<named_memory_guard const &>( *this ) ) )
+            if ( !named_memory_guard::operator bool() ) [[ unlikely ]]
                 return nullptr;
             auto const length( std::strlen( name ) );
             auto const slashed_name( new ( std::nothrow ) char[ 1 + length + 1 ] );
             if ( BOOST_LIKELY( slashed_name != nullptr ) )
-                detail::slash_name( name, slashed_name, length );
+                detail::preslash_name( name, slashed_name, length );
             else
                 error::set( ENOMEM );
             return detail::shm_name_t( slashed_name );
         }
 
-        file_handle::reference conditional_make_shm_fd( std::size_t const length, flags::shared_memory const & flags ) const __restrict
+        file_handle::reference conditional_make_shm_fd( std::size_t const length, flags::shared_memory const & flags ) const noexcept
         {
-            auto const & name( static_cast<shm_name_t const &>( *this ) );
+            auto const name{ shm_name_t::get() };
             if ( BOOST_LIKELY( name != nullptr ) )
-                return detail::shm_open( name.get(), length, flags );
+                return detail::shm_open( name, length, flags );
             return { file_handle::traits::invalid_value };
         }
     }; // class scoped_named_memory
@@ -353,22 +347,11 @@ namespace detail
 } // namespace detail
 #endif // __ANDROID__
 
-template <>
-struct is_resizable<file_handle> : std::true_type {};
 
-
-mapping BOOST_CC_REG create_mapping( handle::reference, mapping ) noexcept;
+mapping create_mapping( handle::reference, mapping ) noexcept;
 
 //------------------------------------------------------------------------------
 } // namespace posix
 //------------------------------------------------------------------------------
-} // namespace vm
+} // namespace psi::vm
 //------------------------------------------------------------------------------
-} // namespace psi
-//------------------------------------------------------------------------------
-
-#ifdef PSI_VM_HEADER_ONLY
-#   include "mem.inl"
-#endif // PSI_VM_HEADER_ONLY
-
-#endif // mem_hpp

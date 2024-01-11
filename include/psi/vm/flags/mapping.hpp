@@ -70,8 +70,8 @@ struct viewing;
 //------------------------------------------------------------------------------
 
 #ifndef DOXYGEN_ONLY
-#include "psi/vm/detail/impl_selection.hpp"
-#include PSI_VM_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /mapping.hpp ) )
+#include <psi/vm/detail/impl_selection.hpp>
+#include PSI_VM_DIR_IMPL_INCLUDE( BOOST_PP_IDENTITY( mapping.hpp ) )
 #endif // DOXYGEN_ONLY
 
 #endif // opening_hpp

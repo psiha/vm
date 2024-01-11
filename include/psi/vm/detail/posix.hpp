@@ -13,35 +13,29 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef posix_hpp__8FC3F669_80D4_4455_829D_F72E8ABDE9D0
-#define posix_hpp__8FC3F669_80D4_4455_829D_F72E8ABDE9D0
 #pragma once
-//------------------------------------------------------------------------------
-#include <boost/config.hpp>
 
-#if defined( BOOST_HAS_UNISTD_H )
-    #include <boost/config/detail/posix_features.hpp>
-#elif defined( BOOST_MSVC )
-    #pragma warning ( disable : 4996 ) // "The POSIX name for this item is deprecated. Instead, use the ISO C++ conformant name."
-    #include <io.h>
-    #include <wchar.h>
+#if __has_include( <unistd.h> )
+#   include <boost/config/detail/posix_features.hpp>
+#   include <cstddef>
+#   include <cstdint>
+#elif defined( _MSC_VER )
+#   pragma warning ( disable : 4996 ) // "The POSIX name for this item is deprecated. Instead, use the ISO C++ conformant name."
+#   include <io.h>
+#   include <wchar.h>
 #else
-    #error no suitable POSIX implementation found
-#endif // BOOST_MSVC
+#   error no suitable POSIX implementation found
+#endif // impl
 
-#if defined( BOOST_MSVC )
-    #define PSI_VM_POSIX_STANDARD_LINUX_OSX_MSVC( standard, linux, osx, msvc ) msvc
+#if defined( _MSC_VER )
+#   define PSI_VM_POSIX_STANDARD_LINUX_OSX_MSVC( standard, linux, osx, msvc ) msvc
 #elif defined( __APPLE__ )
-    #define PSI_VM_POSIX_STANDARD_LINUX_OSX_MSVC( standard, linux, osx, msvc ) osx
+#   define PSI_VM_POSIX_STANDARD_LINUX_OSX_MSVC( standard, linux, osx, msvc ) osx
 #elif defined( _GNU_SOURCE )
-    #define PSI_VM_POSIX_STANDARD_LINUX_OSX_MSVC( standard, linux, osx, msvc ) linux
+#   define PSI_VM_POSIX_STANDARD_LINUX_OSX_MSVC( standard, linux, osx, msvc ) linux
 #else
-    #define PSI_VM_POSIX_STANDARD_LINUX_OSX_MSVC( standard, linux, osx, msvc ) standard
+#   define PSI_VM_POSIX_STANDARD_LINUX_OSX_MSVC( standard, linux, osx, msvc ) standard
 #endif // POSIX impl
-
-#if !defined( __has_include )
-#   define __has_include( x ) 0
-#endif // __has_include
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -55,4 +49,3 @@ inline namespace posix
 //------------------------------------------------------------------------------
 } // namespace psi::vm
 //------------------------------------------------------------------------------
-#endif // posix_hpp

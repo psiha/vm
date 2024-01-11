@@ -14,11 +14,9 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef handle_hpp__56DDDE10_05C3_4B18_8DC5_89317D689F99
-#define handle_hpp__56DDDE10_05C3_4B18_8DC5_89317D689F99
 #pragma once
-//------------------------------------------------------------------------------
-#include "psi/vm/handles/handle.hpp"
+
+#include <psi/vm/handles/handle.hpp>
 //------------------------------------------------------------------------------
 namespace psi
 {
@@ -27,7 +25,7 @@ namespace vm
 {
 //------------------------------------------------------------------------------
 
-#ifdef BOOST_HAS_UNISTD_H
+#if __has_include( <unistd.h> )
 using file_handle = handle; // "Everything is a file" unofficial *nix philosophy
 #else
 struct file_handle : PSI_VM_IMPL()::handle
@@ -44,4 +42,3 @@ struct file_handle : PSI_VM_IMPL()::handle
 //------------------------------------------------------------------------------
 } // namespace psi
 //------------------------------------------------------------------------------
-#endif // handle_hpp

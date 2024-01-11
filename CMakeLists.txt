@@ -3,20 +3,7 @@ cmake_minimum_required( VERSION 3.27.0 )
 project( vm )
 
 ###################
-##### Target ######
-###################
-
-set(CMAKE_CXX_STANDARD 23)
-
-# TODO: Use psiha/build cmake utils?
-
-file( GLOB_RECURSE vm_sources "${PROJECT_SOURCE_DIR}/include/*" )
-add_library( vm STATIC ${vm_sources} )
-target_include_directories( vm PUBLIC "${PROJECT_SOURCE_DIR}/include/" )
-target_compile_features( vm PRIVATE cxx_std_23 )
-
-###################
-###### Deps #######
+## Deps
 ###################
 
 # Download CPM.cmake
@@ -27,57 +14,76 @@ file(
   ${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake
   EXPECTED_HASH SHA256=cc155ce02e7945e7b8967ddfaff0b050e958a723ef7aad3766d368940cb15494
 )
-set(CPM_SOURCE_CACHE "${CMAKE_CURRENT_BINARY_DIR}/deps")    # Using this ensures shallow clones
-include(${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake)
+set( CPM_SOURCE_CACHE "${CMAKE_CURRENT_BINARY_DIR}/deps" )    # Using this ensures shallow clones
+include( ${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake )
 
 
 # Add packages
 
-CPMAddPackage("gh:boostorg/static_assert#boost-1.84.0")     # Boost::core dependency
-CPMAddPackage("gh:boostorg/throw_exception#boost-1.84.0")   # Boost::core dependency
-CPMAddPackage("gh:boostorg/config#boost-1.84.0")            # Boost::core dependency
-CPMAddPackage("gh:boostorg/io#boost-1.84.0")                # Boost::utility dependency
-CPMAddPackage("gh:boostorg/type_traits#boost-1.84.0")       # Boost::utility dependency
-CPMAddPackage("gh:boostorg/predef#boost-1.84.0")            # Boost::winapi dependency
-CPMAddPackage("gh:boostorg/assert#boost-1.84.0")
-CPMAddPackage("gh:boostorg/core#boost-1.84.0")
-CPMAddPackage("gh:boostorg/preprocessor#boost-1.84.0")
-CPMAddPackage("gh:boostorg/winapi#boost-1.84.0")
-CPMAddPackage("gh:boostorg/utility#boost-1.84.0")
+set( boost_ver boost-1.84.0 )
+CPMAddPackage( "gh:boostorg/static_assert#${boost_ver}"   ) # Boost::core dependency
+CPMAddPackage( "gh:boostorg/throw_exception#${boost_ver}" ) # Boost::core dependency
+CPMAddPackage( "gh:boostorg/config#${boost_ver}"          ) # Boost::core dependency
+CPMAddPackage( "gh:boostorg/io#${boost_ver}"              ) # Boost::utility dependency
+CPMAddPackage( "gh:boostorg/type_traits#${boost_ver}"     ) # Boost::utility dependency
+CPMAddPackage( "gh:boostorg/predef#${boost_ver}"          ) # Boost::winapi dependency
+CPMAddPackage( "gh:boostorg/assert#${boost_ver}"          )
+CPMAddPackage( "gh:boostorg/core#${boost_ver}"            )
+CPMAddPackage( "gh:boostorg/preprocessor#${boost_ver}"    )
+CPMAddPackage( "gh:boostorg/winapi#${boost_ver}"          )
+CPMAddPackage( "gh:boostorg/utility#${boost_ver}"         )
 
-CPMAddPackage("gh:psiha/config_ex#master")
-CPMAddPackage("gh:psiha/std_fix#master")
-CPMAddPackage("gh:psiha/err#master")
-CPMAddPackage("gh:psiha/build#master")
+CPMAddPackage( "gh:psiha/config_ex#master" )
+CPMAddPackage( "gh:psiha/std_fix#master"   )
+CPMAddPackage( "gh:psiha/err#master"       )
+CPMAddPackage( "gh:psiha/build#master"     )
 
-CPMAddPackage("gh:google/googletest@1.14.0")
+CPMAddPackage( "gh:google/googletest@1.14.0" )
 
-# Link & include
 
-target_link_libraries( vm PRIVATE
-        Boost::core
-        Boost::assert
-        Boost::preprocessor
-        Boost::winapi
-        Boost::utility
+include( ${build_SOURCE_DIR}/build_options.cmake )
+
+PSI_add_compile_options( Debug ${PSI_compiler_runtime_sanity_checks} )
+PSI_add_link_options   ( Debug ${PSI_linker_runtime_sanity_checks}   )
+  
+set( CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE true )
+PSI_add_link_options   ( Release ${PSI_linker_LTO} )
+PSI_add_compile_options( Release ${PSI_compiler_LTO} ${PSI_compiler_optimize_for_size} ${PSI_compiler_disable_thread_safe_init} ${PSI_compiler_fastmath} ${PSI_compiler_debug_symbols} )
+
+if ( WIN32 )
+  add_compile_definitions( WIN32_LEAN_AND_MEAN NOMINMAX NOCOMM )
+endif()
+
+###################
+## Target(s)
+###################
+
+include( vm.cmake )
+
+target_link_libraries( psi_vm PRIVATE
+  Boost::core
+  Boost::assert
+  Boost::preprocessor
+  Boost::winapi
+  Boost::utility
 )
 
-target_include_directories( vm PRIVATE
-        "${assert_SOURCE_DIR}/include"
-        "${core_SOURCE_DIR}/include"
-        "${preprocessor_SOURCE_DIR}/include"
-        "${winapi_SOURCE_DIR}/include"
-        "${utility_SOURCE_DIR}/include"
-        "${config_ex_SOURCE_DIR}/include"
-        "${std_fix_SOURCE_DIR}/include"
-        "${err_SOURCE_DIR}/include"
-        "${build_SOURCE_DIR}/include"
+target_include_directories( psi_vm PRIVATE
+  "${assert_SOURCE_DIR}/include"
+  "${core_SOURCE_DIR}/include"
+  "${preprocessor_SOURCE_DIR}/include"
+  "${winapi_SOURCE_DIR}/include"
+  "${utility_SOURCE_DIR}/include"
+  "${config_ex_SOURCE_DIR}/include"
+  "${std_fix_SOURCE_DIR}/include"
+  "${err_SOURCE_DIR}/include"
+  "${build_SOURCE_DIR}/include"
 )
 
 ###################
-##### Testing #####
+## Testing
 ###################
 
 enable_testing()
 
-add_subdirectory("${PROJECT_SOURCE_DIR}/test")
+add_subdirectory( "${PROJECT_SOURCE_DIR}/test" )

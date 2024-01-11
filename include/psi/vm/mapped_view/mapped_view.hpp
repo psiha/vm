@@ -13,18 +13,13 @@
 /// For more information, see http://www.boost.org
 ///
 ////////////////////////////////////////////////////////////////////////////////
-//------------------------------------------------------------------------------
-#ifndef mapped_view_hpp__D9C84FF5_E506_4ECB_9778_61E036048D28
-#define mapped_view_hpp__D9C84FF5_E506_4ECB_9778_61E036048D28
 #pragma once
-//------------------------------------------------------------------------------
-#include "psi/vm/detail/impl_selection.hpp"
-#include "psi/vm/error/error.hpp"
-#include "psi/vm/mapping/mapping.hpp"
-#include "psi/vm/handles/handle.hpp"
-#include "psi/vm/mapping/mapping.hpp"
-#include "psi/vm/span.hpp"
-#include "psi/vm/allocation/allocation.hpp"
+
+#include <psi/vm/allocation.hpp>
+#include <psi/vm/detail/impl_selection.hpp>
+#include <psi/vm/error/error.hpp>
+#include <psi/vm/mapping/mapping.hpp>
+#include <psi/vm/span.hpp>
 
 #include <boost/assert.hpp>
 #include <boost/config.hpp>
@@ -149,9 +144,3 @@ using read_only_mapped_view = basic_mapped_view<true >;
 //------------------------------------------------------------------------------
 } // namespace psi
 //------------------------------------------------------------------------------
-
-#ifdef PSI_VM_HEADER_ONLY
-    #include "mapped_view.inl"
-#endif
-
-#endif // mapped_view_hpp

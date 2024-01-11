@@ -14,15 +14,9 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef flags_hpp__BFFC0541_21AC_4A80_A9EE_E0450B6D4D8A
-#define flags_hpp__BFFC0541_21AC_4A80_A9EE_E0450B6D4D8A
 #pragma once
 //------------------------------------------------------------------------------
-//------------------------------------------------------------------------------
-namespace psi
-{
-//------------------------------------------------------------------------------
-namespace vm
+namespace psi::vm
 {
 //------------------------------------------------------------------------------
 #ifdef DOXYGEN_ONLY
@@ -200,14 +194,10 @@ struct opening
 } // namespace flags
 #endif // DOXYGEN_ONLY
 //------------------------------------------------------------------------------
-} // namespace vm
-//------------------------------------------------------------------------------
-} // namespace psi
+} // namespace psi::vm
 //------------------------------------------------------------------------------
 
 #ifndef DOXYGEN_ONLY
-#include "psi/vm/detail/impl_selection.hpp"
-#include PSI_VM_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /flags.hpp ) )
+#include <psi/vm/detail/impl_selection.hpp>
+#include PSI_VM_IMPL_INCLUDE( flags )
 #endif // DOXYGEN_ONLY
-
-#endif // flags_hpp

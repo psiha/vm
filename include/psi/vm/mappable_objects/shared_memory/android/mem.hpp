@@ -14,10 +14,8 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef mem_hpp__497A6A4E_4630_4841_BAEE_2A26498ABF6A
-#define mem_hpp__497A6A4E_4630_4841_BAEE_2A26498ABF6A
 #pragma once
-//------------------------------------------------------------------------------
+
 #include "flags.hpp"
 
 #include <psi/vm/detail/impl_selection.hpp>
@@ -39,10 +37,7 @@
 #include <string_view>
 #include <type_traits>
 //------------------------------------------------------------------------------
-namespace psi
-{
-//------------------------------------------------------------------------------
-namespace vm
+namespace psi::vm
 {
 //------------------------------------------------------------------------------
 PSI_VM_POSIX_INLINE
@@ -63,12 +58,12 @@ namespace detail
     ///                                       (03.10.2015.) (Domagoj Saric)
     static std::string_view constexpr shm_prefix{ ASHMEM_NAME_DEF "/", sizeof( ASHMEM_NAME_DEF "/" ) - 1 };
     static std::string_view           shm_emulated_path{ "/mnt/sdcard/shm" };
-    void BOOST_CC_REG prefix_shm_name( char const * const name, char * const prefixed_name, std::uint8_t const name_length, std::string_view const prefix ) noexcept
+    void prefix_shm_name( char const * const name, char * const prefixed_name, std::uint8_t const name_length, std::string_view const prefix ) noexcept
     {
         std::copy  ( prefix.begin(), prefix.end(), prefixed_name );
         std::memcpy( prefixed_name + prefix.size(), name, name_length + 1 );
     }
-    void BOOST_CC_REG prefix_shm_name( char const * const name, char * const prefixed_name, std::uint8_t const name_length ) noexcept
+    void prefix_shm_name( char const * const name, char * const prefixed_name, std::uint8_t const name_length ) noexcept
     {
         std::copy  ( shm_prefix.begin(), shm_prefix.end(), prefixed_name );
         std::memcpy( prefixed_name + shm_prefix.size(), name, name_length + 1 );
@@ -126,7 +121,7 @@ public:
         mflags              const flags,
         std::nothrow_t
     ) noexcept( true )
-        : base_t( detail::shm_open( name, size, flags ), flags, size )
+        : base_t{ detail::shm_open( name, size, flags ), flags, size }
     {}
 
     native_named_memory
@@ -135,16 +130,16 @@ public:
         std::size_t         const size,
         mflags              const flags
     ) noexcept( false )
-        : native_named_memory( name, size, flags, std::nothrow_t() )
+        : native_named_memory{ name, size, flags, std::nothrow }
     {
-        if ( BOOST_UNLIKELY( !*this ) )
+        if ( !*this ) [[ unlikely ]]
             err::make_and_throw_exception<error>();
     }
 
     native_named_memory( native_named_memory && other ) noexcept : base_t( std::move( other ) ) {}
 
     static
-    fallible_result<native_named_memory> BOOST_CC_REG create
+    fallible_result<native_named_memory> create
     (
         char        const * const name,
         std::size_t         const size,
@@ -157,14 +152,14 @@ public:
     std::uint32_t size() const noexcept
     {
         auto const result( ::ioctl( mapping::get(), ASHMEM_GET_SIZE, nullptr ) );
-        BOOST_ASSERT( result >= 0 );
+        BOOST_ASSUME( result >= 0 );
         return result;
     }
 
-    fallible_result<void> BOOST_CC_REG resize( std::uint32_t const new_size )
+    fallible_result<void> resize( std::uint32_t const new_size ) noexcept
     {
         auto const result( ::ioctl( mapping::get(), ASHMEM_SET_SIZE, new_size ) );
-        if ( BOOST_UNLIKELY( result < 0 ) ) return error();
+        if ( result < 0 ) [[ unlikely ]] return error();
         return err::success;
     }
 }; // class native_named_memory
@@ -184,7 +179,7 @@ private:
 
 public:
     static
-    fallible_result<file_backed_named_memory> BOOST_CC_REG create
+    fallible_result<file_backed_named_memory> create
     (
         char        const * const name,
         std::size_t         const size,
@@ -219,7 +214,7 @@ public:
             { detail::shm_open( name, size, flags ), flags, size, std::move( file ) };
     }
 
-    static bool BOOST_CC_REG cleanup( char const * const name ) noexcept
+    static bool cleanup( char const * const name ) noexcept
     {
         auto const length( std::strlen( name ) );
         char adjusted_name[ detail::shm_emulated_path.size() + length + 1 ];
@@ -228,10 +223,10 @@ public:
     }
 
     static
-    fallible_result<file_backed_named_memory> BOOST_CC_REG open( char const * const name, mflags const flags, std::size_t const size ) noexcept;
+    fallible_result<file_backed_named_memory> open( char const * const name, mflags const flags, std::size_t const size ) noexcept;
 
-    auto BOOST_CC_REG   size(                            ) const noexcept { return get_size( file_           ); }
-    auto BOOST_CC_REG resize( std::size_t const new_size )       noexcept { return set_size( file_, new_size ); }
+    auto   size(                            ) const noexcept { return get_size( file_           ); }
+    auto resize( std::size_t const new_size )       noexcept { return set_size( file_, new_size ); }
 
 private:
     file_backed_named_memory( file_handle::reference const shm, flags::viewing const view_mapping_flags, std::size_t const maximum_size, file_handle && backing_file ) noexcept
@@ -255,13 +250,5 @@ namespace detail
 //------------------------------------------------------------------------------
 } // namespace posix
 //------------------------------------------------------------------------------
-} // namespace vm
+} // namespace psi::vm
 //------------------------------------------------------------------------------
-} // namespace psi
-//------------------------------------------------------------------------------
-
-#ifdef PSI_VM_HEADER_ONLY
-//#   include "mem.inl"
-#endif // PSI_VM_HEADER_ONLY
-
-#endif // mem_hpp

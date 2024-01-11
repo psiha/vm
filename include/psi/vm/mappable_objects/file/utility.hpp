@@ -14,22 +14,17 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef utility_hpp__3713A8AF_A516_4A23_BE6A_2BB79EBF7B5F
-#define utility_hpp__3713A8AF_A516_4A23_BE6A_2BB79EBF7B5F
 #pragma once
-//------------------------------------------------------------------------------
-#include "psi/vm/error/error.hpp"
-#include "psi/vm/flags/opening.hpp"
-#include "psi/vm/mapped_view/mapped_view.hpp"
 
-#include "psi/err/fallible_result.hpp"
+#include <psi/vm/error/error.hpp>
+#include <psi/vm/flags/opening.hpp>
+#include <psi/vm/mapped_view/mapped_view.hpp>
+
+#include <psi/err/fallible_result.hpp>
 
 #include <cstddef>
 //------------------------------------------------------------------------------
-namespace psi
-{
-//------------------------------------------------------------------------------
-namespace vm
+namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
@@ -54,13 +49,5 @@ err::fallible_result<read_only_mapped_view, error> map_read_only_file( wchar_t c
 #endif // _MSC_VER
 
 //------------------------------------------------------------------------------
-} // namespace vm
+} // namespace psi::vm
 //------------------------------------------------------------------------------
-} // namespace psi
-//------------------------------------------------------------------------------
-
-#ifdef PSI_VM_HEADER_ONLY
-    #include "utility.inl"
-#endif // PSI_VM_HEADER_ONLY
-
-#endif // utility_hpp

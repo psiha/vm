@@ -14,18 +14,13 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef flags_hpp__F9CD9C91_1F07_4107_A422_0D814F0FE487
-#define flags_hpp__F9CD9C91_1F07_4107_A422_0D814F0FE487
 #pragma once
+
+#include <psi/vm/detail/impl_selection.hpp>
+#include <psi/vm/detail/posix.hpp>
+#include <psi/vm/flags/mapping.posix.hpp>
 //------------------------------------------------------------------------------
-#include "psi/vm/detail/impl_selection.hpp"
-#include "psi/vm/detail/posix.hpp"
-#include "psi/vm/flags/posix/mapping.hpp"
-//------------------------------------------------------------------------------
-namespace psi
-{
-//------------------------------------------------------------------------------
-namespace vm
+namespace psi::vm
 {
 //------------------------------------------------------------------------------
 PSI_VM_POSIX_INLINE
@@ -58,16 +53,16 @@ struct shared_memory
         value_type value;
     };
 
-    static shared_memory BOOST_CC_REG create
+    static shared_memory create
     (
         access_privileges               ,
         named_object_construction_policy,
         system_hints
     ) noexcept;
 
-    operator mapping () const noexcept
+    operator mapping() const noexcept
     {
-        auto flags( mapping::create( ap.object_access, viewing::share_mode::shared ) );
+        auto flags{ mapping::create( ap.object_access, viewing::share_mode::shared ) };
         flags.flags |= hints.value;
         return static_cast<mapping &>( flags );
     }
@@ -82,13 +77,5 @@ struct shared_memory
 //------------------------------------------------------------------------------
 } // namespace posix
 //------------------------------------------------------------------------------
-} // namespace vm
+} // namespace psi::vm
 //------------------------------------------------------------------------------
-} // namespace psi
-//------------------------------------------------------------------------------
-
-#ifdef PSI_VM_HEADER_ONLY
-    #include "flags.inl"
-#endif // PSI_VM_HEADER_ONLY
-
-#endif // flags.hpp

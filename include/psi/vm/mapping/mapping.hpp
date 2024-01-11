@@ -13,24 +13,18 @@
 /// For more information, see http://www.boost.org
 ///
 ////////////////////////////////////////////////////////////////////////////////
-//------------------------------------------------------------------------------
-#ifndef mapping_hpp__D42BC724_FD9A_4C7B_B521_CF3C29C948B3
-#define mapping_hpp__D42BC724_FD9A_4C7B_B521_CF3C29C948B3
 #pragma once
-//------------------------------------------------------------------------------
-#include "psi/vm/detail/impl_selection.hpp"
-#include "psi/vm/handles/handle.hpp"
 
-#include PSI_VM_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /mapping.hpp ) )
+#include <psi/vm/detail/impl_selection.hpp>
+#include <psi/vm/handles/handle.hpp>
+
+#include PSI_VM_IMPL_INCLUDE( mapping )
 
 #include <cstdint>
 #include <cstdio>
-#include <filesystem> // merely for the (fwd) decl std::filesystem::path
+#include <filesystem> // merely for the (fwd) decl of std::filesystem::path
 //------------------------------------------------------------------------------
-namespace psi
-{
-//------------------------------------------------------------------------------
-namespace vm
+namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
@@ -73,8 +67,5 @@ mapping open_mapping( mapping, char const * name ) noexcept;
 #endif // todo
 
 //------------------------------------------------------------------------------
-} // namespace vm
+} // namespace psi::vm
 //------------------------------------------------------------------------------
-} // namespace psi
-//------------------------------------------------------------------------------
-#endif // mapping_hpp

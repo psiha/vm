@@ -14,10 +14,8 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef mem_hpp__6DB85D55_CCA0_493D_AB14_78064457885B
-#define mem_hpp__6DB85D55_CCA0_493D_AB14_78064457885B
 #pragma once
-//------------------------------------------------------------------------------
+
 #include "flags.hpp"
 
 #include <psi/vm/detail/impl_selection.hpp>
@@ -34,13 +32,10 @@
 #include <string_view>
 #include <type_traits>
 //------------------------------------------------------------------------------
-namespace psi
+namespace psi::vm
 {
 //------------------------------------------------------------------------------
-namespace vm
-{
-//------------------------------------------------------------------------------
-namespace win32
+inline namespace win32
 {
 //------------------------------------------------------------------------------
 
@@ -55,7 +50,7 @@ namespace detail
         char const * name () const { return &buffer_[ name_offset_ ]; }
 
     private:
-        void BOOST_CC_REG apply( char const * __restrict const name )
+        void apply( char const * __restrict const name )
         {
             auto const length( static_cast<std::uint8_t>( ::GetWindowsDirectoryA( &buffer_[ 0 ], static_cast<std::uint16_t>( buffer_.size() ) ) ) );
             BOOST_ASSUME( length );
@@ -87,7 +82,7 @@ namespace detail
 
     public:
         static
-        named_memory_base BOOST_CC_REG create
+        named_memory_base create
         (
             shm_path    const & __restrict       name,
             std::size_t                    const size,
@@ -111,7 +106,7 @@ namespace detail
                     }
                 )
             );
-            if ( BOOST_UNLIKELY( !file ) )
+            if ( !file ) [[ unlikely ]]
                 return {};
             auto const preexisting_file( err::last_win32_error::is<ERROR_ALREADY_EXISTS>() );
 
@@ -136,8 +131,8 @@ namespace detail
                     name.name()
                 )
             };
-            auto const creation_disposition( flags.creation_disposition );
-            auto const preexisting_mapping ( err::last_win32_error::is<ERROR_ALREADY_EXISTS>() );
+            auto const creation_disposition{ flags.creation_disposition };
+            auto const preexisting_mapping { err::last_win32_error::is<ERROR_ALREADY_EXISTS>() };
             BOOST_ASSERT( preexisting_file == preexisting_mapping );
             switch ( creation_disposition )
             {
@@ -391,13 +386,5 @@ namespace detail
 //------------------------------------------------------------------------------
 } // namespace win32
 //------------------------------------------------------------------------------
-} // namespace vm
+} // namespace psi::vm
 //------------------------------------------------------------------------------
-} // namespace psi
-//------------------------------------------------------------------------------
-
-#ifdef PSI_VM_HEADER_ONLY
-    //#include "mem.inl"
-#endif // PSI_VM_HEADER_ONLY
-
-#endif // mem_hpp
