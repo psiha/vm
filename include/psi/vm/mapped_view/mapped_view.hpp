@@ -35,8 +35,6 @@ namespace vm
 {
 //------------------------------------------------------------------------------
 
-inline namespace PSI_VM_IMPL() { struct mapper; }
-
 ////////////////////////////////////////////////////////////////////////////////
 ///
 /// \class basic_mapped_view
@@ -50,10 +48,9 @@ template <bool read_only>
 class basic_mapped_view : public std::conditional_t<read_only, read_only_mapped_span, mapped_span>
 {
 public:
-    using mapper    = PSI_VM_IMPL()::mapper;
-    using error_t   = error;
-    using mapping_t = mapping;
-    using span      = std::conditional_t<read_only, read_only_mapped_span, mapped_span>;
+    using error_t    = error;
+    using mapping_t  = mapping;
+    using span       = std::conditional_t<read_only, read_only_mapped_span, mapped_span>;
     using value_type = typename span::value_type;
 
 public:
