@@ -36,7 +36,7 @@ struct mapper
         std   ::size_t   desired_size
     ) noexcept;
 
-    static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
+    static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
     void BOOST_CC_REG unmap( mapped_span view ) noexcept;
 
     static void shrink( mapped_span view, std::size_t target_size ) noexcept;

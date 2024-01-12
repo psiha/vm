@@ -124,6 +124,9 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
     return err::success;
 } // view::expand()
 
+template class basic_mapped_view<false>;
+template class basic_mapped_view<true >;
+
 //------------------------------------------------------------------------------
 } // namespace psi::vm
 //------------------------------------------------------------------------------
