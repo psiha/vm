@@ -14,13 +14,11 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef handle_hpp__67A36E06_53FF_4361_9786_9E04A3917CD3
-#define handle_hpp__67A36E06_53FF_4361_9786_9E04A3917CD3
 #pragma once
-//------------------------------------------------------------------------------
+
 #include "handle_ref.hpp"
 
-#include "psi/vm/detail/impl_selection.hpp"
+#include <psi/vm/detail/impl_selection.hpp>
 //------------------------------------------------------------------------------
 namespace psi
 {
@@ -53,6 +51,8 @@ public:
     using native_handle_t = typename traits::native_t;
     using       reference = handle_ref<handle_impl, false>;
     using const_reference = handle_ref<handle_impl, true >;
+
+    inline static auto const invalid_value{ traits::invalid_value };
 
              constexpr handle_impl(                                        ) noexcept : handle_{ traits::invalid_value } {                                        }
     explicit constexpr handle_impl( native_handle_t    const native_handle ) noexcept : handle_{ native_handle         } {                                        }
@@ -93,5 +93,4 @@ private:
 //------------------------------------------------------------------------------
 } // namespace psi
 //------------------------------------------------------------------------------
-#include PSI_VM_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /handle.hpp ) )
-#endif // handle_hpp
+#include PSI_VM_IMPL_INCLUDE( handle )

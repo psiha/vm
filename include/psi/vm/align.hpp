@@ -24,7 +24,8 @@ namespace align_detail
 #ifdef __clang__
 [[ using gnu: const, always_inline ]] constexpr auto is_aligned( auto const value, auto const alignment ) noexcept { return __builtin_is_aligned( value, alignment ); }
 #else
-[[ using gnu: const, always_inline ]] constexpr auto is_aligned( auto const value, auto const alignment ) noexcept { return value % alignment == 0; }
+[[ using gnu: const, always_inline ]] constexpr auto is_aligned( auto   const value, auto const alignment ) noexcept { return value % alignment == 0; }
+[[ using gnu: const, always_inline ]] constexpr auto is_aligned( auto * const ptr  , auto const alignment ) noexcept { return is_aligned( reinterpret_cast<std::uintptr_t>( ptr ), alignment ); }
 #endif
 [[ using gnu: const, always_inline ]] constexpr auto align_down( auto const value, auto const alignment ) noexcept
 {

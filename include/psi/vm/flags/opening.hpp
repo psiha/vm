@@ -14,10 +14,8 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef opening_hpp__FEEA10FA_EA28_496E_B860_815D484AFB36
-#define opening_hpp__FEEA10FA_EA28_496E_B860_815D484AFB36
 #pragma once
-//------------------------------------------------------------------------------
+
 #include "flags.hpp"
 //------------------------------------------------------------------------------
 namespace psi
@@ -76,8 +74,6 @@ struct opening
 //------------------------------------------------------------------------------
 
 #ifndef DOXYGEN_ONLY
-#include "psi/vm/detail/impl_selection.hpp"
-#include PSI_VM_IMPL_INCLUDE( BOOST_PP_EMPTY, BOOST_PP_IDENTITY( /opening.hpp ) )
+#include <psi/vm/detail/impl_selection.hpp>
+#include PSI_VM_IMPL_INCLUDE( opening )
 #endif // DOXYGEN_ONLY
-
-#endif // opening_hpp

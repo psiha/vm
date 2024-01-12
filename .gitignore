@@ -1,1 +1,6 @@
 *.swp
+
+out/*
+build/*
+bin/*
+.vs/*

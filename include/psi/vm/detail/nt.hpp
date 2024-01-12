@@ -22,10 +22,8 @@
 /// http://downloads.securityfocus.com/vulnerabilities/exploits/20940-Ivan.c
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef nt_hpp__532C3d08_E487_4548_B51D_1E64CD74dE9B
-#define nt_hpp__532C3d08_E487_4548_B51D_1E64CD74dE9B
 #pragma once
-//------------------------------------------------------------------------------
+
 #include <boost/assert.hpp>
 #include <boost/config_ex.hpp>
 
@@ -53,31 +51,24 @@ namespace detail
     inline HMODULE const ntdll{ ::GetModuleHandleW( L"ntdll.dll" ) };
 
     inline BOOST_ATTRIBUTES( BOOST_COLD, BOOST_RESTRICTED_FUNCTION_L3, BOOST_RESTRICTED_FUNCTION_RETURN )
-    void * BOOST_CC_REG get_nt_proc( char const * const proc_name ) noexcept
+    ::PROC BOOST_CC_REG get_nt_proc( char const * const proc_name ) noexcept
     {
         BOOST_ASSERT( ntdll );
-        auto const result( ::GetProcAddress( ntdll, proc_name ) );
+        auto const result{ ::GetProcAddress( ntdll, proc_name ) };
         BOOST_ASSERT( result );
         return result;
     }
 
-#ifdef __clang__
-#   pragma clang diagnostic push
-#   pragma clang diagnostic ignored "-Wmicrosoft-cast" // cast between pointer-to-function and pointer-to-object is a Microsoft extension
-#endif
-    template <typename Proc>
-    Proc * get_nt_proc( char const * const proc_name )
+    template <typename ProcPtr>
+    ProcPtr get_nt_proc( char const * const proc_name )
     {
-        return reinterpret_cast<Proc *>( detail::get_nt_proc( proc_name ) );
+        return reinterpret_cast<ProcPtr>( detail::get_nt_proc( proc_name ) );
     }
-#ifdef __clang__
-#   pragma clang diagnostic pop
-#endif
 } // namespace detail
 
 using BaseGetNamedObjectDirectory_t = NTSTATUS (WINAPI*)( HANDLE * phDir );
 
-using NtCreateSection_t = NTSYSAPI NTSTATUS (NTAPI)
+using NtCreateSection_t = NTSYSAPI NTSTATUS (NTAPI*)
 (
     OUT PHANDLE            SectionHandle,
     IN ULONG               DesiredAccess,
@@ -98,7 +89,7 @@ struct SECTION_BASIC_INFORMATION
     LARGE_INTEGER SectionSize;
 };
 
-using NtQuerySection_t = NTSYSAPI NTSTATUS (NTAPI)
+using NtQuerySection_t = NTSYSAPI NTSTATUS (NTAPI*)
 (
     IN  HANDLE                    SectionHandle,
     IN  SECTION_INFORMATION_CLASS InformationClass,
@@ -108,16 +99,16 @@ using NtQuerySection_t = NTSYSAPI NTSTATUS (NTAPI)
 );
 inline auto const NtQuerySection{ detail::get_nt_proc<NtQuerySection_t>( "NtQuerySection" ) };
 
-using NtExtendSection_t = NTSYSAPI NTSTATUS (NTAPI)
+using NtExtendSection_t = NTSYSAPI NTSTATUS (NTAPI*)
 (
     IN HANDLE         SectionHandle,
     IN PLARGE_INTEGER NewSectionSize
 );
 inline auto const NtExtendSection{ detail::get_nt_proc<NtExtendSection_t>( "NtExtendSection" ) };
 
-using NtAllocateVirtualMemory_t = NTSTATUS (NTAPI)( IN HANDLE ProcessHandle, IN OUT PVOID * BaseAddress, ULONG_PTR ZeroBits, PSIZE_T RegionSize, ULONG allocation_type, ULONG Protect );
-using NtFreeVirtualMemory_t     = NTSTATUS (NTAPI)( IN HANDLE ProcessHandle, IN     PVOID * BaseAddress, PSIZE_T RegionSize, ULONG FreeType );
-using NtProtectVirtualMemory_t  = NTSTATUS (NTAPI)( IN HANDLE ProcessHandle, IN OUT PVOID * BaseAddress, IN OUT PULONG NumberOfBytesToProtect, IN ULONG NewAccessProtection, OUT PULONG OldAccessProtection );
+using NtAllocateVirtualMemory_t = NTSTATUS (NTAPI*)( IN HANDLE ProcessHandle, IN OUT PVOID * BaseAddress, ULONG_PTR ZeroBits, PSIZE_T RegionSize, ULONG allocation_type, ULONG Protect );
+using NtFreeVirtualMemory_t     = NTSTATUS (NTAPI*)( IN HANDLE ProcessHandle, IN     PVOID * BaseAddress, PSIZE_T RegionSize, ULONG FreeType );
+using NtProtectVirtualMemory_t  = NTSTATUS (NTAPI*)( IN HANDLE ProcessHandle, IN OUT PVOID * BaseAddress, IN OUT PULONG NumberOfBytesToProtect, IN ULONG NewAccessProtection, OUT PULONG OldAccessProtection );
 
 inline auto const NtAllocateVirtualMemory{ detail::get_nt_proc<NtAllocateVirtualMemory_t>( "NtAllocateVirtualMemory" ) };
 inline auto const NtFreeVirtualMemory    { detail::get_nt_proc<NtFreeVirtualMemory_t    >( "NtFreeVirtualMemory"     ) };
@@ -125,4 +116,3 @@ inline auto const NtFreeVirtualMemory    { detail::get_nt_proc<NtFreeVirtualMemo
 //------------------------------------------------------------------------------
 } // psi::vm::nt
 //------------------------------------------------------------------------------
-#endif // nt_hpp
