@@ -220,7 +220,7 @@ namespace detail
         return static_cast<std::uint16_t>( result );
     }
 
-    bool named_semaphore::semadd( int const value, bool const nowait /*= false*/ ) noexcept
+    bool named_semaphore::semadd( short const value, bool const nowait /*= false*/ ) noexcept
     {
         auto const result( semop( value, nowait ) );
         BOOST_ASSERT( result || error::get() == ENOMEM || ( nowait && error::get() == EAGAIN ) );
@@ -228,7 +228,7 @@ namespace detail
     }
 
     BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_RESTRICTED_FUNCTION_L2, BOOST_EXCEPTIONLESS, BOOST_WARN_UNUSED_RESULT )
-    bool named_semaphore::semop( int const opcode, bool const nowait /*= false*/ ) noexcept
+    bool named_semaphore::semop( short const opcode, bool const nowait /*= false*/ ) noexcept
     {
         // http://linux.die.net/man/2/semop
         ::sembuf sb;

@@ -99,10 +99,10 @@ namespace detail
         auto       file_descriptor{ ::shm_open( slashed_name, oflags, mode ) };
         if ( file_descriptor != -1 ) [[ likely ]]
         {
-            if ( ::ftruncate( file_descriptor, size ) != 0 ) [[ unlikely ]]
+            if ( ::ftruncate( file_descriptor, static_cast<off_t>( size ) ) != 0 ) [[ unlikely ]]
             {
-                BOOST_VERIFY( ::shm_unlink( slashed_name   ) == 0 );
-                BOOST_VERIFY( ::close     ( file_descriptor) == 0 );
+                BOOST_VERIFY( ::shm_unlink( slashed_name    ) == 0 );
+                BOOST_VERIFY( ::close     ( file_descriptor ) == 0 );
                 file_descriptor = file_handle::invalid_value;
             }
         }
@@ -116,7 +116,7 @@ namespace detail
         flags::shared_memory const & flags
     )
     {
-        auto const length{ std::strlen( name ) }; //...todo...constexpr
+        auto const length{ static_cast<std::uint8_t>( std::strlen( name ) ) }; //...todo...constexpr
         char slashed_name[ 1 + length + 1 ];
         preslash_name( name, slashed_name, length );
         return shm_open_slashed( slashed_name, size, flags );
@@ -174,7 +174,7 @@ public:
 
     static bool cleanup( char const * const name ) noexcept
     {
-        auto const length( std::strlen( name ) );
+        auto const length{ static_cast<std::uint8_t>( std::strlen( name ) ) };
         char slashed_name[ 1 + length + 1 ];
         detail::preslash_name( name, slashed_name, length );
         auto const result( ::shm_unlink( slashed_name ) );
@@ -208,7 +208,7 @@ namespace detail
 
         void remove() noexcept;
 
-        bool semadd( int value, bool nowait = false ) noexcept;
+        bool semadd( short value, bool nowait = false ) noexcept;
         bool try_wait() { return semadd( -1, true ); }
 
         std::uint16_t value() const noexcept;
@@ -221,7 +221,7 @@ namespace detail
 
         bool is_initialised() const noexcept;
 
-        bool semop( int opcode, bool nowait = false ) noexcept;
+        bool semop( short opcode, bool nowait = false ) noexcept;
 
     private:
         int semid_;
@@ -245,8 +245,6 @@ namespace detail
         using mflags = flags::shared_memory;
 
     public:
-        scoped_named_memory() = default;
-
         scoped_named_memory
         (
             char        const * const name,
@@ -315,8 +313,8 @@ namespace detail
         {
             if ( !named_memory_guard::operator bool() ) [[ unlikely ]]
                 return nullptr;
-            auto const length( std::strlen( name ) );
-            auto const slashed_name( new ( std::nothrow ) char[ 1 + length + 1 ] );
+            auto const length{ static_cast<std::uint8_t>( std::strlen( name ) ) };
+            auto const slashed_name{ new ( std::nothrow ) char[ 1 + length + 1 ] };
             if ( BOOST_LIKELY( slashed_name != nullptr ) )
                 detail::preslash_name( name, slashed_name, length );
             else

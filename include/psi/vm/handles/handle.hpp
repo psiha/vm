@@ -52,7 +52,7 @@ public:
     using       reference = handle_ref<handle_impl, false>;
     using const_reference = handle_ref<handle_impl, true >;
 
-    static auto const invalid_value{ traits::invalid_value };
+    inline static auto const invalid_value{ traits::invalid_value };
 
              constexpr handle_impl(                                        ) noexcept : handle_{ traits::invalid_value } {                                        }
     explicit constexpr handle_impl( native_handle_t    const native_handle ) noexcept : handle_{ native_handle         } {                                        }
