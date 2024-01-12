@@ -38,21 +38,30 @@ CPMAddPackage( "gh:psiha/std_fix#master"   )
 CPMAddPackage( "gh:psiha/err#master"       )
 CPMAddPackage( "gh:psiha/build#master"     )
 
-CPMAddPackage( "gh:google/googletest@1.14.0" )
-
-
+if ( ${CMAKE_SYSTEM_NAME} MATCHES "Linux" )
+    set( PSI_USE_LINKER "lld" ) # for thinlto-cache-dir support
+endif()
 include( ${build_SOURCE_DIR}/build_options.cmake )
 
 PSI_add_compile_options( Debug ${PSI_compiler_runtime_sanity_checks} )
 PSI_add_link_options   ( Debug ${PSI_linker_runtime_sanity_checks}   )
   
-set( CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE true )
-PSI_add_link_options   ( Release ${PSI_linker_LTO} )
 PSI_add_compile_options( Release ${PSI_compiler_LTO} ${PSI_compiler_optimize_for_size} ${PSI_compiler_disable_thread_safe_init} ${PSI_compiler_fastmath} ${PSI_compiler_debug_symbols} )
 
 if ( WIN32 )
   add_compile_definitions( WIN32_LEAN_AND_MEAN NOMINMAX NOCOMM )
 endif()
+
+if ( ${CMAKE_SYSTEM_NAME} MATCHES "Linux" )
+    PSI_add_link_options( Release -flto ) # lld does not seem to be enough
+    add_compile_options( -stdlib=libc++ )
+    # Needed under WSL for some reason?
+    PSI_add_link_options( Debug -lc++ -lc++abi -lubsan )
+else()
+    set( CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE true )
+    PSI_add_link_options( Release ${PSI_linker_LTO} )
+endif()
+
 
 ###################
 ## Target(s)
@@ -60,7 +69,7 @@ endif()
 
 include( vm.cmake )
 
-target_link_libraries( psi_vm PRIVATE
+target_link_libraries( psi_vm PUBLIC
   Boost::core
   Boost::assert
   Boost::preprocessor
@@ -68,16 +77,14 @@ target_link_libraries( psi_vm PRIVATE
   Boost::utility
 )
 
-target_include_directories( psi_vm PRIVATE
-  "${assert_SOURCE_DIR}/include"
-  "${core_SOURCE_DIR}/include"
-  "${preprocessor_SOURCE_DIR}/include"
-  "${winapi_SOURCE_DIR}/include"
-  "${utility_SOURCE_DIR}/include"
-  "${config_ex_SOURCE_DIR}/include"
-  "${std_fix_SOURCE_DIR}/include"
-  "${err_SOURCE_DIR}/include"
+target_include_directories( psi_vm PUBLIC
   "${build_SOURCE_DIR}/include"
+  "${config_ex_SOURCE_DIR}/include"
+  "${err_SOURCE_DIR}/include"
+)
+
+target_include_directories( psi_vm PRIVATE
+  "${std_fix_SOURCE_DIR}/include"
 )
 
 ###################
@@ -85,5 +92,4 @@ target_include_directories( psi_vm PRIVATE
 ###################
 
 enable_testing()
-
 add_subdirectory( "${PROJECT_SOURCE_DIR}/test" )
