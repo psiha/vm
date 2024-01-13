@@ -42,6 +42,7 @@ mapper::map
     // http://msdn.microsoft.com/en-us/library/aa366537(VS.85).aspx
     //                                    (26.03.2010.) (Domagoj Saric)
 
+#if 1
     ULARGE_INTEGER const win32_offset{ .QuadPart = offset };
     auto const view_start
     {
@@ -57,6 +58,29 @@ mapper::map
             )
         )
     };
+#else
+    LARGE_INTEGER nt_offset{ .QuadPart = static_cast<LONGLONG>( offset ) };
+    auto sz{ desired_size };
+    sz = 0;
+    void * view_startv{ nullptr };
+    auto const success
+    {
+        nt::NtMapViewOfSection
+        (
+            source_mapping,
+            ::GetCurrentProcess(),
+            &view_startv,
+            0,
+            0,
+            &nt_offset,
+            &sz,
+            nt::SECTION_INHERIT::ViewUnmap,
+            0,
+            PAGE_READWRITE
+        )
+    };
+    auto const view_start{ static_cast< std::byte * >( view_startv ) };
+#endif
 
     return
     {

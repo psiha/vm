@@ -106,6 +106,26 @@ using NtExtendSection_t = NTSYSAPI NTSTATUS (NTAPI*)
 );
 inline auto const NtExtendSection{ detail::get_nt_proc<NtExtendSection_t>( "NtExtendSection" ) };
 
+enum SECTION_INHERIT
+{
+    ViewShare = 1,
+    ViewUnmap = 2
+};
+using NtMapViewOfSection_t = NTSYSAPI NTSTATUS (NTAPI*)
+(
+    IN HANDLE             SectionHandle,
+    IN HANDLE             ProcessHandle,
+    IN OUT PVOID          *BaseAddress OPTIONAL,
+    IN ULONG_PTR          ZeroBits OPTIONAL,
+    IN SIZE_T             CommitSize,
+    IN OUT PLARGE_INTEGER SectionOffset OPTIONAL,
+    IN OUT PSIZE_T        ViewSize,
+    IN SECTION_INHERIT    InheritDisposition,
+    IN ULONG              AllocationType OPTIONAL,
+    IN ULONG              Protect
+);
+inline auto const NtMapViewOfSection{ detail::get_nt_proc<NtMapViewOfSection_t>( "NtMapViewOfSection" ) };
+
 using NtAllocateVirtualMemory_t = NTSTATUS (NTAPI*)( IN HANDLE ProcessHandle, IN OUT PVOID * BaseAddress, ULONG_PTR ZeroBits, PSIZE_T RegionSize, ULONG allocation_type, ULONG Protect );
 using NtFreeVirtualMemory_t     = NTSTATUS (NTAPI*)( IN HANDLE ProcessHandle, IN     PVOID * BaseAddress, PSIZE_T RegionSize, ULONG FreeType );
 using NtProtectVirtualMemory_t  = NTSTATUS (NTAPI*)( IN HANDLE ProcessHandle, IN OUT PVOID * BaseAddress, IN OUT PULONG NumberOfBytesToProtect, IN ULONG NewAccessProtection, OUT PULONG OldAccessProtection );
