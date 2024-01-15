@@ -97,11 +97,14 @@ void BOOST_CC_REG mapper::unmap( mapped_span const view ) noexcept
 
 void mapper::shrink( mapped_span const view, std::size_t const target_size ) noexcept
 {
-    // TODO OfferVirtualMemory, VirtualUnlock
-    decommit
+    // VirtualFree (wrapped by decommit) does not work for mapped views (only for VirtualAlloced memory)
+    BOOST_VERIFY
     (
-        align_up  ( view.data() + target_size, commit_granularity ),
-        align_down( view.size() - target_size, commit_granularity )
+        ::DiscardVirtualMemory
+        (
+            align_up  ( view.data() + target_size, commit_granularity ),
+            align_down( view.size() - target_size, commit_granularity )
+        )
     );
 }
 
