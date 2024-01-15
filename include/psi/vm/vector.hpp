@@ -164,7 +164,7 @@ public:
 
     void expand( size_type const target_size )
     {
-        BOOST_ASSUME( target_size > size() );
+        BOOST_ASSUME( target_size > size() || ( target_size == size() && target_size == 0 ) );
         if ( target_size > capacity() ) [[ likely ]]
             contiguous_container_storage_base::expand( target_size + header_size );
         hdr().size = target_size;
@@ -403,14 +403,14 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] bool empty() const noexcept { return span().empty(); }
+    [[ nodiscard, gnu::pure ]] bool empty() const noexcept { return span().empty(); }
 
     //! <b>Effects</b>: Returns the number of the elements contained in the vector.
     //!
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] size_type size() const noexcept { return to_t_sz( storage_.size() ); }
+    [[ nodiscard, gnu::pure ]] size_type size() const noexcept { return to_t_sz( storage_.size() ); }
 
     //! <b>Effects</b>: Returns the largest possible size of the vector.
     //!
@@ -603,7 +603,7 @@ public:
     //! <b>Note</b>: Non-standard extension
     [[ nodiscard ]] size_type index_of( iterator const p ) noexcept
     {
-        BOOST_ASSERT( p <= end() );
+        verify_iterator( p );
         return static_cast<size_type>( p - begin() );
     }
 
@@ -619,7 +619,7 @@ public:
     //! <b>Note</b>: Non-standard extension
     [[ nodiscard ]] size_type index_of( const_iterator const p ) const noexcept
     {
-        BOOST_ASSERT( p <= end() );
+        verify_iterator( p );
         return static_cast<size_type>( p - begin() );
     }
 
@@ -848,10 +848,11 @@ public:
     iterator erase( const_iterator const position ) noexcept
     {
         verify_iterator( position );
-        auto const mutable_pos{ nth( index_of( position ) ) };
+        auto const pos_index{ index_of( position ) };
+        auto const mutable_pos{ nth( pos_index ) };
         std::move( mutable_pos + 1, end(), mutable_pos );
         pop_back();
-        return nth( index_of( position ) );
+        return nth( pos_index );
     }
 
     //! <b>Effects</b>: Erases the elements pointed by [first, last).
@@ -1000,8 +1001,8 @@ public:
             (
                 base::erase
                 (
-                    base::nth( static_cast<typename base::size_type>( first - begin() ) ),
-                    base::nth( static_cast<typename base::size_type>( last  - begin() ) )
+                    base::nth( static_cast<typename base::size_type>( first - cbegin() ) ),
+                    base::nth( static_cast<typename base::size_type>( last  - cbegin() ) )
                 )
             );
     }
@@ -1015,7 +1016,7 @@ public:
             (
                 base::erase
                 (
-                    base::nth( static_cast<typename base::size_type>( position - begin() ) )
+                    base::cbegin() + ( position - cbegin() )
                 )
             );
     }
