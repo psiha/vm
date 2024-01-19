@@ -62,7 +62,7 @@ template <bool read_only>
 fallible_result<void>
 basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & original_mapping ) noexcept
 {
-    auto const current_address{ const_cast</*mrmlj*/std::byte *>( this->data() ) };
+    auto const current_address{ const_cast</*mrmlj*/std::byte *>( this->data() ) }; [[ maybe_unused ]]
     auto const current_size   {                                   this->size()   };
 #if defined( __linux__ )
     if ( auto const new_address{ ::mremap( current_address, current_size, target_size, std::to_underlying( reallocation_type::moveable ) ) }; new_address != MAP_FAILED ) [[ likely ]]
