@@ -103,13 +103,13 @@ BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
 void BOOST_CC_REG mapper::unmap( mapped_span const view ) noexcept
 {
     [[ maybe_unused ]] auto munmap_result{ ::munmap( view.data(), view.size() ) };
-#   ifndef __EMSCRIPTEN__
+#ifndef __EMSCRIPTEN__
     BOOST_VERIFY
     (
         ( munmap_result == 0 ) ||
         ( view.empty() && !view.data() )
     );
-#   endif
+#endif
 }
 
 void mapper::shrink( mapped_span const view, std::size_t const target_size ) noexcept
