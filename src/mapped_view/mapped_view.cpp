@@ -12,6 +12,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 #include "mapper.hpp"
+
+#include <psi/vm/align.hpp>
 #include <psi/vm/mapped_view/mapped_view.hpp>
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -62,8 +64,17 @@ template <bool read_only>
 fallible_result<void>
 basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & original_mapping ) noexcept
 {
-    auto const current_address{ const_cast</*mrmlj*/std::byte *>( this->data() ) }; [[ maybe_unused ]]
-    auto const current_size   {                                   this->size()   };
+    auto const current_address    { const_cast</*mrmlj*/std::byte *>( this->data() ) };
+    auto const current_size       {                                   this->size()   };
+    auto const kernel_current_size{ align_up( current_size, commit_granularity )     };
+    if ( kernel_current_size >= target_size )
+    {
+        BOOST_ASSUME( current_address );
+        BOOST_ASSUME( current_size    );
+        static_cast<span &>( *this ) = { current_address, target_size };
+        return err::success;
+    }
+
 #if defined( __linux__ )
     if ( auto const new_address{ ::mremap( current_address, current_size, target_size, std::to_underlying( reallocation_type::moveable ) ) }; new_address != MAP_FAILED ) [[ likely ]]
     {
@@ -71,32 +82,30 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
         return err::success;
     }
 #endif // linux mremap
+    auto const current_offset{ 0U }; // TODO: what if this is an offset view?
+    auto const target_offset { current_offset + kernel_current_size };
+    auto const additional_tail_size{ target_size - kernel_current_size };
+    auto const tail_target_address { current_address + kernel_current_size };
 #ifndef _WIN32
-    auto const new_address
+    auto new_address
     {
         posix::mmap
         (
-            current_address,
-            target_size,
+            tail_target_address,
+            additional_tail_size,
             original_mapping.view_mapping_flags.protection,
-            original_mapping.view_mapping_flags.flags | MAP_FIXED,
+            original_mapping.view_mapping_flags.flags,
             original_mapping.get(),
-            0 /*TODO: what if this is an offset view?*/
+            target_offset
         )
     };
-    if ( new_address ) [[ likely ]]
+    if ( new_address != tail_target_address ) // On POSIX the target address is only a hint (while MAP_FIXED may overwrite existing mappings)
     {
-        BOOST_ASSUME( new_address == current_address );
-#   ifdef __linux__
-        BOOST_ASSERT_MSG( false, "mremap failed but an overlapping mmap succeeded!?" ); // behaviour investigation
-#   endif
-        static_cast<span &>( *this ) = { static_cast<typename span::pointer>( new_address ), target_size };
-        return err::success;
+        BOOST_VERIFY( ::munmap( new_address, additional_tail_size ) == 0 );
+        new_address = nullptr;
     }
 #else
-    auto const current_offset{ 0U }; // TODO: what if this is an offset view?
-    auto const additional_end_size{ target_size - current_size };
-    ULARGE_INTEGER const win32_offset{ .QuadPart = current_offset + current_size };
+    ULARGE_INTEGER const win32_offset{ .QuadPart = target_offset };
     auto const new_address
     {
         ::MapViewOfFileEx
@@ -105,17 +114,20 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
             original_mapping.view_mapping_flags.map_view_flags,
             win32_offset.HighPart,
             win32_offset.LowPart,
-            additional_end_size,
-            current_address + current_size
+            additional_tail_size,
+            tail_target_address
         )
     };
+#endif
     if ( new_address ) [[ likely ]]
     {
-        BOOST_ASSUME( new_address == current_address + current_size );
+        BOOST_ASSUME( new_address == current_address + kernel_current_size );
+#   ifdef __linux__
+        BOOST_ASSERT_MSG( false, "mremap failed but an overlapping mmap succeeded!?" ); // behaviour investigation
+#   endif
         static_cast<span &>( *this ) = { current_address, target_size };
         return err::success;
     }
-#endif
     // paying with peak VM space usage and/or fragmentation for the strong guarantee
     auto remapped_span{ this->map( original_mapping, 0, target_size )() };
     if ( !remapped_span )
