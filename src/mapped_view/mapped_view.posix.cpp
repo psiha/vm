@@ -25,6 +25,9 @@ namespace psi::vm
 inline namespace posix
 {
 //------------------------------------------------------------------------------
+
+// OSX syscalls https://github.com/opensource-apple/xnu/blob/master/bsd/kern/syscalls.master
+
 namespace
 {
 #if !defined( MAP_UNINITIALIZED )
