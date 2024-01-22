@@ -182,13 +182,15 @@ public:
         {
             if ( target_size > capacity() )
                 expand( target_size );
+            else
+                hdr().size = target_size;
         }
         else
         {
             // or skip this like std::vector and rely on an explicit shrink_to_fit() call?
             shrink( target_size );
         }
-        hdr().size = target_size;
+        BOOST_ASSUME( hdr().size == target_size );
     }
 
     void reserve( size_type const new_capacity )
