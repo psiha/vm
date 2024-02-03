@@ -116,7 +116,7 @@ namespace detail
         HANDLE map_file( file_handle::reference const file, flags::flags_t const flags, std::uint64_t const size ) noexcept
         {
             HANDLE handle{ handle_traits::invalid_value };
-            LARGE_INTEGER maximum_size{ .QuadPart = static_cast<LONGLONG>( std::max( 1ULL, size ) ) };
+            LARGE_INTEGER maximum_size{ .QuadPart = static_cast<LONGLONG>( size ) };
             auto const nt_result
             {
                 nt::NtCreateSection // TODO use it for named sections also

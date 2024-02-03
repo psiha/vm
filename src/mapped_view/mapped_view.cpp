@@ -76,7 +76,11 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
     }
 
 #if defined( __linux__ )
-    if ( auto const new_address{ ::mremap( current_address, current_size, target_size, std::to_underlying( reallocation_type::moveable ) ) }; new_address != MAP_FAILED ) [[ likely ]]
+    if
+    (
+        auto const new_address{ ::mremap( current_address, current_size, target_size, std::to_underlying( reallocation_type::moveable ) ) };
+        new_address != MAP_FAILED
+    ) [[ likely ]]
     {
         static_cast<span &>( *this ) = { static_cast<typename span::pointer>( new_address ), target_size };
         return err::success;
@@ -99,7 +103,11 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
             target_offset
         )
     };
-    if ( new_address != tail_target_address ) // On POSIX the target address is only a hint (while MAP_FIXED may overwrite existing mappings)
+    if
+    (
+        ( new_address     != tail_target_address ) && // On POSIX the target address is only a hint (while MAP_FIXED may overwrite existing mappings)
+        ( current_address != nullptr             )    // in case of starting with an empty/null/zero-sized views (is it worth the special handling?)
+    )
     {
         BOOST_VERIFY( ::munmap( new_address, additional_tail_size ) == 0 );
         new_address = nullptr;
@@ -121,11 +129,18 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
 #endif
     if ( new_address ) [[ likely ]]
     {
-        BOOST_ASSUME( new_address == current_address + kernel_current_size );
-#   ifdef __linux__
-        BOOST_ASSERT_MSG( false, "mremap failed but an overlapping mmap succeeded!?" ); // behaviour investigation
-#   endif
-        static_cast<span &>( *this ) = { current_address, target_size };
+        if ( current_address != nullptr ) [[ likely ]]
+        {
+            BOOST_ASSUME( new_address == current_address + kernel_current_size );
+#       ifdef __linux__
+            BOOST_ASSERT_MSG( false, "mremap failed but an overlapping mmap succeeded!?" ); // behaviour investigation
+#       endif
+            static_cast<span &>( *this ) = {                          current_address, target_size };
+        }
+        else
+        {
+            static_cast<span &>( *this ) = { static_cast<std::byte *>( new_address ) , target_size };
+        }
         return err::success;
     }
     // paying with peak VM space usage and/or fragmentation for the strong guarantee

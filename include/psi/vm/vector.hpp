@@ -21,6 +21,7 @@
 #include <psi/build/disable_warnings.hpp>
 
 #include <algorithm>
+#include <array>
 #include <concepts>
 #include <cstdint>
 #include <climits>
@@ -46,7 +47,7 @@ public:
     contiguous_container_storage_base( contiguous_container_storage_base && ) = default;
     contiguous_container_storage_base & operator=( contiguous_container_storage_base && ) = default;
 
-    auto data()       noexcept { BOOST_ASSERT_MSG( !view_.empty(), "Paging file not attached" ); return view_.data(); }
+    auto data()       noexcept { BOOST_ASSERT_MSG( mapping_, "Paging file not attached" ); return view_.data(); }
     auto data() const noexcept { return const_cast< contiguous_container_storage_base & >( *this ).data(); }
 
     void unmap() noexcept { view_.unmap(); }
@@ -54,8 +55,6 @@ public:
     explicit operator bool() const noexcept { return static_cast<bool>( mapping_ ); }
 
 protected:
-    static std::uint8_t constexpr header_size{ 64 };
-
     constexpr contiguous_container_storage_base() = default;
 
     err::fallible_result< std::size_t, error > open( auto const * const file_name ) noexcept { return open( create_file( file_name, create_rw_file_flags() ) ); }
@@ -66,6 +65,12 @@ protected:
     void expand( std::size_t const target_size )
     {
         set_size( mapping_, target_size );
+        expand_view( target_size );
+    }
+
+    void expand_view( std::size_t const target_size )
+    {
+        BOOST_ASSERT( get_size( mapping_ ) >= target_size );
         view_.expand( target_size, mapping_ );
     }
 
@@ -74,6 +79,8 @@ protected:
         view_.shrink( target_size );
         set_size( mapping_, target_size )().assume_succeeded();
     }
+
+    void shrink_to_fit() noexcept { set_size( mapping_, mapped_size() )().assume_succeeded(); }
 
     void resize( std::size_t const target_size )
     {
@@ -87,7 +94,7 @@ protected:
             set_size( mapping_, new_capacity );
     }
 
-    err::fallible_result< std::size_t, error > open( file_handle && file ) noexcept
+    err::fallible_result< std::size_t, error > open( file_handle && file, std::size_t const header_size ) noexcept
     {
         if ( !file )
             return error{};
@@ -108,13 +115,15 @@ protected:
             ap::object{ ap::readwrite },
             ap::child_process::does_not_inherit,
             flags::share_mode::shared,
-            mapping_size
+            mapping::supports_zero_sized_mappings
+                ? mapping_size
+                : std::max( std::size_t{ 1 }, mapping_size )
         );
         if ( !mapping_ )
             return error{};
 
         view_ = mapped_view::map( mapping_, 0, mapping_size );
-        if ( !view_.data() )
+        if ( !view_.data() && ( mapping::supports_zero_sized_views || mapping_size != 0 ) )
             return error{};
 
         return std::size_t{ mapping_size };
@@ -125,83 +134,112 @@ private:
     mapped_view view_   ;
 }; // contiguous_container_storage_base
 
-template < typename sz_t >
+template < typename sz_t, std::uint16_t header_size = 64 >
 class contiguous_container_storage : public contiguous_container_storage_base
 {
 public:
     using size_type = sz_t;
 
+    static bool constexpr headerless{ header_size == 0 };
+
+    static_assert( headerless || header_size >= sizeof( size_type ), "Header must at least fit the size value" );
+
 private:
     struct alignas( header_size ) header
     {
-        std::byte user_storage[ header_size - sizeof( size_type ) ];
-        size_type size;
+        [[ no_unique_address ]]
+        std::array< std::byte, std::max<signed>( 0, header_size - signed( sizeof( size_type ) ) ) > user_storage;
+        size_type size; // place the size last so that user_storage preserves maximum alignment
     };
 
 public:
     err::fallible_result< void, error > open( auto const * const file_name ) noexcept
     {
-        auto const sz{ contiguous_container_storage_base::open( create_file( file_name, create_rw_file_flags() ) )() };
+        auto const sz{ contiguous_container_storage_base::open( create_file( file_name, create_rw_file_flags() ), header_size )() };
         if ( !sz )
             return sz.error();
-        auto const stored_size{ hdr().size };
-        BOOST_ASSERT_MSG( stored_size <= *sz - header_size, "Corrupted file: stored size larger than the file itself?" );
-        // Clamp bogus/too large sizes (implicitly handles possible garbage on file creation).
-        hdr().size = std::min( stored_size, static_cast<size_type>( *sz - header_size ) );
+        if constexpr ( !headerless )
+        {
+            auto const stored_size{ hdr().size };
+            BOOST_ASSERT_MSG( stored_size <= *sz - header_size, "Corrupted file: stored size larger than the file itself?" );
+            // Clamp bogus/too large sizes (implicitly handles possible garbage on file creation).
+            hdr().size = std::min( stored_size, static_cast<size_type>( *sz - header_size ) );
+        }
         return err::success;
     }
 
     auto data()       noexcept { return contiguous_container_storage_base::data() + header_size; }
     auto data() const noexcept { return contiguous_container_storage_base::data() + header_size; }
 
-    auto & hdr_storage() noexcept { return hdr().user_storage; }
+    auto & hdr_storage() noexcept requires( !headerless ) { return hdr().user_storage; }
 
     [[ gnu::pure, nodiscard ]] auto storage_size() const noexcept { return static_cast<size_type>( contiguous_container_storage_base::storage_size() ); }
     [[ gnu::pure, nodiscard ]] auto  mapped_size() const noexcept { return static_cast<size_type>( contiguous_container_storage_base:: mapped_size() ); }
 
-    [[ gnu::pure, nodiscard ]] auto size    () const noexcept { return hdr().size                 ; }
-    [[ gnu::pure, nodiscard ]] auto capacity() const noexcept { return mapped_size() - header_size; }
+    [[ gnu::pure, nodiscard ]] auto size    () const noexcept { if constexpr ( headerless ) return  mapped_size(); else return hdr().size; }
+    [[ gnu::pure, nodiscard ]] auto capacity() const noexcept { if constexpr ( headerless ) return storage_size(); else return mapped_size() - header_size; }
 
     void expand( size_type const target_size )
     {
         BOOST_ASSUME( target_size > size() || ( target_size == size() && target_size == 0 ) );
-        if ( target_size > capacity() ) [[ likely ]]
-            contiguous_container_storage_base::expand( target_size + header_size );
-        hdr().size = target_size;
+        if constexpr ( headerless )
+        {
+            if ( target_size > size() )
+                contiguous_container_storage_base::expand( target_size );
+        }
+        else
+        {
+            if ( target_size > capacity() )
+                contiguous_container_storage_base::expand( target_size + header_size );
+            hdr().size = target_size;
+        }
     }
 
     void shrink( size_type const target_size ) noexcept
     {
         contiguous_container_storage_base::shrink( target_size + header_size );
-        hdr().size = target_size;
+        if constexpr ( !headerless )
+            hdr().size = target_size;
     }
 
     void resize( size_type const target_size )
     {
         if ( target_size > size() )
         {
-            if ( target_size > capacity() )
+            if constexpr ( headerless )
                 expand( target_size );
             else
-                hdr().size = target_size;
+            {
+                if ( target_size > capacity() )
+                    expand( target_size );
+                else
+                    hdr().size = target_size;
+            }
         }
         else
         {
             // or skip this like std::vector and rely on an explicit shrink_to_fit() call?
             shrink( target_size );
         }
-        BOOST_ASSUME( hdr().size == target_size );
+        if constexpr ( !headerless )
+            BOOST_ASSUME( hdr().size == target_size );
     }
 
     void reserve( size_type const new_capacity )
     {
+        if constexpr ( headerless )
+            contiguous_container_storage_base::reserve( new_capacity );
+        else
         if ( new_capacity > capacity() )
             contiguous_container_storage_base::expand( new_capacity + header_size );
     }
 
     void shrink_to_fit() noexcept
     {
-        contiguous_container_storage_base::shrink( hdr().size + header_size );
+        if constexpr ( headerless )
+            contiguous_container_storage_base::shrink_to_fit();
+        else
+            contiguous_container_storage_base::shrink( hdr().size + header_size );
     }
 
     bool has_extra_capacity() const noexcept
@@ -213,7 +251,10 @@ public:
     void allocate_available_capacity( size_type const sz ) noexcept
     {
         BOOST_ASSERT_MSG( sz <= ( capacity() - size() ), "Out of preallocated space" );
-        hdr().size += sz;
+        if constexpr ( headerless )
+            contiguous_container_storage_base::expand_view( mapped_size() + sz );
+        else
+            hdr().size += sz;
     }
 
 private:
@@ -238,12 +279,13 @@ struct value_init_t   {}; inline constexpr value_init_t   value_init  ;
 // to trivial_abi types.
 // Used the Boost.Container vector as a starting skeleton.
 
-template < typename T, typename sz_t = std::size_t >
+template < typename T, typename sz_t = std::size_t, std::uint16_t header_size = 64 >
 requires is_trivially_moveable< T >
 class vector
 {
 private:
-    contiguous_container_storage< sz_t > storage_;
+    using storage_t = contiguous_container_storage< sz_t, header_size >;
+    storage_t storage_;
 
 public:
     using       span_t = std::span<T      >;
@@ -278,7 +320,7 @@ public:
     //! <b>Throws</b>: Nothing
     //!
     //! <b>Complexity</b>: Constant.
-    explicit vector( contiguous_container_storage< sz_t > && storage ) noexcept : storage_{ std::move( storage ) } {}
+    explicit vector( storage_t && storage ) noexcept : storage_{ std::move( storage ) } {}
 
     vector( vector const & ) = delete;
     vector( vector && ) = default;
@@ -307,14 +349,16 @@ public:
         //Overwrite all elements we can from [first, last)
         auto       cur   { this->begin() };
         auto const end_it{ this->end  () };
-        for ( ; first != last && cur != end_it; ++cur, ++first)
+        for ( ; first != last && cur != end_it; ++cur, ++first )
             *cur = *first;
 
         if ( first == last )
         {
+            auto const target_size{ static_cast<size_type>( cur - begin() ) };
             //There are no more elements in the sequence, erase remaining
             while ( cur != end_it )
                 (*cur++).~value_type();
+            shrink_storage_to( target_size );
         }
         else
         {

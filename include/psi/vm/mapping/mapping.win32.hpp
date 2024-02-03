@@ -41,8 +41,10 @@ struct [[ clang::trivial_abi ]] mapping
     using       handle = handle_ref<mapping, false>;
     using const_handle = handle_ref<mapping, true >;
 
-    static bool constexpr retains_parent_handle              = true;
-    static bool constexpr create_mapping_can_set_source_size = true;
+    static bool constexpr retains_parent_handle              = true ;
+    static bool constexpr create_mapping_can_set_source_size = true ;
+    static bool constexpr supports_zero_sized_mappings       = false; // Windows does not support zero sized mappings
+    static bool constexpr supports_zero_sized_views          = false;
 
     constexpr mapping(            ) noexcept = default;
     constexpr mapping( mapping && ) noexcept = default;
