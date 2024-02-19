@@ -129,12 +129,27 @@ protected:
         return std::size_t{ mapping_size };
     }
 
+protected:
+    template <typename sz_t, std::uint16_t header_size >
+    struct alignas( header_size ) header
+    {
+        static_assert( header_size >= sizeof( sz_t ), "Header must at least fit the size value" );
+
+        [[ no_unique_address ]]
+        std::array< std::byte, std::max<signed>( 0, header_size - signed( sizeof( sz_t ) ) ) > user_storage;
+        sz_t size; // place the size last so that user_storage preserves maximum alignment
+    };
+
+    template <typename sz_t, std::uint16_t header_size>
+    requires( header_size == sizeof( sz_t ) )
+    struct alignas( alignof( sz_t ) ) header< sz_t, header_size > { sz_t size; };
+
 private:
     mapping     mapping_;
     mapped_view view_   ;
 }; // contiguous_container_storage_base
 
-template < typename sz_t, std::uint16_t header_size = 64 >
+template < typename sz_t, std::uint16_t header_size >
 class contiguous_container_storage : public contiguous_container_storage_base
 {
 public:
@@ -145,12 +160,7 @@ public:
     static_assert( headerless || header_size >= sizeof( size_type ), "Header must at least fit the size value" );
 
 private:
-    struct alignas( header_size ) header
-    {
-        [[ no_unique_address ]]
-        std::array< std::byte, std::max<signed>( 0, header_size - signed( sizeof( size_type ) ) ) > user_storage;
-        size_type size; // place the size last so that user_storage preserves maximum alignment
-    };
+    using header = contiguous_container_storage_base::header< size_type, header_size >;
 
 public:
     err::fallible_result< void, error > open( auto const * const file_name ) noexcept
@@ -258,8 +268,8 @@ public:
     }
 
 private:
-    [[ gnu::pure, nodiscard ]] auto       & hdr()       noexcept { return *reinterpret_cast< header       * >( contiguous_container_storage_base::data() ); }
-    [[ gnu::pure, nodiscard ]] auto const & hdr() const noexcept { return *reinterpret_cast< header const * >( contiguous_container_storage_base::data() ); }
+    [[ gnu::pure, nodiscard ]] auto       & hdr()       noexcept requires( !headerless ) { return *reinterpret_cast< header       * >( contiguous_container_storage_base::data() ); }
+    [[ gnu::pure, nodiscard ]] auto const & hdr() const noexcept requires( !headerless ) { return *reinterpret_cast< header const * >( contiguous_container_storage_base::data() ); }
 }; // contiguous_container_storage
 
 template < typename T >
@@ -279,7 +289,7 @@ struct value_init_t   {}; inline constexpr value_init_t   value_init  ;
 // to trivial_abi types.
 // Used the Boost.Container vector as a starting skeleton.
 
-template < typename T, typename sz_t = std::size_t, std::uint16_t header_size = 64 >
+template < typename T, typename sz_t = std::size_t, std::uint16_t header_size = std::max( sizeof( sz_t ), alignof( T ) ) >
 requires is_trivially_moveable< T >
 class vector
 {
