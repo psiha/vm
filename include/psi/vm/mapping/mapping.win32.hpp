@@ -31,6 +31,11 @@ inline namespace win32
 {
 //------------------------------------------------------------------------------
 
+#ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wignored-attributes"
+#endif
+
 struct [[ clang::trivial_abi ]] mapping
     :
     handle
@@ -64,6 +69,9 @@ struct [[ clang::trivial_abi ]] mapping
     flags::viewing view_mapping_flags{};
 }; // struct mapping
 
+#ifdef __clang__
+#    pragma clang diagnostic pop
+#endif
 
 std::uint64_t                         get_size( mapping::const_handle                         ) noexcept;
 err::fallible_result<void, nt::error> set_size( mapping::      handle, std::uint64_t new_size ) noexcept;

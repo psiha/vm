@@ -1,4 +1,9 @@
-set( CMAKE_CXX_STANDARD 23 )
+# https://gitlab.kitware.com/cmake/cmake/-/issues/25725
+if ( CMAKE_CXX_COMPILER_ID MATCHES Clang AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT MATCHES MSVC )
+    add_compile_options( $<$<COMPILE_LANGUAGE:CXX>:/clang:-std=gnu++2b> )
+else()
+    set( CMAKE_CXX_STANDARD 26 )
+endif()
 
 # TODO finish and replace file globbing
 #set( vm_public_headers
@@ -30,4 +35,3 @@ endforeach()
 add_library( psi_vm STATIC ${vm_public_headers} ${vm_sources} )
 add_library( psi::vm ALIAS psi_vm )
 target_include_directories( psi_vm PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include" )
-target_compile_features( psi_vm PUBLIC cxx_std_23 )

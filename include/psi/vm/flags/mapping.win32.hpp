@@ -39,7 +39,7 @@ namespace flags
 using flags_t = unsigned long; // DWORD
 
 
-struct viewing
+struct [[ clang::trivial_abi ]] viewing
 {
     using access_rights = access_privileges;
 

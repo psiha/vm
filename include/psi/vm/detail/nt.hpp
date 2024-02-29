@@ -39,7 +39,7 @@ namespace psi::vm::nt
 //------------------------------------------------------------------------------
 
 #ifndef STATUS_SUCCESS
-using NTSTATUS = long;
+using NTSTATUS = DWORD;
 NTSTATUS constexpr STATUS_SUCCESS{ 0 };
 #endif // STATUS_SUCCESS
 #ifndef STATUS_CONFLICTING_ADDRESSES
@@ -68,7 +68,7 @@ namespace detail
 
 using BaseGetNamedObjectDirectory_t = NTSTATUS (WINAPI*)( HANDLE * phDir );
 
-using NtCreateSection_t = NTSYSAPI NTSTATUS (NTAPI*)
+using NtCreateSection_t = NTSTATUS (NTAPI*)
 (
     OUT PHANDLE            SectionHandle,
     IN ULONG               DesiredAccess,
@@ -89,7 +89,7 @@ struct SECTION_BASIC_INFORMATION
     LARGE_INTEGER SectionSize;
 };
 
-using NtQuerySection_t = NTSYSAPI NTSTATUS (NTAPI*)
+using NtQuerySection_t = NTSTATUS (NTAPI*)
 (
     IN  HANDLE                    SectionHandle,
     IN  SECTION_INFORMATION_CLASS InformationClass,
@@ -99,7 +99,7 @@ using NtQuerySection_t = NTSYSAPI NTSTATUS (NTAPI*)
 );
 inline auto const NtQuerySection{ detail::get_nt_proc<NtQuerySection_t>( "NtQuerySection" ) };
 
-using NtExtendSection_t = NTSYSAPI NTSTATUS (NTAPI*)
+using NtExtendSection_t = NTSTATUS (NTAPI*)
 (
     IN HANDLE         SectionHandle,
     IN PLARGE_INTEGER NewSectionSize
@@ -111,7 +111,7 @@ enum SECTION_INHERIT
     ViewShare = 1,
     ViewUnmap = 2
 };
-using NtMapViewOfSection_t = NTSYSAPI NTSTATUS (NTAPI*)
+using NtMapViewOfSection_t = NTSTATUS (NTAPI*)
 (
     IN HANDLE             SectionHandle,
     IN HANDLE             ProcessHandle,

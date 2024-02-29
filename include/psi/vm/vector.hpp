@@ -135,7 +135,6 @@ protected:
     {
         static_assert( header_size >= sizeof( sz_t ), "Header must at least fit the size value" );
 
-        [[ no_unique_address ]]
         std::array< std::byte, std::max<signed>( 0, header_size - signed( sizeof( sz_t ) ) ) > user_storage;
         sz_t size; // place the size last so that user_storage preserves maximum alignment
     };
