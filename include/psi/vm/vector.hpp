@@ -52,12 +52,20 @@ public:
 
     void unmap() noexcept { view_.unmap(); }
 
+#ifndef _WIN32 // TODO
+    bool file_backed() const noexcept { return mapping_.get() == handle::invalid_value; }
+#endif
+
     explicit operator bool() const noexcept { return static_cast<bool>( mapping_ ); }
 
 protected:
     constexpr contiguous_container_storage_base() = default;
 
-    err::fallible_result< std::size_t, error > open( auto const * const file_name ) noexcept { return open( create_file( file_name, create_rw_file_flags() ) ); }
+    err::fallible_result<std::size_t, error>
+    map_file( auto const * const file_name, std::size_t const header_size ) noexcept { return map_file( create_file( file_name, create_rw_file_flags() ), header_size ); }
+
+    err::fallible_result<std::size_t, error>
+    map_memory( std::size_t const size ) noexcept { return map( {}, size ); }
 
     [[ gnu::pure ]] auto storage_size() const noexcept { return get_size( mapping_ ); }
     [[ gnu::pure ]] auto  mapped_size() const noexcept { return view_.size(); }
@@ -94,7 +102,9 @@ protected:
             set_size( mapping_, new_capacity );
     }
 
-    err::fallible_result< std::size_t, error > open( file_handle && file, std::size_t const header_size ) noexcept
+    // template (char type) independent portion of map_file
+    err::fallible_result<std::size_t, error>
+    map_file( file_handle && file, std::size_t const header_size ) noexcept
     {
         if ( !file )
             return error{};
@@ -102,11 +112,18 @@ protected:
         BOOST_ASSERT_MSG( file_size <= std::numeric_limits<std::size_t>::max(), "Pagging file larger than address space!?" );
         auto const existing_size{ static_cast<std::size_t>( file_size ) };
         bool const created_file { existing_size == 0 };
-        BOOST_ASSERT_MSG( existing_size >= header_size || created_file, "Corrupted file: bogus on-disk size" );
         auto const mapping_size { std::max<std::size_t>( header_size, existing_size ) };
+        BOOST_ASSERT_MSG( existing_size >= header_size || created_file, "Corrupted file: bogus on-disk size" );
         if ( created_file && !mapping::create_mapping_can_set_source_size )
             set_size( file, mapping_size );
 
+        return map( std::move( file ), mapping_size );
+    }
+
+private:
+    err::fallible_result<std::size_t, error>
+    map( file_handle && file, std::size_t const mapping_size ) noexcept
+    {
         using ap    = flags::access_privileges;
         using flags = flags::mapping;
         mapping_ = create_mapping
@@ -162,17 +179,31 @@ private:
     using header = contiguous_container_storage_base::header< size_type, header_size >;
 
 public:
-    err::fallible_result< void, error > open( auto const * const file_name ) noexcept
+    err::fallible_result<void, error> map_file( auto const * const file_name ) noexcept
     {
-        auto const sz{ contiguous_container_storage_base::open( create_file( file_name, create_rw_file_flags() ), header_size )() };
+        auto const sz{ contiguous_container_storage_base::map_file( file_name, header_size )() };
         if ( !sz )
             return sz.error();
         if constexpr ( !headerless )
         {
-            auto const stored_size{ hdr().size };
+            auto & stored_size{ hdr().size };
             BOOST_ASSERT_MSG( stored_size <= *sz - header_size, "Corrupted file: stored size larger than the file itself?" );
             // Clamp bogus/too large sizes (implicitly handles possible garbage on file creation).
-            hdr().size = std::min( stored_size, static_cast<size_type>( *sz - header_size ) );
+            stored_size = std::min( stored_size, static_cast<size_type>( *sz - header_size ) );
+        }
+        return err::success;
+    }
+
+    err::fallible_result<void, error> map_memory( size_type const size ) noexcept
+    {
+        auto const sz{ contiguous_container_storage_base::map_memory( size + header_size )() };
+        if ( !sz )
+            return sz.error();
+        if constexpr ( !headerless )
+        {
+            auto & stored_size{ hdr().size };
+            BOOST_ASSERT_MSG( stored_size == 0, "Got garbage in an anonymous mapping!?" );
+            stored_size = size;
         }
         return err::success;
     }
@@ -484,28 +515,11 @@ public:
     {
         storage_.resize( to_byte_sz( new_size ) );
     }
-    PSI_WARNING_DISABLE_PUSH()
-    PSI_WARNING_MSVC_DISABLE( 4702 ) // unreachable code
     void resize( size_type const new_size, value_init_t )
     {
-        auto const current_size{ size() };
-        if ( new_size < current_size && !std::is_trivially_destructible_v< T > )
-        {
-            for ( auto & element : span().subspan( current_size ) )
-                std::destroy_at( &element );
-        }
-        storage_.resize( to_byte_sz( new_size ) );
-        if ( new_size < current_size )
-            return;
-        if constexpr ( std::is_trivially_constructible_v< value_type > )
-            std::memset( data() + current_size, 0, new_size - current_size * sizeof( T ) );
-        else
-        {
-            for ( auto & element : span().subspan( current_size ) )
-                std::construct_at( &element );
-        }
+        if ( new_size > size() )   grow_to( new_size, value_init );
+        else                     shrink_to( new_size             );
     }
-    PSI_WARNING_DISABLE_POP()
 
     //! <b>Effects</b>: Inserts or erases elements at the end such that
     //!   the size becomes n. New elements are copy constructed from x.
@@ -972,11 +986,10 @@ public:
     // Extensions
     ///////////////////////////////////////////////////////////////////////////
 
-    auto open( auto const file ) { return storage_.open( file ); }
+    auto map_file  ( auto      const file ) noexcept { return storage_.map_file  ( file ); }
+    auto map_memory( size_type const size ) noexcept { return storage_.map_memory( size ); }
 
     bool is_open() const noexcept { return static_cast<bool>( storage_ ); }
-
-    decltype( auto ) user_header_data() noexcept { return storage_.hdr_storage(); }
 
     //! <b>Effects</b>: If n is less than or equal to capacity(), this call has no
     //!   effect. Otherwise, it is a request for allocation of additional memory
@@ -989,7 +1002,52 @@ public:
     //! <b>Note</b>: Non-standard extension.
     bool stable_reserve( size_type new_cap ) = /*TODO*/ delete;
 
-    // TODO grow shrink
+    void grow_to( size_type const target_size, default_init_t ) requires( std::is_trivial_v<T> )
+    {
+        storage_.expand( to_byte_sz( target_size ) );
+    }
+    PSI_WARNING_DISABLE_PUSH()
+    PSI_WARNING_MSVC_DISABLE( 4702 ) // unreachable code
+    void grow_to( size_type const target_size, value_init_t )
+    {
+        auto const current_size{ size() };
+        BOOST_ASSUME( target_size >= current_size );
+        storage_.expand( to_byte_sz( target_size ) );
+        if constexpr ( std::is_trivially_constructible_v<value_type> )
+        {
+            std::memset( data() + current_size, 0, target_size - current_size * sizeof( T ) );
+        }
+        else
+        {
+            for ( auto & element : span().subspan( current_size ) )
+            {
+                std::construct_at( &element );
+            }
+        }
+    }
+    PSI_WARNING_DISABLE_POP()
+    void grow_by( size_type const delta, auto const init_policy )
+    {
+        grow_to( size() + delta, init_policy );
+    }
+
+    void shrink_to( size_type const target_size ) noexcept
+    {
+        auto const current_size{ size() };
+        BOOST_ASSUME( target_size <= current_size );
+        if ( !std::is_trivially_destructible_v<T> )
+        {
+            for ( auto & element : span().subspan( target_size ) )
+                std::destroy_at( &element );
+        }
+        storage_.shrink( to_byte_sz( target_size ) );
+    }
+    void shrink_by( size_type const delta ) noexcept
+    {
+        shrink_to( size() - delta );
+    }
+
+    decltype( auto ) user_header_data() noexcept { return storage_.hdr_storage(); }
 
 private:
     PSI_WARNING_DISABLE_PUSH()
@@ -1028,7 +1086,7 @@ private:
 
 template < typename T, typename sz_t = std::size_t >
 #if defined( _MSC_VER ) && !defined( NDEBUG )
-// Boost.Container flat_set is bugged: tries to get the reference from end iterators - asserts at runtime with secure/checked STL/containers
+// Boost.Container flat_set is bugged: tries to dereference end iterators - asserts at runtime with secure/checked STL/containers
 // https://github.com/boostorg/container/issues/261
 requires is_trivially_moveable< T >
 class unchecked_vector : public vector< T, sz_t >

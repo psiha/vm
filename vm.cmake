@@ -1,6 +1,8 @@
 # https://gitlab.kitware.com/cmake/cmake/-/issues/25725
 if ( CMAKE_CXX_COMPILER_ID MATCHES Clang AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT MATCHES MSVC )
     add_compile_options( $<$<COMPILE_LANGUAGE:CXX>:/clang:-std=gnu++2b> )
+elseif( MSVC ) # :wat: :wat: suddenly stopped 'recognizing' CMAKE_CXX_STANDARD !?
+    add_compile_options( /std:c++latest )
 else()
     set( CMAKE_CXX_STANDARD 26 )
 endif()
