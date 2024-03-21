@@ -24,7 +24,7 @@ namespace psi::vm
 //------------------------------------------------------------------------------
 
 [[ gnu::const ]]
-flags::opening create_rw_file_flags() noexcept
+flags::opening create_rw_file_flags( flags::named_object_construction_policy const policy ) noexcept
 {
     using namespace flags;
     using ap = access_privileges;
@@ -35,8 +35,8 @@ flags::opening create_rw_file_flags() noexcept
             ap::child_process::does_not_inherit,
             ap::system::process_default// ap::system::user( ap::readwrite ) | ap::system::group( ap::read )
         },
-        named_object_construction_policy::open_or_create,
-        system_hints                    ::sequential_access
+        policy,
+        system_hints::sequential_access
     );
 }
 

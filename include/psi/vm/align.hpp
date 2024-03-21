@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <std_fix/bit>
+#include <type_traits>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -40,7 +41,7 @@ namespace align_detail
     else
         return static_cast< T >( value / alignment * alignment );
 }
-[[ using gnu: const, always_inline ]] constexpr auto align_up  ( auto const value, auto const alignment ) noexcept
+[[ using gnu: const, always_inline ]] constexpr auto align_up( auto const value, auto const alignment ) noexcept
 {
     using T = decltype( value );
 #ifdef __clang__
