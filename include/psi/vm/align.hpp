@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <std_fix/bit>
+#include <type_traits>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {

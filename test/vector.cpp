@@ -16,7 +16,7 @@ TEST( vector, playground )
     std::filesystem::remove( test_vec );
     {
         psi::vm::vector< double, std::uint16_t > vec;
-        vec.map_file( test_vec.c_str() );
+        vec.map_file( test_vec.c_str(), flags::named_object_construction_policy::create_new );
         EXPECT_EQ( vec.size(), 0 );
         vec.append_range({ 3.14, 0.14, 0.04 });
         EXPECT_EQ( vec.size(), 3 );
@@ -26,7 +26,7 @@ TEST( vector, playground )
     }
     {
         psi::vm::vector< double, std::uint16_t > vec;
-        vec.map_file( test_vec.c_str() );
+        vec.map_file( test_vec.c_str(), flags::named_object_construction_policy::open_existing );
         EXPECT_EQ( vec.size(), 3 );
         EXPECT_EQ( vec[ 0 ], 3.14 );
         EXPECT_EQ( vec[ 1 ], 0.14 );

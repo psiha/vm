@@ -33,7 +33,7 @@ namespace psi::vm
 #   pragma warning( disable : 5030 ) // Unrecognized attribute
 #endif // _MSC_VER
 
-[[ gnu::const ]] flags::opening create_rw_file_flags() noexcept;
+[[ gnu::const ]] flags::opening create_rw_file_flags( flags::named_object_construction_policy policy = flags::named_object_construction_policy::open_or_create ) noexcept;
 [[ gnu::const ]] flags::opening create_r_file_flags () noexcept;
 
 err::fallible_result<mapped_view          , error> map_file          (    char const * file_name, std::size_t desired_size ) noexcept;

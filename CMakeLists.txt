@@ -81,11 +81,9 @@ target_include_directories( psi_vm PUBLIC
   "${build_SOURCE_DIR}/include"
   "${config_ex_SOURCE_DIR}/include"
   "${err_SOURCE_DIR}/include"
+  "${std_fix_SOURCE_DIR}/include" # vm::vector uses it (in a header)
 )
 
-target_include_directories( psi_vm PRIVATE
-  "${std_fix_SOURCE_DIR}/include"
-)
 
 ###################
 ## Testing
