@@ -307,7 +307,7 @@ public:
 private:
     [[ gnu::pure, nodiscard ]] size_type & stored_size() noexcept requires( !headerless )
     {
-        return *reinterpret_cast<size_type *>( &header_storage().back() + 1 );
+        return *reinterpret_cast<size_type *>( contiguous_container_storage_base::data() + header_size() - size_size );
     }
     [[ gnu::pure, nodiscard ]] size_type   stored_size() const noexcept requires( !headerless )
     {
@@ -369,7 +369,7 @@ public:
 
 public:
     vector() noexcept requires( headerless ) {}
-    explicit vector( size_type const header_size ) noexcept requires( !headerless )
+    explicit vector( size_type const header_size = 0 ) noexcept requires( !headerless )
     // TODO: use slack space (if any) in the object placed (by user code) in the header space
     // to store the size (to avoid wasting even more slack space due to alignment padding
     // after appending the size ('member').
