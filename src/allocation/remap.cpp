@@ -74,6 +74,7 @@ expand_result expand
         // TODO: implement 'VirtualQuery4Linux' https://github.com/ouadev/proc_maps_parser
         BOOST_VERIFY( ::mprotect( address, current_size, static_cast<int>( allocation_type::commit ) ) == 0 );
 
+        // https://stackoverflow.com/questions/11621606/faster-way-to-move-memory-page-than-mremap
         auto const actual_address{ ::mremap( address, current_size, required_size_for_end_expansion, static_cast<int>( realloc_type ) ) }; // https://laptrinhx.com/linux-mremap-tlb-flush-too-late-1728576753
         if ( actual_address != MAP_FAILED ) [[ likely ]]
         {
