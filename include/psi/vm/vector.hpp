@@ -227,7 +227,7 @@ public:
 
     void expand( size_type const target_size )
     {
-        BOOST_ASSUME( target_size > size() || ( target_size == size() && target_size == 0 ) );
+        BOOST_ASSUME( target_size >= size() );
         if constexpr ( headerless )
         {
             if ( target_size > size() )
@@ -307,7 +307,9 @@ public:
 private:
     [[ gnu::pure, nodiscard ]] size_type & stored_size() noexcept requires( !headerless )
     {
-        return *reinterpret_cast<size_type *>( contiguous_container_storage_base::data() + header_size() - size_size );
+        auto const p_size{ contiguous_container_storage_base::data() + header_size() - size_size };
+        BOOST_ASSERT( reinterpret_cast<std::intptr_t>( p_size ) % alignof( size_type ) == 0 );
+        return *reinterpret_cast<size_type *>( p_size );
     }
     [[ gnu::pure, nodiscard ]] size_type   stored_size() const noexcept requires( !headerless )
     {
@@ -369,11 +371,32 @@ public:
 
 public:
     vector() noexcept requires( headerless ) {}
-    explicit vector( size_type const header_size = 0 ) noexcept requires( !headerless )
-    // TODO: use slack space (if any) in the object placed (by user code) in the header space
-    // to store the size (to avoid wasting even more slack space due to alignment padding
-    // after appending the size ('member').
-      : storage_( static_cast<size_type>( align_up( header_size + sizeof( size_type ), alignof( T ) ) ) ) {}
+    // Allowing for a header to store/persist the 'actual' size of the container can be generalized
+    // to storing arbitrary (types of) headers. This however makes this class template no longer
+    // model just a vector like container but rather a structure consisting of a fixed-sized part
+    // (the header) and a dynamically resizable part (the vector part) - kind of like the 'curiously
+    // recurring C pattern' of a struct with a zero-sized trailing array data member.
+    // Awaiting a better name for the idiom, considering its usefulness, the library exposes this
+    // ability/functionality publicly - as a runtime parameter (instead of a Header template type
+    // parameter) - the relative runtime cost should be near non-existent vs all the standard
+    // benefits (having concrete base clasess, less template instantiations and codegen copies...).
+    explicit vector
+    (
+        size_type const header_size      = 0,
+        size_type const header_alignment = 0
+    ) noexcept requires( !headerless )
+        // TODO: use slack space (if any) in the object placed (by user code) in the header space
+        // to store the size (to avoid wasting even more slack space due to alignment padding
+        // after appending the size ('member').
+        :
+        storage_
+        (
+            static_cast<size_type>( align_up
+            (
+                header_size + sizeof( size_type ),
+                std::max<size_type>({ alignof( size_type ), alignof( T ), header_alignment })
+            ))
+        ) {}
 
     vector( vector const & ) = delete;
     vector( vector && ) = default;
