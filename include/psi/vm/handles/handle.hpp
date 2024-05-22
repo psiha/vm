@@ -54,31 +54,37 @@ public:
 
     inline static auto const invalid_value{ traits::invalid_value };
 
-             constexpr handle_impl(                                        ) noexcept : handle_{ traits::invalid_value } {                                        }
-    explicit constexpr handle_impl( native_handle_t    const native_handle ) noexcept : handle_{ native_handle         } {                                        }
-             constexpr handle_impl( handle_impl     &&       other         ) noexcept : handle_{ other.handle_         } { other.handle_ = traits::invalid_value; }
-                      ~handle_impl(                                        ) noexcept                                    { traits::close( handle_ );              }
+             constexpr handle_impl(                                        ) noexcept : handle_{ invalid_value } {                                }
+    explicit constexpr handle_impl( native_handle_t    const native_handle ) noexcept : handle_{ native_handle } {                                }
+             constexpr handle_impl( handle_impl     &&       other         ) noexcept : handle_{ other.handle_ } { other.handle_ = invalid_value; }
+                      ~handle_impl(                                        ) noexcept                            { traits::close( handle_ );      }
 
     handle_impl & operator=( handle_impl && __restrict other ) noexcept
     {
         close();
         this->handle_ = other.handle_;
-        other.handle_ = traits::invalid_value;
+        other.handle_ = invalid_value;
         return *this;
     }
 
-    void close() noexcept { traits::close( release() ); }
+    void close() noexcept
+    {
+        if constexpr ( requires{ __builtin_constant_p( handle_ ); } )
+            if ( __builtin_constant_p( handle_ ) && handle_ == invalid_value )
+                return;
+        traits::close( release() );
+    }
 
     native_handle_t release() noexcept
     {
         auto const result{ handle_ };
-        handle_ = traits::invalid_value;
+        handle_ = invalid_value;
         return result;
     }
 
     native_handle_t get() const noexcept { return handle_; }
 
-    explicit operator bool() const noexcept { return handle_ != traits::invalid_value; }
+    explicit operator bool() const noexcept { return handle_ != invalid_value; }
 
 private:
     native_handle_t handle_;
