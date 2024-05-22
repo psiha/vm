@@ -27,10 +27,7 @@
 #include <span>
 #include <type_traits>
 //------------------------------------------------------------------------------
-namespace psi
-{
-//------------------------------------------------------------------------------
-namespace vm
+namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
@@ -39,7 +36,7 @@ namespace vm
 #   pragma warning( disable : 5030 ) // Unrecognized attribute
 #endif // _MSC_VER
 
-#if defined( _WIN32 )
+#if defined( _WIN32 ) //////////////////////////////////////////////////////////
 
 enum class allocation_type : std::uint32_t
 {
@@ -53,7 +50,7 @@ inline std::uint16_t constexpr page_size          {  4 * 1024 };
 inline std::uint16_t constexpr commit_granularity {  4 * 1024 };
 inline std::uint32_t constexpr reserve_granularity{ 64 * 1024 };
 
-#else // POSIX
+#else // POSIX /////////////////////////////////////////////////////////////////
 
 enum class allocation_type : int
 {
@@ -86,7 +83,7 @@ static_assert( page_size == PAGE_SIZE );
 inline std::uint16_t constexpr  commit_granularity{ 4 * 1024 };
 inline std::uint16_t constexpr reserve_granularity{ 4 * 1024 };
 
-#endif // platform
+#endif // platform /////////////////////////////////////////////////////////////
 
 [[ gnu::assume_aligned( reserve_granularity ), gnu::malloc, nodiscard ]] void * allocate(                 std::size_t & size ) noexcept;
 [[ gnu::assume_aligned( reserve_granularity ), gnu::malloc, nodiscard ]] void * reserve (                 std::size_t & size ) noexcept;
@@ -100,9 +97,6 @@ inline std::uint16_t constexpr reserve_granularity{ 4 * 1024 };
 
 [[ nodiscard ]] inline bool commit  ( mapped_span const span ) noexcept { return commit  ( span.data(), span.size() ); }
                 inline void decommit( mapped_span const span ) noexcept { return decommit( span.data(), span.size() ); }
-
-// TODO madvise&co
-// https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-prefetchvirtualmemory
 
 struct [[ nodiscard ]] expand_result
 {
@@ -150,7 +144,5 @@ expand_result expand
 #endif // _MSC_VER
 
 //------------------------------------------------------------------------------
-} // namespace vm
-//------------------------------------------------------------------------------
-} // namespace psi
+} // namespace psi::vm
 //------------------------------------------------------------------------------

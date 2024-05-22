@@ -15,10 +15,7 @@
 
 #include <psi/vm/detail/win32.hpp>
 //------------------------------------------------------------------------------
-namespace psi
-{
-//------------------------------------------------------------------------------
-namespace vm
+namespace psi::vm
 {
 //------------------------------------------------------------------------------
 inline namespace win32
@@ -32,8 +29,8 @@ static_assert(         ( viewing::access_rights::read    & 0xFF ) == FILE_MAP_RE
 static_assert(         ( viewing::access_rights::write   & 0xFF ) == FILE_MAP_WRITE  , "Psi.VM internal inconsistency" );
 static_assert(         ( viewing::access_rights::execute & 0xFF ) == FILE_MAP_EXECUTE, "Psi.VM internal inconsistency" );
 
-static_assert( (unsigned)viewing::share_mode   ::shared           == 0               , "Psi.VM internal inconsistency" );
-static_assert( (unsigned)viewing::share_mode   ::hidden           == FILE_MAP_COPY   , "Psi.VM internal inconsistency" );
+static_assert( unsigned( viewing::share_mode   ::shared         ) == 0               , "Psi.VM internal inconsistency" );
+static_assert( unsigned( viewing::share_mode   ::hidden         ) == FILE_MAP_COPY   , "Psi.VM internal inconsistency" );
 
 viewing viewing::create
 (
@@ -58,8 +55,8 @@ viewing viewing::create
 
 bool viewing::is_cow() const noexcept
 {
-    /// \note Mind the Win32+NativeNT flags mess: FILE_MAP_ALL_ACCESS maps to
-    /// (NativeNT) SECTION_ALL_ACCESS which includes SECTION_QUERY which in
+    /// \note Mind the Win32 vs NativeNT flags mess: FILE_MAP_ALL_ACCESS maps
+    /// to (NativeNT) SECTION_ALL_ACCESS which includes SECTION_QUERY which in
     /// turn has the same value as FILE_MAP_COPY (which according to
     /// MapViewOfFile() documentation, is supposed to be a 'distinct' flag
     /// WRT the FILE_MAP_ALL_ACCESS flag).
@@ -125,7 +122,5 @@ mapping mapping::create
 //------------------------------------------------------------------------------
 } // win32
 //------------------------------------------------------------------------------
-} // vm
-//------------------------------------------------------------------------------
-} // psi
+} // psi::vm
 //------------------------------------------------------------------------------

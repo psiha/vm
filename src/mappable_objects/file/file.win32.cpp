@@ -202,19 +202,19 @@ mapping BOOST_CC_REG create_mapping( handle::reference const file, flags::mappin
 
 mapping BOOST_CC_REG create_mapping
 (
-    file_handle             ::reference     const file,
-    flags::access_privileges::object        const object_access,
+    file_handle                             &&       file,
+    flags::access_privileges::object           const object_access,
     [[ maybe_unused ]]
-    flags::access_privileges::child_process const child_access,
-    flags::mapping          ::share_mode    const share_mode,
-    std  ::size_t                           const size
+    flags::access_privileges::child_process    const child_access,
+    flags::mapping          ::share_mode       const share_mode,
+    std  ::size_t                              const size
 ) noexcept
 {
     auto const mapping_handle
     (
         detail::create_mapping_impl::map_file( file, flags::detail::object_access_to_page_access( object_access, share_mode ), size )
     );
-    return { mapping_handle, flags::viewing::create( object_access, share_mode ) };
+    return { mapping_handle, flags::viewing::create( object_access, share_mode ), std::move( file ) };
 }
 
 //------------------------------------------------------------------------------

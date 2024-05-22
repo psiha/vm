@@ -16,11 +16,15 @@
 //------------------------------------------------------------------------------
 #pragma once
 
-#include <psi/vm/handles/handle.win32.hpp>
+// The first two includes have to come in that order otherwise we get #error: "No Target Architecture" in winnt.h@169
 #include <psi/vm/flags/mapping.win32.hpp>
 #include <psi/vm/error/error.nt.hpp>
+#include <psi/vm/handles/handle.win32.hpp>
+#include <psi/vm/mappable_objects/file/handle.hpp>
 
 #include <psi/err/fallible_result.hpp>
+
+#include <boost/assert.hpp>
 
 #include <cstdint>
 //------------------------------------------------------------------------------
@@ -46,7 +50,6 @@ struct [[ clang::trivial_abi ]] mapping
     using       handle = handle_ref<mapping, false>;
     using const_handle = handle_ref<mapping, true >;
 
-    static bool constexpr retains_parent_handle              = true ;
     static bool constexpr create_mapping_can_set_source_size = true ;
     static bool constexpr supports_zero_sized_mappings       = false; // Windows does not support zero sized mappings
     static bool constexpr supports_zero_sized_views          = false;
@@ -54,10 +57,15 @@ struct [[ clang::trivial_abi ]] mapping
     constexpr mapping(            ) noexcept = default;
     constexpr mapping( mapping && ) noexcept = default;
 
-    constexpr mapping( native_handle_t const native_handle, flags::viewing const view_mapping_flags_param ) noexcept
-        : vm::handle( native_handle ), view_mapping_flags( view_mapping_flags_param ) {}
+    constexpr mapping( native_handle_t const native_mapping_handle, flags::viewing const _view_mapping_flags, file_handle && _file = {} ) noexcept
+        : vm::handle{ native_mapping_handle }, view_mapping_flags( _view_mapping_flags ), file( std::move( _file ) ) {}
 
     bool is_read_only() const noexcept { return ( view_mapping_flags.map_view_flags & flags::mapping::access_rights::write ) == 0; }
+
+    bool is_file_based() const noexcept { return static_cast<bool>( file ); }
+
+    file_handle::      reference underlying_file()       noexcept { BOOST_ASSERT( is_file_based() ); return file; }
+    file_handle::const_reference underlying_file() const noexcept { BOOST_ASSERT( is_file_based() ); return file; }
 
     void operator=( mapping && source ) noexcept
     {
@@ -67,6 +75,7 @@ struct [[ clang::trivial_abi ]] mapping
     }
 
     flags::viewing view_mapping_flags{};
+    file_handle    file;
 }; // struct mapping
 
 #ifdef __clang__

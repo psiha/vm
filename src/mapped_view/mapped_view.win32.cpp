@@ -14,11 +14,10 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#include "mapper.hpp"
-
 #include <psi/vm/align.hpp>
 #include <psi/vm/detail/win32.hpp>
 #include <psi/vm/mapped_view/mapped_view.hpp>
+#include <psi/vm/mapped_view/ops.hpp>
 
 #include <boost/assert.hpp>
 //------------------------------------------------------------------------------
@@ -28,7 +27,7 @@ namespace psi::vm
 
 BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
 mapped_span BOOST_CC_REG
-mapper::map
+map
 (
     mapping::handle  const source_mapping,
     flags ::viewing  const flags         ,
@@ -61,14 +60,13 @@ mapper::map
 #else
     LARGE_INTEGER nt_offset{ .QuadPart = static_cast<LONGLONG>( offset ) };
     auto sz{ desired_size };
-    sz = 0;
     void * view_startv{ nullptr };
     auto const success
     {
         nt::NtMapViewOfSection
         (
             source_mapping,
-            ::GetCurrentProcess(),
+            nt::current_process,
             &view_startv,
             0,
             0,
@@ -79,7 +77,8 @@ mapper::map
             PAGE_READWRITE
         )
     };
-    auto const view_start{ static_cast< std::byte * >( view_startv ) };
+    BOOST_ASSERT( sz >= desired_size );
+    auto const view_start{ static_cast<std::byte *>( view_startv ) };
 #endif
 
     return
@@ -89,28 +88,58 @@ mapper::map
     };
 }
 
-BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
-void BOOST_CC_REG mapper::unmap( mapped_span const view ) noexcept
+namespace
 {
+    [[ maybe_unused ]]
+    auto mem_info( void * const address ) noexcept
+    {
+        MEMORY_BASIC_INFORMATION info;
+        BOOST_VERIFY( ::VirtualQueryEx( nt::current_process, address, &info, sizeof( info ) ) == sizeof( info ) );
+        return info;
+    }
+} // anonymous namespace
+
+BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
+void BOOST_CC_REG unmap( mapped_span const view ) noexcept
+{
+    BOOST_ASSERT_MSG
+    (   // greater-or-equal because of the inability of Windows to do a proper unmap_partial
+        // (so we do discard() calls and shrinking of the view-span only, while the actual
+        // region remains in its original size)
+        mem_info( view.data() ).RegionSize >= align_up( view.size(), commit_granularity ) || view.empty(),
+        "TODO: implement a loop to handle concatenated ranges"
+        // see mapped_view::expand, Windows does not allow partial unmaps or merging of mapped views/ranges
+    );
     BOOST_VERIFY( ::UnmapViewOfFile( view.data() ) || view.empty() );
 }
 
-void mapper::shrink( mapped_span const view, std::size_t const target_size ) noexcept
+void unmap_partial( mapped_span const range ) noexcept
 {
-    // VirtualFree (wrapped by decommit) does not work for mapped views (only for VirtualAlloced memory)
-    BOOST_VERIFY
-    (
-        ::DiscardVirtualMemory
-        (
-            align_up  ( view.data() + target_size, commit_granularity ),
-            align_down( view.size() - target_size, commit_granularity )
-        )
-    );
+    // Windows does not offer this functionality (altering VMAs), the best
+    // we can do is:
+    discard( range );
+    // TODO add a mem_info query to see if there maybe is  (sub)range we
+    // can actually fully unmap here (connected to the todo in umap and expand)
 }
 
-void mapper::flush( mapped_span const view ) noexcept
+void discard( mapped_span const range ) noexcept
 {
-    BOOST_VERIFY( ::FlushViewOfFile( view.data(), view.size() ) == 0 );
+    // A survey of the various ways of declaring pages of memory to be uninteresting
+    // https://devblogs.microsoft.com/oldnewthing/20170113-00/?p=95185
+    // https://chromium.googlesource.com/chromium/src.git/+/refs/heads/main/docs/memory/key_concepts.md https://issues.chromium.org/issues/40522456
+    // VirtualFree (wrapped by decommit) does not work for mapped views (only for VirtualAlloced memory)
+    BOOST_VERIFY( ::DiscardVirtualMemory( range.data(), range.size() ) );
+}
+
+void flush_async( mapped_span const range ) noexcept
+{
+    BOOST_VERIFY( ::FlushViewOfFile( range.data(), range.size() ) );
+}
+
+void flush_blocking( mapped_span const range, file_handle::reference const source_file ) noexcept
+{
+    flush_async( range );
+    BOOST_VERIFY( ::FlushFileBuffers( source_file ) );
 }
 
 //------------------------------------------------------------------------------

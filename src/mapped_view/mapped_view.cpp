@@ -11,14 +11,31 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#include "mapper.hpp"
-
 #include <psi/vm/align.hpp>
 #include <psi/vm/mapped_view/mapped_view.hpp>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
 //------------------------------------------------------------------------------
+
+//------------------------------------------------------------------------------
+// implemented in impl cpps
+BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS )
+mapped_span BOOST_CC_REG
+map
+(
+    mapping::handle  source_mapping,
+    flags ::viewing  flags         ,
+    std   ::uint64_t offset        ,
+    std   ::size_t   desired_size
+) noexcept;
+
+BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
+void BOOST_CC_REG unmap( mapped_span view ) noexcept;
+
+void unmap_partial( mapped_span range ) noexcept;
+//------------------------------------------------------------------------------
+
 
 template <bool read_only>
 BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
@@ -31,7 +48,7 @@ basic_mapped_view<read_only>::map
     std::size_t      const desired_size
 ) noexcept
 {
-    auto const mapped_span{ mapper::map( source_mapping, flags, offset, desired_size ) };
+    auto const mapped_span{ vm::map( source_mapping, flags, offset, desired_size ) };
     if ( mapped_span.size() != desired_size ) [[ unlikely ]]
     {
         BOOST_ASSERT( mapped_span.empty() );
@@ -44,18 +61,26 @@ basic_mapped_view<read_only>::map
 template <bool read_only>
 void basic_mapped_view<read_only>::do_unmap() noexcept
 {
-    mapper::unmap( reinterpret_cast<mapped_span const &>( static_cast<span const &>( *this ) ) );
+    vm::unmap( reinterpret_cast<mapped_span const &>( static_cast<span const &>( *this ) ) );
 }
 
 
-template <bool read_only>
-void basic_mapped_view<read_only>::flush() const noexcept requires( !read_only ) { mapper::flush( *this ); }
-
+namespace
+{
+    void do_shrink( mapped_span const view, std::size_t const target_size ) noexcept
+    {
+        unmap_partial
+        ({
+            align_up  ( view.data() + target_size, commit_granularity ),
+            align_down( view.size() - target_size, commit_granularity )
+        });
+    }
+} // anonymous namepsace
 
 template <bool read_only>
 void basic_mapped_view<read_only>::shrink( std::size_t const target_size ) noexcept
 {
-    mapper::shrink( reinterpret_cast<mapped_span const &>( static_cast<span const &>( *this ) ), target_size );
+    do_shrink( reinterpret_cast<mapped_span const &>( static_cast<span const &>( *this ) ), target_size );
     static_cast<span &>( *this ) = { this->data(), target_size };
 }
 
@@ -115,7 +140,7 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
 #else
     ULARGE_INTEGER const win32_offset{ .QuadPart = target_offset };
     auto const new_address
-    {
+    { // TODO this (appending) requires complexity to be added on the unmap side (see mapper::unmap)
         ::MapViewOfFileEx
         (
             original_mapping.get(),

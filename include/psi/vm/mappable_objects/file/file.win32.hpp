@@ -45,7 +45,7 @@ std::uint64_t                     get_size( file_handle::reference              
 
 mapping BOOST_CC_REG create_mapping
 (
-    file_handle::reference,
+    file_handle &&,
     flags::access_privileges::object,
     flags::access_privileges::child_process,
     flags::mapping          ::share_mode,

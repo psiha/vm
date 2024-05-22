@@ -46,6 +46,8 @@ NTSTATUS constexpr STATUS_SUCCESS{ 0 };
 auto constexpr STATUS_CONFLICTING_ADDRESSES{ NTSTATUS( 0xC0000018 ) };
 #endif
 
+inline auto const current_process{ reinterpret_cast<HANDLE>( std::intptr_t{ -1 } ) };
+
 namespace detail
 {
     inline HMODULE const ntdll{ ::GetModuleHandleW( L"ntdll.dll" ) };
@@ -53,6 +55,8 @@ namespace detail
     inline BOOST_ATTRIBUTES( BOOST_COLD, BOOST_RESTRICTED_FUNCTION_L3, BOOST_RESTRICTED_FUNCTION_RETURN )
     ::PROC BOOST_CC_REG get_nt_proc( char const * const proc_name ) noexcept
     {
+        BOOST_ASSERT( current_process == ::GetCurrentProcess() ); // for lack of a better place for this sanity check
+
         BOOST_ASSERT( ntdll );
         auto const result{ ::GetProcAddress( ntdll, proc_name ) };
         BOOST_ASSERT( result );
