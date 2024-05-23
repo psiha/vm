@@ -28,10 +28,7 @@
 #include <cstdint>
 #include <span>
 //------------------------------------------------------------------------------
-namespace psi
-{
-//------------------------------------------------------------------------------
-namespace vm
+namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
@@ -76,8 +73,6 @@ public:
     void shrink( std::size_t target_size ) noexcept;
 
     fallible_result<void> expand( std::size_t target_size, mapping & ) noexcept;
-
-    void flush() const noexcept requires( !read_only );
 
     explicit operator bool() const noexcept { return !this->empty(); }
 
@@ -137,7 +132,5 @@ using           mapped_view = basic_mapped_view<false>;
 using read_only_mapped_view = basic_mapped_view<true >;
 
 //------------------------------------------------------------------------------
-} // namespace vm
-//------------------------------------------------------------------------------
-} // namespace psi
+} // namespace vm::psi
 //------------------------------------------------------------------------------

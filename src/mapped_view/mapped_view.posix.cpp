@@ -11,11 +11,10 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#include "mapper.hpp"
-
 #include <psi/vm/align.hpp>
 #include <psi/vm/detail/posix.hpp>
 #include <psi/vm/mapped_view/mapped_view.hpp>
+#include <psi/vm/mapped_view/ops.hpp>
 
 #include <boost/assert.hpp>
 //------------------------------------------------------------------------------
@@ -34,10 +33,11 @@ namespace
     auto constexpr MAP_UNINITIALIZED{ 0 };
 #endif // MAP_UNINITIALIZED
 #if !defined( MAP_ALIGNED_SUPER )
-    auto constexpr MAP_ALIGNED_SUPER{ 0 }; // FreeBSD specfic hint for large pages https://man.freebsd.org/cgi/man.cgi?sektion=2&query=mmap
+    auto constexpr MAP_ALIGNED_SUPER{ 0 }; // FreeBSD specific hint for large pages https://man.freebsd.org/cgi/man.cgi?sektion=2&query=mmap
 #endif // MAP_ALIGNED_SUPER
 } // anonymous namespace
 
+BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
 void * mmap( void * const target_address, std::size_t const size, int const protection, int const flags, int const file_handle, std::uint64_t const offset ) noexcept
 {
     BOOST_ASSUME( is_aligned( target_address, reserve_granularity )                      );
@@ -46,6 +46,9 @@ void * mmap( void * const target_address, std::size_t const size, int const prot
     auto const actual_address{ ::mmap( target_address, size, protection,
 #   if defined( __linux__ ) && !defined( __ANDROID__ ) && 0 // investigate whether always wired
         MAP_HUGETLB |
+#   endif
+#   if defined( MAP_NOSYNC ) && 0 // TODO reconsider
+        MAP_NOSYNC |
 #   endif
         MAP_UNINITIALIZED | MAP_ALIGNED_SUPER | flags,
         file_handle,
@@ -68,7 +71,7 @@ void * mmap( void * const target_address, std::size_t const size, int const prot
 
 BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
 mapped_span BOOST_CC_REG
-mapper::map
+map
 (
     handle::reference const source_mapping,
     flags ::viewing   const flags         ,
@@ -103,31 +106,50 @@ mapper::map
 }
 
 BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
-void BOOST_CC_REG mapper::unmap( mapped_span const view ) noexcept
+void BOOST_CC_REG unmap( mapped_span const view ) noexcept
 {
     [[ maybe_unused ]] auto munmap_result{ ::munmap( view.data(), view.size() ) };
 #ifndef __EMSCRIPTEN__
     BOOST_VERIFY
     (
         ( munmap_result == 0 ) ||
-        ( view.empty() && !view.data() )
+        ( view.empty() && ( !view.data() || errno == EINVAL ) )
     );
 #endif
 }
 
-void mapper::shrink( mapped_span const view, std::size_t const target_size ) noexcept
+void unmap_partial( mapped_span const range ) noexcept { unmap( range ); }
+
+void discard( mapped_span const range ) noexcept
 {
-    free
-    (
-        align_up  ( view.data() + target_size, commit_granularity ),
-        align_down( view.size() - target_size, commit_granularity )
-    );
+    BOOST_VERIFY( ::madvise( range.data(), range.size(), MADV_DONTNEED ) == 0 );
+    // https://www.man7.org/linux/man-pages/man2/madvise.2.html
+    // MADV_FREE vs MADV_DONTNEED
+    // https://lwn.net/Articles/590991
+    // https://github.com/JuliaLang/julia/issues/51086
+    // MADV_COLD, MADV_PAGEOUT
+    // destructive MADV_REMOVE, MADV_FREE
 }
 
-void mapper::flush( mapped_span const view ) noexcept
+// https://stackoverflow.com/questions/60547532/whats-the-exact-meaning-of-the-flag-ms-invalidate-in-msync
+// https://linux-fsdevel.vger.kernel.narkive.com/ytPKRHNt/munmap-msync-synchronization
+// https://lwn.net/Articles/712467 The future of the page cache
+void flush_async( mapped_span const range ) noexcept
 {
-    BOOST_VERIFY( ::msync( view.data(), view.size(), MS_ASYNC /*?: | MS_INVALIDATE*/ ) == 0 );
+#ifdef __linux__
+    // MS_ASYNC is a no-op on Linux https://www.man7.org/linux/man-pages/man2/msync.2.html
+    (void)range;
+#else
+    BOOST_VERIFY( ::msync( range.data(), range.size(), MS_ASYNC ) == 0 );
+#endif
 }
+
+void flush_blocking( mapped_span const range ) noexcept
+{
+    // sync_file_range, fdatasync...
+    BOOST_VERIFY( ::msync( range.data(), range.size(), MS_SYNC | MS_INVALIDATE ) == 0 );
+}
+void flush_blocking( mapped_span const range, file_handle::reference ) noexcept { flush_blocking( range ); }
 
 //------------------------------------------------------------------------------
 } // psi::vm

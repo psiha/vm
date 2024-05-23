@@ -38,10 +38,10 @@ struct [[ clang::trivial_abi ]] mapping
     using const_reference = mapping const &;
     using       reference = mapping       &;
 
-    static bool constexpr retains_parent_handle              = false;
     static bool constexpr create_mapping_can_set_source_size = false;
     static bool constexpr supports_zero_sized_mappings       = true ; // simply because there is actually no intermediate mapping object
     static bool constexpr supports_zero_sized_views          = false;
+    static bool constexpr views_downsizeable                 = true ;
 
     constexpr mapping(            ) noexcept = default;
     constexpr mapping( mapping && ) noexcept = default;
@@ -58,6 +58,11 @@ struct [[ clang::trivial_abi ]] mapping
             ( flags::access_privileges::write | flags::access_privileges::readwrite )
         ) == 0;
     }
+
+    bool is_file_based() const noexcept { return this->get() != posix::handle::invalid_value; }
+
+    posix::handle::      reference underlying_file()       noexcept { BOOST_ASSERT( is_file_based() ); return *this; }
+    posix::handle::const_reference underlying_file() const noexcept { BOOST_ASSERT( is_file_based() ); return *this; }
 
     constexpr mapping & operator=( mapping && source ) noexcept
     {

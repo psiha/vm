@@ -13,36 +13,32 @@
 //------------------------------------------------------------------------------
 #pragma once
 
-#include <psi/vm/flags/mapping.hpp>
-#include <psi/vm/handles/handle.hpp>
-#include <psi/vm/mapping/mapping.hpp>
+#include <psi/vm/mappable_objects/file/handle.hpp>
 #include <psi/vm/span.hpp>
-
-#include <boost/config_ex.hpp>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
-struct mapper
-{
-    static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
-    mapped_span BOOST_CC_REG
-    map
-    (
-        mapping::handle  source_mapping,
-        flags ::viewing  flags         ,
-        std   ::uint64_t offset        ,
-        std   ::size_t   desired_size
-    ) noexcept;
+void flush_blocking( mapped_span range, file_handle::reference source_file ) noexcept;
+#ifndef _WIN32
+// No way to perform this on Windows through only the view itself
+// https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-flushviewoffile
+void flush_blocking( mapped_span range ) noexcept;
+#endif
+void flush_async   ( mapped_span range ) noexcept;
 
-    static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
-    void BOOST_CC_REG unmap( mapped_span view ) noexcept;
+// these below out to go/get special versions in allocation.hpp
+void discard( mapped_span range ) noexcept;
 
-    static void shrink( mapped_span view, std::size_t target_size ) noexcept;
+// TODO prefetch/WILL_NEED
+// https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-prefetchvirtualmemory
 
-    static void flush( mapped_span view ) noexcept;
-}; // struct mapper
+
+#ifndef _WIN32
+// utility verbosity reducing wrapper
+void madvise( mapped_span range, int advice ) noexcept;
+#endif
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm

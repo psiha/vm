@@ -16,6 +16,7 @@
 #include "align.hpp"
 #include "mapping/mapping.hpp"
 #include "mapped_view/mapped_view.hpp"
+#include "mapped_view/ops.hpp"
 #include "mappable_objects/file/file.hpp"
 #include "mappable_objects/file/utility.hpp"
 
@@ -26,6 +27,7 @@
 #include <concepts>
 #include <cstdint>
 #include <climits>
+#include <memory>
 #include <span>
 #include <type_traits>
 #include <stdexcept>
@@ -48,14 +50,24 @@ public:
     contiguous_container_storage_base( contiguous_container_storage_base && ) = default;
     contiguous_container_storage_base & operator=( contiguous_container_storage_base && ) = default;
 
-    auto data()       noexcept { BOOST_ASSERT_MSG( mapping_, "Paging file not attached" ); return view_.data(); }
+    auto data()       noexcept { BOOST_ASSERT_MSG( mapping_, "Paging file not attached" ); return std::assume_aligned<commit_granularity>( view_.data() ); }
     auto data() const noexcept { return const_cast< contiguous_container_storage_base & >( *this ).data(); }
 
     void unmap() noexcept { view_.unmap(); }
 
-#ifndef _WIN32 // TODO
+    void close() noexcept
+    {
+        mapping_.close();
+        unmap();
+    }
+
+    [[ gnu::pure ]] auto storage_size() const noexcept { return get_size( mapping_ ); }
+    [[ gnu::pure ]] auto  mapped_size() const noexcept { return view_.size(); }
+
+    void flush_async   ( std::size_t const beginning, std::size_t const size ) noexcept { vm::flush_async   ( mapped_span({ view_.subspan( beginning, size ) }) ); }
+    void flush_blocking( std::size_t const beginning, std::size_t const size ) noexcept { vm::flush_blocking( mapped_span({ view_.subspan( beginning, size ) }), mapping_.underlying_file() ); }
+
     bool file_backed() const noexcept { return mapping_.get() == handle::invalid_value; }
-#endif
 
     explicit operator bool() const noexcept { return static_cast<bool>( mapping_ ); }
 
@@ -71,9 +83,7 @@ protected:
     err::fallible_result<std::size_t, error>
     map_memory( std::size_t const size ) noexcept { return map( {}, size ); }
 
-    [[ gnu::pure ]] auto storage_size() const noexcept { return get_size( mapping_ ); }
-    [[ gnu::pure ]] auto  mapped_size() const noexcept { return view_.size(); }
-#
+
     void expand( std::size_t const target_size )
     {
         set_size( mapping_, target_size );
@@ -88,8 +98,17 @@ protected:
 
     void shrink( std::size_t const target_size ) noexcept
     {
-        view_.shrink( target_size );
-        set_size( mapping_, target_size )().assume_succeeded();
+        if constexpr ( mapping::views_downsizeable )
+        {
+            view_.shrink( target_size );
+            set_size( mapping_, target_size )().assume_succeeded();
+        }
+        else
+        {
+            view_.unmap();
+            set_size( mapping_, target_size )().assume_succeeded();
+            view_ = mapped_view::map( mapping_, 0, target_size );
+        }
     }
 
     void shrink_to_fit() noexcept { set_size( mapping_, mapped_size() )().assume_succeeded(); }
@@ -1025,6 +1044,8 @@ public:
     auto map_file  ( auto      const file, flags::named_object_construction_policy const policy ) noexcept { return storage_.map_file  ( file, policy ); }
     auto map_memory( size_type const size                                                       ) noexcept { return storage_.map_memory( size         ); }
 
+    void close() noexcept { storage_.close(); }
+
     bool is_open() const noexcept { return static_cast<bool>( storage_ ); }
 
     //! <b>Effects</b>: If n is less than or equal to capacity(), this call has no
@@ -1033,7 +1054,7 @@ public:
     //!   If the request is successful, then capacity() is greater than or equal to
     //!   n; otherwise, capacity() is unchanged. In either case, size() is unchanged.
     //!
-    //! <b>Throws</b>: If memory allocation allocation throws or T's copy/move constructor throws.
+    //! <b>Throws</b>: If memory allocation throws or T's copy/move constructor throws.
     //!
     //! <b>Note</b>: Non-standard extension.
     bool stable_reserve( size_type new_cap ) = /*TODO*/ delete;
@@ -1084,6 +1105,12 @@ public:
     }
 
     decltype( auto ) user_header_data() noexcept { return storage_.header_storage(); }
+
+    // helper getter for generic code that wishes to do basic manipulation on
+    // vm::vectors w/o being templated (contiguous_container_storage_base does not
+    // publicize functionality that could be used to make it out of sync with the
+    // corresponding vm::vector)
+    contiguous_container_storage_base & storage_base() noexcept { return storage_; }
 
 private:
     PSI_WARNING_DISABLE_PUSH()

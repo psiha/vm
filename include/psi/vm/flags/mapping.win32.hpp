@@ -3,7 +3,7 @@
 /// \file flags/mapping.win32.hpp
 /// -----------------------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2018.
+/// Copyright (c) Domagoj Saric 2010 - 2024.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -23,10 +23,7 @@
 
 #include <cstdint>
 //------------------------------------------------------------------------------
-namespace psi
-{
-//------------------------------------------------------------------------------
-namespace vm
+namespace psi::vm
 {
 //------------------------------------------------------------------------------
 inline namespace win32
@@ -43,7 +40,7 @@ struct [[ clang::trivial_abi ]] viewing
 {
     using access_rights = access_privileges;
 
-    enum struct share_mode
+    enum struct share_mode : std::uint8_t
     {
         shared = 0,
         hidden = 0x0001
@@ -105,7 +102,5 @@ struct mapping
 //------------------------------------------------------------------------------
 } // namespace win32
 //------------------------------------------------------------------------------
-} // namespace vm
-//------------------------------------------------------------------------------
-} // namespace psi
+} // namespace psi::vm
 //------------------------------------------------------------------------------
