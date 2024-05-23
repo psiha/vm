@@ -56,7 +56,7 @@ err::fallible_result<void, nt::error> set_size( mapping & __restrict the_mapping
         the_mapping.close(); // no strong guarantee :/
         auto const file_reisze_result{ set_size( the_mapping.underlying_file(), new_size )() };
         if ( !file_reisze_result )
-            return nt::error/*...mrmlj...*/( file_reisze_result.error().get() ); // TODO fully move to NativeNT API (NtSetInformationFile)
+            return nt::error/*...mrmlj...*/( file_reisze_result.error().get() ); // TODO fully move to NativeNT API https://cpp.hotexamples.com/examples/-/-/NtSetInformationFile/cpp-ntsetinformationfile-function-examples.html
         auto const new_mapping_handle{ detail::create_mapping_impl::map_file( the_mapping.file, the_mapping.create_mapping_flags, new_size ) };
         the_mapping.reset( new_mapping_handle );
         if ( !the_mapping )
