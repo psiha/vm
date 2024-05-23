@@ -348,6 +348,39 @@ bool constexpr is_trivially_moveable
 struct default_init_t{}; inline constexpr default_init_t default_init;
 struct value_init_t  {}; inline constexpr value_init_t   value_init  ;
 
+struct header_info
+{
+    constexpr header_info() = default;
+    constexpr header_info( std::uint32_t const size, std::uint8_t const alignment ) noexcept : header_size{ size }, data_extra_alignment{ alignment } {}
+    template <typename T>
+    constexpr header_info( std::in_place_type_t<T>, std::uint8_t const extra_alignment = 1 ) noexcept : header_info{ sizeof( T ), extra_alignment } {}
+    template <typename T>
+    static constexpr header_info make( std::uint8_t const extra_alignment = 1 ) noexcept { return { sizeof( T ), extra_alignment }; }
+
+    template <typename AdditionalHeader>
+    header_info addHeader() const noexcept // support chained headers (class hierarchies)
+    {
+        auto const aligned_size{ align_up( this->header_size, alignof( AdditionalHeader ) ) };
+        return
+        {
+            static_cast<std::uint32_t>( aligned_size + sizeof( AdditionalHeader ) ),
+            this->data_extra_alignment
+        };
+    }
+
+    template <typename ... T>
+    header_info withAlignmentFor() const noexcept
+    {
+        BOOST_ASSUME( data_extra_alignment >= 1 );
+        return { this->header_size, std::max<std::uint8_t>({ this->data_extra_alignment, alignof( T )... }) };
+    }
+
+    std::uint32_t final_header_size() const noexcept { return align_up( header_size, data_extra_alignment ); }
+
+    std::uint32_t header_size         { 0 };
+    std::uint8_t  data_extra_alignment{ 1 }; // e.g. for vectorization or overlaying complex types over std::byte storage
+}; // header_info
+
 // Standard-vector-like/compatible _presistent_ container class template
 // which uses VM/a mapped object for its backing storage. Currently limited
 // to trivial_abi types.
@@ -399,28 +432,23 @@ public:
     // ability/functionality publicly - as a runtime parameter (instead of a Header template type
     // parameter) - the relative runtime cost should be near non-existent vs all the standard
     // benefits (having concrete base clasess, less template instantiations and codegen copies...).
-    explicit vector
-    (
-        size_type const header_size      = 0,
-        size_type const header_alignment = 0
-    ) noexcept requires( !headerless )
+    explicit vector( header_info const hdr_info = {} ) noexcept requires( !headerless )
         // TODO: use slack space (if any) in the object placed (by user code) in the header space
         // to store the size (to avoid wasting even more slack space due to alignment padding
         // after appending the size ('member').
         :
         storage_
         (
-            static_cast<size_type>( align_up
-            (
-                header_size + sizeof( size_type ),
-                std::max<size_type>({ alignof( size_type ), alignof( T ), header_alignment })
-            ))
+            hdr_info
+                .         addHeader<size_type>()
+                .template withAlignmentFor<size_type, T>()
+                .         final_header_size()
         ) {}
 
     vector( vector const & ) = delete;
     vector( vector && ) = default;
 
-    ~vector() noexcept = default;
+   ~vector() noexcept = default;
 
     vector & operator=( vector && ) = default;
     vector & operator=( vector const & x )
