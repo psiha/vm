@@ -10,7 +10,7 @@ set( vm_test_sources
 )
 
 add_executable( vm_unit_tests EXCLUDE_FROM_ALL ${vm_test_sources} )
-target_link_libraries( vm_unit_tests PRIVATE GTest::gtest GTest::gtest_main psi::vm )
+target_link_libraries( vm_unit_tests PRIVATE GTest::gtest_main psi::vm )
 
 set_target_properties(
     vm_unit_tests
