@@ -24,7 +24,7 @@ jobs:
       # To add more build types (Release, Debug, RelWithDebInfo, etc.) customize the build_type list.
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        build_type: [Release]
+        build_type: [Debug, Release]
         c_compiler: [clang, clang-cl]
         include:
           - os: windows-latest
@@ -53,26 +53,25 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
-    - name: Install LLVM and Clang on Ubuntu
+    - name: Setup latest Xcode on MacOS
+      if: matrix.os == 'macos-latest'
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: latest
+    - name: Install LLVM and Clang on Linux
       if: matrix.os == 'ubuntu-latest'
       run: |
         wget https://apt.llvm.org/llvm.sh
         chmod u+x llvm.sh
-        sudo ./llvm.sh 17 all
-        echo "PATH=/usr/lib/llvm-17/bin:$PATH" >> $GITHUB_ENV
-        echo "LLVM_PATH=/usr/lib/llvm-17" >> $GITHUB_ENV
-        echo "LD_LIBRARY_PATH=/usr/lib/llvm-17/lib" >> $GITHUB_ENV
-        echo "DYLD_LIBRARY_PATH=/usr/lib/llvm-17/lib" >> $GITHUB_ENV
-        echo "CC=/usr/lib/llvm-17/bin/clang" >> $GITHUB_ENV
-        echo "CXX=/usr/lib/llvm-17/bin/clang++" >> $GITHUB_ENV
+        sudo ./llvm.sh 18 all
+        echo "PATH=/usr/lib/llvm-18/bin:$PATH" >> $GITHUB_ENV
+        echo "LLVM_PATH=/usr/lib/llvm-18" >> $GITHUB_ENV
+        echo "LD_LIBRARY_PATH=/usr/lib/llvm-18/lib" >> $GITHUB_ENV
+        echo "DYLD_LIBRARY_PATH=/usr/lib/llvm-18/lib" >> $GITHUB_ENV
+        echo "CC=/usr/lib/llvm-18/bin/clang" >> $GITHUB_ENV
+        echo "CXX=/usr/lib/llvm-18/bin/clang++" >> $GITHUB_ENV
       shell: sh
 
-    - name: Install LLVM and Clang on MacOS
-      if: matrix.os == 'macos-latest'
-      uses: KyleMayes/install-llvm-action@v1.9.0
-      with:
-        version: "15.0.7"
-      
     - name: Set reusable strings
       # Turn repeated input strings (such as the build output directory) into step outputs. These step outputs can be used throughout the workflow file.
       id: strings
