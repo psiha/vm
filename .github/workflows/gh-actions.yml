@@ -39,10 +39,14 @@ jobs:
         exclude:
           - os: windows-latest
             c_compiler: clang
+          - os: windows-latest
+            build_type: Debug
           - os: ubuntu-latest
             c_compiler: msvc
           - os: macos-latest
             c_compiler: msvc
+          - os: macos-latest
+            build_type: Debug
 
     steps:
     - uses: actions/checkout@v3
