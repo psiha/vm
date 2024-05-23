@@ -97,8 +97,17 @@ protected:
 
     void shrink( std::size_t const target_size ) noexcept
     {
-        view_.shrink( target_size );
-        set_size( mapping_, target_size )().assume_succeeded();
+        if constexpr ( mapping::views_downsizeable )
+        {
+            view_.shrink( target_size );
+            set_size( mapping_, target_size )().assume_succeeded();
+        }
+        else
+        {
+            view_.unmap();
+            set_size( mapping_, target_size )().assume_succeeded();
+            view_ = mapped_view::map( mapping_, 0, target_size );
+        }
     }
 
     void shrink_to_fit() noexcept { set_size( mapping_, mapped_size() )().assume_succeeded(); }

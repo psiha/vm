@@ -67,6 +67,16 @@ public:
         return *this;
     }
 
+    void reset( native_handle_t const new_handle ) noexcept
+    {
+        auto const old_handle{ handle_ };
+        handle_ = new_handle;
+        if constexpr ( requires{ __builtin_constant_p( handle_ ); } ) //...mrmlj...TODO deduplicate
+            if ( __builtin_constant_p( handle_ ) && handle_ == invalid_value )
+                return;
+        traits::close( old_handle );
+    }
+
     void close() noexcept
     {
         if constexpr ( requires{ __builtin_constant_p( handle_ ); } )

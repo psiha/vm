@@ -104,15 +104,15 @@ namespace detail
     std::uint64_t get_section_size( HANDLE const mapping_handle ) noexcept { return get_size( mapping::const_handle{ mapping_handle } ); }
 
     // https://support.microsoft.com/en-us/kb/125713 Common File Mapping Problems and Platform Differences
-    struct create_mapping_impl
+    namespace create_mapping_impl
     {
-        static BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_FORCEINLINE HANDLE call_create( char    const * __restrict const file_name, auto const ... args ) { return ::CreateFileMappingA( args..., file_name ); }
-        static BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_FORCEINLINE HANDLE call_create( wchar_t const * __restrict const file_name, auto const ... args ) { return ::CreateFileMappingW( args..., file_name ); }
+        BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_FORCEINLINE HANDLE call_create( char    const * __restrict const file_name, auto const ... args ) { return ::CreateFileMappingA( args..., file_name ); }
+        BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_FORCEINLINE HANDLE call_create( wchar_t const * __restrict const file_name, auto const ... args ) { return ::CreateFileMappingW( args..., file_name ); }
 
-        static BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_FORCEINLINE HANDLE call_open  ( char    const * __restrict const file_name, auto const ... args ) { return ::OpenFileMappingA  ( args..., file_name ); }
-        static BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_FORCEINLINE HANDLE call_open  ( wchar_t const * __restrict const file_name, auto const ... args ) { return ::OpenFileMappingW  ( args..., file_name ); }
+        BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_FORCEINLINE HANDLE call_open  ( char    const * __restrict const file_name, auto const ... args ) { return ::OpenFileMappingA  ( args..., file_name ); }
+        BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_FORCEINLINE HANDLE call_open  ( wchar_t const * __restrict const file_name, auto const ... args ) { return ::OpenFileMappingW  ( args..., file_name ); }
 
-        static BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
+        BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
         HANDLE map_file( file_handle::reference const file, flags::flags_t const flags, std::uint64_t const size ) noexcept
         {
             HANDLE handle{ handle_traits::invalid_value };
@@ -133,17 +133,16 @@ namespace detail
             BOOST_VERIFY( NT_SUCCESS( nt_result ) || handle == handle_traits::invalid_value );
             return handle;
         }
-        static
         HANDLE map_file( file_handle::reference const file, flags::flags_t const flags ) noexcept { return map_file( file, flags, 0 ); }
 
-        static void clear( HANDLE & mapping_handle )
+        void clear( HANDLE & mapping_handle )
         {
             handle::traits::close( mapping_handle );
             mapping_handle = nullptr;
         }
 
         BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_FORCEINLINE
-        static mapping BOOST_CC_REG do_map( file_handle::reference const file, flags::mapping const flags, std::uint64_t const maximum_size, auto const * __restrict const name ) noexcept
+        mapping BOOST_CC_REG do_map( file_handle::reference const file, flags::mapping const flags, std::uint64_t const maximum_size, auto const * __restrict const name ) noexcept
         {
             ::SECURITY_ATTRIBUTES sa;
             auto const p_security_attributes( flags::detail::make_sa_ptr( sa, flags.system_access.p_sd, reinterpret_cast<bool const &>/*static_cast<bool>*/( flags.child_access ) ) );
@@ -181,7 +180,7 @@ namespace detail
 
             return { mapping_handle, flags.map_view_flags };
         }
-    }; // struct create_mapping_impl
+    } // namepsace create_mapping_impl
 } // namespace detail
 
 mapping BOOST_CC_REG create_mapping( file_handle::reference const file, flags::mapping const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
@@ -210,11 +209,12 @@ mapping BOOST_CC_REG create_mapping
     std  ::size_t                              const size
 ) noexcept
 {
+    auto const create_mapping_flasgs{ flags::detail::object_access_to_page_access( object_access, share_mode ) };
     auto const mapping_handle
     (
-        detail::create_mapping_impl::map_file( file, flags::detail::object_access_to_page_access( object_access, share_mode ), size )
+        detail::create_mapping_impl::map_file( file, create_mapping_flasgs, size )
     );
-    return { mapping_handle, flags::viewing::create( object_access, share_mode ), std::move( file ) };
+    return { mapping_handle, flags::viewing::create( object_access, share_mode ), create_mapping_flasgs, std::move( file ) };
 }
 
 //------------------------------------------------------------------------------

@@ -53,12 +53,13 @@ struct [[ clang::trivial_abi ]] mapping
     static bool constexpr create_mapping_can_set_source_size = true ;
     static bool constexpr supports_zero_sized_mappings       = false; // Windows does not support zero sized mappings
     static bool constexpr supports_zero_sized_views          = false;
+    static bool constexpr views_downsizeable                 = false;
 
     constexpr mapping(            ) noexcept = default;
     constexpr mapping( mapping && ) noexcept = default;
 
-    constexpr mapping( native_handle_t const native_mapping_handle, flags::viewing const _view_mapping_flags, file_handle && _file = {} ) noexcept
-        : vm::handle{ native_mapping_handle }, view_mapping_flags( _view_mapping_flags ), file( std::move( _file ) ) {}
+    constexpr mapping( native_handle_t const native_mapping_handle, flags::viewing const _view_mapping_flags, flags::flags_t const _create_mapping_flags = 0, file_handle && _file = {} ) noexcept
+        : vm::handle{ native_mapping_handle }, view_mapping_flags{ _view_mapping_flags }, create_mapping_flags{ _create_mapping_flags }, file{ std::move( _file ) } {}
 
     bool is_read_only() const noexcept { return ( view_mapping_flags.map_view_flags & flags::mapping::access_rights::write ) == 0; }
 
@@ -70,11 +71,17 @@ struct [[ clang::trivial_abi ]] mapping
     void operator=( mapping && source ) noexcept
     {
         vm::handle::operator=( std::move( source ) );
-        view_mapping_flags = source.view_mapping_flags;
-        source.view_mapping_flags = {};
+        file                 = std::move( source.file );
+          view_mapping_flags = source.  view_mapping_flags;
+        create_mapping_flags = source.create_mapping_flags;
+        source.  view_mapping_flags = {};
+        source.create_mapping_flags = {};
     }
 
     flags::viewing view_mapping_flags{};
+    // members below are only required for downsizeable mappings (and is_file_based() info)
+    // TODO create a separate mapping type
+    flags::flags_t create_mapping_flags;
     file_handle    file;
 }; // struct mapping
 
@@ -82,8 +89,8 @@ struct [[ clang::trivial_abi ]] mapping
 #    pragma clang diagnostic pop
 #endif
 
-std::uint64_t                         get_size( mapping::const_handle                         ) noexcept;
-err::fallible_result<void, nt::error> set_size( mapping::      handle, std::uint64_t new_size ) noexcept;
+std::uint64_t                         get_size( mapping::const_handle             ) noexcept;
+err::fallible_result<void, nt::error> set_size( mapping &, std::uint64_t new_size ) noexcept;
 
 //------------------------------------------------------------------------------
 } // namespace win32

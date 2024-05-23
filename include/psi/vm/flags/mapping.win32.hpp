@@ -40,7 +40,7 @@ struct [[ clang::trivial_abi ]] viewing
 {
     using access_rights = access_privileges;
 
-    enum struct share_mode
+    enum struct share_mode : std::uint8_t
     {
         shared = 0,
         hidden = 0x0001
