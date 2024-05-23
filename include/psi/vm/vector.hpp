@@ -27,6 +27,7 @@
 #include <concepts>
 #include <cstdint>
 #include <climits>
+#include <memory>
 #include <span>
 #include <type_traits>
 #include <stdexcept>
