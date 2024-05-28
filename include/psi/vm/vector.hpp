@@ -358,7 +358,7 @@ struct header_info
     static constexpr header_info make( std::uint8_t const extra_alignment = 1 ) noexcept { return { sizeof( T ), extra_alignment }; }
 
     template <typename AdditionalHeader>
-    header_info addHeader() const noexcept // support chained headers (class hierarchies)
+    header_info add_header() const noexcept // support chained headers (class hierarchies)
     {
         auto const aligned_size{ align_up( this->header_size, alignof( AdditionalHeader ) ) };
         return
@@ -369,7 +369,7 @@ struct header_info
     }
 
     template <typename ... T>
-    header_info withAlignmentFor() const noexcept
+    header_info with_alignment_for() const noexcept
     {
         BOOST_ASSUME( data_extra_alignment >= 1 );
         return { this->header_size, std::max<std::uint8_t>({ this->data_extra_alignment, alignof( T )... }) };
@@ -440,8 +440,8 @@ public:
         storage_
         (
             hdr_info
-                .         addHeader<size_type>()
-                .template withAlignmentFor<size_type, T>()
+                .         add_header<size_type>()
+                .template with_alignment_for<size_type, T>()
                 .         final_header_size()
         ) {}
 
