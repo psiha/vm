@@ -131,6 +131,15 @@ void discard( mapped_span const range ) noexcept
     // destructive MADV_REMOVE, MADV_FREE
 }
 
+namespace {
+    void call_msync( mapped_span const range, int const flags ) __attribute__(( noexcept )) {
+        BOOST_ASSERT( is_aligned( range.data(), page_size ) );
+        // EINVAL on OSX for empty range
+        // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/msync.2.html
+        BOOST_VERIFY( ::msync( range.data(), range.size(), flags ) == 0 || range.empty() );
+    }
+}
+
 // https://stackoverflow.com/questions/60547532/whats-the-exact-meaning-of-the-flag-ms-invalidate-in-msync
 // https://linux-fsdevel.vger.kernel.narkive.com/ytPKRHNt/munmap-msync-synchronization
 // https://lwn.net/Articles/712467 The future of the page cache
@@ -140,14 +149,14 @@ void flush_async( mapped_span const range ) noexcept
     // MS_ASYNC is a no-op on Linux https://www.man7.org/linux/man-pages/man2/msync.2.html
     (void)range;
 #else
-    BOOST_VERIFY( ::msync( range.data(), range.size(), MS_ASYNC ) == 0 );
+    call_msync( range, MS_ASYNC );
 #endif
 }
 
 void flush_blocking( mapped_span const range ) noexcept
 {
     // sync_file_range, fdatasync...
-    BOOST_VERIFY( ::msync( range.data(), range.size(), MS_SYNC | MS_INVALIDATE ) == 0 );
+    call_msync( range, MS_SYNC | MS_INVALIDATE );
 }
 void flush_blocking( mapped_span const range, file_handle::const_reference ) noexcept { flush_blocking( range ); }
 
