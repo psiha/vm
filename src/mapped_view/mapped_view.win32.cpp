@@ -136,10 +136,10 @@ void flush_async( mapped_span const range ) noexcept
     BOOST_VERIFY( ::FlushViewOfFile( range.data(), range.size() ) );
 }
 
-void flush_blocking( mapped_span const range, file_handle::reference const source_file ) noexcept
+void flush_blocking( mapped_span const range, file_handle::const_reference const source_file ) noexcept
 {
     flush_async( range );
-    BOOST_VERIFY( ::FlushFileBuffers( source_file ) );
+    BOOST_VERIFY( ::FlushFileBuffers( source_file.value ) );
 }
 
 //------------------------------------------------------------------------------

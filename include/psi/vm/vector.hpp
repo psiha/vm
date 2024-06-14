@@ -64,8 +64,8 @@ public:
     [[ gnu::pure ]] auto storage_size() const noexcept { return get_size( mapping_ ); }
     [[ gnu::pure ]] auto  mapped_size() const noexcept { return view_.size(); }
 
-    void flush_async   ( std::size_t const beginning, std::size_t const size ) noexcept { vm::flush_async   ( mapped_span({ view_.subspan( beginning, size ) }) ); }
-    void flush_blocking( std::size_t const beginning, std::size_t const size ) noexcept { vm::flush_blocking( mapped_span({ view_.subspan( beginning, size ) }), mapping_.underlying_file() ); }
+    void flush_async   ( std::size_t const beginning, std::size_t const size ) const noexcept { vm::flush_async   ( mapped_span({ view_.subspan( beginning, size ) }) ); }
+    void flush_blocking( std::size_t const beginning, std::size_t const size ) const noexcept { vm::flush_blocking( mapped_span({ view_.subspan( beginning, size ) }), mapping_.underlying_file() ); }
 
     bool file_backed() const noexcept { return mapping_.get() == handle::invalid_value; }
 
@@ -1139,6 +1139,9 @@ public:
     // publicize functionality that could be used to make it out of sync with the
     // corresponding vm::vector)
     contiguous_container_storage_base & storage_base() noexcept { return storage_; }
+
+    void flush_async   ( std::size_t const beginning, std::size_t const size ) const noexcept { storage_.flush_async   ( beginning, size ); }
+    void flush_blocking( std::size_t const beginning, std::size_t const size ) const noexcept { storage_.flush_blocking( beginning, size ); }
 
 private:
     PSI_WARNING_DISABLE_PUSH()

@@ -149,7 +149,7 @@ void flush_blocking( mapped_span const range ) noexcept
     // sync_file_range, fdatasync...
     BOOST_VERIFY( ::msync( range.data(), range.size(), MS_SYNC | MS_INVALIDATE ) == 0 );
 }
-void flush_blocking( mapped_span const range, file_handle::reference ) noexcept { flush_blocking( range ); }
+void flush_blocking( mapped_span const range, file_handle::const_reference ) noexcept { flush_blocking( range ); }
 
 //------------------------------------------------------------------------------
 } // psi::vm

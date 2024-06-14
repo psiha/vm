@@ -20,7 +20,7 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
-void flush_blocking( mapped_span range, file_handle::reference source_file ) noexcept;
+void flush_blocking( mapped_span range, file_handle::const_reference source_file ) noexcept;
 #ifndef _WIN32
 // No way to perform this on Windows through only the view itself
 // https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-flushviewoffile
