@@ -132,7 +132,8 @@ void discard( mapped_span const range ) noexcept
 }
 
 namespace {
-    void call_msync( mapped_span const range, int const flags ) __attribute__(( noexcept )) {
+    __attribute__(( nothrow ))
+    void call_msync( mapped_span const range, int const flags ) {
         BOOST_ASSERT( is_aligned( range.data(), page_size ) );
         // EINVAL on OSX for empty range
         // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/msync.2.html
