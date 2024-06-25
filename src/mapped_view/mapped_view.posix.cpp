@@ -135,6 +135,8 @@ namespace {
     __attribute__(( nothrow ))
     void call_msync( mapped_span const range, int const flags ) {
         BOOST_ASSERT( is_aligned( range.data(), page_size ) );
+        // It is OK (efficiency-wise) to call msync on the entire file regardless of how small the change is
+        // https://stackoverflow.com/questions/68832263/does-msync-performance-depend-on-the-size-of-the-provided-range
         // EINVAL on OSX for empty range
         // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/msync.2.html
         BOOST_VERIFY( ::msync( range.data(), range.size(), flags ) == 0 || range.empty() );
