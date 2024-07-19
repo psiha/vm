@@ -10,17 +10,16 @@ project( vm )
 
 file(
   DOWNLOAD
-  https://github.com/cpm-cmake/CPM.cmake/releases/download/v0.38.3/CPM.cmake
-  ${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake
-  EXPECTED_HASH SHA256=cc155ce02e7945e7b8967ddfaff0b050e958a723ef7aad3766d368940cb15494
+  https://github.com/cpm-cmake/CPM.cmake/releases/latest/download/get_cpm.cmake
+  ${CMAKE_CURRENT_BINARY_DIR}/cmake/get_cpm.cmake
 )
-set( CPM_SOURCE_CACHE "${CMAKE_CURRENT_BINARY_DIR}/deps" )    # Using this ensures shallow clones
-include( ${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake )
+set( CPM_SOURCE_CACHE "${CMAKE_CURRENT_BINARY_DIR}/deps" )
+include( ${CMAKE_CURRENT_BINARY_DIR}/cmake/get_cpm.cmake )
 
 
 # Add packages
 
-set( boost_ver boost-1.84.0 )
+set( boost_ver boost-1.85.0 )
 CPMAddPackage( "gh:boostorg/static_assert#${boost_ver}"   ) # Boost::core dependency
 CPMAddPackage( "gh:boostorg/throw_exception#${boost_ver}" ) # Boost::core dependency
 CPMAddPackage( "gh:boostorg/config#${boost_ver}"          ) # Boost::core dependency
