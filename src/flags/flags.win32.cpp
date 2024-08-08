@@ -116,7 +116,7 @@ namespace detail
         return make_sd( &ea, 1 );
     }
 
-    BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L3, BOOST_RESTRICTED_FUNCTION_RETURN )
+    BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_RETURN )
     dynamic_sd const * BOOST_CC_REG make_sd( scope_privileges const permissions )
     {
         EXPLICIT_ACCESSW entries[ permissions.size() ];

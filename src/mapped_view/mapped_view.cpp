@@ -31,7 +31,7 @@ map
 ) noexcept;
 
 BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
-void BOOST_CC_REG unmap( mapped_span view ) noexcept;
+void unmap( mapped_span view ) noexcept;
 
 void unmap_partial( mapped_span range ) noexcept;
 //------------------------------------------------------------------------------

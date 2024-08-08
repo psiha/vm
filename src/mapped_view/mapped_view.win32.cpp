@@ -100,7 +100,7 @@ namespace
 } // anonymous namespace
 
 BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
-void BOOST_CC_REG unmap( mapped_span const view ) noexcept
+void unmap( mapped_span const view ) noexcept
 {
     BOOST_ASSERT_MSG
     (   // greater-or-equal because of the inability of Windows to do a proper unmap_partial
