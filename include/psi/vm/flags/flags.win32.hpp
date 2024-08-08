@@ -83,7 +83,7 @@ namespace detail
         std::uint8_t release() const noexcept { return --const_cast<std::uint8_t &>( member ); }
     }; // struct dynamic_sd
 
-    BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L3, BOOST_RESTRICTED_FUNCTION_RETURN )
+    BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_RETURN )
     dynamic_sd const * BOOST_CC_REG make_sd( scope_privileges );
 } // namespace detail
 

@@ -45,7 +45,7 @@ struct handle_traits
 
     static native_t constexpr invalid_value = -1;
 
-    static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_RESTRICTED_FUNCTION_L1, BOOST_EXCEPTIONLESS )
+    static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
     void close( native_t const native_handle ) noexcept
     {
         BOOST_VERIFY
@@ -58,7 +58,7 @@ struct handle_traits
         );
     }
 
-    static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_RESTRICTED_FUNCTION_L1, BOOST_EXCEPTIONLESS )
+    static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
     native_t copy( native_t native_handle ); // TODO
 }; // handle_traits
 
