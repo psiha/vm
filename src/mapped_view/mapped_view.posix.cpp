@@ -106,7 +106,7 @@ map
 }
 
 BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
-void BOOST_CC_REG unmap( mapped_span const view ) noexcept
+void unmap( mapped_span const view ) noexcept
 {
     [[ maybe_unused ]] auto munmap_result{ ::munmap( view.data(), view.size() ) };
 #ifndef __EMSCRIPTEN__

@@ -13,26 +13,18 @@
 /// For more information, see http://www.boost.org
 ///
 ////////////////////////////////////////////////////////////////////////////////
-/// http://undocumented.ntinternals.net
-/// https://www.i.u-tokyo.ac.jp/edu/training/ss/lecture/new-documents/Lectures/02-VirtualMemory/VirtualMemory.pdf
-/// http://ultradefrag.sourceforge.net/doc/man/Windows%20NT(2000)%20Native%20API%20Reference.pdf
-/// https://webdiis.unizar.es/~spd/pub/windows/ntdll.htm
-/// https://technet.microsoft.com/en-us/sysinternals/bb896657.aspx WinObj
-/// https://www.osronline.com/article.cfm?id=91
-/// http://downloads.securityfocus.com/vulnerabilities/exploits/20940-Ivan.c
-////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 #pragma once
 
-#include <boost/assert.hpp>
 #include <boost/config_ex.hpp>
 
 #ifndef _WIN32_WINNT
 #   define _WIN32_WINNT 0x0A00 // _WIN32_WINNT_WIN10
 #endif // _WIN32_WINNT
+#include <windows.h>
 #include <winternl.h>
 
-#pragma comment( lib, "ntdll.lib" )
+#include <cstdint>
 //------------------------------------------------------------------------------
 namespace psi::vm::nt
 {
@@ -50,18 +42,8 @@ inline auto const current_process{ reinterpret_cast<HANDLE>( std::intptr_t{ -1 }
 
 namespace detail
 {
-    inline HMODULE const ntdll{ ::GetModuleHandleW( L"ntdll.dll" ) };
-
-    inline BOOST_ATTRIBUTES( BOOST_COLD, BOOST_RESTRICTED_FUNCTION_L3, BOOST_RESTRICTED_FUNCTION_RETURN )
-    ::PROC BOOST_CC_REG get_nt_proc( char const * const proc_name ) noexcept
-    {
-        BOOST_ASSERT( current_process == ::GetCurrentProcess() ); // for lack of a better place for this sanity check
-
-        BOOST_ASSERT( ntdll );
-        auto const result{ ::GetProcAddress( ntdll, proc_name ) };
-        BOOST_ASSERT( result );
-        return result;
-    }
+    BOOST_ATTRIBUTES( BOOST_COLD, BOOST_RESTRICTED_FUNCTION_L3, BOOST_RESTRICTED_FUNCTION_RETURN )
+    ::PROC get_nt_proc( char const * proc_name ) noexcept;
 
     template <typename ProcPtr>
     ProcPtr get_nt_proc( char const * const proc_name )
