@@ -31,11 +31,13 @@ namespace psi::vm::nt
 
 namespace detail
 {
-#ifdef __clang__ // initialization order fiasco wrkrnd
+    // initialization order fiasco wrkrnds
+#if defined( __clang__ ) || defined( __GNUC__ ) // clang-cl does not define __GNUC__
     HMODULE ntdll;
     [[ gnu::constructor( 101 ) ]]
     void init_ntdll_handle() noexcept { ntdll = ::GetModuleHandleW( L"ntdll.dll" ); }
 #else
+    #pragma init_seg( lib )
     HMODULE const ntdll{ ::GetModuleHandleW( L"ntdll.dll" ) };
 #endif
 
