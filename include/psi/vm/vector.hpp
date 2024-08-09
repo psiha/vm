@@ -25,8 +25,9 @@
 #include <algorithm>
 #include <array>
 #include <concepts>
-#include <cstdint>
 #include <climits>
+#include <cstdint>
+#include <cstring>
 #include <memory>
 #include <span>
 #include <type_traits>
@@ -1100,7 +1101,14 @@ public:
         storage_.expand( to_byte_sz( target_size ) );
         if constexpr ( std::is_trivially_constructible_v<value_type> )
         {
-            std::memset( data() + current_size, 0, target_size - current_size * sizeof( T ) );
+            [[ maybe_unused ]] auto const newSpaceBegin{ reinterpret_cast<unsigned char const *>( data() + current_size ) };
+            [[ maybe_unused ]] auto const newSpaceSize { ( target_size - current_size ) * sizeof( value_type ) };
+            //std::memset( newSpaceBegin, 0, newSpaceSize );
+            BOOST_ASSERT_MSG
+            (
+                *std::max_element( newSpaceBegin, newSpaceBegin + newSpaceSize ) == 0,
+                "Expecting files to be zero-extended"
+            );
         }
         else
         {
