@@ -58,6 +58,10 @@ namespace detail
         ///                                   (10.11.2015.) (Domagoj Saric)
         ::key_t sem_key;
         {
+#       ifdef __clang__
+#           pragma clang diagnostic push
+#           pragma clang diagnostic ignored "-Wvla-cxx-extension"
+#       endif
             /// \note Allow a prexisting key file regardless of the specified
             /// creation_disposition to handle zombie files from killed/crashed
             /// processes. The opening/creation of the semaphore object should
@@ -77,6 +81,9 @@ namespace detail
                 return;
             /// \todo Add key file cleanup!!
             ///                               (17.11.2015.) (Domagoj Saric)
+#       ifdef __clang__
+#           pragma clang diagnostic pop
+#       endif
         }
 
         // no need to cleanup the semaphore or shared memory if orphan - simply reuse - but report as created, instead of opened, for orphans

@@ -54,6 +54,11 @@ namespace posix
 {
 //------------------------------------------------------------------------------
 
+#ifdef __clang__
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wvla-cxx-extension"
+#endif
+
 template <class Handle> struct is_resizable;
 
 #ifndef __ANDROID__
@@ -347,6 +352,10 @@ namespace detail
 
 
 mapping create_mapping( handle::reference, mapping ) noexcept;
+
+#ifdef __clang__
+#    pragma clang diagnostic pop
+#endif
 
 //------------------------------------------------------------------------------
 } // namespace posix
