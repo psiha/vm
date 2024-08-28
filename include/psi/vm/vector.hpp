@@ -1070,12 +1070,14 @@ public:
     // Extensions
     ///////////////////////////////////////////////////////////////////////////
 
-    auto map_file  ( auto      const file, flags::named_object_construction_policy const policy ) noexcept { return storage_.map_file  ( file, policy ); }
-    auto map_memory( size_type const size                                                       ) noexcept { return storage_.map_memory( size         ); }
+    auto map_file  ( auto      const file, flags::named_object_construction_policy const policy ) noexcept { BOOST_ASSERT( !has_attached_storage() ); return storage_.map_file  ( file, policy ); }
+    auto map_memory( size_type const size                                                       ) noexcept { BOOST_ASSERT( !has_attached_storage() ); return storage_.map_memory( size         ); }
+
+    bool has_attached_storage() const noexcept { return static_cast<bool>( storage_ ); }
+
+    bool file_backed() const noexcept { return storage_.file_backed(); }
 
     void close() noexcept { storage_.close(); }
-
-    bool is_open() const noexcept { return static_cast<bool>( storage_ ); }
 
     //! <b>Effects</b>: If n is less than or equal to capacity(), this call has no
     //!   effect. Otherwise, it is a request for allocation of additional memory
@@ -1103,12 +1105,15 @@ public:
         {
             [[ maybe_unused ]] auto const newSpaceBegin{ reinterpret_cast<unsigned char const *>( data() + current_size ) };
             [[ maybe_unused ]] auto const newSpaceSize { ( target_size - current_size ) * sizeof( value_type ) };
-            //std::memset( newSpaceBegin, 0, newSpaceSize );
+#       if 0
+            std::memset( newSpaceBegin, 0, newSpaceSize );
+#       else
             BOOST_ASSERT_MSG
             (
                 *std::max_element( newSpaceBegin, newSpaceBegin + newSpaceSize ) == 0,
                 "Expecting files to be zero-extended"
             );
+#       endif
         }
         else
         {
