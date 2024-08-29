@@ -126,7 +126,7 @@ namespace detail
                     nullptr, // OBJECT_ATTRIBUTES
                     &maximum_size,
                     flags,
-                    SEC_RESERVE,
+                    SEC_COMMIT,
                     file
                 )
             };
@@ -142,8 +142,11 @@ namespace detail
         }
 
         BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_FORCEINLINE
-        mapping BOOST_CC_REG do_map( file_handle::reference const file, flags::mapping const flags, std::uint64_t const maximum_size, auto const * __restrict const name ) noexcept
+        mapping BOOST_CC_REG do_map( file_handle::reference file, flags::mapping const flags, std::uint64_t const maximum_size, auto const * __restrict const name ) noexcept
         {
+            if ( file == file_handle::invalid_value )
+                file.value = INVALID_HANDLE_VALUE; // CreateFileMapping wants this instead of null
+
             ::SECURITY_ATTRIBUTES sa;
             auto const p_security_attributes( flags::detail::make_sa_ptr( sa, flags.system_access.p_sd, reinterpret_cast<bool const &>/*static_cast<bool>*/( flags.child_access ) ) );
             auto const max_sz               ( reinterpret_cast<ULARGE_INTEGER const &>( maximum_size ) );

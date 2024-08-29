@@ -34,11 +34,15 @@ struct handle_traits
 {
     using native_t = boost::winapi::HANDLE_;
 
-    inline static native_t const invalid_value{ boost::winapi::invalid_handle_value }; //...mrmlj...or nullptr eg. for CreateFileMapping
+    inline static native_t const invalid_value{ nullptr }; // Win32 is inconsistent: some parts use null while other parts use INVALID_HANDLE_VALUE
 
     static BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_RESTRICTED_FUNCTION_L1, BOOST_EXCEPTIONLESS )
     void close( native_t const native_handle )
     {
+#   if defined( __clang__ ) || defined( __GNUC__ )
+        if ( __builtin_constant_p( native_handle ) && ( native_handle == nullptr || native_handle == boost::winapi::INVALID_HANDLE_VALUE_ ) )
+            return;
+#   endif
         BOOST_VERIFY
         (
             ( boost::winapi::CloseHandle( native_handle ) != false ) ||
