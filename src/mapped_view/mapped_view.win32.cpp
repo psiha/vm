@@ -57,9 +57,15 @@ map
             )
         )
     };
+    return
+    {
+        view_start,
+        view_start ? desired_size : 0
+    };
 #else
+    // TODO flags parameter
     LARGE_INTEGER nt_offset{ .QuadPart = static_cast<LONGLONG>( offset ) };
-    auto sz{ desired_size };
+    auto   sz{ desired_size };
     void * view_startv{ nullptr };
     auto const success
     {
@@ -77,15 +83,19 @@ map
             PAGE_READWRITE
         )
     };
-    BOOST_ASSERT( sz >= desired_size );
-    auto const view_start{ static_cast<std::byte *>( view_startv ) };
-#endif
-
-    return
+    if ( success == nt::STATUS_SUCCESS ) [[ likely ]]
     {
-        view_start,
-        view_start ? desired_size : 0
-    };
+        BOOST_ASSUME( sz          >= desired_size );
+        BOOST_ASSUME( view_startv != nullptr      );
+        return { static_cast<std::byte *>( view_startv ), sz };
+    }
+    else
+    {
+        BOOST_ASSUME( sz          == 0       );
+        BOOST_ASSUME( view_startv == nullptr );
+        return {};
+    }
+#endif
 }
 
 namespace

@@ -230,7 +230,7 @@ public:
         if constexpr ( !headerless )
         {
             auto & stored_size{ this->stored_size() };
-            BOOST_ASSERT_MSG( stored_size == 0, "Got garbage in an anonymous mapping!?" );
+            BOOST_ASSUME( stored_size == 0 ); // Got garbage in an anonymous mapping!?
             stored_size = size;
         }
         return err::success;

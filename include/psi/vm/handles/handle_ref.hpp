@@ -50,7 +50,7 @@ struct handle_ref
 
     [[ gnu::pure ]] constexpr bool operator==( native_handle_t const other ) const noexcept { return value == other; }
 
-    native_handle_t const value;
+    native_handle_t value;
 }; // struct handle_ref
 
 #ifdef _MSC_VER
