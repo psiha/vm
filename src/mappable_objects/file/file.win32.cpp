@@ -50,7 +50,7 @@ namespace detail
                     file_name, flags.ap.object_access.privileges, default_unix_shared_semantics, const_cast<LPSECURITY_ATTRIBUTES>( p_security_attributes ), static_cast<DWORD>( flags.creation_disposition ), flags.flags_and_attributes, nullptr
                 )
             );
-            BOOST_ASSERT( ( handle == handle_traits::invalid_value ) || ( ::GetLastError() == NO_ERROR ) || ( ::GetLastError() == ERROR_ALREADY_EXISTS ) );
+            BOOST_ASSERT( ( handle == INVALID_HANDLE_VALUE ) || ( ::GetLastError() == NO_ERROR ) || ( ::GetLastError() == ERROR_ALREADY_EXISTS ) );
 
             return handle;
         }
