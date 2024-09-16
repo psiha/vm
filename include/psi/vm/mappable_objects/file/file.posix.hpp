@@ -74,7 +74,14 @@ mapping BOOST_CC_REG create_mapping
 {
     // Apple guidelines http://developer.apple.com/library/mac/#documentation/Performance/Conceptual/FileSystem/Articles/MappingFiles.html
     (void)child_access; //...mrmlj...figure out what to do with this...
-    return { std::forward<Handle>( file ), flags::viewing::create( object_access, share_mode ), size };
+    auto view_flags{ flags::viewing::create( object_access, share_mode ) };
+    if ( !file )
+    {
+        // emulate the Windows interface: null file signifies that the user
+        // wants a temporary/non-persisted 'anonymous'/pagefile-backed mapping
+        view_flags.flags |= MAP_ANONYMOUS;
+    }
+    return { std::forward<Handle>( file ), view_flags, size };
 }
 #endif // POSIX impl level
 
