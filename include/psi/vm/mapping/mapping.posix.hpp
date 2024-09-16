@@ -59,7 +59,7 @@ struct [[ clang::trivial_abi ]] mapping
         ) == 0;
     }
 
-    bool is_file_based() const noexcept { return this->get() != posix::handle::invalid_value; }
+    bool is_file_based() const noexcept { return posix::handle::operator bool(); }
 
     posix::handle::      reference underlying_file()       noexcept { BOOST_ASSERT( is_file_based() ); return *this; }
     posix::handle::const_reference underlying_file() const noexcept { BOOST_ASSERT( is_file_based() ); return *this; }
@@ -73,6 +73,9 @@ struct [[ clang::trivial_abi ]] mapping
         source.maximum_size       = {};
         return *this;
     }
+
+    // override Handle operator bool to allow for anonymous mappings
+    explicit operator bool() const noexcept { return posix::handle::operator bool() || ( view_mapping_flags.flags & MAP_ANONYMOUS ); }
 
     flags::viewing view_mapping_flags{};
     std  ::size_t  maximum_size      {};

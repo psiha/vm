@@ -212,12 +212,12 @@ mapping BOOST_CC_REG create_mapping
     std  ::size_t                              const size
 ) noexcept
 {
-    auto const create_mapping_flasgs{ flags::detail::object_access_to_page_access( object_access, share_mode ) };
+    auto const create_mapping_flags{ flags::detail::object_access_to_page_access( object_access, share_mode ) };
     auto const mapping_handle
     (
-        detail::create_mapping_impl::map_file( file, create_mapping_flasgs, size )
+        detail::create_mapping_impl::map_file( file, create_mapping_flags, size )
     );
-    return { mapping_handle, flags::viewing::create( object_access, share_mode ), create_mapping_flasgs, std::move( file ) };
+    return { mapping_handle, flags::viewing::create( object_access, share_mode ), create_mapping_flags, std::move( file ) };
 }
 
 //------------------------------------------------------------------------------
