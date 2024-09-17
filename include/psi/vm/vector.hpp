@@ -68,7 +68,7 @@ public:
     void flush_async   ( std::size_t const beginning, std::size_t const size ) const noexcept { vm::flush_async   ( mapped_span({ view_.subspan( beginning, size ) }) ); }
     void flush_blocking( std::size_t const beginning, std::size_t const size ) const noexcept { vm::flush_blocking( mapped_span({ view_.subspan( beginning, size ) }), mapping_.underlying_file() ); }
 
-    bool file_backed() const noexcept { return mapping_.get() == handle::invalid_value; }
+    bool file_backed() const noexcept { return mapping_.is_file_based(); }
 
     explicit operator bool() const noexcept { return static_cast<bool>( mapping_ ); }
 
@@ -163,9 +163,10 @@ private:
         if ( !mapping_ )
             return error{};
 
-        view_ = mapped_view::map( mapping_, 0, mapping_size );
-        if ( !view_.data() && ( mapping::supports_zero_sized_views || mapping_size != 0 ) )
-            return error{};
+        auto view{ mapped_view::map( mapping_, 0, mapping_size ).as_result_or_error() };
+        if ( !view )
+            return view.error();
+        view_ = *std::move( view );
 
         return std::size_t{ mapping_size };
     }
@@ -1071,7 +1072,7 @@ public:
     ///////////////////////////////////////////////////////////////////////////
 
     auto map_file  ( auto      const file, flags::named_object_construction_policy const policy ) noexcept { BOOST_ASSERT( !has_attached_storage() ); return storage_.map_file  ( file, policy ); }
-    auto map_memory( size_type const size                                                       ) noexcept { BOOST_ASSERT( !has_attached_storage() ); return storage_.map_memory( size         ); }
+    auto map_memory( size_type const size                                                       ) noexcept { BOOST_ASSERT( !has_attached_storage() ); return storage_.map_memory( to_byte_sz( size ) ); }
 
     bool has_attached_storage() const noexcept { return static_cast<bool>( storage_ ); }
 
@@ -1159,9 +1160,9 @@ public:
 private:
     PSI_WARNING_DISABLE_PUSH()
     PSI_WARNING_GCC_OR_CLANG_DISABLE( -Wsign-conversion )
-    static T *  to_t_ptr  ( mapped_view::value_type * const ptr     ) noexcept {                                             return reinterpret_cast< T * >( ptr ); }
-    static sz_t to_t_sz   ( auto                      const byte_sz ) noexcept { BOOST_ASSUME( byte_sz % sizeof( T ) == 0 ); return static_cast< sz_t >( byte_sz / sizeof( T ) ); }
-    static sz_t to_byte_sz( auto                      const sz      ) noexcept {                                             return static_cast< sz_t >(      sz * sizeof( T ) ); }
+    static T *  to_t_ptr  ( mapped_view::value_type * const ptr     ) noexcept {                                             return reinterpret_cast<T *>( ptr ); }
+    static sz_t to_t_sz   ( auto                      const byte_sz ) noexcept { BOOST_ASSUME( byte_sz % sizeof( T ) == 0 ); return static_cast<sz_t>( byte_sz / sizeof( T ) ); }
+    static sz_t to_byte_sz( auto                      const sz      ) noexcept {                                             return static_cast<sz_t>(      sz * sizeof( T ) ); }
     PSI_WARNING_DISABLE_POP()
 
     void shrink_storage_to( size_type const target_size ) noexcept

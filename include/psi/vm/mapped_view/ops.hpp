@@ -28,7 +28,7 @@ void flush_blocking( mapped_span range ) noexcept;
 #endif
 void flush_async   ( mapped_span range ) noexcept;
 
-// these below out to go/get special versions in allocation.hpp
+// these below ought to go/get special versions in allocation.hpp
 void discard( mapped_span range ) noexcept;
 
 // TODO prefetch/WILL_NEED

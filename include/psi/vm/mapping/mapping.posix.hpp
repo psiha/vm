@@ -40,7 +40,6 @@ struct [[ clang::trivial_abi ]] mapping
 
     static bool constexpr create_mapping_can_set_source_size = false;
     static bool constexpr supports_zero_sized_mappings       = true ; // simply because there is actually no intermediate mapping object
-    static bool constexpr supports_zero_sized_views          = false;
     static bool constexpr views_downsizeable                 = true ;
 
     constexpr mapping(            ) noexcept = default;

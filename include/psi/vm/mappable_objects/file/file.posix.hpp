@@ -62,27 +62,14 @@ std::uint64_t                     get_size( file_handle::const_reference        
 
 
 #if __has_include( <unistd.h> )
-template <typename Handle>
-mapping BOOST_CC_REG create_mapping
+mapping create_mapping
 (
-    Handle                                  &&       file,
-    flags::access_privileges::object           const object_access,
-    flags::access_privileges::child_process    const child_access,
-    flags::mapping          ::share_mode       const share_mode,
-    std::size_t                                const size
-) noexcept
-{
-    // Apple guidelines http://developer.apple.com/library/mac/#documentation/Performance/Conceptual/FileSystem/Articles/MappingFiles.html
-    (void)child_access; //...mrmlj...figure out what to do with this...
-    auto view_flags{ flags::viewing::create( object_access, share_mode ) };
-    if ( !file )
-    {
-        // emulate the Windows interface: null file signifies that the user
-        // wants a temporary/non-persisted 'anonymous'/pagefile-backed mapping
-        view_flags.flags |= MAP_ANONYMOUS;
-    }
-    return { std::forward<Handle>( file ), view_flags, size };
-}
+    handle                                  && file,
+    flags::access_privileges::object           object_access,
+    flags::access_privileges::child_process    child_access,
+    flags::mapping          ::share_mode       share_mode,
+    std::size_t                                size
+) noexcept;
 #endif // POSIX impl level
 
 //------------------------------------------------------------------------------

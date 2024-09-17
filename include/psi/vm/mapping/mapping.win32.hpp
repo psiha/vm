@@ -52,7 +52,6 @@ struct [[ clang::trivial_abi ]] mapping
 
     static bool constexpr create_mapping_can_set_source_size = true ;
     static bool constexpr supports_zero_sized_mappings       = false; // Windows does not support zero sized mappings
-    static bool constexpr supports_zero_sized_views          = false;
     static bool constexpr views_downsizeable                 = false;
 
     constexpr mapping(            ) noexcept = default;

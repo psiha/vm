@@ -29,9 +29,6 @@ inline namespace posix
 
 namespace
 {
-#if !defined( MAP_UNINITIALIZED )
-    auto constexpr MAP_UNINITIALIZED{ 0 };
-#endif // MAP_UNINITIALIZED
 #if !defined( MAP_ALIGNED_SUPER )
     auto constexpr MAP_ALIGNED_SUPER{ 0 }; // FreeBSD specific hint for large pages https://man.freebsd.org/cgi/man.cgi?sektion=2&query=mmap
 #endif // MAP_ALIGNED_SUPER
@@ -41,7 +38,8 @@ BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
 void * mmap( void * const target_address, std::size_t const size, int const protection, int const flags, int const file_handle, std::uint64_t const offset ) noexcept
 {
     BOOST_ASSUME( is_aligned( target_address, reserve_granularity )                      );
-    BOOST_ASSUME( is_aligned( size          , reserve_granularity ) || file_handle != -1 );
+  //BOOST_ASSUME( is_aligned( size          , reserve_granularity ) || file_handle != -1 ); // Linux allows seems to allow nonaligned size even for anonymous mappings
+    BOOST_ASSUME( is_aligned( offset        , page_size           )                      ); // BSD does not impose this requirement but Linux and POSIX in general do
 
     auto const actual_address{ ::mmap( target_address, size, protection,
 #   if defined( __linux__ ) && !defined( __ANDROID__ ) && 0 // investigate whether always wired
@@ -50,9 +48,9 @@ void * mmap( void * const target_address, std::size_t const size, int const prot
 #   if defined( MAP_NOSYNC ) && 0 // TODO reconsider
         MAP_NOSYNC |
 #   endif
-        MAP_UNINITIALIZED | MAP_ALIGNED_SUPER | flags,
+        MAP_ALIGNED_SUPER | flags, // reconsider unconditional ALIGNED_SUPER: can cause mmap to fail https://man.freebsd.org/cgi/man.cgi?sektion=2&query=mmap
         file_handle,
-        static_cast< off_t >( offset )
+        static_cast<off_t>( offset )
     ) };
     auto const succeeded{ actual_address != MAP_FAILED };
     if ( succeeded ) [[ likely ]]
@@ -70,7 +68,7 @@ void * mmap( void * const target_address, std::size_t const size, int const prot
 //------------------------------------------------------------------------------
 
 BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
-mapped_span BOOST_CC_REG
+mapped_span
 map
 (
     handle::reference const source_mapping,

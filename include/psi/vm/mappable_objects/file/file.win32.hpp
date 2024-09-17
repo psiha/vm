@@ -32,10 +32,10 @@ template <typename> struct is_resizable;
 template <        > struct is_resizable<file_handle> : std::true_type {};
 
 BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
-file_handle BOOST_CC_REG create_file( char    const * file_name, flags::opening ) noexcept;
-file_handle BOOST_CC_REG create_file( wchar_t const * file_name, flags::opening ) noexcept;
-bool                     delete_file( char    const * file_name                 ) noexcept;
-bool                     delete_file( wchar_t const * file_name                 ) noexcept;
+file_handle create_file( char    const * file_name, flags::opening ) noexcept;
+file_handle create_file( wchar_t const * file_name, flags::opening ) noexcept;
+bool        delete_file( char    const * file_name                 ) noexcept;
+bool        delete_file( wchar_t const * file_name                 ) noexcept;
 
 
 err::fallible_result<void, error> set_size( file_handle::reference, std::uint64_t desired_size ) noexcept;
@@ -43,7 +43,7 @@ std::uint64_t                     get_size( file_handle::reference              
 
 // https://msdn.microsoft.com/en-us/library/ms810613.aspx Managing Memory-Mapped Files
 
-mapping BOOST_CC_REG create_mapping
+mapping create_mapping
 (
     file_handle &&,
     flags::access_privileges::object,
