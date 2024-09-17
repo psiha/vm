@@ -16,6 +16,10 @@
 //------------------------------------------------------------------------------
 #include <psi/vm/mappable_objects/file/file.hpp>
 
+#if __has_include( <unistd.h> )
+#include <psi/vm/align.hpp>
+#include <psi/vm/allocation.hpp> // for reserve_granularity
+#endif
 #include <psi/vm/detail/posix.hpp>
 #include <psi/vm/flags/opening.posix.hpp>
 #include <psi/vm/mapping/mapping.posix.hpp>
@@ -79,11 +83,45 @@ std::uint64_t get_size( file_handle::const_reference const file_handle ) noexcep
 #endif
     struct stat file_info{ .st_size = 0 }; // ensure zero is returned for invalid handles (in unchecked/release builds)
     BOOST_VERIFY( ( ::fstat( file_handle.value, &file_info ) == 0 ) || ( file_handle == handle_traits::invalid_value ) );
-    return static_cast< std::uint64_t >( file_info.st_size );
+    return static_cast<std::uint64_t>( file_info.st_size );
 #ifdef __clang__
 #   pragma clang diagnostic pop
 #endif
 }
+
+#if __has_include( <unistd.h> )
+mapping create_mapping
+(
+    handle                                  &&       file,
+    flags::access_privileges::object           const object_access,
+    flags::access_privileges::child_process    const child_access,
+    flags::mapping          ::share_mode       const share_mode,
+    std::size_t                                      size
+) noexcept
+{
+    // Apple guidelines http://developer.apple.com/library/mac/#documentation/Performance/Conceptual/FileSystem/Articles/MappingFiles.html
+    (void)child_access; //...mrmlj...figure out what to do with this...
+    auto view_flags{ flags::viewing::create( object_access, share_mode ) };
+    if ( !file )
+    {
+        // emulate the Windows interface: null file signifies that the user
+        // wants a temporary/non-persisted 'anonymous'/pagefile-backed mapping
+        // TODO a separate function for this purpose
+#    if defined( MAP_SHARED_VALIDATE )
+        // mmap fails with EINVAL (under WSL kernel 5.15 w/ ArchLinux) when
+        // MAP_SHARED_VALIDATE is combined with MAP_ANONYMOUS
+        if ( ( std::to_underlying( flags::mapping::share_mode::shared ) == MAP_SHARED_VALIDATE ) && ( view_flags.flags & MAP_SHARED_VALIDATE ) )
+        {
+            view_flags.flags &= ~MAP_SHARED_VALIDATE;
+            view_flags.flags |=  MAP_SHARED;
+        }
+#    endif
+        view_flags.flags |= MAP_ANONYMOUS;
+        size              = align_up( size, reserve_granularity );
+    }
+    return { std::move( file ), view_flags, size };
+}
+#endif // POSIX impl level
 
 //------------------------------------------------------------------------------
 } // posix
