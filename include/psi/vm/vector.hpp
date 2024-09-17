@@ -68,7 +68,7 @@ public:
     void flush_async   ( std::size_t const beginning, std::size_t const size ) const noexcept { vm::flush_async   ( mapped_span({ view_.subspan( beginning, size ) }) ); }
     void flush_blocking( std::size_t const beginning, std::size_t const size ) const noexcept { vm::flush_blocking( mapped_span({ view_.subspan( beginning, size ) }), mapping_.underlying_file() ); }
 
-    bool file_backed() const noexcept { return mapping_.get() == handle::invalid_value; }
+    bool file_backed() const noexcept { return mapping_.is_file_based(); }
 
     explicit operator bool() const noexcept { return static_cast<bool>( mapping_ ); }
 
