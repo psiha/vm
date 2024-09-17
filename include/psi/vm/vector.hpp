@@ -1072,7 +1072,7 @@ public:
     ///////////////////////////////////////////////////////////////////////////
 
     auto map_file  ( auto      const file, flags::named_object_construction_policy const policy ) noexcept { BOOST_ASSERT( !has_attached_storage() ); return storage_.map_file  ( file, policy ); }
-    auto map_memory( size_type const size                                                       ) noexcept { BOOST_ASSERT( !has_attached_storage() ); return storage_.map_memory( size         ); }
+    auto map_memory( size_type const size                                                       ) noexcept { BOOST_ASSERT( !has_attached_storage() ); return storage_.map_memory( to_byte_sz( size ) ); }
 
     bool has_attached_storage() const noexcept { return static_cast<bool>( storage_ ); }
 
@@ -1160,9 +1160,9 @@ public:
 private:
     PSI_WARNING_DISABLE_PUSH()
     PSI_WARNING_GCC_OR_CLANG_DISABLE( -Wsign-conversion )
-    static T *  to_t_ptr  ( mapped_view::value_type * const ptr     ) noexcept {                                             return reinterpret_cast< T * >( ptr ); }
-    static sz_t to_t_sz   ( auto                      const byte_sz ) noexcept { BOOST_ASSUME( byte_sz % sizeof( T ) == 0 ); return static_cast< sz_t >( byte_sz / sizeof( T ) ); }
-    static sz_t to_byte_sz( auto                      const sz      ) noexcept {                                             return static_cast< sz_t >(      sz * sizeof( T ) ); }
+    static T *  to_t_ptr  ( mapped_view::value_type * const ptr     ) noexcept {                                             return reinterpret_cast<T *>( ptr ); }
+    static sz_t to_t_sz   ( auto                      const byte_sz ) noexcept { BOOST_ASSUME( byte_sz % sizeof( T ) == 0 ); return static_cast<sz_t>( byte_sz / sizeof( T ) ); }
+    static sz_t to_byte_sz( auto                      const sz      ) noexcept {                                             return static_cast<sz_t>(      sz * sizeof( T ) ); }
     PSI_WARNING_DISABLE_POP()
 
     void shrink_storage_to( size_type const target_size ) noexcept
