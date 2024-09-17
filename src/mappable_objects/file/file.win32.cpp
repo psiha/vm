@@ -39,7 +39,7 @@ namespace detail
         static BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_FORCEINLINE HANDLE call_create( wchar_t const * __restrict const file_name, auto const ... args ) { return CreateFileW( file_name, args... ); }
 
         BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_FORCEINLINE
-        static HANDLE BOOST_CC_REG do_create( auto const * __restrict const file_name, flags::opening const & __restrict flags ) noexcept
+        static HANDLE do_create( auto const * __restrict const file_name, flags::opening const & __restrict flags ) noexcept
         {
             ::SECURITY_ATTRIBUTES sa;
             auto const p_security_attributes( flags::detail::make_sa_ptr( sa, flags.ap.system_access.p_sd, reinterpret_cast<bool const &>/*static_cast<bool>*/( flags.ap.child_access ) ) );
@@ -58,8 +58,8 @@ namespace detail
 } // namespace detail
 
 BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
-file_handle BOOST_CC_REG create_file( char    const * const file_name, flags::opening const flags ) noexcept { return file_handle{ detail::create_file::do_create( file_name, flags ) }; }
-file_handle BOOST_CC_REG create_file( wchar_t const * const file_name, flags::opening const flags ) noexcept { return file_handle{ detail::create_file::do_create( file_name, flags ) }; }
+file_handle create_file( char    const * const file_name, flags::opening const flags ) noexcept { return file_handle{ detail::create_file::do_create( file_name, flags ) }; }
+file_handle create_file( wchar_t const * const file_name, flags::opening const flags ) noexcept { return file_handle{ detail::create_file::do_create( file_name, flags ) }; }
 
 
 bool delete_file( char    const * const file_name ) noexcept { return ::DeleteFileA( file_name ) != false; }
@@ -142,7 +142,7 @@ namespace detail
         }
 
         BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_FORCEINLINE
-        mapping BOOST_CC_REG do_map( file_handle::reference file, flags::mapping const flags, std::uint64_t const maximum_size, auto const * __restrict const name ) noexcept
+        mapping do_map( file_handle::reference file, flags::mapping const flags, std::uint64_t const maximum_size, auto const * __restrict const name ) noexcept
         {
             if ( file == file_handle::invalid_value )
                 file.value = INVALID_HANDLE_VALUE; // CreateFileMapping wants this instead of null
@@ -186,13 +186,13 @@ namespace detail
     } // namepsace create_mapping_impl
 } // namespace detail
 
-mapping BOOST_CC_REG create_mapping( file_handle::reference const file, flags::mapping const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
+mapping create_mapping( file_handle::reference const file, flags::mapping const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
 {
     return detail::create_mapping_impl::do_map( file, flags, maximum_size, name );
 }
 
 #if 0
-mapping BOOST_CC_REG create_mapping( handle::reference const file, flags::mapping const flags ) noexcept
+mapping create_mapping( handle::reference const file, flags::mapping const flags ) noexcept
 {
     auto const mapping_handle
     (
@@ -202,7 +202,7 @@ mapping BOOST_CC_REG create_mapping( handle::reference const file, flags::mappin
 }
 #endif
 
-mapping BOOST_CC_REG create_mapping
+mapping create_mapping
 (
     file_handle                             &&       file,
     flags::access_privileges::object           const object_access,

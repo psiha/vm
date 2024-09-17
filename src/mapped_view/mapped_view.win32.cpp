@@ -26,7 +26,7 @@ namespace psi::vm
 //------------------------------------------------------------------------------
 
 BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
-mapped_span BOOST_CC_REG
+mapped_span
 map
 (
     mapping::handle  const source_mapping,

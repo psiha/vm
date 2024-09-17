@@ -21,7 +21,7 @@ namespace psi::vm
 //------------------------------------------------------------------------------
 // implemented in impl cpps
 BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS )
-mapped_span BOOST_CC_REG
+mapped_span
 map
 (
     mapping::handle  source_mapping,
