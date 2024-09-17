@@ -80,8 +80,8 @@ inline std::uint16_t constexpr page_size{ 4 * 1024 };
 static_assert( page_size == PAGE_SIZE );
 #endif
 
-inline std::uint16_t constexpr  commit_granularity{ 4 * 1024 };
-inline std::uint16_t constexpr reserve_granularity{ 4 * 1024 };
+inline std::uint16_t constexpr  commit_granularity{ page_size };
+inline std::uint16_t constexpr reserve_granularity{ page_size };
 
 #endif // platform /////////////////////////////////////////////////////////////
 
