@@ -1185,13 +1185,13 @@ private:
         auto const current_size  { size() };
         auto const new_size      { current_size + n };
         storage_.expand( to_byte_sz( new_size ) );
+        auto const elements_to_move{ static_cast<size_type>( current_size - position_index ) };
         if constexpr ( is_trivially_moveable<T> )
         {
-            std::move( nth( position_index ), nth( position_index + n ), nth( position_index + n ) );
+            std::move( nth( position_index ), nth( position_index + elements_to_move ), nth( position_index + n ) );
         }
         else // future support for generic types
         {
-            auto const elements_to_move                       { static_cast<size_type>( current_size - position_index ) };
             auto const elements_to_move_to_uninitialized_space{ n };
             auto const elements_to_move_to_the_current_end    { static_cast<size_type>( elements_to_move - elements_to_move_to_uninitialized_space ) };
             std::uninitialized_move_n( nth( current_size - elements_to_move_to_uninitialized_space ),                       elements_to_move_to_uninitialized_space, nth( current_size       ) );
