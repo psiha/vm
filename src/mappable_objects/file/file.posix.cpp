@@ -121,6 +121,29 @@ mapping create_mapping
     }
     return { std::move( file ), view_flags, size };
 }
+
+// mapping_posix.cpp (not yet existent file) contents//////////////////////////
+err::fallible_result<void, error> set_size( mapping & mapping, std::size_t const desired_size ) noexcept
+{
+    if ( mapping.is_anonymous() )
+    {
+        mapping.maximum_size = align_up( desired_size, reserve_granularity );
+        return err::success;
+    }
+    auto result{ set_size( mapping.underlying_file(), desired_size ) };
+    if ( std::move( result ) )
+        mapping.maximum_size = align_up( desired_size, reserve_granularity );
+    return result;
+}
+std::size_t get_size( mapping const & mapping ) noexcept
+{
+    if ( mapping.is_anonymous() )
+        return mapping.maximum_size;
+    // TODO update or verify&return mapping.maximum_size?
+    return static_cast<std::size_t>( get_size( mapping.underlying_file() ) );
+}
+///////////////////////////////////////////////////////////////////////////////
+
 #endif // POSIX impl level
 
 //------------------------------------------------------------------------------
