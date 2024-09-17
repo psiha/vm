@@ -60,6 +60,8 @@ struct [[ clang::trivial_abi ]] mapping
 
     bool is_file_based() const noexcept { return posix::handle::operator bool(); }
 
+    bool is_anonymous() const noexcept { return view_mapping_flags.flags & MAP_ANONYMOUS; }
+
     posix::handle::      reference underlying_file()       noexcept { BOOST_ASSERT( is_file_based() ); return *this; }
     posix::handle::const_reference underlying_file() const noexcept { BOOST_ASSERT( is_file_based() ); return *this; }
 
@@ -74,7 +76,7 @@ struct [[ clang::trivial_abi ]] mapping
     }
 
     // override Handle operator bool to allow for anonymous mappings
-    explicit operator bool() const noexcept { return posix::handle::operator bool() || ( view_mapping_flags.flags & MAP_ANONYMOUS ); }
+    explicit operator bool() const noexcept { return posix::handle::operator bool() || is_anonymous(); }
 
     flags::viewing view_mapping_flags{};
     std  ::size_t  maximum_size      {};
@@ -83,6 +85,10 @@ struct [[ clang::trivial_abi ]] mapping
 // fwd declarations for file_handle functions which work for mappings as well ('everything is a file')
 err::fallible_result<void, error> set_size( handle::      reference, std::uint64_t desired_size ) noexcept;
 std::uint64_t                     get_size( handle::const_reference                             ) noexcept;
+
+// (temporary) special overloads to handle anonymous mappings (until a dedicated mapping type sees the light of day)
+err::fallible_result<void, error> set_size( mapping       &, std::size_t desired_size ) noexcept;
+std::size_t                       get_size( mapping const &                           ) noexcept;
 
 //------------------------------------------------------------------------------
 } // namespace posix
