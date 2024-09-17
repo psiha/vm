@@ -90,7 +90,7 @@ public:
     }
 
 public: // Factory methods.
-    static err::fallible_result<basic_mapped_view, error_t> BOOST_CC_REG
+    static err::fallible_result<basic_mapped_view, error_t>
     map
     (
         mapping       &       source_mapping,
@@ -101,7 +101,7 @@ public: // Factory methods.
         return map( source_mapping, source_mapping.view_mapping_flags, offset, desired_size );
     }
 
-    static err::fallible_result<basic_mapped_view, error_t> BOOST_CC_REG
+    static err::fallible_result<basic_mapped_view, error_t>
     map
     (
         mapping        &       source_mapping,

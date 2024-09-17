@@ -39,7 +39,7 @@ void unmap_partial( mapped_span range ) noexcept;
 
 template <bool read_only>
 BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
-err::fallible_result<basic_mapped_view<read_only>, error> BOOST_CC_REG
+err::fallible_result<basic_mapped_view<read_only>, error>
 basic_mapped_view<read_only>::map
 (
     mapping        &       source_mapping,
