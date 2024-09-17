@@ -163,9 +163,10 @@ private:
         if ( !mapping_ )
             return error{};
 
-        view_ = mapped_view::map( mapping_, 0, mapping_size );
-        if ( !view_.data() && ( mapping::supports_zero_sized_views || mapping_size != 0 ) )
-            return error{};
+        auto view{ mapped_view::map( mapping_, 0, mapping_size ).as_result_or_error() };
+        if ( !view )
+            return view.error();
+        view_ = *std::move( view );
 
         return std::size_t{ mapping_size };
     }
