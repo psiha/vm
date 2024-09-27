@@ -4,6 +4,8 @@
 #include <psi/vm/allocation.hpp>
 #include <psi/vm/vector.hpp>
 
+#include <psi/build/disable_warnings.hpp>
+
 #include <boost/assert.hpp>
 #include <boost/config_ex.hpp>
 #include <boost/stl_interfaces/iterator_interface.hpp>
@@ -14,12 +16,25 @@
 #include <cstdint>
 #include <functional>
 #include <iterator>
+#include <std_fix/const_iterator.hpp>
+#include <ranges>
 #include <span>
 #include <utility>
+//------------------------------------------------------------------------------
+#if __cpp_lib_shift < 202202L
+namespace std::ranges
+{
+    auto shift_left ( auto && rng, auto d ) noexcept { return std::shift_left ( rng.begin(), rng.end(), d ); }
+    auto shift_right( auto && rng, auto d ) noexcept { return std::shift_right( rng.begin(), rng.end(), d ); }
+}
+#endif
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
 //------------------------------------------------------------------------------
+
+PSI_WARNING_DISABLE_PUSH()
+PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
 
 namespace detail
 {
@@ -54,8 +69,8 @@ public:
 
     bool has_attached_storage() const noexcept { return nodes_.has_attached_storage(); }
 
-    storage_result map_file  ( auto      const file, flags::named_object_construction_policy const policy ) noexcept { return init_header( nodes_.map_file  ( file, policy              ) ); }
-    storage_result map_memory( size_type const initial_capacity_in_nodes = 0                              ) noexcept { return init_header( nodes_.map_memory( initial_capacity_in_nodes ) ); }
+    storage_result map_file  ( auto          const file, flags::named_object_construction_policy const policy ) noexcept { return init_header( nodes_.map_file  ( file, policy                        ) ); }
+    storage_result map_memory( std::uint32_t const initial_capacity_as_number_of_nodes = 0                    ) noexcept { return init_header( nodes_.map_memory( initial_capacity_as_number_of_nodes ) ); }
 
 protected:
     static constexpr auto node_size{ page_size };
@@ -258,6 +273,8 @@ public:
 
     // should implicitly handle end iterator comparison also (this requires the start_index constructor argument for the construction of end iterators)
     friend constexpr bool operator==( base_random_access_iterator const & left, base_random_access_iterator const & right ) noexcept { return left.index_ == right.index_; }
+
+    auto operator<=>( base_random_access_iterator const & other ) const noexcept { return this->index_ <=> other.index_; }
 }; // class base_random_access_iterator
 
 
@@ -357,13 +374,18 @@ protected: // helpers for split_to_insert
         auto const max{ N::max_values }; // or 'order'
         auto const mid{ max / 2 };
 
+        new_node.num_vals = max - mid;
+
         value_type key_to_propagate;
-        if ( new_insert_pos == 0 ) {
+        if ( new_insert_pos == 0 )
+        {
             umove<&N::keys    >( node, mid    , node.num_vals    , new_node, 0 );
             umove<&N::children>( node, mid + 1, node.num_vals + 1, new_node, 1 );
             children( new_node )[ new_insert_pos ] = key_right_child;
             key_to_propagate = std::move( value );
-        } else {
+        }
+        else
+        {
             key_to_propagate = std::move( node.keys[ mid ] );
 
             umove<&N::keys    >( node, mid + 1, insert_pos    , new_node, 0 );
@@ -376,8 +398,7 @@ protected: // helpers for split_to_insert
             children( new_node )[ new_insert_pos     ] = key_right_child;
         }
 
-        node    .num_vals = mid      ;
-        new_node.num_vals = max - mid;
+        node.num_vals = mid;
 
         return key_to_propagate;
     }
@@ -424,11 +445,11 @@ protected: // helpers for split_to_insert
         umove<&N::keys    >( node, insert_pos    , mid - 1, node, insert_pos + 1 );
         umove<&N::children>( node, insert_pos + 1, mid    , node, insert_pos + 2 );
 
-        keys    ( node )[ insert_pos     ] = value;
-        children( node )[ insert_pos + 1 ] = key_right_child;
-
         node    .num_vals = mid;
         new_node.num_vals = max - mid;
+
+        keys    ( node )[ insert_pos     ] = value;
+        children( node )[ insert_pos + 1 ] = key_right_child;
 
         return key_to_propagate;
     }
@@ -481,7 +502,6 @@ protected: // 'other'
         source.num_vals  = 0;
         target.next      = source.next;
         BOOST_ASSUME( target.num_vals == target.max_values - 1 );
-
         std::ranges::shift_left( keys    ( parent ).subspan( parent_key_idx   ), 1 );
         std::ranges::shift_left( children( parent ).subspan( parent_child_idx ), 1 );
         BOOST_ASSUME( parent.num_vals );
@@ -744,13 +764,15 @@ public:
 
 private:
     [[ gnu::pure, gnu::hot, clang::preserve_most, gnu::noinline ]]
-    auto find( Key const keys[], node_size_type const num_vals, key_const_arg value ) const noexcept {
+    auto find( Key const keys[], node_size_type const num_vals, key_const_arg value ) const noexcept
+    {
         BOOST_ASSUME( num_vals > 0 );
-        auto const posIter { std::lower_bound( &keys[ 0 ], &keys[ num_vals ], value, comp() ) };
-        auto const posIndex{ std::distance( &keys[ 0 ], posIter ) };
-        return static_cast<node_size_type>( posIndex );
+        auto const pos_iter{ std::lower_bound( &keys[ 0 ], &keys[ num_vals ], value, comp() ) };
+        auto const pos_idx { std::distance( &keys[ 0 ], pos_iter ) };
+        return static_cast<node_size_type>( pos_idx );
     }
-    auto find( auto const & node, key_const_arg value ) const noexcept {
+    auto find( auto const & node, key_const_arg value ) const noexcept
+    {
         return find( node.keys, node.num_vals, value );
     }
 
@@ -758,8 +780,8 @@ private:
     void split_to_insert( N * p_node, node_size_type const insert_pos, key_const_arg value, node_slot const key_right_child ) {
         verify( *p_node );
 
-        auto const max{ N::max_values }; // or 'order'
-        auto const mid{ max / 2 };
+        node_size_type const max{ N::max_values }; // or 'order'
+        node_size_type const mid{ max / 2 };
 
         auto const node_slot{ slot_of( *p_node ) };
         auto * p_new_node{ &bptree_base::new_node<N>() };
@@ -778,8 +800,8 @@ private:
             p_node    ->next = new_slot;
         }
 
-        auto const new_insert_pos         { insert_pos - mid  };
-        auto const insertion_into_new_node{ insert_pos >= mid };
+        node_size_type const new_insert_pos         ( insert_pos - mid  );
+        bool           const insertion_into_new_node{ insert_pos >= mid };
         Key key_to_propagate{ insertion_into_new_node
             ? base::insert_into_new_node     ( *p_node, *p_new_node, value, insert_pos, new_insert_pos, key_right_child )
             : base::insert_into_existing_node( *p_node, *p_new_node, value, insert_pos,                 key_right_child )
@@ -866,12 +888,12 @@ private:
         verify( parent );
 
         auto const parent_key_idx     { find( parent, node.keys[ 0 ] ) }; BOOST_ASSUME( parent_key_idx != parent.num_vals || !leaf_node_type );
-        auto const parent_has_key_copy{ leaf_node_type && ( parent.keys[ parent_key_idx ] == node.keys[ 0 ] ) };
-        auto const parent_child_idx   { parent_key_idx + parent_has_key_copy };
+        bool const parent_has_key_copy{ leaf_node_type && ( parent.keys[ parent_key_idx ] == node.keys[ 0 ] ) };
+        auto const parent_child_idx   { static_cast<node_size_type>( parent_key_idx + parent_has_key_copy ) };
         BOOST_ASSUME( parent.children[ parent_child_idx ] == node_slot );
 
-        auto const right_separator_key_idx{ parent_key_idx + parent_has_key_copy };
-        auto const  left_separator_key_idx{ std::min<node_size_type>( right_separator_key_idx - 1, parent.num_vals ) }; // (ab)use unsigned wraparound
+        auto const right_separator_key_idx{ static_cast<node_size_type>( parent_key_idx + parent_has_key_copy ) };
+        auto const  left_separator_key_idx{ std::min( static_cast<node_size_type>( right_separator_key_idx - 1 ), parent.num_vals ) }; // (ab)use unsigned wraparound
         auto const has_right_sibling      { right_separator_key_idx != parent.num_vals };
         auto const has_left_sibling       {  left_separator_key_idx != parent.num_vals };
         auto const p_right_separator_key  { has_right_sibling ? &parent.keys[ right_separator_key_idx ] : nullptr };
@@ -964,7 +986,7 @@ private:
                 BOOST_ASSUME( parent_key_idx == 0 );
                 BOOST_ASSUME( parent.keys[ parent_key_idx ] <= p_right_sibling->keys[ 0 ] );
                 // Merge right sibling -> node
-                this->merge_nodes( *p_right_sibling, node, parent, right_separator_key_idx, parent_child_idx + 1 );
+                this->merge_nodes( *p_right_sibling, node, parent, right_separator_key_idx, static_cast<node_size_type>( parent_child_idx + 1 ) );
             }
 
             // propagate underflow
@@ -993,7 +1015,7 @@ private:
     key_locations find_nodes_for( key_const_arg key ) noexcept
     {
         node_slot      separator_key_node;
-        node_size_type separator_key_offset;
+        node_size_type separator_key_offset{};
         // if the root is a (lone) leaf_node is implicitly handled by the loop condition:
         // depth_ == 1 so the loop is skipped entirely and the lone root is never examined
         // through the incorrectly typed reference
@@ -1013,6 +1035,8 @@ private:
         return { base::template as<leaf_node>( *p_node ), separator_key_node, separator_key_offset };
     }
 }; // class bp_tree
+
+PSI_WARNING_DISABLE_POP()
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm

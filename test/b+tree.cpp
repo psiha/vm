@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <random>
 #include <ranges>
+#include <utility>
 #include <vector>
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -30,7 +31,9 @@ TEST( bp_tree, playground )
         for ( auto const & n : numbers )
             bpt.insert( n );
     
-        EXPECT_TRUE( std::ranges::is_sorted( bpt ) );
+        static_assert( std::forward_iterator<bp_tree<int>::const_iterator> );
+
+        EXPECT_TRUE( std::ranges::is_sorted( std::as_const( bpt ) ) );
         EXPECT_TRUE( std::ranges::equal( bpt, sorted_numbers ) );
         EXPECT_NE( bpt.find( +42 ), bpt.end() );
         EXPECT_EQ( bpt.find( -42 ), bpt.end() );
@@ -45,7 +48,7 @@ TEST( bp_tree, playground )
         bpt.insert( +42 );
     
         EXPECT_TRUE( std::ranges::is_sorted( bpt ) );
-        EXPECT_TRUE( std::ranges::equal( bpt, sorted_numbers ) );
+        EXPECT_TRUE( std::ranges::equal( std::as_const( bpt ), sorted_numbers ) );
         EXPECT_NE( bpt.find( +42 ), bpt.end() );
         EXPECT_EQ( bpt.find( -42 ), bpt.end() );
 

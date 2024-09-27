@@ -329,7 +329,7 @@ private:
     [[ gnu::pure, nodiscard ]] size_type & stored_size() noexcept requires( !headerless )
     {
         auto const p_size{ contiguous_container_storage_base::data() + header_size() - size_size };
-        BOOST_ASSERT( reinterpret_cast<std::intptr_t>( p_size ) % alignof( size_type ) == 0 );
+        BOOST_ASSERT( reinterpret_cast<std::uintptr_t>( p_size ) % alignof( size_type ) == 0 );
         return *reinterpret_cast<size_type *>( p_size );
     }
     [[ gnu::pure, nodiscard ]] size_type   stored_size() const noexcept requires( !headerless )
@@ -1180,8 +1180,6 @@ private:
 
     iterator make_space_for_insert( const_iterator const position, size_type const n )
     {
-        using ssize_type = std::make_signed_t<size_type>;
-
         verify_iterator( position );
         auto const position_index{ index_of( position ) };
         auto const current_size  { size() };

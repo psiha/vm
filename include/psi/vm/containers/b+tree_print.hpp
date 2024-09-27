@@ -43,7 +43,7 @@ void bptree_base_wkey<Key>::print() const
                 auto & ln{ as<leaf_node>( *node ) };
                 level_key_count += num_vals( ln );
                 std::putchar( '[' );
-                for ( auto i{ 0 }; i < num_vals( ln ); ++i )
+                for ( auto i{ 0U }; i < num_vals( ln ); ++i )
                 {
                     std::print( "{}", keys( ln )[ i ] );
                     if ( i < num_vals( ln ) - 1 )
@@ -56,7 +56,7 @@ void bptree_base_wkey<Key>::print() const
                 // Internal node, print keys and add children to the queue
                 level_key_count += num_vals( *node );
                 std::putchar( '<' );
-                for ( auto i{ 0 }; i < num_vals( *node ); ++i )
+                for ( auto i{ 0U }; i < num_vals( *node ); ++i )
                 {
                     std::print( "{}", keys( *node )[ i ] );
                     if ( i < num_vals( *node ) - 1 )

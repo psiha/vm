@@ -80,12 +80,13 @@ bptree_base::base_random_access_iterator::operator+=( difference_type const n ) 
 {
     if ( n < 0 )
     {
-        BOOST_ASSUME( static_cast<size_type>( -n ) < index_ );
-        auto const absolute_pos{ index_ + n };
-        node_slot_  = leaves_start_;
+        auto const un{ static_cast<size_type>( -n ) };
+        BOOST_ASSUME( un < index_ );
+        auto const absolute_pos{ index_ - un };
+        node_slot_    = leaves_start_;
         value_offset_ = 0;
         index_        = 0;
-        return *this += absolute_pos;
+        return *this += static_cast<difference_type>( absolute_pos );
     }
 
     BOOST_ASSERT_MSG( node_slot_, "Iterator at end: not incrementable" );
