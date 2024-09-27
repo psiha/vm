@@ -352,12 +352,14 @@ struct value_init_t  {}; inline constexpr value_init_t   value_init  ;
 
 struct header_info
 {
+    using align_t = std::uint16_t; // fit page_size
+
     constexpr header_info() = default;
-    constexpr header_info( std::uint32_t const size, std::uint8_t const alignment ) noexcept : header_size{ size }, data_extra_alignment{ alignment } {}
+    constexpr header_info( std::uint32_t const size, align_t const alignment ) noexcept : header_size{ size }, data_extra_alignment{ alignment } {}
     template <typename T>
-    constexpr header_info( std::in_place_type_t<T>, std::uint8_t const extra_alignment = 1 ) noexcept : header_info{ sizeof( T ), extra_alignment } {}
+    constexpr header_info( std::in_place_type_t<T>, align_t const extra_alignment = 1 ) noexcept : header_info{ sizeof( T ), extra_alignment } {}
     template <typename T>
-    static constexpr header_info make( std::uint8_t const extra_alignment = 1 ) noexcept { return { sizeof( T ), extra_alignment }; }
+    static constexpr header_info make( align_t const extra_alignment = 1 ) noexcept { return { sizeof( T ), extra_alignment }; }
 
     template <typename AdditionalHeader>
     header_info add_header() const noexcept // support chained headers (class hierarchies)
@@ -374,13 +376,13 @@ struct header_info
     header_info with_alignment_for() const noexcept
     {
         BOOST_ASSUME( data_extra_alignment >= 1 );
-        return { this->header_size, std::max<std::uint8_t>({ this->data_extra_alignment, alignof( T )... }) };
+        return { this->header_size, std::max<align_t>({ this->data_extra_alignment, alignof( T )... }) };
     }
 
     std::uint32_t final_header_size() const noexcept { return align_up( header_size, data_extra_alignment ); }
 
     std::uint32_t header_size         { 0 };
-    std::uint8_t  data_extra_alignment{ 1 }; // e.g. for vectorization or overlaying complex types over std::byte storage
+    align_t       data_extra_alignment{ 1 }; // e.g. for vectorization or overlaying complex types over std::byte storage
 }; // header_info
 
 // Standard-vector-like/compatible _presistent_ container class template
@@ -1038,7 +1040,7 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    void swap( vector & x ) noexcept { swap( this->storage, x.storage ); }
+    void swap( vector & x ) noexcept { using std::swap; swap( this->storage_, x.storage_ ); }
 
     //! <b>Effects</b>: Erases all the elements of the vector.
     //!

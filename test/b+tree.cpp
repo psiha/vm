@@ -1,0 +1,59 @@
+#include <psi/vm/containers/b+tree.hpp>
+#include <psi/vm/containers/b+tree_print.hpp>
+
+#include <boost/assert.hpp>
+
+#include <gtest/gtest.h>
+
+#include <filesystem>
+#include <random>
+#include <ranges>
+#include <vector>
+//------------------------------------------------------------------------------
+namespace psi::vm
+{
+//------------------------------------------------------------------------------
+
+static auto const test_file{ "test.bpt" };
+
+TEST( bp_tree, playground )
+{
+    std::ranges::iota_view constexpr sorted_numbers{ 0, 913735 };
+    std::mt19937 rng{ std::random_device{}() };
+    auto numbers{ std::ranges::to<std::vector>( sorted_numbers ) };
+    std::shuffle( numbers.begin(), numbers.end(), rng );
+
+    {
+        bp_tree<int> bpt;
+        bpt.map_file( test_file, flags::named_object_construction_policy::create_new_or_truncate_existing );    
+
+        for ( auto const & n : numbers )
+            bpt.insert( n );
+    
+        EXPECT_TRUE( std::ranges::is_sorted( bpt ) );
+        EXPECT_TRUE( std::ranges::equal( bpt, sorted_numbers ) );
+        EXPECT_NE( bpt.find( +42 ), bpt.end() );
+        EXPECT_EQ( bpt.find( -42 ), bpt.end() );
+        bpt.erase( 42 );
+        EXPECT_EQ( bpt.find( +42 ), bpt.end() );
+    }
+    {
+        bp_tree<int> bpt;
+        bpt.map_file( test_file, flags::named_object_construction_policy::open_existing );    
+
+        EXPECT_EQ( bpt.size(), sorted_numbers.size() - 1 );
+        bpt.insert( +42 );
+    
+        EXPECT_TRUE( std::ranges::is_sorted( bpt ) );
+        EXPECT_TRUE( std::ranges::equal( bpt, sorted_numbers ) );
+        EXPECT_NE( bpt.find( +42 ), bpt.end() );
+        EXPECT_EQ( bpt.find( -42 ), bpt.end() );
+
+        bpt.clear();
+        bpt.print();
+    }
+}
+
+//------------------------------------------------------------------------------
+} // namespace psi::vm
+//------------------------------------------------------------------------------
