@@ -31,7 +31,7 @@ namespace psi::vm::nt
 //------------------------------------------------------------------------------
 
 #ifndef STATUS_SUCCESS
-using NTSTATUS = DWORD;
+using NTSTATUS = LONG;
 NTSTATUS constexpr STATUS_SUCCESS{ 0 };
 #endif // STATUS_SUCCESS
 #ifndef STATUS_CONFLICTING_ADDRESSES

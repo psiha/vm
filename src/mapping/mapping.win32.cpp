@@ -40,7 +40,7 @@ std::uint64_t get_size( mapping::const_handle const mapping_handle ) noexcept
 
 namespace detail::create_mapping_impl { HANDLE map_file( file_handle::reference file, flags::flags_t flags, std::uint64_t size ) noexcept; }
 
-err::fallible_result<void, nt::error> set_size( mapping & __restrict the_mapping, std::uint64_t const new_size ) noexcept
+err::fallible_result<void, nt::error> set_size( mapping & the_mapping, std::uint64_t const new_size ) noexcept
 {
     using namespace nt;
     LARGE_INTEGER ntsz{ .QuadPart = static_cast<LONGLONG>( new_size ) };

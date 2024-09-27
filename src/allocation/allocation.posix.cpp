@@ -12,6 +12,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 #include "allocation.impl.hpp"
+#include <psi/vm/allocation.hpp>
 #include <psi/vm/align.hpp>
 #include <psi/vm/detail/posix.hpp>
 

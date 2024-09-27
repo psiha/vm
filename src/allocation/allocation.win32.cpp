@@ -12,6 +12,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 #include "allocation.impl.hpp"
+#include <psi/vm/allocation.hpp>
 #include <psi/vm/detail/nt.hpp>
 #include <psi/vm/detail/win32.hpp>
 
@@ -23,8 +24,6 @@
 namespace psi::vm
 {
 //------------------------------------------------------------------------------
-
-auto const this_process{ reinterpret_cast<HANDLE>( static_cast<std::intptr_t>( -1 ) ) };
 
 enum class deallocation_type : std::uint32_t
 {
@@ -45,7 +44,7 @@ auto alloc( void * & desired_location, std::size_t & size, allocation_type const
     {
         NtAllocateVirtualMemory
         (
-            this_process,
+            nt::current_process,
             reinterpret_cast< PVOID * >( &desired_location ),
             0, // address zero bits
             &sz,
@@ -65,7 +64,7 @@ auto alloc( void * & desired_location, std::size_t & size, allocation_type const
     }
     else
     {
-        BOOST_ASSUME( ( nt_status == STATUS_NO_MEMORY ) || ( nt_status == STATUS_INVALID_PARAMETER && !size ) );
+        BOOST_ASSUME( ( nt_status == NTSTATUS( STATUS_NO_MEMORY ) ) || ( nt_status == NTSTATUS( STATUS_INVALID_PARAMETER ) && !size ) );
         desired_location = nullptr;
     }
     return nt_status;
@@ -86,7 +85,7 @@ void dealloc( void * & address, std::size_t & size, deallocation_type const type
 #if NATIVE_NT
     using namespace nt;
     SIZE_T sz( size );
-    auto const result{ NtFreeVirtualMemory( this_process, &address, &sz, std::to_underlying( type ) ) };
+    auto const result{ NtFreeVirtualMemory( nt::current_process, &address, &sz, std::to_underlying( type ) ) };
     size = static_cast< std::size_t >( sz );
     BOOST_ASSUME( result == STATUS_SUCCESS || size == 0 );
 #else
@@ -94,11 +93,11 @@ void dealloc( void * & address, std::size_t & size, deallocation_type const type
 #endif
 }
 
-auto mem_info( void * const pAddress ) noexcept
+MEMORY_BASIC_INFORMATION mem_info( void * const address ) noexcept
 {
     MEMORY_BASIC_INFORMATION info;
-    BOOST_VERIFY( ::VirtualQueryEx( this_process, pAddress, &info, sizeof( info ) ) == sizeof( info ) );
-    BOOST_ASSUME( info.BaseAddress == pAddress );
+    BOOST_VERIFY( ::VirtualQueryEx( nt::current_process, address, &info, sizeof( info ) ) == sizeof( info ) );
+    BOOST_ASSUME( info.BaseAddress == address );
     return info;
 }
 
@@ -123,17 +122,17 @@ bool commit( void * const desired_location, std::size_t const size ) noexcept
             BOOST_ASSUME( info.State             == MEM_RESERVE    );
             BOOST_ASSUME( info.Protect           == 0              );
             BOOST_ASSUME( info.Type              == MEM_PRIVATE    );
-            auto regionSize{ std::min( static_cast< std::size_t >( info.RegionSize ), size - final_size ) };
-            auto const partial_result{ alloc( final_address, regionSize, allocation_type::commit ) };
+            auto region_size{ std::min( static_cast< std::size_t >( info.RegionSize ), size - final_size ) };
+            auto const partial_result{ alloc( final_address, region_size, allocation_type::commit ) };
             if ( partial_result != STATUS_SUCCESS )
             {
-                BOOST_ASSERT( partial_result == STATUS_NO_MEMORY );
+                BOOST_ASSERT( partial_result == NTSTATUS( STATUS_NO_MEMORY ) );
                 return false;
             }
-            BOOST_ASSUME( regionSize <= info.RegionSize );
+            BOOST_ASSUME( region_size <= info.RegionSize );
 
-            add( final_address, regionSize );
-            add( final_size   , regionSize );
+            add( final_address, region_size );
+            add( final_size   , region_size );
         }
         final_address = desired_location;
         result        = STATUS_SUCCESS;
@@ -158,11 +157,11 @@ void free( void * address, std::size_t size ) noexcept
     // emulate support for adjacent/concatenated regions (as supported by mmap)
     while ( size )
     {
-        std::size_t releasedSize{ 0 };
-        dealloc( address, releasedSize, deallocation_type::free );
-        BOOST_ASSERT( releasedSize <= size );
-        add( address, releasedSize );
-        sub( size   , releasedSize );
+        std::size_t released_size{ 0 };
+        dealloc( address, released_size, deallocation_type::free );
+        BOOST_ASSUME( released_size <= size );
+        add( address, released_size );
+        sub( size   , released_size );
     }
 }
 

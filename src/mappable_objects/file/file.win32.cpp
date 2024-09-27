@@ -117,6 +117,7 @@ namespace detail
         {
             HANDLE handle{ handle_traits::invalid_value };
             LARGE_INTEGER maximum_size{ .QuadPart = static_cast<LONGLONG>( size ) };
+            BOOST_ASSERT_MSG( std::uint64_t( maximum_size.QuadPart ) == size, "Unsupported section size" );
             auto const nt_result
             {
                 nt::NtCreateSection // TODO use it for named sections also
