@@ -100,7 +100,7 @@ map
 }
 
 // defined in allocation.win32.cpp
-MEMORY_BASIC_INFORMATION mem_info( void * const ) noexcept;
+WIN32_MEMORY_REGION_INFORMATION mem_info( void * const ) noexcept;
 
 namespace
 {

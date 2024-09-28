@@ -34,7 +34,7 @@ std::uint64_t get_size( mapping::const_handle const mapping_handle ) noexcept
     using namespace nt;
     SECTION_BASIC_INFORMATION info;
     auto const result{ NtQuerySection( mapping_handle.value, SECTION_INFORMATION_CLASS::SectionBasicInformation, &info, sizeof( info ), nullptr ) };
-    BOOST_VERIFY( NT_SUCCESS( result ) );
+    BOOST_ASSUME( result == STATUS_SUCCESS );
     return info.SectionSize.QuadPart;
 }
 
@@ -43,24 +43,33 @@ namespace detail::create_mapping_impl { HANDLE map_file( file_handle::reference 
 err::fallible_result<void, nt::error> set_size( mapping & the_mapping, std::uint64_t const new_size ) noexcept
 {
     using namespace nt;
-    LARGE_INTEGER ntsz{ .QuadPart = static_cast<LONGLONG>( new_size ) };
-    auto const result{ NtExtendSection( the_mapping.get(), &ntsz ) };
-    if ( !NT_SUCCESS( result ) ) [[ unlikely ]]
-        return result;
 
-    BOOST_ASSERT( ntsz.QuadPart >= static_cast<LONGLONG>( new_size ) );
-    if ( ntsz.QuadPart > static_cast<LONGLONG>( new_size ) )
+    if ( the_mapping.is_file_based() )
     {
-        // NtExtendSection does not support downsizing - use it also as a size getter (avoid get_size call)
-        BOOST_ASSERT( ntsz.QuadPart == static_cast<LONGLONG>( get_size( the_mapping ) ) );
-        the_mapping.close(); // no strong guarantee :/
-        auto const file_reisze_result{ set_size( the_mapping.underlying_file(), new_size )() };
-        if ( !file_reisze_result )
-            return nt::error/*...mrmlj...*/( file_reisze_result.error().get() ); // TODO fully move to NativeNT API https://cpp.hotexamples.com/examples/-/-/NtSetInformationFile/cpp-ntsetinformationfile-function-examples.html
-        auto const new_mapping_handle{ detail::create_mapping_impl::map_file( the_mapping.file, the_mapping.create_mapping_flags, new_size ) };
-        the_mapping.reset( new_mapping_handle );
-        if ( !the_mapping )
-            return nt::error/*...mrmlj...*/( err::last_win32_error::get() );
+        LARGE_INTEGER ntsz{ .QuadPart = static_cast<LONGLONG>( new_size ) };
+        auto const result{ NtExtendSection( the_mapping.get(), &ntsz ) };
+        if ( !NT_SUCCESS( result ) ) [[ unlikely ]]
+            return result;
+
+        BOOST_ASSERT( ntsz.QuadPart >= static_cast<LONGLONG>( new_size ) );
+        if ( ntsz.QuadPart > static_cast<LONGLONG>( new_size ) )
+        {
+            // NtExtendSection does not support downsizing - use it also as a size getter (avoid get_size call)
+            BOOST_ASSERT( ntsz.QuadPart == static_cast<LONGLONG>( get_size( the_mapping ) ) );
+            the_mapping.close(); // no strong guarantee :/
+            auto const file_reisze_result{ set_size( the_mapping.underlying_file(), new_size )() };
+            if ( !file_reisze_result )
+                return nt::error/*...mrmlj...*/( file_reisze_result.error().get() ); // TODO fully move to NativeNT API https://cpp.hotexamples.com/examples/-/-/NtSetInformationFile/cpp-ntsetinformationfile-function-examples.html
+            auto const new_mapping_handle{ detail::create_mapping_impl::map_file( the_mapping.file, the_mapping.create_mapping_flags, new_size ) };
+            the_mapping.reset( new_mapping_handle );
+            if ( !the_mapping )
+                return nt::error/*...mrmlj...*/( err::last_win32_error::get() );
+        }
+    }
+    else
+    {
+        if ( new_size > get_size( the_mapping ) ) [[ unlikely ]]
+            return nt::STATUS_SECTION_NOT_EXTENDED;
     }
     return err::success;
 }

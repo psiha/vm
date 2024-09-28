@@ -30,12 +30,17 @@ namespace psi::vm::nt
 {
 //------------------------------------------------------------------------------
 
+// TODO move to https://github.com/winsiderss/phnt
+
 #ifndef STATUS_SUCCESS
 using NTSTATUS = LONG;
 NTSTATUS constexpr STATUS_SUCCESS{ 0 };
 #endif // STATUS_SUCCESS
 #ifndef STATUS_CONFLICTING_ADDRESSES
 auto constexpr STATUS_CONFLICTING_ADDRESSES{ NTSTATUS( 0xC0000018 ) };
+#endif
+#ifndef STATUS_SECTION_NOT_EXTENDED
+auto constexpr STATUS_SECTION_NOT_EXTENDED{ NTSTATUS( 0xC0000087 ) };
 #endif
 
 inline auto const current_process{ reinterpret_cast<HANDLE>( std::intptr_t{ -1 } ) };
@@ -63,7 +68,7 @@ using NtCreateSection_t = NTSTATUS (NTAPI*)
     IN ULONG               PageAttributess,
     IN ULONG               SectionAttributes,
     IN HANDLE              FileHandle OPTIONAL
-);
+) noexcept;
 inline auto const NtCreateSection{ detail::get_nt_proc<NtCreateSection_t>( "NtCreateSection" ) };
 
 enum SECTION_INFORMATION_CLASS { SectionBasicInformation, SectionImageInformation };
@@ -82,14 +87,14 @@ using NtQuerySection_t = NTSTATUS (NTAPI*)
     OUT PVOID                     InformationBuffer,
     IN  ULONG                     InformationBufferSize,
     OUT PULONG                    ResultLength OPTIONAL
-);
+) noexcept;
 inline auto const NtQuerySection{ detail::get_nt_proc<NtQuerySection_t>( "NtQuerySection" ) };
 
 using NtExtendSection_t = NTSTATUS (NTAPI*)
 (
     IN HANDLE         SectionHandle,
     IN PLARGE_INTEGER NewSectionSize
-);
+) noexcept;
 inline auto const NtExtendSection{ detail::get_nt_proc<NtExtendSection_t>( "NtExtendSection" ) };
 
 enum SECTION_INHERIT
@@ -109,12 +114,44 @@ using NtMapViewOfSection_t = NTSTATUS (NTAPI*)
     IN SECTION_INHERIT    InheritDisposition,
     IN ULONG              AllocationType OPTIONAL,
     IN ULONG              Protect
-);
+) noexcept;
 inline auto const NtMapViewOfSection{ detail::get_nt_proc<NtMapViewOfSection_t>( "NtMapViewOfSection" ) };
 
-using NtAllocateVirtualMemory_t = NTSTATUS (NTAPI*)( IN HANDLE ProcessHandle, IN OUT PVOID * BaseAddress, ULONG_PTR ZeroBits, PSIZE_T RegionSize, ULONG allocation_type, ULONG Protect );
-using NtFreeVirtualMemory_t     = NTSTATUS (NTAPI*)( IN HANDLE ProcessHandle, IN     PVOID * BaseAddress, PSIZE_T RegionSize, ULONG FreeType );
-using NtProtectVirtualMemory_t  = NTSTATUS (NTAPI*)( IN HANDLE ProcessHandle, IN OUT PVOID * BaseAddress, IN OUT PULONG NumberOfBytesToProtect, IN ULONG NewAccessProtection, OUT PULONG OldAccessProtection );
+enum MEMORY_INFORMATION_CLASS
+{
+    MemoryBasicInformation, // q: MEMORY_BASIC_INFORMATION
+    MemoryWorkingSetInformation, // q: MEMORY_WORKING_SET_INFORMATION
+    MemoryMappedFilenameInformation, // q: UNICODE_STRING
+    MemoryRegionInformation, // q: MEMORY_REGION_INFORMATION
+    MemoryWorkingSetExInformation, // q: MEMORY_WORKING_SET_EX_INFORMATION // since VISTA
+    MemorySharedCommitInformation, // q: MEMORY_SHARED_COMMIT_INFORMATION // since WIN8
+    MemoryImageInformation, // q: MEMORY_IMAGE_INFORMATION
+    MemoryRegionInformationEx, // MEMORY_REGION_INFORMATION
+    MemoryPrivilegedBasicInformation, // MEMORY_BASIC_INFORMATION
+    MemoryEnclaveImageInformation, // MEMORY_ENCLAVE_IMAGE_INFORMATION // since REDSTONE3
+    MemoryBasicInformationCapped, // 10
+    MemoryPhysicalContiguityInformation, // MEMORY_PHYSICAL_CONTIGUITY_INFORMATION // since 20H1
+    MemoryBadInformation, // since WIN11
+    MemoryBadInformationAllProcesses, // since 22H1
+    MemoryImageExtensionInformation, // MEMORY_IMAGE_EXTENSION_INFORMATION // since 24H2
+    MaxMemoryInfoClass
+};
+
+using NtQueryVirtualMemory_t = NTSTATUS (NTAPI *)
+(
+    HANDLE                   ProcessHandle,
+    PVOID                    BaseAddress,
+    MEMORY_INFORMATION_CLASS MemoryInformationClass,
+    PVOID                    MemoryInformation,
+    SIZE_T                   MemoryInformationLength,
+    PSIZE_T                  ReturnLength
+) noexcept;
+inline auto const NtQueryVirtualMemory{ detail::get_nt_proc<NtQueryVirtualMemory_t>( "NtQueryVirtualMemory" ) };
+
+
+using NtAllocateVirtualMemory_t = NTSTATUS (NTAPI*)( IN HANDLE ProcessHandle, IN OUT PVOID * BaseAddress, ULONG_PTR ZeroBits, PSIZE_T RegionSize, ULONG allocation_type, ULONG Protect ) noexcept;
+using NtFreeVirtualMemory_t     = NTSTATUS (NTAPI*)( IN HANDLE ProcessHandle, IN     PVOID * BaseAddress, PSIZE_T RegionSize, ULONG FreeType ) noexcept;
+using NtProtectVirtualMemory_t  = NTSTATUS (NTAPI*)( IN HANDLE ProcessHandle, IN OUT PVOID * BaseAddress, IN OUT PULONG NumberOfBytesToProtect, IN ULONG NewAccessProtection, OUT PULONG OldAccessProtection ) noexcept;
 
 inline auto const NtAllocateVirtualMemory{ detail::get_nt_proc<NtAllocateVirtualMemory_t>( "NtAllocateVirtualMemory" ) };
 inline auto const NtFreeVirtualMemory    { detail::get_nt_proc<NtFreeVirtualMemory_t    >( "NtFreeVirtualMemory"     ) };

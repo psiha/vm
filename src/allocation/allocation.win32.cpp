@@ -93,11 +93,11 @@ void dealloc( void * & address, std::size_t & size, deallocation_type const type
 #endif
 }
 
-MEMORY_BASIC_INFORMATION mem_info( void * const address ) noexcept
+WIN32_MEMORY_REGION_INFORMATION mem_info( void * const address ) noexcept
 {
-    MEMORY_BASIC_INFORMATION info;
-    BOOST_VERIFY( ::VirtualQueryEx( nt::current_process, address, &info, sizeof( info ) ) == sizeof( info ) );
-    BOOST_ASSUME( info.BaseAddress == address );
+    WIN32_MEMORY_REGION_INFORMATION info;
+    BOOST_VERIFY( nt::NtQueryVirtualMemory( nt::current_process, address, nt::MemoryRegionInformation, &info, sizeof( info ), nullptr ) == nt::STATUS_SUCCESS );
+    BOOST_ASSUME( info.AllocationBase == address );
     return info;
 }
 
@@ -119,9 +119,7 @@ bool commit( void * const desired_location, std::size_t const size ) noexcept
         {
             auto const info{ mem_info( final_address ) };
             BOOST_ASSUME( info.AllocationProtect == PAGE_READWRITE );
-            BOOST_ASSUME( info.State             == MEM_RESERVE    );
-            BOOST_ASSUME( info.Protect           == 0              );
-            BOOST_ASSUME( info.Type              == MEM_PRIVATE    );
+            BOOST_ASSUME( info.Private                             );
             auto region_size{ std::min( static_cast< std::size_t >( info.RegionSize ), size - final_size ) };
             auto const partial_result{ alloc( final_address, region_size, allocation_type::commit ) };
             if ( partial_result != STATUS_SUCCESS )

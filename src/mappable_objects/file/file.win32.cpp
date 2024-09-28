@@ -118,6 +118,15 @@ namespace detail
             HANDLE handle{ handle_traits::invalid_value };
             LARGE_INTEGER maximum_size{ .QuadPart = static_cast<LONGLONG>( size ) };
             BOOST_ASSERT_MSG( std::uint64_t( maximum_size.QuadPart ) == size, "Unsupported section size" );
+            if ( !file )
+            {
+                // Windows (11 23H2) does not (still) seem to support resizing of pagefile-backed mappings
+                // so we emulate those by creating a 4GB one and counting on:
+                // - the NT kernel to be lazy and
+                // - that amount to be 'enough for everyone'.
+                maximum_size.QuadPart = std::numeric_limits<std::uint32_t>::max();
+            }
+
             auto const nt_result
             {
                 nt::NtCreateSection // TODO use it for named sections also
