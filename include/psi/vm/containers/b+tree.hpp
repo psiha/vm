@@ -374,6 +374,9 @@ protected: // helpers for split_to_insert
         auto const max{ N::max_values }; // or 'order'
         auto const mid{ max / 2 };
 
+        BOOST_ASSUME(     node.num_vals == max );
+        BOOST_ASSUME( new_node.num_vals == 0   );
+
         new_node.num_vals = max - mid;
 
         value_type key_to_propagate;
@@ -417,8 +420,11 @@ protected: // helpers for split_to_insert
         auto const max{ N::max_values }; // or 'order'
         auto const mid{ max / 2 };
 
-        umove<&N::keys>( node, mid       , insert_pos   , new_node, 0                  );
-        umove<&N::keys>( node, insert_pos, node.num_vals, new_node, new_insert_pos + 1 );
+        BOOST_ASSUME(     node.num_vals == max );
+        BOOST_ASSUME( new_node.num_vals == 0   );
+
+        umove<&N::keys>( node, mid       , insert_pos, new_node, 0                  );
+        umove<&N::keys>( node, insert_pos, max       , new_node, new_insert_pos + 1 );
 
         node    .num_vals = mid          ;
         new_node.num_vals = max - mid + 1;
@@ -437,13 +443,16 @@ protected: // helpers for split_to_insert
         auto const max{ N::max_values }; // or 'order'
         auto const mid{ max / 2 };
 
+        BOOST_ASSUME(     node.num_vals == max );
+        BOOST_ASSUME( new_node.num_vals == 0   );
+
         value_type key_to_propagate{ std::move( node.keys[ mid - 1 ] ) };
 
         umove<&N::keys    >( node, mid, node.num_vals    , new_node, 0 );
         umove<&N::children>( node, mid, node.num_vals + 1, new_node, 0 );
 
-        umove<&N::keys    >( node, insert_pos    , mid - 1, node, insert_pos + 1 );
-        umove<&N::children>( node, insert_pos + 1, mid    , node, insert_pos + 2 );
+        std::shift_right( &node.keys    [ insert_pos     ], &node.keys    [ mid     ], 1 );
+        std::shift_right( &node.children[ insert_pos + 1 ], &node.children[ mid + 1 ], 1 );
 
         node    .num_vals = mid;
         new_node.num_vals = max - mid;
@@ -463,8 +472,11 @@ protected: // helpers for split_to_insert
         auto const max{ N::max_values }; // or 'order'
         auto const mid{ max / 2 };
 
-        umove<&N::keys>( node, mid       , node.num_vals, new_node, 0              );
-        umove<&N::keys>( node, insert_pos, mid          , node    , insert_pos + 1 );
+        BOOST_ASSUME(     node.num_vals == max );
+        BOOST_ASSUME( new_node.num_vals == 0   );
+
+        umove<&N::keys> ( node, mid, max, new_node, 0 );
+        std::shift_right( &node.keys[ insert_pos ], &node.keys[ mid + 1 ], 1 );
 
         node    .num_vals = mid + 1  ;
         new_node.num_vals = max - mid;
@@ -800,11 +812,11 @@ private:
             p_node    ->next = new_slot;
         }
 
-        node_size_type const new_insert_pos         ( insert_pos - mid  );
-        bool           const insertion_into_new_node{ insert_pos >= mid };
-        Key key_to_propagate{ insertion_into_new_node
-            ? base::insert_into_new_node     ( *p_node, *p_new_node, value, insert_pos, new_insert_pos, key_right_child )
-            : base::insert_into_existing_node( *p_node, *p_new_node, value, insert_pos,                 key_right_child )
+        auto const new_insert_pos         { insert_pos - mid  };
+        bool const insertion_into_new_node{ insert_pos >= mid };
+        decltype( auto ) key_to_propagate{ insertion_into_new_node
+            ? base::insert_into_new_node     ( *p_node, *p_new_node, value, insert_pos, static_cast<node_size_type>( new_insert_pos ), key_right_child )
+            : base::insert_into_existing_node( *p_node, *p_new_node, value, insert_pos,                                                key_right_child )
         };
 
         verify( *p_node     );
@@ -822,7 +834,7 @@ private:
             auto & hdr    { this->hdr() };
             p_node     = &node<N>( node_slot );
             p_new_node = &node<N>( new_slot );
-            newRoot.keys    [ 0 ] = key_to_propagate;
+            newRoot.keys    [ 0 ] = std::move( key_to_propagate );
             newRoot.children[ 0 ] = node_slot;
             newRoot.children[ 1 ] = new_slot;
             newRoot.num_vals      = 1;
