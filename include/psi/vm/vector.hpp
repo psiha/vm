@@ -155,6 +155,11 @@ private:
             std::move( file ),
             ap::object{ ap::readwrite },
             ap::child_process::does_not_inherit,
+#       ifdef __linux__
+            // TODO solve in a cleaner/'in a single place' way
+            // https://bugzilla.kernel.org/show_bug.cgi?id=8691 mremap: Wrong behaviour expanding a MAP_SHARED anonymous mapping
+            !file ? flags::share_mode::hidden :
+#       endif
             flags::share_mode::shared,
             mapping::supports_zero_sized_mappings
                 ? mapping_size
@@ -176,7 +181,7 @@ private:
     mapping     mapping_;
 }; // contiguous_container_storage_base
 
-template < typename sz_t, bool headerless >
+template <typename sz_t, bool headerless>
 class contiguous_container_storage
     :
     public  contiguous_container_storage_base,
@@ -856,10 +861,11 @@ public:
     reference emplace_back( Args &&...args )
     {
         storage_.expand( to_byte_sz( size() + 1 ) );
+        auto & placeholder{ back() };
         if constexpr ( sizeof...( args ) )
-            return *std::construct_at( &back(), std::forward< Args >( args )... );
+            return *std::construct_at( &placeholder, std::forward<Args>( args )... );
         else
-            return *new ( &back() ) T; // default init
+            return *new ( &placeholder ) T; // default init
     }
 
    //! <b>Effects</b>: Inserts an object of type T constructed with
