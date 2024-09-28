@@ -46,7 +46,7 @@ void bptree_base_wkey<Key>::print() const
                 for ( auto i{ 0U }; i < num_vals( ln ); ++i )
                 {
                     std::print( "{}", keys( ln )[ i ] );
-                    if ( i < num_vals( ln ) - 1 )
+                    if ( i < num_vals( ln ) - 1U )
                         std::print( ", " );
                 }
                 std::print( "] " );
@@ -59,7 +59,7 @@ void bptree_base_wkey<Key>::print() const
                 for ( auto i{ 0U }; i < num_vals( *node ); ++i )
                 {
                     std::print( "{}", keys( *node )[ i ] );
-                    if ( i < num_vals( *node ) - 1 )
+                    if ( i < num_vals( *node ) - 1U )
                         std::print( ", " );
                 }
                 std::print( "> " );
