@@ -147,6 +147,8 @@ protected:
 
     void free( node_header & ) noexcept;
 
+    void reserve( node_slot::value_type additional_nodes );
+
     [[ gnu::pure ]] header       & hdr()       noexcept;
     [[ gnu::pure ]] header const & hdr() const noexcept { return const_cast<bptree_base &>( *this ).hdr(); }
 
@@ -680,6 +682,7 @@ private:
     using base::root;
 
 public:
+    using size_type       = base::size_type;
     using value_type      = base::value_type;
     using       pointer   = value_type       *;
     using const_pointer   = value_type const *;
@@ -711,8 +714,6 @@ public:
 
     auto random_access()       noexcept { return std::ranges::subrange{ ra_begin(), ra_end() }; }
     auto random_access() const noexcept { return std::ranges::subrange{ ra_begin(), ra_end() }; }
-
-    void swap( bp_tree & other ) noexcept { base::swap( other ); }
 
     BOOST_NOINLINE
     void insert( key_const_arg v )
@@ -798,6 +799,10 @@ public:
         --size_;
     }
 
+    void reserve( size_type const additional_values ) { bptree_base::reserve( ( additional_values + leaf_node::max_values - 1 ) / leaf_node::max_values ); }
+
+    void swap( bp_tree & other ) noexcept { base::swap( other ); }
+
     Comparator const & comp() const noexcept { return *this; }
 
     // UB if the comparator is changed in such a way as to invalidate to order of elements already in the container
@@ -818,7 +823,8 @@ private:
     }
 
     template <typename N>
-    void split_to_insert( N * p_node, node_size_type const insert_pos, key_const_arg value, node_slot const key_right_child ) {
+    void split_to_insert( N * p_node, node_size_type const insert_pos, key_const_arg value, node_slot const key_right_child )
+    {
         verify( *p_node );
 
         auto const max{ N::max_values };
@@ -938,7 +944,8 @@ private:
         BOOST_ASSERT( &node != p_right_sibling );
         BOOST_ASSERT( static_cast<node_header *>( &node ) != static_cast<node_header *>( &parent ) );
         // Borrow from left sibling if possible
-        if ( p_left_sibling && can_borrow( *p_left_sibling ) ) {
+        if ( p_left_sibling && can_borrow( *p_left_sibling ) )
+        {
             verify( *p_left_sibling );
             BOOST_ASSUME( node.num_vals == node.min_values - 1 );
             node.num_vals++;
@@ -975,7 +982,9 @@ private:
             BOOST_ASSUME( p_left_sibling->num_vals >= N::min_values );
         }
         // Borrow from right sibling if possible
-        else if ( p_right_sibling && can_borrow( *p_right_sibling ) ) {
+        else
+        if ( p_right_sibling && can_borrow( *p_right_sibling ) )
+        {
             verify( *p_right_sibling );
 
             node.num_vals++;
@@ -1008,7 +1017,8 @@ private:
             BOOST_ASSUME( p_right_sibling->num_vals >= N::min_values );
         }
         // Merge with left or right sibling
-        else {
+        else
+        {
             if ( p_left_sibling ) {
                 verify( *p_left_sibling );
                 BOOST_ASSUME( parent_has_key_copy == leaf_node_type );

@@ -30,15 +30,26 @@ void bptree_base::clear() noexcept
     hdr() = {};
 }
 
-std::span<std::byte> bptree_base::user_header_data() noexcept { return header_data().second; }
+std::span<std::byte>
+bptree_base::user_header_data() noexcept { return header_data().second; }
 
-bptree_base::header & bptree_base::hdr() noexcept { return *header_data().first; }
+bptree_base::header &
+bptree_base::hdr() noexcept { return *header_data().first; }
 
-bptree_base::storage_result bptree_base::init_header( storage_result success ) noexcept
+bptree_base::storage_result
+bptree_base::init_header( storage_result success ) noexcept
 {
     if ( std::move( success ) && nodes_.empty() )
         hdr() = {};
     return success;
+}
+
+void bptree_base::reserve( node_slot::value_type const additional_nodes )
+{
+    auto const current_size{ nodes_.size() };
+    nodes_.grow_by( additional_nodes, value_init );
+    for ( auto & n : std::views::reverse( std::span{ nodes_ }.subspan( current_size ) ) )
+        free( n );
 }
 
 bptree_base::base_iterator::base_iterator( node_pool & nodes, node_slot const node_offset, node_size_type const value_offset ) noexcept
@@ -140,10 +151,11 @@ bptree_base::depth_t bptree_base::   leaf_level() const noexcept { BOOST_ASSUME(
 
 void bptree_base::free( node_header & node ) noexcept
 {
+    BOOST_ASSUME( node.num_vals == 0 );
     auto & free_list{ hdr().free_list_ };
     auto & free_node{ static_cast<struct free_node &>( node ) };
-    if ( free_list )
-        free_node.next = free_list;
+    if ( free_list ) free_node.next = free_list;
+    else             free_node.next = {};
     free_list = slot_of( free_node );
 }
 
@@ -161,10 +173,14 @@ bptree_base::new_node()
     if ( free_list )
     {
         auto & cached_node{ node<free_node>( free_list ) };
+        BOOST_ASSUME( cached_node.num_vals == 0 );
         free_list = cached_node.next;
+        cached_node.next = {};
         return as<node_placeholder>( cached_node );
     }
-    return nodes_.emplace_back();
+    auto & new_node{ nodes_.emplace_back() };
+    BOOST_ASSUME( new_node.num_vals == 0 );
+    return new_node;
 }
 
 //------------------------------------------------------------------------------
