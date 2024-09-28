@@ -19,7 +19,12 @@ static auto const test_file{ "test.bpt" };
 
 TEST( bp_tree, playground )
 {
-    std::ranges::iota_view constexpr sorted_numbers{ 0, 913735 };
+#ifdef NDEBUG
+    auto const test_size{ 913735 };
+#else
+    auto const test_size{  93735 };
+#endif
+    std::ranges::iota_view constexpr sorted_numbers{ 0, test_size };
     std::mt19937 rng{ std::random_device{}() };
     auto numbers{ std::ranges::to<std::vector>( sorted_numbers ) };
     std::shuffle( numbers.begin(), numbers.end(), rng );
