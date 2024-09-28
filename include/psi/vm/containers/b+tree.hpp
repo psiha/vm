@@ -814,7 +814,7 @@ private:
 
         auto const new_insert_pos         { insert_pos - mid  };
         bool const insertion_into_new_node{ insert_pos >= mid };
-        decltype( auto ) key_to_propagate{ insertion_into_new_node
+        auto key_to_propagate{ insertion_into_new_node // we cannnot save a reference here because it might get invalidated by the new_node<root_node>() call below
             ? base::insert_into_new_node     ( *p_node, *p_new_node, value, insert_pos, static_cast<node_size_type>( new_insert_pos ), key_right_child )
             : base::insert_into_existing_node( *p_node, *p_new_node, value, insert_pos,                                                key_right_child )
         };
