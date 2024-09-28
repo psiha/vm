@@ -395,8 +395,8 @@ struct header_info
 // to trivial_abi types.
 // Used the Boost.Container vector as a starting skeleton.
 
-template < typename T, typename sz_t = std::size_t, bool headerless_param = true >
-requires is_trivially_moveable< T >
+template <typename T, typename sz_t = std::size_t, bool headerless_param = true>
+requires is_trivially_moveable<T>
 class vector
 {
 private:
@@ -1099,7 +1099,7 @@ public:
     //! <b>Note</b>: Non-standard extension.
     bool stable_reserve( size_type new_cap ) = /*TODO*/ delete;
 
-    void grow_to( size_type const target_size, default_init_t ) requires( std::is_trivial_v<T> )
+    void grow_to( size_type const target_size, default_init_t ) requires( std::is_trivially_default_constructible_v<T> )
     {
         storage_.expand( to_byte_sz( target_size ) );
     }
@@ -1126,10 +1126,7 @@ public:
         }
         else
         {
-            for ( auto & element : span().subspan( current_size ) )
-            {
-                std::construct_at( &element );
-            }
+            std::uninitialized_default_construct( nth( current_size ), end() );
         }
     }
     PSI_WARNING_DISABLE_POP()
