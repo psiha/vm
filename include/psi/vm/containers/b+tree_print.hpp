@@ -20,7 +20,7 @@ void bptree_base_wkey<Key>::print() const
 
     // BFS, one level of the tree at a time.
     auto p_node{ &as<inner_node>( root() ) };
-    for ( auto level{ 0U }; !is_leaf_level( level ); ++level )
+    for ( depth_t level{ 0 }; !is_leaf_level( level ); ++level )
     {
         std::print( "Level {}:\t", std::uint16_t( level ) );
 

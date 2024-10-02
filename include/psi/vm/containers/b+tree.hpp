@@ -213,13 +213,13 @@ protected:
 
     template <typename N>
     void rshift_chldrn( N & parent, auto... args ) noexcept {
-        auto const shifted_children{ rshift<&N::children>( parent, args... ) };
+        auto const shifted_children{ rshift<&N::children>( parent, static_cast<node_size_type>( args )... ) };
         for ( auto ch_slot : shifted_children )
             node( ch_slot ).parent_child_idx++;
     }
     template <typename N>
     void lshift_chldrn( N & parent, auto... args ) noexcept {
-        auto const shifted_children{ lshift<&N::children>( parent, args... ) };
+        auto const shifted_children{ lshift<&N::children>( parent, static_cast<node_size_type>( args )... ) };
         for ( auto ch_slot : shifted_children )
             node( ch_slot ).parent_child_idx--;
     }
@@ -353,7 +353,7 @@ public:
     void reserve( size_type additional_values )
     {
         additional_values = additional_values * 3 / 2; // TODO find the appropriate formula
-        bptree_base::reserve( ( additional_values + leaf_node::max_values - 1 ) / leaf_node::max_values );
+        bptree_base::reserve( static_cast<node_slot::value_type>( ( additional_values + leaf_node::max_values - 1 ) / leaf_node::max_values ) );
     }
 
     // solely a debugging helper (include b+tree_print.hpp)
@@ -458,7 +458,7 @@ protected: // split_to_insert and its helpers
         if ( p_node->is_root() ) [[ unlikely ]] {
             new_root( node_slot, new_slot, std::move( key_to_propagate ) );
         } else {
-            auto const key_pos{ p_new_node->parent_child_idx /*it is the _right_ child*/ - 1 };
+            auto const key_pos{ static_cast<node_size_type>( p_new_node->parent_child_idx /*it is the _right_ child*/ - 1 ) };
             return insert( node<inner_node>( p_node->parent ), key_pos, std::move( key_to_propagate ), new_slot );
         }
     }
@@ -624,7 +624,7 @@ protected: // 'other'
             rshift_keys( target_node, target_node_pos );
             target_node.keys[ target_node_pos ] = v;
             if constexpr ( requires { target_node.children; } ) {
-                auto const ch_pos{ target_node_pos + /*>right< child*/ 1 };
+                node_size_type const ch_pos( target_node_pos + /*>right< child*/ 1 );
                 rshift_chldrn( target_node, ch_pos );
                 this->insrt_child( target_node, ch_pos, right_child );
             }
@@ -968,7 +968,7 @@ void bptree_base_wkey<Key>::move_chldrn
     auto const src_chldrn{ &source.children[ src_begin ] };
 
     auto const target_slot{ slot_of( target ) };
-    for ( auto ch{ 0 }; ch < count; ++ch )
+    for ( node_size_type ch{ 0 }; ch < count; ++ch )
     {
         auto & ch_slot{ src_chldrn[ ch ] };
         auto & child  { node( ch_slot ) };
@@ -1079,8 +1079,8 @@ public:
     BOOST_NOINLINE
     const_iterator find( key_const_arg key ) const noexcept {
         auto const & leaf{ const_cast<bp_tree &>( *this ).find_nodes_for( key ).leaf };
-        auto const pos{ find( leaf, key ) };
-        if ( pos != leaf.num_vals && leaf.keys[ pos ] == key ) [[ likely ]] {
+        auto const [pos, exact_find]{ find( leaf, key ) };
+        if ( exact_find ) [[ likely ]] {
             return iterator{ const_cast<bp_tree &>( *this ).nodes_, slot_of( leaf ), pos };
         }
 
@@ -1103,7 +1103,7 @@ public:
             verify( leaf );
             BOOST_ASSUME( leaf.num_vals >= leaf.min_values );
         }
-        auto const key_offset{ find( leaf, key ) };
+        auto const [key_offset, key_found]{ find( leaf, key ) };
         // code below can go into base
         if ( nodes.inner ) [[ unlikely ]] // "most keys are in the leaf nodes"
         {
@@ -1118,7 +1118,7 @@ public:
         }
 
 
-        BOOST_ASSUME( key_offset != leaf.num_vals && leaf.keys[ key_offset ] == key );
+        BOOST_ASSUME( key_found );
         lshift_keys( leaf, key_offset );
         BOOST_ASSUME( leaf.num_vals );
         --leaf.num_vals;
@@ -1155,13 +1155,15 @@ public:
     [[ nodiscard ]] Comparator & mutable_comp() noexcept { return *this; }
 
 private:
-    [[ gnu::pure, gnu::hot, clang::preserve_most, gnu::noinline ]]
-    auto find( Key const keys[], node_size_type const num_vals, key_const_arg value ) const noexcept
+    struct [[ clang::trivial_abi ]] find_pos { node_size_type pos; bool exact_find; };
+    [[ using gnu: pure, hot, noinline, sysv_abi ]]
+    find_pos find( Key const keys[], node_size_type const num_vals, key_const_arg value ) const noexcept
     {
         BOOST_ASSUME( num_vals > 0 );
-        auto const pos_iter{ std::lower_bound( &keys[ 0 ], &keys[ num_vals ], value, comp() ) };
-        auto const pos_idx { std::distance( &keys[ 0 ], pos_iter ) };
-        return static_cast<node_size_type>( pos_idx );
+        auto const pos_iter  { std::lower_bound( &keys[ 0 ], &keys[ num_vals ], value, comp() ) };
+        auto const pos_idx   { static_cast<node_size_type>( std::distance( &keys[ 0 ], pos_iter ) ) };
+        auto const exact_find{ ( pos_idx != num_vals ) & !comp()( value, keys[ std::min( pos_idx, num_vals ) ] ) };
+        return { pos_idx, reinterpret_cast<bool const &>( exact_find ) };
     }
     auto find( auto const & node, key_const_arg value ) const noexcept
     {
@@ -1171,7 +1173,7 @@ private:
     template <typename N>
     void insert( N & target_node, key_const_arg v, node_slot const right_child )
     {
-        auto const pos{ find( target_node, v ) };
+        auto const pos{ find( target_node, v ).pos };
         base::insert( target_node, pos, v, right_child );
     }
 
@@ -1193,10 +1195,11 @@ private:
         // through the incorrectly typed reference
         auto       p_node{ &bptree_base::as<parent_node>( root() ) };
         auto const depth { this->hdr().depth_ };
+        BOOST_ASSUME( depth >= 1 );
         for ( auto level{ 0 }; level < depth - 1; ++level )
         {
-            auto pos{ find( *p_node, key ) };
-            if ( pos != p_node->num_vals && p_node->keys[ pos ] == key )
+            auto [pos, exact_find]{ find( *p_node, key ) };
+            if ( exact_find )
             {
                 // separator key - it also means we have to traverse to the right
                 BOOST_ASSUME( !separator_key_node );
