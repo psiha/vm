@@ -19,6 +19,7 @@
 #include <std_fix/const_iterator.hpp>
 #include <ranges>
 #include <span>
+#include <type_traits>
 #include <utility>
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -38,7 +39,30 @@ namespace detail
         BOOST_ASSERT( remaining_space >= sizeof( Header ) );
         return std::pair{ reinterpret_cast<Header *>( data ), std::span{ data + sizeof( Header ), remaining_space - sizeof( Header ) } };
     }
+
+    template <typename T> static constexpr bool is_simple_comparator{ false };
+    template <typename T> static constexpr bool is_simple_comparator<std::less   <T>>{ true };
+    template <typename T> static constexpr bool is_simple_comparator<std::greater<T>>{ true };
 } // namespace detail
+
+
+template <typename Comparator, typename Key>
+constexpr bool use_linear_search_for_sorted_array( [[ maybe_unused ]] std::uint32_t const minimum_array_length, std::uint32_t const maximum_array_length ) noexcept
+{
+    auto const basic_test
+    { 
+        detail::is_simple_comparator<Comparator> && 
+        std::is_trivially_copyable_v<Key>        &&
+        sizeof( Key ) < ( 4 * sizeof( void * ) ) &&
+        maximum_array_length < 2048
+    };
+    if constexpr ( requires{ Key{}.size(); } )
+    {
+        return basic_test && ( Key{}.size() != 0 );
+    }
+    return basic_test;
+}
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // \class bptree_base
@@ -1071,17 +1095,20 @@ public:
             return;
         }
 
-        insert( find_nodes_for( v ).leaf, v, { /*insertion starts from leaves which do not have children*/ } );
+        auto const locations{ find_nodes_for( v ) };
+        BOOST_ASSUME( !locations.inner );
+        BOOST_ASSUME( !locations.inner_offset );
+        BOOST_ASSUME( !locations.leaf_offset.exact_find );
+        base::insert( locations.leaf, locations.leaf_offset.pos, v, { /*insertion starts from leaves which do not have children*/ } );
 
         ++this->hdr().size_;
     }
 
     BOOST_NOINLINE
     const_iterator find( key_const_arg key ) const noexcept {
-        auto const & leaf{ const_cast<bp_tree &>( *this ).find_nodes_for( key ).leaf };
-        auto const [pos, exact_find]{ find( leaf, key ) };
-        if ( exact_find ) [[ likely ]] {
-            return iterator{ const_cast<bp_tree &>( *this ).nodes_, slot_of( leaf ), pos };
+        auto const location{ const_cast<bp_tree &>( *this ).find_nodes_for( key ) };
+        if ( location.leaf_offset.exact_find ) [[ likely ]] {
+            return iterator{ const_cast<bp_tree &>( *this ).nodes_, slot_of( location.leaf ), location.leaf_offset.pos };
         }
 
         return this->cend();
@@ -1095,31 +1122,30 @@ public:
         auto & __restrict root_ { hdr.root_  };
         auto & __restrict size_ { hdr.size_  };
 
-        auto const nodes{ find_nodes_for( key ) };
-
-        leaf_node & leaf{ nodes.leaf };
+        auto const location{ find_nodes_for( key ) };
+        // code below can go into base
+        leaf_node & leaf{ location.leaf };
         if ( depth_ != 1 )
         {
             verify( leaf );
             BOOST_ASSUME( leaf.num_vals >= leaf.min_values );
         }
-        auto const [key_offset, key_found]{ find( leaf, key ) };
-        // code below can go into base
-        if ( nodes.inner ) [[ unlikely ]] // "most keys are in the leaf nodes"
+        auto const leaf_key_offset{ location.leaf_offset.pos };
+        if ( location.inner ) [[ unlikely ]] // "most keys are in the leaf nodes"
         {
-            BOOST_ASSUME( key_offset == 0 );
-            BOOST_ASSUME( leaf.keys[ key_offset ] == key );
+            BOOST_ASSUME( leaf_key_offset == 0 );
+            BOOST_ASSUME( leaf.keys[ leaf_key_offset ] == key );
 
-            auto & inner        { node<inner_node>( nodes.inner ) };
-            auto & separator_key{ inner.keys[ nodes.inner_offset ] };
+            auto & inner        { node<inner_node>( location.inner ) };
+            auto & separator_key{ inner.keys[ location.inner_offset ] };
             BOOST_ASSUME( separator_key == key );
-            BOOST_ASSUME( key_offset + 1 < leaf.num_vals );
-            separator_key = leaf.keys[ key_offset + 1 ];
+            BOOST_ASSUME( leaf_key_offset + 1 < leaf.num_vals );
+            separator_key = leaf.keys[ leaf_key_offset + 1 ];
         }
 
 
-        BOOST_ASSUME( key_found );
-        lshift_keys( leaf, key_offset );
+        BOOST_ASSUME( location.leaf_offset.exact_find );
+        lshift_keys( leaf, leaf_key_offset );
         BOOST_ASSUME( leaf.num_vals );
         --leaf.num_vals;
         if ( depth_ == 1 ) [[ unlikely ]] // handle 'leaf root' deletion directly to simplify handle_underflow()
@@ -1155,14 +1181,30 @@ public:
     [[ nodiscard ]] Comparator & mutable_comp() noexcept { return *this; }
 
 private:
-    struct [[ clang::trivial_abi ]] find_pos { node_size_type pos; bool exact_find; };
+    struct find_pos
+    {
+        node_size_type pos        : ( sizeof( node_size_type ) * CHAR_BIT - 1 );
+        node_size_type exact_find : 1;
+    };
     [[ using gnu: pure, hot, noinline, sysv_abi ]]
     find_pos find( Key const keys[], node_size_type const num_vals, key_const_arg value ) const noexcept
     {
         BOOST_ASSUME( num_vals > 0 );
-        auto const pos_iter  { std::lower_bound( &keys[ 0 ], &keys[ num_vals ], value, comp() ) };
-        auto const pos_idx   { static_cast<node_size_type>( std::distance( &keys[ 0 ], pos_iter ) ) };
-        auto const exact_find{ ( pos_idx != num_vals ) & !comp()( value, keys[ std::min( pos_idx, num_vals ) ] ) };
+        auto const & __restrict comp{ this->comp() };
+        node_size_type pos_idx;
+        if constexpr ( use_linear_search_for_sorted_array<Comparator, Key>( 1, leaf_node::max_values ) )
+        {
+            auto k{ 0 };
+            while ( ( k != num_vals ) && comp( keys[ k ], value ) )
+                ++k;
+            pos_idx = static_cast<node_size_type>( k );
+        }
+        else
+        {
+            auto const pos_iter{ std::lower_bound( &keys[ 0 ], &keys[ num_vals ], value, comp ) };
+            pos_idx = static_cast<node_size_type>( std::distance( &keys[ 0 ], pos_iter ) );
+        }
+        auto const exact_find{ ( pos_idx != num_vals ) & !comp( value, keys[ std::min<node_size_type>( pos_idx, num_vals - 1 ) ] ) };
         return { pos_idx, reinterpret_cast<bool const &>( exact_find ) };
     }
     auto find( auto const & node, key_const_arg value ) const noexcept
@@ -1180,9 +1222,10 @@ private:
     struct key_locations
     {
         leaf_node & leaf;
+        find_pos    leaf_offset;
         // optional - if also present in an inner node as a separator key
+        node_size_type inner_offset; // ordered for compact layout
         node_slot      inner;
-        node_size_type inner_offset;
     };
 
     [[ gnu::hot, gnu::sysv_abi ]]
@@ -1209,7 +1252,14 @@ private:
             }
             p_node = &node<parent_node>( p_node->children[ pos ] );
         }
-        return { base::template as<leaf_node>( *p_node ), separator_key_node, separator_key_offset };
+        auto & leaf{ base::template as<leaf_node>( *p_node ) };
+        return
+        {
+            leaf,
+            separator_key_node ? find_pos{ 0, true } : find( leaf, key ),
+            separator_key_offset,
+            separator_key_node
+        };
     }
 }; // class bp_tree
 
