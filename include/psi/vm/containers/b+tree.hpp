@@ -739,15 +739,16 @@ protected: // 'other'
             if constexpr ( leaf_node_type ) {
                 // Move the smallest key from the right sibling to the current node
                 auto & leftmost_right_key{ keys( *p_right_sibling ).front() };
-                BOOST_ASSUME( *p_right_separator_key == leftmost_right_key );
+                BOOST_ASSUME( *p_right_separator_key == leftmost_right_key ); // yes we expect exact or bitwise equality for key-copies in inner nodes
                 node_keys.back() = std::move( leftmost_right_key );
                 lshift_keys( *p_right_sibling );
                 // adjust the separator key in the parent
                 *p_right_separator_key = leftmost_right_key;
             } else {
                 // Move/rotate the smallest key from the right sibling to the current node 'through' the parent
-                BOOST_ASSUME( parent.keys[ parent_child_idx ] < p_right_sibling->keys[ 0 ] );
-                BOOST_ASSERT( *( node_keys.end() - 2 ) < *p_right_separator_key );
+                // no comparator in base classes :/
+                //BOOST_ASSUME( le( parent.keys[ parent_child_idx ], p_right_sibling->keys[ 0 ] ) );
+                //BOOST_ASSERT( le( *( node_keys.end() - 2 ), *p_right_separator_key ) );
                 node_keys.back()       = std::move( *p_right_separator_key );
                 *p_right_separator_key = std::move( keys( *p_right_sibling ).front() );
                 insrt_child( node, num_chldrn( node ) - 1, children( *p_right_sibling ).front(), node_slot );
@@ -768,13 +769,14 @@ protected: // 'other'
                 verify( *p_left_sibling );
                 BOOST_ASSUME( parent_has_key_copy == leaf_node_type );
                 // Merge node -> left sibling
-                this->merge_right_into_left( *p_left_sibling, node, parent, left_separator_key_idx, parent_child_idx );
+                merge_right_into_left( *p_left_sibling, node, parent, left_separator_key_idx, parent_child_idx );
             } else {
                 verify( *p_right_sibling );
                 BOOST_ASSUME( parent_key_idx == 0 );
-                BOOST_ASSUME( parent.keys[ parent_key_idx ] <= p_right_sibling->keys[ 0 ] );
+                // no comparator in base classes :/
+                //BOOST_ASSUME( leq( parent.keys[ parent_key_idx ], p_right_sibling->keys[ 0 ] ) );
                 // Merge right sibling -> node
-                this->merge_right_into_left( node, *p_right_sibling, parent, right_separator_key_idx, static_cast<node_size_type>( parent_child_idx + 1 ) );
+                merge_right_into_left( node, *p_right_sibling, parent, right_separator_key_idx, static_cast<node_size_type>( parent_child_idx + 1 ) );
             }
 
             // propagate underflow
@@ -1134,11 +1136,11 @@ public:
         if ( location.inner ) [[ unlikely ]] // "most keys are in the leaf nodes"
         {
             BOOST_ASSUME( leaf_key_offset == 0 );
-            BOOST_ASSUME( leaf.keys[ leaf_key_offset ] == key );
+            BOOST_ASSUME( eq( leaf.keys[ leaf_key_offset ], key ) );
 
             auto & inner        { node<inner_node>( location.inner ) };
             auto & separator_key{ inner.keys[ location.inner_offset ] };
-            BOOST_ASSUME( separator_key == key );
+            BOOST_ASSUME( eq( separator_key, key ) );
             BOOST_ASSUME( leaf_key_offset + 1 < leaf.num_vals );
             separator_key = leaf.keys[ leaf_key_offset + 1 ];
         }
@@ -1260,6 +1262,24 @@ private:
             separator_key_offset,
             separator_key_node
         };
+    }
+
+    [[ gnu::pure ]] bool le( key_const_arg left, key_const_arg right ) const noexcept { return comp()( left, right ); }
+    [[ gnu::pure ]] bool eq( key_const_arg left, key_const_arg right ) const noexcept
+    {
+        if constexpr ( requires{ comp().eq( left, right ); } )
+            return comp().eq( left, right );
+        if constexpr ( detail::is_simple_comparator<Comparator> && requires{ left == right; } )
+            return left == right;
+        return !comp()( left, right ) && !comp()( right, left );
+    }
+    [[ gnu::pure ]] bool leq( key_const_arg left, key_const_arg right ) const noexcept
+    {
+        if constexpr ( requires{ comp().leq( left, right ); } )
+            return comp().leq( left, right );
+        if constexpr ( detail::is_simple_comparator<Comparator> && requires { left == right; } )
+            return left <= right;
+        return !comp()( right, left );
     }
 }; // class bp_tree
 
