@@ -2,8 +2,8 @@
 
 #include "b+tree.hpp"
 
+#include <cstdint>
 #include <print>
-#include <queue>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -18,62 +18,63 @@ void bptree_base_wkey<Key>::print() const
         return;
     }
 
-    // Queue for performing level-order traversal (BFS).
-    std::queue<inner_node const *> nodes;
-    nodes.push( &as<inner_node>( root() ) );
-
-    // Current level tracker
-    depth_t level{ 0 };
-
-    // Perform BFS, processing one level of the tree at a time.
-    while ( !nodes.empty() )
+    // BFS, one level of the tree at a time.
+    auto p_node{ &as<inner_node>( root() ) };
+    for ( auto level{ 0U }; !is_leaf_level( level ); ++level )
     {
-        auto node_count{ nodes.size() };
-        std::print( "Level {} ({} nodes):\n\t", std::uint16_t( level ), node_count );
+        std::print( "Level {}:\t", std::uint16_t( level ) );
 
-        size_t level_key_count{ 0 };
+        auto p_next_level{ &node<inner_node>( children( *p_node ).front() ) };
+
+        std::uint32_t level_node_count{ 0 };
+        size_type     level_key_count { 0 };
         // Process all nodes at the current level
-        while ( node_count > 0 )
+        for ( ; ; )
         {
-            auto const node{ nodes.front() };
-            nodes.pop();
-
-            if ( is_leaf_level( level ) )
+            // Internal node, print keys and add children to the queue
+            level_key_count += num_vals( *p_node );
+            std::putchar( '<' );
+            for ( auto i{ 0U }; i < num_vals( *p_node ); ++i )
             {
-                auto & ln{ as<leaf_node>( *node ) };
-                level_key_count += num_vals( ln );
-                std::putchar( '[' );
-                for ( auto i{ 0U }; i < num_vals( ln ); ++i )
-                {
-                    std::print( "{}", keys( ln )[ i ] );
-                    if ( i < num_vals( ln ) - 1U )
-                        std::print( ", " );
-                }
-                std::print( "] " );
+                std::print( "{}", keys( *p_node )[ i ] );
+                if ( i < num_vals( *p_node ) - 1U )
+                    std::print( ", " );
             }
-            else
-            {
-                // Internal node, print keys and add children to the queue
-                level_key_count += num_vals( *node );
-                std::putchar( '<' );
-                for ( auto i{ 0U }; i < num_vals( *node ); ++i )
-                {
-                    std::print( "{}", keys( *node )[ i ] );
-                    if ( i < num_vals( *node ) - 1U )
-                        std::print( ", " );
-                }
-                std::print( "> " );
+            std::print( "> " );
 
-                // Add all children of this internal node to the queue
-                for ( auto i{ 0 }; i < num_chldrn( *node ); ++i )
-                    nodes.push( &this->node<inner_node>( node->children[ i ] ) );
-            }
-
-            --node_count;
+            ++level_node_count;
+            if ( !p_node->right )
+                break;
+            p_node = &node<inner_node>( p_node->right );
         }
+        std::println( " [{} nodes w/ {} values]", level_node_count, level_key_count );
 
-        std::println( " [{} values]", level_key_count );
-        ++level;
+        p_node = p_next_level;
+    }
+
+    {
+        std::print( "Leaf level ({}):\t", leaf_level() );
+        std::uint32_t level_node_count{ 0 };
+        size_type     level_key_count { 0 };
+        auto p_leaf{ &as<leaf_node>( *p_node ) };
+        for ( ; ; )
+        {
+            level_key_count += num_vals( *p_leaf );
+            std::putchar( '[' );
+            for ( auto i{ 0U }; i < num_vals( *p_leaf ); ++i ) {
+                std::print( "{}", keys( *p_leaf )[ i ] );
+                if ( i < num_vals( *p_leaf ) - 1U ) {
+                    std::print( ", " );
+                }
+            }
+            std::print( "] " );
+
+            ++level_node_count;
+            if ( !p_leaf->right )
+                break;
+            p_leaf = &node<leaf_node>( p_leaf->right );
+        }
+        std::println( " [{} nodes w/ {} values]", level_node_count, level_key_count );
     }
 }
 
