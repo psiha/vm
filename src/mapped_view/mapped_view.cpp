@@ -140,7 +140,7 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
 #else
     ULARGE_INTEGER const win32_offset{ .QuadPart = target_offset };
     auto const new_address
-    { // TODO this (appending) requires complexity to be added on the unmap side (see mapper::unmap)
+    {
         ::MapViewOfFileEx
         (
             original_mapping.get(),

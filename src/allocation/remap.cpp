@@ -13,6 +13,7 @@
 //------------------------------------------------------------------------------
 #include "allocation.impl.hpp"
 #include <psi/vm/align.hpp>
+#include <psi/vm/allocation.hpp>
 
 #include <boost/assert.hpp>
 #include <boost/config_ex.hpp>
