@@ -15,9 +15,13 @@ namespace psi::vm
 // https://stackoverflow.com/questions/59362113/b-tree-minimum-internal-children-count-explanation
 // https://web.archive.org/web/20190126073810/http://supertech.csail.mit.edu/cacheObliviousBTree.html
 // https://www.researchgate.net/publication/220225482_Cache-Oblivious_Databases_Limitations_and_Opportunities
+// https://www.postgresql.org/docs/current/btree.html
+// https://abseil.io/about/design/btree
 // Data Structure Visualizations https://www.cs.usfca.edu/~galles/visualization/Algorithms.html
 // Griffin: Fast Transactional Database Index with Hash and B+-Tree https://ieeexplore.ieee.org/abstract/document/10678674
 // Restructuring the concurrent B+-tree with non-blocked search operations https://www.sciencedirect.com/science/article/abs/pii/S002002550200261X
+
+// https://en.wikipedia.org/wiki/Judy_array
 
 bptree_base::bptree_base( header_info const hdr_info ) noexcept
     :
@@ -44,10 +48,15 @@ bptree_base::init_header( storage_result success ) noexcept
     return success;
 }
 
-void bptree_base::reserve( node_slot::value_type const additional_nodes )
+void bptree_base::reserve( node_slot::value_type additional_nodes )
 {
+    auto const preallocated_count{ hdr().free_node_count_ };
+    additional_nodes -= std::min( preallocated_count, additional_nodes );
     auto const current_size{ nodes_.size() };
     nodes_.grow_by( additional_nodes, value_init );
+#ifndef NDEBUG
+    hdr_ = &hdr();
+#endif
     for ( auto & n : std::views::reverse( std::span{ nodes_ }.subspan( current_size ) ) )
         free( n );
 }
@@ -94,11 +103,11 @@ bptree_base::new_spillover_node_for( node_header & existing_node )
     auto &       left_node         { node( existing_node_slot ) };  // handle relocation (by new_node())
     auto   const right_node_slot   { slot_of( right_node ) };
 
-    // insert into the level dlinked list
+    // insert into the level dlinked list (TODO extract into small specialized dlinked list functions)
     // node <- left/lesser | new_node -> right/greater
     right_node.left  = existing_node_slot;
     right_node.right = left_node.right;
-        left_node.right = right_node_slot;
+     left_node.right = right_node_slot;
     update_right_sibling_link( right_node, right_node_slot );
     right_node.parent           = left_node.parent;
     right_node.parent_child_idx = left_node.parent_child_idx + 1;
@@ -116,7 +125,7 @@ bptree_base::new_root( node_slot const left_child, node_slot const right_child )
     auto & left { node(  left_child ) }; BOOST_ASSUME( left.is_root() );
     auto & right{ node( right_child ) };
     new_root.left = new_root.right = {};
-    new_root.num_vals = 1;
+    new_root.num_vals = 1; // the minimum of two children with one separator key
     hdr.root_         = slot_of( new_root );
     left .parent      = hdr.root_;
     right.parent      = hdr.root_;
@@ -126,29 +135,57 @@ bptree_base::new_root( node_slot const left_child, node_slot const right_child )
     return new_root;
 }
 
-bptree_base::base_iterator::base_iterator( node_pool & nodes, node_slot const node_offset, node_size_type const value_offset ) noexcept
+bptree_base::base_iterator::base_iterator( node_pool & nodes, iter_pos const pos ) noexcept
     :
-#ifndef NDEBUG // for bounds checking
-    nodes_{ nodes },
-#else
-    nodes_{ nodes.data() },
-#endif
-    node_slot_{ node_offset }, value_offset_{ value_offset }
-{}
+    nodes_{},
+    pos_{ pos }
+{
+    update_pool_ptr( nodes );
+}
 
+void bptree_base::base_iterator::update_pool_ptr( node_pool & nodes ) const noexcept
+{
+#ifndef NDEBUG // for bounds checking
+    nodes_ = nodes;
+#else
+    nodes_ = nodes.data();
+#endif
+}
+
+[[ gnu::pure ]]
 bptree_base::node_header &
-bptree_base::base_iterator::node() const noexcept { return nodes_[ *node_slot_ ]; }
+bptree_base::base_iterator::node() const noexcept { return nodes_[ *pos_.node ]; }
 
 bptree_base::base_iterator &
 bptree_base::base_iterator::operator++() noexcept
 {
-    BOOST_ASSERT_MSG( node_slot_, "Iterator at end: not incrementable" );
     auto & node{ this->node() };
+    BOOST_ASSERT_MSG( pos_.value_offset < node.num_vals, "Iterator at end: not incrementable" );
     BOOST_ASSUME( node.num_vals >= 1 );
-    if ( ++value_offset_ == node.num_vals ) [[ unlikely ]] {
-        // implicitly becomes an end iterator when node.next is 'null'
-        node_slot_    = node.right;
-        value_offset_ = 0;
+    BOOST_ASSUME( pos_.value_offset < node.num_vals );
+    if ( ++pos_.value_offset == node.num_vals ) [[ unlikely ]]
+    {
+        // have to perform this additional check to allow an iterator to arrive
+        // to the end position
+        if ( node.right ) [[ likely ]]
+        {
+            pos_.node         = node.right;
+            pos_.value_offset = 0;
+        }
+    }
+    return *this;
+}
+bptree_base::base_iterator &
+bptree_base::base_iterator::operator--() noexcept
+{
+    auto & node{ this->node() };
+    BOOST_ASSERT_MSG( ( pos_.value_offset > 0 ) || node.left, "Iterator at end: not incrementable" );
+    BOOST_ASSUME( pos_.value_offset <= node.num_vals );
+    BOOST_ASSUME( node.num_vals >= 1 );
+    if ( pos_.value_offset-- == 0 ) [[ unlikely ]]
+    {
+        pos_.node         = node.left;
+        pos_.value_offset = this->node().num_vals - 1;
     }
     return *this;
 }
@@ -156,30 +193,36 @@ bptree_base::base_iterator::operator++() noexcept
 bool bptree_base::base_iterator::operator==( base_iterator const & other ) const noexcept
 {
     BOOST_ASSERT_MSG( &this->nodes_[ 0 ] == &other.nodes_[ 0 ], "Comparing iterators from different containers" );
-    return ( this->node_slot_ == other.node_slot_ ) && ( this->value_offset_ == other.value_offset_ );
+    return ( this->pos_.node == other.pos_.node ) && ( this->pos_.value_offset == other.pos_.value_offset );
 }
 
 
 bptree_base::base_random_access_iterator &
 bptree_base::base_random_access_iterator::operator+=( difference_type const n ) noexcept
 {
-    BOOST_ASSERT_MSG( node_slot_, "Iterator at end: not incrementable" );
-    
-    if ( n >= 0 ) [[ likely ]]
+    BOOST_ASSERT_MSG( pos_.node, "Iterator at end: not incrementable" );
+
+    if ( n >= 0 )
     {
         auto un{ static_cast<size_type>( n ) };
         for ( ;; )
         {
             auto & node{ this->node() };
-            auto const available_offset{ static_cast<size_type>( node.num_vals - 1 - value_offset_ ) };
-            if ( available_offset >= un ) [[ likely ]] {
-                value_offset_ += static_cast<node_size_type>( un );
+            auto const available_offset{ static_cast<size_type>( node.num_vals - 1 - pos_.value_offset ) };
+            if ( available_offset >= un ) {
+                pos_.value_offset += static_cast<node_size_type>( un );
+                BOOST_ASSUME( pos_.value_offset < node.num_vals );
                 break;
             } else {
-                un -= available_offset;
-                node_slot_    = node.right;
-                value_offset_ = 0;
-                BOOST_ASSERT_MSG( node_slot_ || un == 0, "Incrementing out of bounds" );
+                un -= ( available_offset + 1 );
+                // Here we don't have to perform the same check as in the
+                // fwd_iterator increment as (end) iterator comparison is done
+                // solely through the index_ member.
+                pos_.node         = node.right;
+                pos_.value_offset = 0;
+                if ( un == 0 ) [[ unlikely ]]
+                    break;
+                BOOST_ASSERT_MSG( pos_.node, "Incrementing out of bounds" );
             }
         }
         index_ += static_cast<size_type>( n );
@@ -190,20 +233,23 @@ bptree_base::base_random_access_iterator::operator+=( difference_type const n ) 
         BOOST_ASSERT_MSG( index_ >= un, "Moving iterator out of bounds" );
         for ( ;; )
         {
-            auto & node{ this->node() };
-            auto const available_offset{ value_offset_ };
-            if ( available_offset >= un ) [[ likely ]] {
-                value_offset_ -= static_cast<node_size_type>( un );
+            auto const available_offset{ pos_.value_offset };
+            if ( available_offset >= un ) {
+                pos_.value_offset -= static_cast<node_size_type>( un );
+                BOOST_ASSUME( pos_.value_offset < node().num_vals );
                 break;
             } else {
-                un -= available_offset;
-                node_slot_    = node.left;
-                value_offset_ = 0;
-                BOOST_ASSERT_MSG( node_slot_ || un == 0, "Incrementing out of bounds" );
+                un -= ( available_offset + 1 );
+                pos_.node         = node().left;
+                pos_.value_offset = node().num_vals - 1;
+                BOOST_ASSERT_MSG( pos_.node, "Incrementing out of bounds" );
+                BOOST_ASSUME( pos_.value_offset < node().num_vals );
             }
         }
-        index_ += static_cast<size_type>( -n );
+        index_ -= static_cast<size_type>( -n );
     }
+
+    BOOST_ASSUME( !pos_.node || ( pos_.value_offset < node().num_vals ) );
 
     return *this;
 }
@@ -213,7 +259,22 @@ void bptree_base::swap( bptree_base & other ) noexcept
 {
     using std::swap;
     swap( this->nodes_, other.nodes_ );
+#ifndef NDEBUG
+    swap( this->hdr_, other.hdr_ );
+#endif
 }
+
+[[ gnu::pure ]] bptree_base::iter_pos bptree_base::begin_pos() const noexcept { return { this->first_leaf(), 0 }; }
+[[ gnu::pure ]] bptree_base::iter_pos bptree_base::  end_pos() const noexcept {
+    auto const last_leaf{ hdr().last_leaf_ };
+    return { last_leaf, node( last_leaf ).num_vals };
+}
+
+[[ gnu::pure ]] bptree_base::base_iterator bptree_base::begin() noexcept { return { this->nodes_, begin_pos() }; }
+[[ gnu::pure ]] bptree_base::base_iterator bptree_base::end  () noexcept { return { this->nodes_,   end_pos() }; }
+
+[[ gnu::pure ]] bptree_base::base_random_access_iterator bptree_base::ra_begin() noexcept { return { *this, begin_pos(), 0      }; }
+[[ gnu::pure ]] bptree_base::base_random_access_iterator bptree_base::ra_end  () noexcept { return { *this,   end_pos(), size() }; }
 
 [[ gnu::cold ]]
 bptree_base::node_header &
@@ -226,13 +287,14 @@ bptree_base::create_root()
     auto & root{ new_node() };
     auto & hdr { this->hdr() };
     BOOST_ASSUME( root.num_vals == 0 );
-    root.num_vals  = 1;
-    root.left      = {};
-    root.right     = {};
-    hdr.root_      = slot_of( root );
-    hdr.leaves_    = hdr.root_;
-    hdr.depth_     = 1;
-    hdr.size_      = 1;
+    root.num_vals   = 1;
+    root.left       = {};
+    root.right      = {};
+    hdr.root_       = slot_of( root );
+    hdr.first_leaf_ = hdr.root_;
+    hdr.last_leaf_  = hdr.root_;
+    hdr.depth_      = 1;
+    hdr.size_       = 1;
     return root;
 }
 
@@ -242,19 +304,21 @@ bptree_base::depth_t bptree_base::   leaf_level() const noexcept { BOOST_ASSUME(
 void bptree_base::free( node_header & node ) noexcept
 {
     BOOST_ASSUME( node.num_vals == 0 );
-    auto & free_list{ hdr().free_list_ };
+    auto & hdr{ this->hdr() };
+    auto & free_list{ hdr.free_list_ };
     auto & free_node{ static_cast<struct free_node &>( node ) };
-#ifndef NDEBUG
     auto const free_node_slot{ slot_of( free_node ) };
+#ifndef NDEBUG
     if ( free_node.left )
         BOOST_ASSERT( this->node( free_node.left ).right != free_node_slot );
     if ( free_node.right )
         BOOST_ASSERT( this->node( free_node.right ).left != free_node_slot );
 #endif
     free_node.left = {};
-    if ( free_list ) free_node.right = free_list;
-    else             free_node.right = {};
-    free_list = slot_of( free_node );
+    if ( free_list ) { BOOST_ASSUME(  hdr.free_node_count_ ); free_node.right = free_list; this->node<struct free_node>( free_list ).left = free_node_slot; }
+    else             { BOOST_ASSUME( !hdr.free_node_count_ ); free_node.right = {}       ; }
+    free_list = free_node_slot;
+    ++hdr.free_node_count_;
 }
 
 bptree_base::node_slot
@@ -268,19 +332,27 @@ bptree_base::slot_of( node_header const & node ) const noexcept
 bptree_base::node_placeholder &
 bptree_base::new_node()
 {
-    auto & free_list{ hdr().free_list_ };
+    auto & hdr      { this->hdr() };
+    auto & free_list{ hdr.free_list_ };
     if ( free_list )
     {
+        BOOST_ASSUME( hdr.free_node_count_ );
         auto & cached_node{ node<free_node>( free_list ) };
         BOOST_ASSUME( !cached_node.num_vals );
         BOOST_ASSUME( !cached_node.left     );
         free_list = cached_node.right;
         cached_node.right = {};
+        if ( free_list )
+            node( free_list ).left  = {};
+        --hdr.free_node_count_;
         return as<node_placeholder>( cached_node );
     }
     auto & new_node{ nodes_.emplace_back() };
     BOOST_ASSUME( new_node.num_vals == 0 );
     new_node.left = new_node.right = {};
+#ifndef NDEBUG
+    hdr_ = &this->hdr();
+#endif
     return new_node;
 }
 
