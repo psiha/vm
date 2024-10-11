@@ -121,10 +121,10 @@ namespace detail
             if ( !file )
             {
                 // Windows (11 23H2) does not (still) seem to support resizing of pagefile-backed mappings
-                // so we emulate those by creating a 4GB one and counting on:
+                // so we emulate those by creating a 2GB one and counting on:
                 // - the NT kernel to be lazy and
                 // - that amount to be 'enough for everyone'.
-                maximum_size.QuadPart = std::numeric_limits<std::uint32_t>::max();
+                maximum_size.QuadPart = std::numeric_limits<std::int32_t>::max();
             }
 
             auto const nt_result
