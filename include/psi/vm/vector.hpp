@@ -43,6 +43,9 @@ namespace vm
 namespace detail
 {
     [[ noreturn ]] inline void throw_out_of_range() { throw std::out_of_range( "vm::vector access out of bounds" ); }
+
+    template <typename T, bool> struct size           { T value; };
+    template <typename T      > struct size<T, false> {};
 } // namespace detail
 
 class contiguous_container_storage_base
@@ -185,7 +188,7 @@ template <typename sz_t, bool headerless>
 class contiguous_container_storage
     :
     public  contiguous_container_storage_base,
-    private std::conditional_t<headerless, std::false_type, std::tuple<sz_t>>
+    private detail::size<sz_t, !headerless>
     // checkout a revision prior to March the 21st 2024 for a version that used statically sized header sizes
     // this approach is more versatile while the overhead should be less than negligible
 {
@@ -194,16 +197,17 @@ public:
 
 private:
     static constexpr auto size_size{ headerless ? 0 : sizeof( size_type ) };
+    using size_holder = detail::size<sz_t, !headerless>;
 
 public:
              contiguous_container_storage(                             ) noexcept requires(  headerless ) = default;
-    explicit contiguous_container_storage( size_type const header_size ) noexcept requires( !headerless ) : std::tuple<sz_t>{ header_size } {}
+    explicit contiguous_container_storage( size_type const header_size ) noexcept requires( !headerless ) : size_holder{ header_size } {}
 
     static constexpr std::uint8_t header_size() noexcept requires( headerless ) { return 0; }
 
     [[ gnu::pure ]] size_type header_size() const noexcept requires( !headerless )
     {
-        auto const sz{ std::get<0>( *this ) };
+        auto const sz{ size_holder::value };
         BOOST_ASSUME( sz >= sizeof( sz_t ) );
         return sz;
     }
