@@ -68,7 +68,7 @@ bool viewing::is_cow() const noexcept
 
 namespace detail
 {
-    flags_t BOOST_CC_REG object_access_to_page_access( access_privileges::object const object_access, viewing::share_mode const share_mode )
+    flags_t object_access_to_page_access( access_privileges::object const object_access, viewing::share_mode const share_mode ) noexcept
     {
         // Generate CreateFileMapping flags from access_privileges::object/MapViewOfFile flags
         using access_rights = access_privileges;
