@@ -456,7 +456,7 @@ protected: // node types
         // TODO support for maps (i.e. keys+values)
         using value_type = Key;
 
-        static node_size_type constexpr storage_space{ node_size - align_up( sizeof( node_header ), alignof( Key ) ) };
+        static node_size_type constexpr storage_space{ node_size - align_up<node_size_type>( sizeof( node_header ), alignof( Key ) ) };
         static node_size_type constexpr max_values   { storage_space / sizeof( Key ) };
         static node_size_type constexpr min_values   { ihalf_ceil<max_values> };
 
@@ -1014,7 +1014,7 @@ protected: // 'other'
         BOOST_ASSUME( left .right == slot_of( right ) );
         BOOST_ASSUME( right.left  == slot_of( left  ) );
 
-        std::ranges::move( keys( right ), keys( left ).end() );
+        std::ranges::move( keys( right ), &keys( left ).back() + 1 );
         left .num_vals += right.num_vals;
         right.num_vals  = 0;
         BOOST_ASSUME( left.num_vals >= 2 * min - 2 );
@@ -1551,10 +1551,10 @@ private:
             if ( less_than_right_pos != copy_size )
             {
                 BOOST_ASSUME( less_than_right_pos < copy_size );
-                auto const input_end_for_target{ less_than_right_pos + source_offset };
+                node_size_type const input_end_for_target( less_than_right_pos + source_offset );
                 BOOST_ASSUME( input_end_for_target >  source_offset   );
                 BOOST_ASSUME( input_end_for_target <= source.num_vals );
-                copy_size = input_end_for_target - source_offset;
+                copy_size = static_cast<node_size_type>( input_end_for_target - source_offset );
             }
         }
 
