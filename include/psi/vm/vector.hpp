@@ -1084,7 +1084,7 @@ public:
     ///////////////////////////////////////////////////////////////////////////
 
     auto map_file  ( auto      const file, flags::named_object_construction_policy const policy ) noexcept { BOOST_ASSERT( !has_attached_storage() ); return storage_.map_file  ( file, policy ); }
-    auto map_memory( size_type const initial_capacity = 0                                       ) noexcept { BOOST_ASSERT( !has_attached_storage() ); return storage_.map_memory( to_byte_sz( initial_capacity ) ); }
+    auto map_memory( size_type const initial_size = 0                                           ) noexcept { BOOST_ASSERT( !has_attached_storage() ); return storage_.map_memory( to_byte_sz( initial_size ) ); }
 
     bool has_attached_storage() const noexcept { return static_cast<bool>( storage_ ); }
 

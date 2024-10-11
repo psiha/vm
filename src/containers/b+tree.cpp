@@ -40,14 +40,6 @@ bptree_base::user_header_data() noexcept { return header_data().second; }
 bptree_base::header &
 bptree_base::hdr() noexcept { return *header_data().first; }
 
-bptree_base::storage_result
-bptree_base::init_header( storage_result success ) noexcept
-{
-    if ( std::move( success ) && nodes_.empty() )
-        hdr() = {};
-    return success;
-}
-
 void bptree_base::reserve( node_slot::value_type additional_nodes )
 {
     auto const preallocated_count{ hdr().free_node_count_ };
@@ -57,7 +49,12 @@ void bptree_base::reserve( node_slot::value_type additional_nodes )
 #ifndef NDEBUG
     hdr_ = &hdr();
 #endif
-    for ( auto & n : std::views::reverse( std::span{ nodes_ }.subspan( current_size ) ) )
+    assign_nodes_to_free_pool( static_cast<node_slot::value_type>( current_size ) );
+}
+
+void bptree_base::assign_nodes_to_free_pool( node_slot::value_type const starting_node ) noexcept
+{
+    for ( auto & n : std::views::reverse( std::span{ nodes_ }.subspan( starting_node ) ) )
         free( n );
 }
 

@@ -85,8 +85,25 @@ public:
 
     bool has_attached_storage() const noexcept { return nodes_.has_attached_storage(); }
 
-    storage_result map_file  ( auto          const file, flags::named_object_construction_policy const policy ) noexcept { return init_header( nodes_.map_file  ( file, policy                        ) ); }
-    storage_result map_memory( std::uint32_t const initial_capacity_as_number_of_nodes = 0                    ) noexcept { return init_header( nodes_.map_memory( initial_capacity_as_number_of_nodes ) ); }
+    storage_result map_file( auto const file, flags::named_object_construction_policy const policy ) noexcept
+    {
+        storage_result success{ nodes_.map_file( file, policy ) };
+        if ( std::move( success ) && nodes_.empty() )
+            hdr() = {};
+        return success;
+    }
+    storage_result map_memory( std::uint32_t const initial_capacity_as_number_of_nodes = 0 ) noexcept
+    {
+        storage_result success{ nodes_.map_memory( initial_capacity_as_number_of_nodes ) };
+        if ( std::move( success ) )
+        {
+            hdr() = {};
+            if ( initial_capacity_as_number_of_nodes ) {
+                assign_nodes_to_free_pool( 0 );
+            }
+        }
+        return success;
+    }
 
 protected:
     static constexpr auto node_size{ page_size };
@@ -150,7 +167,7 @@ protected:
     class base_iterator;
     class base_random_access_iterator;
 
-    struct header
+    struct header // or persisted data members
     {
         node_slot             root_;
         node_slot             first_leaf_;
@@ -306,7 +323,7 @@ protected:
 private:
     auto header_data() noexcept { return detail::header_data<header>( nodes_.user_header_data() ); }
 
-    storage_result init_header( storage_result ) noexcept;
+    void assign_nodes_to_free_pool( node_slot::value_type starting_node ) noexcept;
 
 protected:
     node_pool nodes_;
@@ -739,8 +756,8 @@ protected: // 'other'
                 leaf_slot = leaf.right;
             else
             {
-                hdr.free_list_ = leaf.right;
                 node( leaf.right ).left = {};
+                hdr.free_list_ = leaf.right;
                 leaf.right = {};
                 return std::make_pair( begin, iter_pos{ leaf_slot, size_to_copy } );
             }
@@ -1421,6 +1438,7 @@ private:
     [[ using gnu: pure, hot, noinline, sysv_abi ]]
     find_pos find( Key const keys[], node_size_type const num_vals, key_const_arg value ) const noexcept
     {
+        // TODO branchless binary search, Alexandrescu's ideas, https://orlp.net/blog/bitwise-binary-search ...
         BOOST_ASSUME( num_vals > 0 );
         auto const & __restrict comp{ this->comp() };
         node_size_type pos_idx;
