@@ -105,6 +105,31 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
     }
 
 #if defined( __linux__ )
+    // unlike realloc mremap does not support functioning (also) as 'malloc'
+    // i.e. it does not support nullptr as the 'old address'
+    if ( !current_address ) [[ unlikely ]] // initial mapping
+    {
+        BOOST_ASSUME( !current_size );
+        auto initial_address
+        {
+            posix::mmap
+            (
+                nullptr,
+                target_size,
+                original_mapping.view_mapping_flags.protection,
+                original_mapping.view_mapping_flags.flags,
+                original_mapping.get(),
+                0
+            )
+        };
+        if ( initial_address ) [[ likely ]]
+        {
+            static_cast<span &>( *this ) = { static_cast<typename span::pointer>( initial_address ), target_size };
+            return err::success;
+        }
+        return error_t{};
+    }
+
     if
     (
         auto const new_address{ ::mremap( current_address, current_size, target_size, std::to_underlying( reallocation_type::moveable ) ) };
