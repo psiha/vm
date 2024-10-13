@@ -148,7 +148,7 @@ expand_result expand_back
 
 expand_result expand_front
 (
-    std::byte * const address,
+    std::byte *       const address,
     std::size_t       const current_size,
     std::size_t       const required_size,
     std::size_t       const used_capacity,
