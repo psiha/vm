@@ -10,11 +10,16 @@ namespace psi::vm
 
 TEST( vector, anon_memory_backed )
 {
-    psi::vm::vector<double, std::uint16_t> vec;
+    psi::vm::vector<double, std::uint32_t> vec;
     vec.map_memory();
     EXPECT_EQ( vec.size(), 0 );
     vec.append_range({ 3.14, 0.14, 0.04 });
     EXPECT_EQ( vec.size(), 3 );
+    EXPECT_EQ( vec[ 0 ], 3.14 );
+    EXPECT_EQ( vec[ 1 ], 0.14 );
+    EXPECT_EQ( vec[ 2 ], 0.04 );
+    vec.grow_by( 12345678, default_init );
+    // test growth (with 'probable' relocation) does not destroy contents
     EXPECT_EQ( vec[ 0 ], 3.14 );
     EXPECT_EQ( vec[ 1 ], 0.14 );
     EXPECT_EQ( vec[ 2 ], 0.04 );
