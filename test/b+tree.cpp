@@ -5,7 +5,6 @@
 
 #include <gtest/gtest.h>
 
-#include <print>
 #include <random>
 #include <ranges>
 #include <utility>
@@ -19,9 +18,8 @@ static auto const test_file{ "test.bpt" };
 
 TEST( bp_tree, playground )
 {
-    std::println( "Generating test data." );
 #ifdef NDEBUG
-    auto const test_size{ 1553735 };
+    auto const test_size{ 3553735 };
 #else
     auto const test_size{  158735 };
 #endif
@@ -30,11 +28,9 @@ TEST( bp_tree, playground )
     auto numbers{ std::ranges::to<std::vector>( sorted_numbers ) };
     std::shuffle( numbers.begin(), numbers.end(), rng );
     {
-        std::println( "B+tree in memory..." );
         bp_tree<int> bpt;
         bpt.map_memory();
         bpt.reserve( numbers.size() );
-        std::println( " ...insertion" );
         {
             auto const nums { std::span{ numbers } };
             auto const third{ nums.size() / 3 };
@@ -46,7 +42,6 @@ TEST( bp_tree, playground )
                                                     bpt.insert( third_third );
         }
 
-        std::println( " ...checks" );
         static_assert( std::forward_iterator<bp_tree<int>::const_iterator> );
 
         EXPECT_TRUE( std::ranges::is_sorted( std::as_const( bpt ) ) );
@@ -65,7 +60,6 @@ TEST( bp_tree, playground )
                 EXPECT_EQ( ra[ n ], n );
         }
 
-        std::println( " ...erasure" );
         std::shuffle( numbers.begin(), numbers.end(), rng );
         for ( auto const & n : numbers )
             bpt.erase( n );
@@ -74,7 +68,6 @@ TEST( bp_tree, playground )
     }
 
     {
-        std::println( "B+tree on disk - creation..." );
         bp_tree<int> bpt;
         bpt.map_file( test_file, flags::named_object_construction_policy::create_new_or_truncate_existing );    
 
@@ -91,7 +84,6 @@ TEST( bp_tree, playground )
         EXPECT_EQ( bpt.find( +42 ), bpt.end() );
     }
     {
-        std::println( "B+tree on disk - opening..." );
         bp_tree<int> bpt;
         bpt.map_file( test_file, flags::named_object_construction_policy::open_existing );    
 
