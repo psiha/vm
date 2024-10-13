@@ -13,6 +13,8 @@
 //------------------------------------------------------------------------------
 #include <psi/vm/align.hpp>
 #include <psi/vm/mapped_view/mapped_view.hpp>
+
+#include <cstring> // memcpy
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -89,9 +91,11 @@ template <bool read_only>
 fallible_result<void>
 basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & original_mapping ) noexcept
 {
-    auto const current_address    { const_cast</*mrmlj*/std::byte *>( this->data() ) };
-    auto const current_size       {                                   this->size()   };
-    auto const kernel_current_size{ align_up( current_size, commit_granularity )     };
+    // TODO kill duplication with remap.cpp::expand()
+
+    auto const current_address    { const_cast<std::byte *>( this->data() )      };
+    auto const current_size       {                          this->size()        };
+    auto const kernel_current_size{ align_up( current_size, commit_granularity ) };
     if ( kernel_current_size >= target_size )
     {
         BOOST_ASSUME( current_address );
@@ -110,12 +114,27 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
         static_cast<span &>( *this ) = { static_cast<typename span::pointer>( new_address ), target_size };
         return err::success;
     }
-#endif // linux mremap
+    return error_t{};
+#else
     auto const current_offset{ 0U }; // TODO: what if this is an offset view?
     auto const target_offset { current_offset + kernel_current_size };
     auto const additional_tail_size{ target_size - kernel_current_size };
     auto const tail_target_address { current_address + kernel_current_size };
-#ifndef _WIN32
+#ifdef _WIN32
+    ULARGE_INTEGER const win32_offset{ .QuadPart = target_offset };
+    auto const new_address
+    {
+        ::MapViewOfFileEx
+        (
+            original_mapping.get(),
+            original_mapping.view_mapping_flags.map_view_flags,
+            win32_offset.HighPart,
+            win32_offset.LowPart,
+            additional_tail_size,
+            tail_target_address
+        )
+    };
+#else
     auto new_address
     {
         posix::mmap
@@ -131,34 +150,20 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
     if
     (
         ( new_address     != tail_target_address ) && // On POSIX the target address is only a hint (while MAP_FIXED may overwrite existing mappings)
-        ( current_address != nullptr             )    // in case of starting with an empty/null/zero-sized views (is it worth the special handling?)
+        ( current_address != nullptr             )    // in case of starting with an empty/null/zero-sized view (is it worth the special handling?)
     )
     {
         BOOST_VERIFY( ::munmap( new_address, additional_tail_size ) == 0 );
         new_address = nullptr;
     }
-#else
-    ULARGE_INTEGER const win32_offset{ .QuadPart = target_offset };
-    auto const new_address
-    {
-        ::MapViewOfFileEx
-        (
-            original_mapping.get(),
-            original_mapping.view_mapping_flags.map_view_flags,
-            win32_offset.HighPart,
-            win32_offset.LowPart,
-            additional_tail_size,
-            tail_target_address
-        )
-    };
 #endif
     if ( new_address ) [[ likely ]]
     {
         if ( current_address != nullptr ) [[ likely ]]
         {
             BOOST_ASSUME( new_address == current_address + kernel_current_size );
-#       ifdef __linux__
-            BOOST_ASSERT_MSG( false, "mremap failed but an overlapping mmap succeeded!?" ); // behaviour investigation
+#       ifdef __linux__ // no longer exercised path (i.e. linux only relies on mremap)
+            BOOST_ASSERT_MSG( false, "mremap failed but an adjacent mmap succeeded!?" ); // behaviour investigation
 #       endif
             static_cast<span &>( *this ) = {                          current_address, target_size };
         }
@@ -172,8 +177,25 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
     auto remapped_span{ this->map( original_mapping, 0, target_size )() };
     if ( !remapped_span )
         return remapped_span.error();
+#ifndef _WIN32
+    // Linux handles relocation-on-expansion implicitly with mremap (it even
+    // supports creating new mappings of the same pages/physical memory by
+    // specifying zero for old_size -> TODO use this to implement 'multimappable'
+    // mappings, 'equivalents' of NtCreateSection instead of going through shm),
+    // Windows tracks the source data/backing storage through the mapping
+    // handle. For others we have to the the new-copy-free old dance - but this
+    // is a quick-fix as this still does not support 'multiply remappable
+    // mapping' semantics a la NtCreateSection - TODO: shm_mkstemp, SHM_ANON,
+    // memfd_create...
+    // https://github.com/lassik/shm_open_anon
+    if ( !original_mapping.is_file_based() )
+        std::memcpy( const_cast<std::byte *>( remapped_span->data() ), this->data(), this->size() );
+    else
+#endif
+        BOOST_ASSERT_MSG( std::memcmp( remapped_span->data(), this->data(), this->size() ) == 0, "View expansion garbled data." );
     *this = std::move( *remapped_span );
     return err::success;
+#endif // end of 'no linux mremap' implementation
 } // view::expand()
 
 template class basic_mapped_view<false>;
