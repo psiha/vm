@@ -390,6 +390,7 @@ protected:
 public:
     constexpr base_random_access_iterator() noexcept = default;
 
+    [[ clang::no_sanitize( "unsigned-integer-overflow" ) ]]
     difference_type operator-( base_random_access_iterator const & other ) const noexcept { return static_cast<difference_type>( this->index_ - other.index_ ); }
 
     base_random_access_iterator & operator+=( difference_type n ) noexcept;

@@ -172,6 +172,7 @@ bptree_base::base_iterator::operator++() noexcept
     }
     return *this;
 }
+[[ clang::no_sanitize( "implicit-conversion" ) ]]
 bptree_base::base_iterator &
 bptree_base::base_iterator::operator--() noexcept
 {
