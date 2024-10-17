@@ -75,7 +75,7 @@ void bptree_base::update_right_sibling_link( node_header const & left_node, node
     BOOST_ASSUME( slot_of( left_node ) == left_node_slot );
     if ( left_node.right ) [[ likely ]]
     {
-        auto & right_back_left{ this->node( left_node.right ).left };
+        auto & right_back_left{ right( left_node ).left };
         BOOST_ASSUME( right_back_left != left_node_slot );
         right_back_left = left_node_slot;
     }
@@ -89,6 +89,33 @@ void bptree_base::unlink_node( node_header & node, node_header & cached_left_sib
     BOOST_ASSUME( right.left  == slot_of( left  ) );
     left.right = right.right;
     update_right_sibling_link( left, right.left );
+    free( node );
+}
+
+void bptree_base::unlink_left( node_header & nd ) noexcept
+{
+    if ( !nd.left )
+        return;
+    auto & left_link{ left( nd ).right };
+    BOOST_ASSUME( left_link == slot_of( nd ) );
+    left_link = nd.left = {};
+}
+
+void bptree_base::unlink_right( node_header & nd ) noexcept
+{
+    if ( !nd.right )
+        return;
+    auto & right_link{ right( nd ).left };
+    BOOST_ASSUME( right_link == slot_of( nd ) );
+    right_link = nd.right = {};
+}
+
+void bptree_base::link( node_header & left, node_header & right ) const noexcept
+{
+    BOOST_ASSUME( !left .right );
+    BOOST_ASSUME( !right.left  );
+    left .right = slot_of( right );
+    right.left  = slot_of( left  );
 }
 
 [[ gnu::noinline, gnu::sysv_abi ]]
@@ -299,29 +326,15 @@ bptree_base::create_root()
 bptree_base::depth_t bptree_base::   leaf_level() const noexcept { BOOST_ASSUME( hdr().depth_ ); return hdr().depth_ - 1; }
              bool    bptree_base::is_leaf_level( depth_t const level ) const noexcept { return level == leaf_level(); }
 
-void bptree_base::free( node_header & node ) noexcept
+bool bptree_base::is_my_node( node_header const & node ) const noexcept
 {
-    BOOST_ASSUME( node.num_vals == 0 );
-    auto & hdr{ this->hdr() };
-    auto & free_list{ hdr.free_list_ };
-    auto & free_node{ static_cast<struct free_node &>( node ) };
-    auto const free_node_slot{ slot_of( free_node ) };
-#ifndef NDEBUG
-    if ( free_node.left )
-        BOOST_ASSERT( this->node( free_node.left ).right != free_node_slot );
-    if ( free_node.right )
-        BOOST_ASSERT( this->node( free_node.right ).left != free_node_slot );
-#endif
-    free_node.left = {};
-    if ( free_list ) { BOOST_ASSUME(  hdr.free_node_count_ ); free_node.right = free_list; this->node<struct free_node>( free_list ).left = free_node_slot; }
-    else             { BOOST_ASSUME( !hdr.free_node_count_ ); free_node.right = {}       ; }
-    free_list = free_node_slot;
-    ++hdr.free_node_count_;
+    return ( &node >= &nodes_.front() ) && ( &node <= &nodes_.back() );
 }
 
 bptree_base::node_slot
 bptree_base::slot_of( node_header const & node ) const noexcept
 {
+    BOOST_ASSUME( is_my_node( node ) );
     return { static_cast<node_slot::value_type>( static_cast<node_placeholder const *>( &node ) - nodes_.data() ) };
 }
 
@@ -339,19 +352,46 @@ bptree_base::new_node()
         BOOST_ASSUME( !cached_node.num_vals );
         BOOST_ASSUME( !cached_node.left     );
         free_list = cached_node.right;
-        cached_node.right = {};
-        if ( free_list )
-            node( free_list ).left  = {};
+        unlink_right( cached_node );
         --hdr.free_node_count_;
         return as<node_placeholder>( cached_node );
     }
     auto & new_node{ nodes_.emplace_back() };
-    BOOST_ASSUME( new_node.num_vals == 0 );
-    new_node.left = new_node.right = {};
+    BOOST_ASSUME( !new_node.num_vals );
+    BOOST_ASSUME( !new_node.left     );
+    BOOST_ASSUME( !new_node.right    );
 #ifndef NDEBUG
     hdr_ = &this->hdr();
 #endif
     return new_node;
+}
+
+void bptree_base::free( node_header & node ) noexcept
+{
+    auto & hdr{ this->hdr() };
+    auto & free_list{ hdr.free_list_ };
+    auto & free_node{ static_cast<struct free_node &>( node ) };
+    auto const free_node_slot{ slot_of( free_node ) };
+#ifndef NDEBUG
+    if ( free_node.left )
+        BOOST_ASSERT( left( free_node ).right != free_node_slot );
+    if ( free_node.right )
+        BOOST_ASSERT( right( free_node ).left != free_node_slot );
+#endif
+    // TODO (re)consider whether the calling code is expected to reset num_vals
+    // (and thus mark the node as 'free'/empty) and/or unlink from its siblings
+    // and the parent (which complicates code but possibly catches errors
+    // earlier) or have free perform all of the cleanup.
+    //BOOST_ASSUME( node.num_vals == 0 );
+    // We have to touch the header (i.e. its residing cache line) anyway here
+    // (to update the right link) so reset/setup the whole header right now for
+    // the new allocation step.
+    static_cast<node_header &>( free_node ) = {};
+    // update the right link
+    if ( free_list ) { BOOST_ASSUME(  hdr.free_node_count_ ); link( free_node, this->node( free_list ) ); }
+    else             { BOOST_ASSUME( !hdr.free_node_count_ ); }
+    free_list = free_node_slot;
+    ++hdr.free_node_count_;
 }
 
 //------------------------------------------------------------------------------

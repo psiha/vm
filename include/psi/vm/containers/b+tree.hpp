@@ -124,34 +124,39 @@ protected:
         [[ gnu::pure ]] explicit operator bool() const noexcept { return index != null.index; }
     }; // struct node_slot
 
-    struct [[ nodiscard ]] node_header
+    struct [[ nodiscard, clang::trivial_abi ]] node_header
     {
         using size_type = std::uint16_t;
 
-        // At minimum we need single-linked/directed list in the vertical/depth and horizontal/breadth directions
-        // (and the latter only for the leaf level - to have a connected sorted 'list' of all the values).
+        // At minimum we need a single-linked/directed list in the vertical/depth
+        // and horizontal/breadth directions (and the latter only for the leaf
+        // level - to have a connected sorted 'list' of all the values).
         // However having a precise vertical back/up-link (parent_child_idx):
-        // * speeds up walks up the tree (as the parent (separator) key slots do not have to be searched for)
-        // * simplifies code (enabling several functions to become independent of the comparator - no longer
-        //   need searching - and moved up into the base bptree classes)
-        // * while at the same time being a negligible overhead considering we are targeting much larger (page
-        //   size sized) nodes.
+        // * speeds up walks up the tree (as the parent (separator) key slots do
+        //   not have to be searched for)
+        // * simplifies code (enabling several functions to become independent
+        //   of the comparator - no longer need searching - and moved up into
+        //   the base bptree classes)
+        // * while at the same time being a negligible overhead considering we
+        //   are targeting much larger (page size sized) nodes.
         node_slot parent          {};
         node_slot left            {};
         node_slot right           {};
         size_type num_vals        {};
         size_type parent_child_idx{};
       /* TODO
-        size_type start; // make keys and children arrays function as devectors: allow empty space at the beginning to avoid moves for small borrowings
+        size_type start; // make keys and children arrays function as devectors: allow empty space at the beginning to avoid moves for smaller borrowings
       */
 
         [[ gnu::pure ]] bool is_root() const noexcept { return !parent; }
 
-        // merely to prevent slicing (in return-node-by-ref cases)
-        node_header( node_header const & ) = delete;
-        constexpr node_header( node_header && ) noexcept = default;
-        constexpr node_header(                ) noexcept = default;
-        constexpr node_header & operator=( node_header && ) noexcept = default;
+    protected: // merely to prevent slicing (in return-node-by-ref cases)
+        constexpr node_header( node_header const & ) noexcept = default;
+        constexpr node_header( node_header &&      ) noexcept = default;
+    public:
+        constexpr node_header(                     ) noexcept = default;
+        constexpr node_header & operator=( node_header &&      ) noexcept = default;
+        constexpr node_header & operator=( node_header const & ) noexcept = default;
     }; // struct node_header
     using node_size_type = node_header::size_type;
 
@@ -166,6 +171,8 @@ protected:
     };
     class base_iterator;
     class base_random_access_iterator;
+
+    struct insert_pos_t { node_slot node; node_size_type next_insert_offset; }; // TODO 'merge' with iter_pos
 
     struct header // or persisted data members
     {
@@ -213,7 +220,6 @@ protected:
 
     static void verify( auto const & node ) noexcept
     {
-        BOOST_ASSERT( std::ranges::is_sorted( keys( node ) ) );
         BOOST_ASSUME( node.num_vals <= node.max_values );
         // also used for underflowing nodes and (most problematically) for root nodes 'interpreted' as inner nodes...TODO...
         //BOOST_ASSUME( node.num_vals >= node.min_values );
@@ -285,6 +291,10 @@ protected:
     void update_right_sibling_link( node_header const & left_node, node_slot left_node_slot ) noexcept;
     void unlink_node( node_header & node, node_header & cached_left_sibling ) noexcept;
 
+    void unlink_left ( node_header & nd ) noexcept;
+    void unlink_right( node_header & nd ) noexcept;
+    void link( node_header & left, node_header & right ) const noexcept;
+
     [[ gnu::sysv_abi ]]
     std::pair<node_slot, node_slot> new_spillover_node_for( node_header & existing_node );
 
@@ -293,7 +303,7 @@ protected:
     template <typename NodeType, typename SourceNode>
     static NodeType & as( SourceNode & slot ) noexcept
     {
-        static_assert( sizeof( NodeType ) == sizeof( slot ) );
+        static_assert( sizeof( NodeType ) == sizeof( slot ) || std::is_same_v<NodeType const, node_header const> );
         return static_cast<NodeType &>( static_cast<node_header &>( slot ) );
     }
     template <typename NodeType, typename SourceNode>
@@ -308,7 +318,13 @@ protected:
     template <typename N> N       & node( node_slot const offset )       noexcept { return as<N>( node( offset ) ); }
     template <typename N> N const & node( node_slot const offset ) const noexcept { return as<N>( node( offset ) ); }
 
-    [[ gnu::pure ]] node_slot slot_of( node_header const & ) const noexcept;
+    template <typename N> N       & right( N const & nd )       noexcept { return node<N>( nd.right ); }
+    template <typename N> N const & right( N const & nd ) const noexcept { return node<N>( nd.right ); }
+    template <typename N> N       & left ( N const & nd )       noexcept { return node<N>( nd.left  ); }
+    template <typename N> N const & left ( N const & nd ) const noexcept { return node<N>( nd.left  ); }
+
+    [[ gnu::pure ]] bool      is_my_node( node_header const & ) const noexcept;
+    [[ gnu::pure ]] node_slot slot_of   ( node_header const & ) const noexcept;
 
     static bool full( auto const & node ) noexcept { 
         BOOST_ASSUME( node.num_vals <= node.max_values );
@@ -369,7 +385,7 @@ public:
     bool operator==( base_iterator const & ) const noexcept;
 
 public:
-    auto pos() const noexcept { return pos_; }
+    iter_pos const & pos() const noexcept { return pos_; }
 }; // class base_iterator
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -499,8 +515,6 @@ protected: // iterators
     class  ra_iterator;
 
 protected: // split_to_insert and its helpers
-    struct insert_pos_t { node_slot node; node_size_type next_insert_offset; };
-
     void new_root( node_slot const left_child, node_slot const right_child, key_const_arg separator_key )
     {
         auto & new_root_node{ as<root_node>( bptree_base::new_root( left_child, right_child ) ) };
@@ -716,12 +730,35 @@ protected: // 'other'
         }
     }
 
-    void bulk_append( leaf_node const * src_leaf, insert_pos_t rightmost_parent_pos ) noexcept
+    // This function only serves the purpose of maintaining the rule about the
+    // minimum number of children per node - that rule is actually only
+    // 'academic' (for making sure that the performance/complexity guarantees
+    // will be maintained) - the tree would operate correctly even without
+    // maintaining that invariant (TODO make this an option).
+    bool bulk_append_fill_incomplete_leaf( leaf_node & leaf ) noexcept
+    {
+        auto const missing_keys{ static_cast<node_size_type>( std::max( 0, signed( leaf.min_values ) - leaf.num_vals ) ) };
+        if ( missing_keys )
+        {
+            auto & preceding{ left( leaf ) };
+            BOOST_ASSUME( preceding.num_vals + leaf.num_vals >= leaf_node::min_values * 2 );
+            std::shift_right( &leaf.keys[ 0 ], &leaf.keys[ leaf.num_vals + missing_keys ], missing_keys );
+            this->move_keys( preceding, preceding.num_vals - missing_keys, preceding.num_vals, leaf, 0 );
+            leaf     .num_vals += missing_keys;
+            preceding.num_vals -= missing_keys;
+            return true;
+        }
+        return false;
+    }
+
+    void bulk_append( leaf_node * src_leaf, insert_pos_t rightmost_parent_pos )
     {
         for ( ;; )
         {
+            BOOST_ASSUME( !src_leaf->parent );
             auto & rightmost_parent{ inner( rightmost_parent_pos.node ) };
             BOOST_ASSUME( rightmost_parent_pos.next_insert_offset == rightmost_parent.num_vals );
+            auto const next_src_slot{ src_leaf->right };
             rightmost_parent_pos = insert
             (
                 rightmost_parent,
@@ -729,11 +766,22 @@ protected: // 'other'
                 src_leaf->keys[ 0 ],
                 slot_of( *src_leaf )
             );
-            if ( !src_leaf->right )
+            if ( !next_src_slot )
                 break;
-            src_leaf = &leaf( src_leaf->right );
+            src_leaf = &leaf( next_src_slot );
         }
         hdr().last_leaf_ = slot_of( *src_leaf );
+        if ( bulk_append_fill_incomplete_leaf( *src_leaf ) )
+        {
+            // Borrowing from the left sibling happened _after_ src_leaf was
+            // already inserted into the parent so we have to update the
+            // separator key in the parent (since this is the rightmost leaf we
+            // know that the separator key has to be in the immediate parent -
+            // no need to call the generic update_separator()).
+            auto & prnt{ parent( *src_leaf ) };
+            BOOST_ASSUME( src_leaf->parent_child_idx == num_chldrn( prnt ) - 1 );
+            keys( prnt ).back() = src_leaf->keys[ 0 ];
+        }
     }
 
     auto bulk_insert_prepare( std::span<Key const> keys )
@@ -757,9 +805,8 @@ protected: // 'other'
                 leaf_slot = leaf.right;
             else
             {
-                node( leaf.right ).left = {};
                 hdr.free_list_ = leaf.right;
-                leaf.right = {};
+                unlink_right( leaf );
                 return std::make_pair( begin, iter_pos{ leaf_slot, size_to_copy } );
             }
         }
@@ -822,9 +869,33 @@ protected: // 'other'
         parent_key = new_separator;
     }
 
+    void move( leaf_node & source, leaf_node & target ) noexcept
+    {
+        BOOST_ASSUME( &source != &target );
+        BOOST_ASSUME( source.num_values >= leaf_node::min_vals );
+        BOOST_ASSUME( source.num_values <= leaf_node::max_vals );
+
+        auto constexpr copy_whole{ std::is_trivial_v<leaf_node> && false };
+        if constexpr ( copy_whole )
+        {
+            std::memcpy( &target, &source, sizeof( target ) );
+        }
+        else
+        if constexpr ( std::is_trivial_v<Key> )
+        {
+            std::memcpy( &target, &source, reinterpret_cast<std::byte const *>( &source.keys[ source.num_vals ] ) - reinterpret_cast<std::byte const *>( &source ) );
+        }
+        else
+        {
+            std::ranges::uninitialized_move( keys( source ), target.keys );
+            static_cast<node_header &>( target ) = std::move( source );
+            source.num_vals                      = 0;
+        }
+    }
+
     template <typename N>
     BOOST_NOINLINE
-    void handle_underflow( N & node, depth_t const level )
+    void handle_underflow( N & node, depth_t const level ) noexcept
     {
         BOOST_ASSUME( underflowed( node ) );
 
@@ -848,8 +919,8 @@ protected: // 'other'
         // (and so cannot be used to resolve existence of siblings)
         auto const has_right_sibling{ parent_child_idx < ( num_chldrn( parent ) - 1 ) };
         auto const has_left_sibling { parent_child_idx > 0 };
-        auto const p_right_sibling  { has_right_sibling ? &this->node<N>( node.right ) : nullptr };
-        auto const p_left_sibling   { has_left_sibling  ? &this->node<N>( node.left  ) : nullptr };
+        auto const p_right_sibling  { has_right_sibling ? &right( node ) : nullptr };
+        auto const p_left_sibling   { has_left_sibling  ? &left ( node ) : nullptr };
 
         auto const right_separator_key_idx{ static_cast<node_size_type>( parent_key_idx + parent_has_key_copy ) };
         auto const  left_separator_key_idx{ std::min( static_cast<node_size_type>( right_separator_key_idx - 1 ), parent.num_vals ) }; // (ab)use unsigned wraparound
@@ -980,14 +1051,11 @@ protected: // 'other'
     using bptree_base::free;
     void free( leaf_node & leaf ) noexcept {
         auto & first_leaf{ hdr().first_leaf_ };
-        if ( first_leaf == slot_of( leaf ) ) {
+        if ( first_leaf == slot_of( leaf ) )
+        {
             BOOST_ASSUME( !leaf.left );
             first_leaf = leaf.right;
-            if ( first_leaf )
-            {
-                BOOST_ASSERT( node( first_leaf ).left );
-                node( first_leaf ).left = {};
-            }
+            unlink_right( leaf );
         }
         bptree_base::free( static_cast<node_header &>( leaf ) );
     }
@@ -1043,10 +1111,7 @@ protected: // 'other'
         parent.num_vals--;
 
         unlink_node( right, left );
-
-        right.right = {};
         verify( left  );
-        free  ( right );
         verify( parent );
     }
     [[ gnu::sysv_abi ]]
@@ -1059,7 +1124,6 @@ protected: // 'other'
         auto constexpr min{ inner_node::min_values };
         BOOST_ASSUME( right.num_vals >= min - 1 ); BOOST_ASSUME( right.num_vals <= min );
         BOOST_ASSUME( left .num_vals >= min - 1 ); BOOST_ASSUME( left .num_vals <= min );
-        unlink_node( right, left );
 
         move_chldrn( right, 0, num_chldrn( right ), left, num_chldrn( left ) );
         auto & separator_key{ parent.keys[ parent_key_idx ] };
@@ -1067,11 +1131,10 @@ protected: // 'other'
         keys( left ).back() = std::move( separator_key );
         std::ranges::move( keys( right ), keys( left ).end() );
 
-        left .num_vals += right.num_vals;
-        right.num_vals  = 0;
+        left.num_vals += right.num_vals;
         BOOST_ASSUME( left.num_vals >= left.max_values - 1 ); BOOST_ASSUME( left.num_vals <= left.max_values );
-        verify( left  );
-        free  ( right );
+        verify( left );
+        unlink_node( right, left );
 
         lshift_keys  ( parent, parent_key_idx   );
         lshift_chldrn( parent, parent_child_idx );
@@ -1102,7 +1165,8 @@ public:
     {
         auto & leaf{ static_cast<leaf_node &>( node() ) };
         BOOST_ASSUME( pos_.value_offset < leaf.num_vals );
-        return leaf.keys[ pos_.value_offset ]; }
+        return leaf.keys[ pos_.value_offset ];
+    }
 
     constexpr fwd_iterator & operator++() noexcept { return static_cast<fwd_iterator &>( base_iterator::operator++() ); }
     constexpr fwd_iterator & operator--() noexcept { return static_cast<fwd_iterator &>( base_iterator::operator--() ); }
@@ -1157,7 +1221,7 @@ void bptree_base_wkey<Key>::move_keys
 {
     BOOST_ASSUME( &source != &target ); // otherwise could require move_backwards or shift_*
     BOOST_ASSUME( src_begin <= src_end );
-    BOOST_ASSUME( ( src_end - src_begin ) <= N::min_values + 1 );
+    BOOST_ASSUME( ( src_end - src_begin ) <= N::max_values );
     BOOST_ASSUME( tgt_begin < N::max_values );
     std::uninitialized_move( &source.keys[ src_begin ], &source.keys[ src_end ], &target.keys[ tgt_begin ] );
 }
@@ -1293,62 +1357,9 @@ public:
 
     // bulk insert
     // TODO proper std insert interface (w/ ranges, iterators, hints...)
-    // https://www.sciencedirect.com/science/article/abs/pii/S0020025502002025 On batch-constructing B+-trees: algorithm and its performance
-    // evaluation https://www.vldb.org/conf/2001/P461.pdf An Evaluation of Generic Bulk Loading Techniques
-    // https://stackoverflow.com/questions/15996319/is-there-any-algorithm-for-bulk-loading-in-b-tree
-    void insert( std::span<Key const> keys )
-    {
-        auto const total_size{ static_cast<size_type>( keys.size() ) };
-        auto const [begin_leaf, end_pos]{ base::bulk_insert_prepare( keys ) };
-        ra_iterator const p_new_nodes_begin{ *this, { begin_leaf, 0 }, 0          };
-        ra_iterator const p_new_nodes_end  { *this, end_pos          , total_size };
-        std::sort( p_new_nodes_begin, p_new_nodes_end, comp() );
+    void insert( std::span<Key const> keys );
 
-        if ( empty() )
-            return base::bulk_insert_into_empty( begin_leaf, end_pos, total_size );
-
-        for ( auto p_new_keys{ p_new_nodes_begin }; p_new_keys != p_new_nodes_end; )
-        {
-            auto [ source_slot, source_slot_offset ]{ p_new_keys.pos() };
-            auto const tgt_location{ find_nodes_for( *p_new_keys ) };
-            auto       tgt_leaf         { &tgt_location.leaf };
-            auto       tgt_leaf_next_pos{  tgt_location.leaf_offset.pos };
-
-            auto * src_leaf{ &base::leaf( source_slot ) };
-            // if we have reached the end of the rightmost leaf simply perform
-            // a bulk_append
-            if ( ( tgt_leaf_next_pos == tgt_leaf->num_vals ) && !tgt_leaf->right )
-            {
-                lshift_keys( *src_leaf, source_slot_offset );
-                src_leaf->num_vals -= source_slot_offset;
-                src_leaf->left      = slot_of( *tgt_leaf );
-                tgt_leaf->right     = source_slot;
-                auto const rightmost_parent_slot{ tgt_leaf->parent };
-                auto const parent_pos{ tgt_leaf->parent_child_idx }; // key idx = child idx - 1 & this is the 'next' key
-                base::bulk_append( src_leaf, { rightmost_parent_slot, parent_pos } );
-                break;
-            }
-
-            node_size_type consumed_source;
-            std::tie( consumed_source, tgt_leaf, tgt_leaf_next_pos ) =
-                merge
-                (
-                    *src_leaf, source_slot_offset,
-                    *tgt_leaf, tgt_leaf_next_pos
-                );
-            // TODO merge returns 'hints' for the next target position: use that
-            // for a faster version of find_nodes_for (that does not search from
-            // the beginning everytime).
-
-            // merge might have caused a relocation (by calling split_to_insert)
-            // TODO use iter_pos directly
-            p_new_keys     .update_pool_ptr( this->nodes_ );
-            p_new_nodes_end.update_pool_ptr( this->nodes_ );
-            p_new_keys += consumed_source;
-        }
-
-        this->hdr().size_ += total_size;
-    }
+    void merge( bp_tree & other );
 
     [[ using gnu: noinline, pure, sysv_abi ]]
     const_iterator find( key_const_arg key ) const noexcept
@@ -1536,11 +1547,12 @@ private:
         }
         if ( !available_space ) [[ unlikely ]]
         {
-            auto const source_slot{ slot_of( source ) };
+            // support merging nodes from another tree instance
+            auto const source_slot{ base::is_my_node( source ) ? slot_of( source ) : node_slot{} };
             BOOST_ASSERT( find( target, src_keys[ 0 ] ).pos == target_offset );
             auto       [target_slot, next_tgt_offset]{ base::split_to_insert( target, target_offset, src_keys[ 0 ], {} ) };
-            auto const & src{ base::leaf( source_slot ) };
-            auto       & tgt{ base::leaf( target_slot ) };
+            auto const & src{ source_slot ? base::leaf( source_slot ) : source };
+            auto       & tgt{               base::leaf( target_slot )          };
             BOOST_ASSUME( next_tgt_offset <= tgt.num_vals );
             auto const next_src_offset{ static_cast<node_size_type>( source_offset + 1 ) };
             // next_tgt_offset returned by split_to_insert points to the
@@ -1620,6 +1632,14 @@ private:
         }
     }
 
+#if !( defined( _MSC_VER ) && !defined( __clang__ ) )
+    // ambiguous call w/ VS 17.11.5
+    void verify( auto const & node ) const noexcept
+    {
+        BOOST_ASSERT( std::ranges::is_sorted( keys( node ), comp() ) );
+        base::verify( node );
+    }
+#endif
 
     [[ gnu::pure ]] bool le( key_const_arg left, key_const_arg right ) const noexcept { return comp()( left, right ); }
     [[ gnu::pure ]] bool eq( key_const_arg left, key_const_arg right ) const noexcept
@@ -1641,6 +1661,161 @@ private:
 }; // class bp_tree
 
 PSI_WARNING_DISABLE_POP()
+
+template <typename Key, typename Comparator>
+void bp_tree<Key, Comparator>::insert( std::span<Key const> keys )
+{
+    // https://www.sciencedirect.com/science/article/abs/pii/S0020025502002025 On batch-constructing B+-trees: algorithm and its performance
+    // https://www.vldb.org/conf/2001/P461.pdf An Evaluation of Generic Bulk Loading Techniques
+    // https://stackoverflow.com/questions/15996319/is-there-any-algorithm-for-bulk-loading-in-b-tree
+
+    auto const total_size{ static_cast<size_type>( keys.size() ) };
+    auto const [begin_leaf, end_pos]{ base::bulk_insert_prepare( keys ) };
+    ra_iterator const p_new_nodes_begin{ *this, { begin_leaf, 0 }, 0          };
+    ra_iterator const p_new_nodes_end  { *this, end_pos          , total_size };
+    std::sort( p_new_nodes_begin, p_new_nodes_end, comp() );
+
+    if ( empty() )
+        return base::bulk_insert_into_empty( begin_leaf, end_pos, total_size );
+
+    for ( auto p_new_keys{ p_new_nodes_begin }; p_new_keys != p_new_nodes_end; )
+    {
+        auto const tgt_location{ find_nodes_for( *p_new_keys ) };
+        BOOST_ASSUME( !tgt_location.leaf_offset.exact_find );
+        auto       tgt_leaf         { &tgt_location.leaf };
+        auto       tgt_leaf_next_pos{  tgt_location.leaf_offset.pos };
+
+        auto const [source_slot, source_slot_offset]{ p_new_keys.pos() };
+        auto *     src_leaf{ &this->leaf( source_slot ) };
+        BOOST_ASSUME( source_slot_offset < src_leaf->num_vals );
+        // if we have reached the end of the rightmost leaf simply perform
+        // a bulk_append
+        if ( ( tgt_leaf_next_pos == tgt_leaf->num_vals ) && !tgt_leaf->right )
+        {
+            std::shift_left( src_leaf->keys, &src_leaf->keys[ src_leaf->num_vals ], source_slot_offset );
+            src_leaf->num_vals -= source_slot_offset;
+            base::link( *tgt_leaf, *src_leaf );
+            base::bulk_append_fill_incomplete_leaf( *src_leaf );
+            auto const rightmost_parent_slot{ tgt_leaf->parent };
+            auto const parent_pos           { tgt_leaf->parent_child_idx }; // key idx = child idx - 1 & this is the 'next' key
+            base::bulk_append( src_leaf, { rightmost_parent_slot, parent_pos } );
+            break;
+        }
+
+        node_size_type consumed_source;
+        std::tie( consumed_source, tgt_leaf, tgt_leaf_next_pos ) =
+            merge
+            (
+                *src_leaf, source_slot_offset,
+                *tgt_leaf, tgt_leaf_next_pos
+            );
+        // TODO merge returns 'hints' for the next target position: use that
+        // for a faster version of find_nodes_for (that does not search from
+        // the beginning every time).
+
+        // merge might have caused a relocation (by calling split_to_insert)
+        // TODO use iter_pos directly
+        p_new_keys     .update_pool_ptr( this->nodes_ );
+        p_new_nodes_end.update_pool_ptr( this->nodes_ );
+        p_new_keys += consumed_source;
+        if ( source_slot != p_new_keys.pos().node )
+        {
+            // merged leaves (their contents) were effectively copied into
+            // existing leaves (instead of simply linked into the tree
+            // structure) and now have to be returned to the free pool
+            // TODO: add leak detection to/for the entire bp_tree class
+            src_leaf = &this->leaf( source_slot ); // could be invalidated by split_to_insert in merge
+            base::unlink_right( *src_leaf );
+            free( *src_leaf );
+        }
+    }
+
+    this->hdr().size_ += total_size;
+} // bp_tree::insert()
+
+template <typename Key, typename Comparator>
+void bp_tree<Key, Comparator>::merge( bp_tree & other )
+{
+    // This function follows nearly the same logic as bulk insert (consult it
+    // for more comments), the main differences being:
+    //  - no need to copy and sort the input
+    //  - the bulk_append phase has to first copy the remaining of the source
+    //    nodes (they are not somehow 'extractable' from the source tree)
+    //  - care has to be taken around the fact that source leaves are coming
+    //    from a different tree instance (i.e. from a different container) e.g.
+    //    when resolving slots to node references.
+    if ( empty() ) {
+        return swap( other );
+    }
+
+    auto const total_size{ other.size() };
+    this->reserve( total_size );
+
+    auto const p_new_nodes_begin{ other.ra_begin() };
+    auto const p_new_nodes_end  { other.ra_end  () };
+
+    for ( auto p_new_keys{ p_new_nodes_begin }; p_new_keys != p_new_nodes_end; )
+    {
+        auto const tgt_location{ find_nodes_for( *p_new_keys ) };
+        auto &     tgt_leaf         { tgt_location.leaf };
+        auto const tgt_leaf_next_pos{ tgt_location.leaf_offset.pos };
+
+        auto *     src_leaf          { &other.leaf( p_new_keys.pos().node ) };
+        auto const source_slot_offset{ p_new_keys.pos().value_offset };
+        BOOST_ASSUME( source_slot_offset < src_leaf->num_vals );
+        // simple bulk_append at the end of the rightmost leaf
+        if ( ( tgt_leaf_next_pos == tgt_leaf.num_vals ) && !tgt_leaf.right )
+        {
+            // pre-copy the (remainder of the) source into fresh nodes in
+            // order to simply call bulk_append
+            node_slot src_copy_begin;
+            node_slot prev_src_copy_node;
+            for ( ;; )
+            {
+                auto & src_leaf_copy{ this->template new_node<leaf_node>() };
+                if ( !src_copy_begin )
+                {
+                    src_copy_begin = slot_of( src_leaf_copy );
+                    this->move_keys( *src_leaf, source_slot_offset, src_leaf->num_vals, src_leaf_copy, 0 );
+                    src_leaf_copy.num_vals = src_leaf->num_vals - source_slot_offset;
+                    src_leaf->num_vals     = source_slot_offset;
+                    this->link( tgt_leaf, src_leaf_copy );
+                    this->bulk_append_fill_incomplete_leaf( src_leaf_copy );
+                }
+                else
+                {
+                    this->move_keys( *src_leaf, 0, src_leaf->num_vals, src_leaf_copy, 0 );
+                    src_leaf_copy.num_vals = src_leaf->num_vals;
+                    src_leaf->num_vals     = 0;
+                    this->link( this->leaf( prev_src_copy_node ), src_leaf_copy );
+                }
+                BOOST_ASSUME( !src_leaf_copy.parent );
+                BOOST_ASSUME( !src_leaf_copy.parent_child_idx );
+                    
+                if ( !src_leaf->right )
+                    break;
+                src_leaf           = &other.right( *src_leaf );
+                prev_src_copy_node = slot_of( src_leaf_copy );
+            }
+
+            this->bulk_append( &this->leaf( src_copy_begin ), { tgt_leaf.parent, tgt_leaf.parent_child_idx } );
+            break;
+        }
+
+        auto const consumed_source
+        {
+            std::get<0>( merge
+            (
+                *src_leaf, source_slot_offset,
+                 tgt_leaf, tgt_leaf_next_pos
+            ))
+        };
+
+        p_new_keys += consumed_source;
+    } // main loop
+
+    this->hdr().size_ += total_size;
+} // bp_tree::merge()
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm
