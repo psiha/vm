@@ -18,6 +18,8 @@ static auto const test_file{ "test.bpt" };
 
 TEST( bp_tree, playground )
 {
+    // TODO different types, insertion from non contiguous containers
+
 #ifdef NDEBUG
     auto const test_size{ 6853735 };
 #else
