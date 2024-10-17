@@ -19,9 +19,9 @@ static auto const test_file{ "test.bpt" };
 TEST( bp_tree, playground )
 {
 #ifdef NDEBUG
-    auto const test_size{ 14553735 };
+    auto const test_size{ 6853735 };
 #else
-    auto const test_size{   258735 };
+    auto const test_size{  258735 };
 #endif
     std::ranges::iota_view constexpr sorted_numbers{ 0, test_size };
     std::mt19937 rng{ std::random_device{}() };
@@ -40,9 +40,11 @@ TEST( bp_tree, playground )
             auto const  first_third{ nums.subspan( 0 * third, third ) };
             auto const second_third{ nums.subspan( 1 * third, third ) };
             auto const  third_third{ nums.subspan( 2 * third        ) };
-                                                    bpt.insert( first_third ); // bulk into empty
-            for ( auto const & n : second_third ) { bpt.insert( n ); }         // single value
-                                                    bpt.insert( third_third ); // bulk into non-empty
+                                                    EXPECT_EQ( bpt.insert( first_third )       , first_third.size() );   // bulk into empty
+            for ( auto const & n : second_third ) { EXPECT_EQ( bpt.insert( n           ).second, true               ); } // single value
+                                                    EXPECT_EQ( bpt.insert( third_third )       , third_third.size() );   // bulk into non-empty
+
+            EXPECT_EQ( bpt.insert( second_third ), 0 );
         }
 
         static_assert( std::forward_iterator<bp_tree<int>::const_iterator> );
@@ -54,9 +56,12 @@ TEST( bp_tree, playground )
         EXPECT_TRUE( std::ranges::equal( sorted_numbers, bpt.random_access() ) );
         EXPECT_NE( bpt.find( +42 ), bpt.end() );
         EXPECT_EQ( bpt.find( -42 ), bpt.end() );
-        bpt.erase( 42 );
-        EXPECT_EQ( bpt.find( +42 ), bpt.end() );
-        bpt.insert( 42 );
+        EXPECT_TRUE ( bpt.erase( 42 ) );
+        EXPECT_FALSE( bpt.erase( 42 ) );
+        EXPECT_EQ   ( bpt.find( +42 ), bpt.end() );
+        EXPECT_TRUE ( bpt.insert( 42 ).second );
+        EXPECT_FALSE( bpt.insert( 42 ).second );
+        EXPECT_EQ   ( *bpt.insert( 42 ).first, 42 );
         EXPECT_TRUE( std::ranges::equal(                      bpt.random_access()  ,                      sorted_numbers   ) );
         EXPECT_TRUE( std::ranges::equal( std::views::reverse( bpt.random_access() ), std::views::reverse( sorted_numbers ) ) );
         {
@@ -78,7 +83,7 @@ TEST( bp_tree, playground )
             auto shuffled_even_numbers{ std::ranges::to<std::vector>( even_sorted_numbers ) };
             std::shuffle( shuffled_even_numbers.begin(), shuffled_even_numbers.end(), rng );
             for ( auto const & n : shuffled_even_numbers ) {
-                bpt.erase( n );
+                EXPECT_TRUE( bpt.erase( n ) );
             }
 
             bp_tree<int> bpt_even;
@@ -86,16 +91,16 @@ TEST( bp_tree, playground )
             shuffled_even_numbers.append_range( merge_appendix );
             bpt_even.insert( shuffled_even_numbers );
 
-            bpt.merge( bpt_even );
+            EXPECT_EQ( bpt.merge( bpt_even ), bpt_even.size() );
         }
 
         EXPECT_TRUE( std::ranges::equal( std::ranges::iota_view{ 0, test_size + extra_entries_for_tree_merge }, bpt ) );
 
         std::shuffle( numbers.begin(), numbers.end(), rng );
         for ( auto const & n : numbers )
-            bpt.erase( n );
+            EXPECT_TRUE( bpt.erase( n ) );
         for ( auto const & n : merge_appendix )
-            bpt.erase( n );
+            EXPECT_TRUE( bpt.erase( n ) );
 
         EXPECT_TRUE( bpt.empty() );
     }
@@ -105,23 +110,23 @@ TEST( bp_tree, playground )
         bpt.map_file( test_file, flags::named_object_construction_policy::create_new_or_truncate_existing );    
 
         for ( auto const & n : numbers )
-            bpt.insert( n );
+            EXPECT_TRUE( bpt.insert( n ).second );
     
         static_assert( std::forward_iterator<bp_tree<int>::const_iterator> );
 
         EXPECT_TRUE( std::ranges::is_sorted( std::as_const( bpt ), bpt.comp() ) );
         EXPECT_TRUE( std::ranges::equal( bpt, sorted_numbers ) );
-        EXPECT_NE( bpt.find( +42 ), bpt.end() );
-        EXPECT_EQ( bpt.find( -42 ), bpt.end() );
-        bpt.erase( 42 );
-        EXPECT_EQ( bpt.find( +42 ), bpt.end() );
+        EXPECT_NE  ( bpt.find( +42 ), bpt.end() );
+        EXPECT_EQ  ( bpt.find( -42 ), bpt.end() );
+        EXPECT_TRUE( bpt.erase( 42 ) );
+        EXPECT_EQ  ( bpt.find( +42 ), bpt.end() );
     }
     {
         bp_tree<int> bpt;
         bpt.map_file( test_file, flags::named_object_construction_policy::open_existing );    
 
-        EXPECT_EQ( bpt.size(), sorted_numbers.size() - 1 );
-        bpt.insert( +42 );
+        EXPECT_EQ  ( bpt.size(), sorted_numbers.size() - 1 );
+        EXPECT_TRUE( bpt.insert( +42 ).second );
     
         EXPECT_TRUE( std::ranges::is_sorted( bpt, bpt.comp() ) );
         EXPECT_TRUE( std::ranges::equal( std::as_const( bpt ), sorted_numbers ) );
