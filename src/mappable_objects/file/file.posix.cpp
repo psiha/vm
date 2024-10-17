@@ -110,7 +110,7 @@ mapping create_mapping
 #    if defined( MAP_SHARED_VALIDATE )
         // mmap fails with EINVAL (under WSL kernel 5.15 w/ ArchLinux) when
         // MAP_SHARED_VALIDATE is combined with MAP_ANONYMOUS
-        if ( ( std::to_underlying( flags::mapping::share_mode::shared ) == MAP_SHARED_VALIDATE ) && ( view_flags.flags & MAP_SHARED_VALIDATE ) )
+        if ( ( view_flags.flags & MAP_TYPE ) == MAP_SHARED_VALIDATE )
         {
             view_flags.flags &= ~MAP_SHARED_VALIDATE;
             view_flags.flags |=  MAP_SHARED;

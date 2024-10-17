@@ -14,6 +14,7 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
+#include "../allocation/allocation.impl.hpp"
 #include <psi/vm/align.hpp>
 #include <psi/vm/detail/win32.hpp>
 #include <psi/vm/mapped_view/mapped_view.hpp>
@@ -98,29 +99,34 @@ map
 #endif
 }
 
+// defined in allocation.win32.cpp
+WIN32_MEMORY_REGION_INFORMATION mem_info( void * const ) noexcept;
+
 namespace
 {
-    [[ maybe_unused ]]
-    auto mem_info( void * const address ) noexcept
+    BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_NOINLINE
+    void unmap_concatenated( void * address, std::size_t size ) noexcept
     {
-        MEMORY_BASIC_INFORMATION info;
-        BOOST_VERIFY( ::VirtualQueryEx( nt::current_process, address, &info, sizeof( info ) ) == sizeof( info ) );
-        return info;
+        // emulate support for adjacent/concatenated regions (as supported by mmap)
+        // (duplicated logic from free() in allocaiton.win32.cpp)
+        for ( ;; )
+        {
+            auto const region_size{ mem_info( address ).RegionSize };
+            BOOST_ASSUME( region_size <= align_up( size, reserve_granularity ) );
+            BOOST_VERIFY( ::UnmapViewOfFile( address ) );
+            if ( region_size >= size )
+                break;
+            add( address, region_size );
+            sub( size   , region_size );
+        }
     }
 } // anonymous namespace
 
-BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
+BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
 void unmap( mapped_span const view ) noexcept
 {
-    BOOST_ASSERT_MSG
-    (   // greater-or-equal because of the inability of Windows to do a proper unmap_partial
-        // (so we do discard() calls and shrinking of the view-span only, while the actual
-        // region remains in its original size)
-        mem_info( view.data() ).RegionSize >= align_up( view.size(), commit_granularity ) || view.empty(),
-        "TODO: implement a loop to handle concatenated ranges"
-        // see mapped_view::expand, Windows does not allow partial unmaps or merging of mapped views/ranges
-    );
-    BOOST_VERIFY( ::UnmapViewOfFile( view.data() ) || view.empty() );
+    if ( !view.empty() )
+        unmap_concatenated( view.data(), view.size() );
 }
 
 void unmap_partial( mapped_span const range ) noexcept

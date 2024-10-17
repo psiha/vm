@@ -234,7 +234,7 @@ namespace detail
         return result;
     }
 
-    BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS, BOOST_WARN_UNUSED_RESULT )
+    [[ nodiscard ]] BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
     bool named_semaphore::semop( short const opcode, bool const nowait /*= false*/ ) noexcept
     {
         // http://linux.die.net/man/2/semop

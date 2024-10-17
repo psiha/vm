@@ -19,7 +19,7 @@ include( ${CMAKE_CURRENT_BINARY_DIR}/cmake/get_cpm.cmake )
 
 # Add packages
 
-set( boost_ver boost-1.85.0 )
+set( boost_ver boost-1.86.0 )
 CPMAddPackage( "gh:boostorg/static_assert#${boost_ver}"   ) # Boost::core dependency
 CPMAddPackage( "gh:boostorg/throw_exception#${boost_ver}" ) # Boost::core dependency
 CPMAddPackage( "gh:boostorg/config#${boost_ver}"          ) # Boost::core dependency
@@ -29,6 +29,7 @@ CPMAddPackage( "gh:boostorg/predef#${boost_ver}"          ) # Boost::winapi depe
 CPMAddPackage( "gh:boostorg/assert#${boost_ver}"          )
 CPMAddPackage( "gh:boostorg/core#${boost_ver}"            )
 CPMAddPackage( "gh:boostorg/preprocessor#${boost_ver}"    )
+CPMAddPackage( "gh:boostorg/stl_interfaces#${boost_ver}"  )
 CPMAddPackage( "gh:boostorg/winapi#${boost_ver}"          )
 CPMAddPackage( "gh:boostorg/utility#${boost_ver}"         )
 
@@ -55,7 +56,9 @@ if ( ${CMAKE_SYSTEM_NAME} MATCHES "Linux" )
     PSI_add_link_options( Release -flto ) # lld does not seem to be enough
     add_compile_options( -stdlib=libc++ )
     # Needed under WSL for some reason?
-    PSI_add_link_options( Debug -lc++ -lc++abi -lubsan )
+    PSI_add_link_options( Debug      -lc++ -lc++abi -lm -lubsan )
+    PSI_add_link_options( DevRelease -lc++ -lc++abi -lm -lubsan )
+    PSI_add_link_options( Release    -lc++ -lc++abi -lm         )
 else()
     set( CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE true )
     PSI_add_link_options( Release ${PSI_linker_LTO} )
@@ -72,6 +75,7 @@ target_link_libraries( psi_vm PUBLIC
   Boost::core
   Boost::assert
   Boost::preprocessor
+  Boost::stl_interfaces
   Boost::winapi
   Boost::utility
 )
@@ -82,6 +86,8 @@ target_include_directories( psi_vm PUBLIC
   "${err_SOURCE_DIR}/include"
   "${std_fix_SOURCE_DIR}/include" # vm::vector uses it (in a header)
 )
+
+target_precompile_headers( psi_vm PUBLIC src/pch.hpp )
 
 
 ###################

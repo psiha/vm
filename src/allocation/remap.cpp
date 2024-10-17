@@ -13,6 +13,7 @@
 //------------------------------------------------------------------------------
 #include "allocation.impl.hpp"
 #include <psi/vm/align.hpp>
+#include <psi/vm/allocation.hpp>
 
 #include <boost/assert.hpp>
 #include <boost/config_ex.hpp>
@@ -147,7 +148,7 @@ expand_result expand_back
 
 expand_result expand_front
 (
-    std::byte * const address,
+    std::byte *       const address,
     std::size_t       const current_size,
     std::size_t       const required_size,
     std::size_t       const used_capacity,
