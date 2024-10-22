@@ -40,7 +40,21 @@ bptree_base::user_header_data() noexcept { return header_data().second; }
 bptree_base::header &
 bptree_base::hdr() noexcept { return *header_data().first; }
 
-void bptree_base::reserve( node_slot::value_type additional_nodes )
+bptree_base::storage_result
+bptree_base::map_memory( std::uint32_t const initial_capacity_as_number_of_nodes ) noexcept
+{
+    storage_result success{ nodes_.map_memory( initial_capacity_as_number_of_nodes, value_init ) };
+    if ( std::move( success ) )
+    {
+        hdr() = {};
+        if ( initial_capacity_as_number_of_nodes ) {
+            assign_nodes_to_free_pool( 0 );
+        }
+    }
+    return success;
+}
+
+void bptree_base::reserve_additional( node_slot::value_type additional_nodes )
 {
     auto const preallocated_count{ hdr().free_node_count_ };
     additional_nodes -= std::min( preallocated_count, additional_nodes );
@@ -49,9 +63,21 @@ void bptree_base::reserve( node_slot::value_type additional_nodes )
 #ifndef NDEBUG
     hdr_ = &hdr();
 #endif
-    assign_nodes_to_free_pool( static_cast<node_slot::value_type>( current_size ) );
+    assign_nodes_to_free_pool( current_size );
 }
 
+void bptree_base::reserve( node_slot::value_type new_capacity_in_number_of_nodes )
+{
+    if ( new_capacity_in_number_of_nodes <= nodes_.capacity() )
+        return;
+    auto const current_size{ nodes_.size() };
+    nodes_.grow_to( new_capacity_in_number_of_nodes, value_init );
+#ifndef NDEBUG
+    hdr_ = &hdr();
+#endif
+    assign_nodes_to_free_pool( current_size );
+}
+[[ gnu::cold ]]
 void bptree_base::assign_nodes_to_free_pool( node_slot::value_type const starting_node ) noexcept
 {
     for ( auto & n : std::views::reverse( std::span{ nodes_ }.subspan( starting_node ) ) )

@@ -45,9 +45,92 @@ namespace detail
     template <typename T> static constexpr bool is_simple_comparator<std::greater<T>>{ true };
 } // namespace detail
 
+////////////////////////////////////////////////////////////////////////////////
+// Modern(ized) attempt at 'automatized' boost::call_traits primarily to support
+// efficient transparent comparators & non-inlined generic lookup functions
+// which cause neither unnecessary copies of non-trivial types nor pass-by-ref
+// of trivial ones.
+// Largely still WiP...
+// Essentially this is 'explicit IPA SROA'.
+// https://gcc.gnu.org/onlinedocs/gccint/passes-and-files-of-the-compiler/inter-procedural-optimization-passes.html
+////////////////////////////////////////////////////////////////////////////////
 
+template <typename T>
+bool constexpr can_be_passed_in_reg
+{
+    (
+        std::is_trivial_v<T> &&
+        ( sizeof( T ) <= 2 * sizeof( void * ) ) // assuming a sane ABI like SysV (ignoring the MS x64 disaster)
+    )
+#if defined( __GNUC__ ) || defined( __clang__ )
+    || // detect SIMD types (this could also produce false positives for large compiler-native vectors that do not fit into the register file)
+    requires{ __builtin_convertvector( T{}, T ); }
+#endif
+    // This is certainly not an exhaustive list/'trait' - certain types that can
+    // be passed in reg cannot be detected as such by existing compiler
+    // functionality, e.g. Homogeneous Vector Aggregates
+    // https://devblogs.microsoft.com/cppblog/introducing-vector-calling-convention
+    // users are encouraged to provide specializations for such types.
+}; // can_be_passed_in_reg
+
+template <typename T>
+struct optimal_const_ref { using type = T const &; };
+
+template <typename Char>
+struct optimal_const_ref<std::basic_string<Char>> { using type = std::basic_string_view<char>; };
+
+template <std::ranges::contiguous_range Rng>
+struct optimal_const_ref<Rng> { using type = std::span<std::ranges::range_value_t<Rng> const>; };
+
+template <typename T>
+struct [[ clang::trivial_abi ]] pass_in_reg
+{
+    static auto constexpr pass_by_val{ can_be_passed_in_reg<T> };
+
+    using  value_type = T;
+    using stored_type = std::conditional_t<pass_by_val, T, optimal_const_ref<T>>;
+
+    constexpr pass_in_reg( T const & u ) noexcept : val{ u } {}
+
+    stored_type val;
+
+    [[ gnu::pure ]] BOOST_FORCEINLINE
+    constexpr operator stored_type const &() const noexcept { return val; }
+}; // pass_in_reg
+
+template <typename T>
+struct [[ clang::trivial_abi ]] pass_rv_in_reg
+{
+    static auto constexpr pass_by_val{ can_be_passed_in_reg<T> };
+
+    using  value_type = T;
+    using stored_type = std::conditional_t<pass_by_val, T, T &&>;
+
+    constexpr pass_rv_in_reg( T && u ) noexcept : val{ std::move( u ) } {} // move for not-trivially-moveable yet trivial_abi types (that can be passed in reg)
+
+    stored_type val;
+
+    [[ gnu::pure ]] BOOST_FORCEINLINE constexpr operator stored_type const & () const noexcept { return            val  ; }
+    [[ gnu::pure ]] BOOST_FORCEINLINE constexpr operator stored_type       &&()       noexcept { return std::move( val ); }
+}; // pass_rv_in_reg
+
+template <typename K, bool transparent_comparator, typename StoredKeyType>
+concept KeyType = transparent_comparator || std::is_same_v<StoredKeyType, K>;
+
+template <typename T> bool constexpr reg                   { false };
+template <typename T> bool constexpr reg<pass_in_reg   <T>>{  true };
+template <typename T> bool constexpr reg<pass_rv_in_reg<T>>{  true };
+
+template <typename T>
+concept Reg = reg<T>;
+
+// 'Explicit IPA SROA' / pass-in-reg helper end
+////////////////////////////////////////////////////////////////////////////////
+
+
+// user specializations and overloads of this function are allowed
 template <typename Comparator, typename Key>
-constexpr bool use_linear_search_for_sorted_array( [[ maybe_unused ]] std::uint32_t const minimum_array_length, std::uint32_t const maximum_array_length ) noexcept
+consteval bool use_linear_search_for_sorted_array( [[ maybe_unused ]] std::uint32_t const minimum_array_length, std::uint32_t const maximum_array_length ) noexcept
 {
     auto const basic_test
     { 
@@ -92,18 +175,7 @@ public:
             hdr() = {};
         return success;
     }
-    storage_result map_memory( std::uint32_t const initial_capacity_as_number_of_nodes = 0 ) noexcept
-    {
-        storage_result success{ nodes_.map_memory( initial_capacity_as_number_of_nodes ) };
-        if ( std::move( success ) )
-        {
-            hdr() = {};
-            if ( initial_capacity_as_number_of_nodes ) {
-                assign_nodes_to_free_pool( 0 );
-            }
-        }
-        return success;
-    }
+    storage_result map_memory( std::uint32_t initial_capacity_as_number_of_nodes = 0 ) noexcept;
 
 protected:
     static constexpr auto node_size{ page_size };
@@ -211,7 +283,8 @@ protected:
 
     void free( node_header & ) noexcept;
 
-    void reserve( node_slot::value_type additional_nodes );
+    void reserve_additional( node_slot::value_type additional_nodes );
+    void reserve           ( node_slot::value_type new_capacity_in_number_of_nodes );
 
     [[ gnu::pure ]] header       & hdr()       noexcept;
     [[ gnu::pure ]] header const & hdr() const noexcept { return const_cast<bptree_base &>( *this ).hdr(); }
@@ -225,10 +298,10 @@ protected:
         //BOOST_ASSUME( node.num_vals >= node.min_values );
     }
 
-    static constexpr auto keys    ( auto       & node ) noexcept {                                             return std::span{ node.keys    , node.num_vals      }; }
-    static constexpr auto keys    ( auto const & node ) noexcept {                                             return std::span{ node.keys    , node.num_vals      }; }
-    static constexpr auto children( auto       & node ) noexcept { if constexpr ( requires{ node.children; } ) return std::span{ node.children, node.num_vals + 1U }; else return std::array<node_slot, 0>{}; }
-    static constexpr auto children( auto const & node ) noexcept { if constexpr ( requires{ node.children; } ) return std::span{ node.children, node.num_vals + 1U }; else return std::array<node_slot, 0>{}; }
+    static constexpr auto keys    ( auto       & node ) noexcept { verify( node );                                             return std::span{ node.keys    , node.num_vals      }; }
+    static constexpr auto keys    ( auto const & node ) noexcept { verify( node );                                             return std::span{ node.keys    , node.num_vals      }; }
+    static constexpr auto children( auto       & node ) noexcept { verify( node ); if constexpr ( requires{ node.children; } ) return std::span{ node.children, node.num_vals + 1U }; else return std::array<node_slot, 0>{}; }
+    static constexpr auto children( auto const & node ) noexcept { verify( node ); if constexpr ( requires{ node.children; } ) return std::span{ node.children, node.num_vals + 1U }; else return std::array<node_slot, 0>{}; }
 
     [[ gnu::pure ]] static constexpr node_size_type num_vals  ( auto const & node ) noexcept { return node.num_vals; }
     [[ gnu::pure ]] static constexpr node_size_type num_chldrn( auto const & node ) noexcept { if constexpr ( requires{ node.children; } ) { BOOST_ASSUME( node.num_vals ); return node.num_vals + 1U; } else return 0; }
@@ -434,14 +507,41 @@ public:
     using key_type      = Key;
     using value_type    = key_type; // TODO map support
 
-    using key_const_arg = std::conditional_t<std::is_trivial_v<Key>, Key, Key const &>;
+    // support for non trivial types (for which move and pass-by-ref matters) is WiP, nowhere near complete
+    static_assert( std::is_trivial_v<Key> );
+
+    using key_rv_arg    = std::conditional_t<can_be_passed_in_reg<Key>, Key const, pass_rv_in_reg<Key>>;
+    using key_const_arg = std::conditional_t<can_be_passed_in_reg<Key>, Key const, pass_in_reg   <Key>>;
 
 public:
-    void reserve( size_type additional_values )
+    storage_result map_memory( size_type initial_capacity = 0 ) noexcept { return bptree_base::map_memory( node_count_required_for_values( initial_capacity ) ); }
+    size_type capacity() const noexcept
     {
-        additional_values = additional_values * 3 / 2; // TODO find the appropriate formula
-        bptree_base::reserve( static_cast<node_slot::value_type>( ( additional_values + leaf_node::max_values - 1 ) / leaf_node::max_values ) );
+        // TODO WiP playground
+        auto const n{ nodes_.capacity() };
+        if ( !n ) [[ unlikely ]]
+            return 0;
+
+        node_slot::value_type inner_nodes{ 0 };
+        node_slot::value_type current_level_count{ 1 };
+        while ( ( current_level_count * inner_node::max_children ) < ( n - inner_nodes ) )
+        {
+            inner_nodes         += current_level_count;
+            current_level_count *= inner_node::max_children;
+        }
+
+        std::uint8_t const depth{ hdr().depth_ };
+        std::uint8_t max_inner_node_count{ depth > 1 };
+        for ( auto d{ 3 }; d < depth; ++d )
+        {
+            max_inner_node_count += max_inner_node_count * inner_node::max_children;
+        }
+        BOOST_ASSUME( max_inner_node_count < n );
+        return ( n - max_inner_node_count ) * leaf_node::max_values;
     }
+
+    void reserve_additional( size_type const additional_values ) { bptree_base::reserve_additional( node_count_required_for_values( additional_values ) ); }
+    void reserve           ( size_type const new_capacity      ) { bptree_base::reserve           ( node_count_required_for_values( new_capacity      ) ); };
 
     // solely a debugging helper (include b+tree_print.hpp)
     void print() const;
@@ -515,18 +615,19 @@ protected: // iterators
     class  ra_iterator;
 
 protected: // split_to_insert and its helpers
-    void new_root( node_slot const left_child, node_slot const right_child, key_const_arg separator_key )
+    root_node & new_root( node_slot const left_child, node_slot const right_child, key_rv_arg separator_key )
     {
         auto & new_root_node{ as<root_node>( bptree_base::new_root( left_child, right_child ) ) };
         new_root_node.keys    [ 0 ] = std::move( separator_key );
         new_root_node.children[ 0 ] = left_child;
         new_root_node.children[ 1 ] = right_child;
+        return new_root_node;
     }
 
     auto insert_into_new_node
     (
         inner_node & node, inner_node & new_node,
-        key_const_arg value,
+        key_rv_arg value,
         node_size_type const insert_pos, node_size_type const new_insert_pos,
         node_slot const key_right_child
     ) noexcept
@@ -562,7 +663,7 @@ protected: // split_to_insert and its helpers
             move_keys  ( node, insert_pos    , node.num_vals    , new_node, new_insert_pos     );
             move_chldrn( node, insert_pos + 1, node.num_vals + 1, new_node, new_insert_pos + 1 );
 
-            keys( new_node )[ new_insert_pos - 1 ] = value;
+            keys( new_node )[ new_insert_pos - 1 ] = std::move( value );
         }
         insrt_child( new_node, new_insert_pos, key_right_child );
 
@@ -577,7 +678,7 @@ protected: // split_to_insert and its helpers
     static auto insert_into_new_node
     (
         leaf_node & node, leaf_node & new_node,
-        key_const_arg value,
+        key_rv_arg value,
         node_size_type const insert_pos, node_size_type const new_insert_pos,
         node_slot const key_right_child
     ) noexcept
@@ -598,7 +699,7 @@ protected: // split_to_insert and its helpers
         node    .num_vals = mid          ;
         new_node.num_vals = max - mid + 1;
 
-        keys( new_node )[ new_insert_pos ] = value;
+        keys( new_node )[ new_insert_pos ] = std::move( value );
         auto const & key_to_propagate{ new_node.keys[ 0 ] };
 
         BOOST_ASSUME( !underflowed( node     ) );
@@ -607,7 +708,7 @@ protected: // split_to_insert and its helpers
         return std::make_pair( key_to_propagate, static_cast<node_size_type>( new_insert_pos + 1 ) );
     }
 
-    auto insert_into_existing_node( inner_node & node, inner_node & new_node, key_const_arg value, node_size_type const insert_pos, node_slot const key_right_child ) noexcept
+    auto insert_into_existing_node( inner_node & node, inner_node & new_node, key_rv_arg value, node_size_type const insert_pos, node_slot const key_right_child ) noexcept
     {
         BOOST_ASSUME( bool( key_right_child ) );
 
@@ -630,16 +731,16 @@ protected: // split_to_insert and its helpers
         node    .num_vals = mid;
         new_node.num_vals = max - mid;
 
-        keys       ( node )[ insert_pos ] = value;
+        keys       ( node )[ insert_pos ] = std::move( value );
         insrt_child( node, insert_pos + 1, key_right_child );
 
         BOOST_ASSUME( !underflowed( node     ) );
         BOOST_ASSUME( !underflowed( new_node ) );
 
-        return std::make_pair( key_to_propagate, static_cast<node_size_type>( insert_pos + 1 ) );
+        return std::make_pair( std::move( key_to_propagate ), static_cast<node_size_type>( insert_pos + 1 ) );
     }
 
-    static auto insert_into_existing_node( leaf_node & node, leaf_node & new_node, key_const_arg value, node_size_type const insert_pos, node_slot const key_right_child ) noexcept
+    static auto insert_into_existing_node( leaf_node & node, leaf_node & new_node, key_rv_arg value, node_size_type const insert_pos, node_slot const key_right_child ) noexcept
     {
         BOOST_ASSUME( !key_right_child );
 
@@ -657,7 +758,7 @@ protected: // split_to_insert and its helpers
         node    .num_vals = mid;
         new_node.num_vals = max - mid + 1;
 
-        keys( node )[ insert_pos ] = value;
+        keys( node )[ insert_pos ] = std::move( value );
         auto const & key_to_propagate{ new_node.keys[ 0 ] };
 
         BOOST_ASSUME( !underflowed( node     ) );
@@ -667,7 +768,7 @@ protected: // split_to_insert and its helpers
     }
 
     template <typename N>
-    insert_pos_t split_to_insert( N & node_to_split, node_size_type const insert_pos, key_const_arg value, node_slot const key_right_child )
+    insert_pos_t split_to_insert( N & node_to_split, node_size_type const insert_pos, key_rv_arg value, node_slot const key_right_child )
     {
         auto const max{ N::max_values };
         auto const mid{ N::min_values };
@@ -685,8 +786,8 @@ protected: // split_to_insert and its helpers
         auto const new_insert_pos         { insert_pos - mid };
         bool const insertion_into_new_node{ new_insert_pos >= 0 };
         auto [key_to_propagate, next_insert_pos]{ insertion_into_new_node // we cannot save a reference here because it might get invalidated by the new_node<root_node>() call below
-            ? insert_into_new_node     ( *p_node, *p_new_node, value, insert_pos, static_cast<node_size_type>( new_insert_pos ), key_right_child )
-            : insert_into_existing_node( *p_node, *p_new_node, value, insert_pos,                                                key_right_child )
+            ? insert_into_new_node     ( *p_node, *p_new_node, std::move( value ), insert_pos, static_cast<node_size_type>( new_insert_pos ), key_right_child )
+            : insert_into_existing_node( *p_node, *p_new_node, std::move( value ), insert_pos,                                                key_right_child )
         };
 
         verify( *p_node     );
@@ -712,15 +813,15 @@ protected: // split_to_insert and its helpers
 
 protected: // 'other'
     template <typename N>
-    insert_pos_t insert( N & target_node, node_size_type const target_node_pos, key_const_arg v, node_slot const right_child )
+    insert_pos_t insert( N & target_node, node_size_type const target_node_pos, key_rv_arg v, node_slot const right_child )
     {
         verify( target_node );
         if ( full( target_node ) ) [[ unlikely ]] {
-            return split_to_insert( target_node, target_node_pos, v, right_child );
+            return split_to_insert( target_node, target_node_pos, std::move( v ), right_child );
         } else {
             ++target_node.num_vals;
             rshift_keys( target_node, target_node_pos );
-            target_node.keys[ target_node_pos ] = v;
+            target_node.keys[ target_node_pos ] = std::move( v );
             if constexpr ( requires { target_node.children; } ) {
                 node_size_type const ch_pos( target_node_pos + /*>right< child*/ 1 );
                 rshift_chldrn( target_node, ch_pos );
@@ -763,7 +864,7 @@ protected: // 'other'
             (
                 rightmost_parent,
                 rightmost_parent_pos.next_insert_offset,
-                src_leaf->keys[ 0 ],
+                key_rv_arg{ auto{ src_leaf->keys[ 0 ] } },
                 slot_of( *src_leaf )
             );
             if ( !next_src_slot )
@@ -796,9 +897,9 @@ protected: // 'other'
     {
         auto constexpr can_preallocate{ kind == std::ranges::subrange_kind::sized };
         if constexpr ( can_preallocate )
-            reserve( static_cast<size_type>( keys.size() ) );
+            reserve_additional( static_cast<size_type>( keys.size() ) );
         else
-            reserve( 42 );
+            reserve_additional( 42 );
         // w/o preallocation a saved hdr reference could get invalidated
         auto const begin    { can_preallocate ? hdr().free_list_ : slot_of( new_node<leaf_node>() ) };
         auto       leaf_slot{ begin };
@@ -838,7 +939,7 @@ protected: // 'other'
                 if constexpr ( can_preallocate ) {
                     this->hdr().free_list_ = leaf.right;
                     unlink_right( leaf );
-                    BOOST_ASSUME( count == static_cast<size_type>( keys.size() ) );
+                    BOOST_ASSERT( count == static_cast<size_type>( keys.size() ) );
                     count = static_cast<size_type>( keys.size() ); // eliminate the accumulation code above
                 }
                 return bulk_copied_input{ begin, { leaf_slot, leaf.num_vals }, count };
@@ -850,28 +951,33 @@ protected: // 'other'
     void bulk_insert_into_empty( node_slot const begin_leaf, iter_pos const end_leaf, size_type const total_size )
     {
         BOOST_ASSUME( empty() );
-        auto & hdr{ this->hdr() };
-        hdr.root_       = begin_leaf;
-        hdr.first_leaf_ = begin_leaf;
+        auto * hdr{ &this->hdr() };
+        hdr->root_       = begin_leaf;
+        hdr->first_leaf_ = begin_leaf;
         if ( begin_leaf == end_leaf.node ) [[ unlikely ]] // single-node-sized initial insert
         {
-            hdr.last_leaf_ = end_leaf.node;
+            hdr->last_leaf_ = end_leaf.node;
             return;
         }
-        auto const & first_root_left { leaf( begin_leaf            ) };
-        auto       & first_root_right{ leaf( first_root_left.right ) };
+        auto const & first_root_left { leaf ( begin_leaf      ) };
+        auto       & first_root_right{ right( first_root_left ) };
         first_root_right.parent_child_idx = 1;
-        hdr.depth_                        = 1;
-        new_root( begin_leaf, first_root_left.right, first_root_right.keys[ 0 ] ); // may invalidate the hdr reference
-        BOOST_ASSUME( this->hdr().depth_ == 2 );
-        bulk_append( &leaf( first_root_right.right ), { hdr.root_, 1 } );
-        BOOST_ASSUME( this->hdr().last_leaf_ == end_leaf.node );
-        this->hdr().size_ = total_size;
+        hdr->depth_                       = 1;
+        auto const first_unconnected_node{ first_root_right.right };
+        new_root( begin_leaf, first_root_left.right, key_rv_arg{ auto{ first_root_right.keys[ 0 ] } } ); // may invalidate references
+        hdr = &this->hdr();
+        BOOST_ASSUME( hdr->depth_ == 2 );
+        bulk_append( &leaf( first_unconnected_node ), { hdr->root_, 1 } );
+        BOOST_ASSUME( hdr->last_leaf_ == end_leaf.node );
+        hdr->size_ = total_size;
     }
 
      leaf_node & leaf  ( node_slot const slot ) noexcept { return node< leaf_node>( slot ); }
     inner_node & inner ( node_slot const slot ) noexcept { return node<inner_node>( slot ); }
     inner_node & parent( node_header & child ) noexcept { return inner( child.parent ); }
+
+     leaf_node const & leaf  ( node_slot const slot ) const noexcept { return const_cast<bptree_base_wkey &>( *this ).leaf( slot ); }
+    inner_node const & parent( node_header const & child  ) const noexcept { return const_cast<bptree_base_wkey &>( *this ).parent( const_cast<node_header &>( child ) ); }
 
     void update_separator( leaf_node & leaf, Key const & new_separator ) noexcept
     {
@@ -901,30 +1007,6 @@ protected: // 'other'
         auto & parent_key{ parent->keys[ leaf.parent_child_idx - 1 ] };
         BOOST_ASSUME( parent_key == separator_key );
         parent_key = new_separator;
-    }
-
-    void move( leaf_node & source, leaf_node & target ) noexcept
-    {
-        BOOST_ASSUME( &source != &target );
-        BOOST_ASSUME( source.num_values >= leaf_node::min_vals );
-        BOOST_ASSUME( source.num_values <= leaf_node::max_vals );
-
-        auto constexpr copy_whole{ std::is_trivial_v<leaf_node> && false };
-        if constexpr ( copy_whole )
-        {
-            std::memcpy( &target, &source, sizeof( target ) );
-        }
-        else
-        if constexpr ( std::is_trivial_v<Key> )
-        {
-            std::memcpy( &target, &source, reinterpret_cast<std::byte const *>( &source.keys[ source.num_vals ] ) - reinterpret_cast<std::byte const *>( &source ) );
-        }
-        else
-        {
-            std::ranges::uninitialized_move( keys( source ), target.keys );
-            static_cast<node_header &>( target ) = std::move( source );
-            source.num_vals                      = 0;
-        }
     }
 
     template <typename N>
@@ -1175,6 +1257,30 @@ protected: // 'other'
         BOOST_ASSUME( parent.num_vals );
         parent.num_vals--;
     }
+
+private:
+    [[ gnu::const, gnu::noinline ]]
+    static node_slot::value_type node_count_required_for_values( size_type const number_of_values ) noexcept
+    {
+        if ( !number_of_values )
+            return 0;
+        auto const  leaf_count{ static_cast<node_slot::value_type>( divide_up( number_of_values, /*assuming an 'optimistic' reserve, i.e. for bulk insert*/leaf_node::max_values ) ) };
+        auto       total_count{ node_slot::value_type{ 0 } };
+        auto       current_level_count{ leaf_count };
+        auto       depth{ 1 };
+        while ( current_level_count > 1 )
+        {
+            total_count += current_level_count;
+            current_level_count = divide_up( current_level_count, inner_node::min_children ); // pessimistic about inner node utilization
+            ++depth;
+        }
+        // theoretical (+1 since we use a 1-based depth index)
+        auto const minimum_height{ static_cast<std::uint8_t>( 1 + std::ceil( std::log(   number_of_values + 1       ) / std::log( inner_node::max_children ) ) - 1 ) };
+        auto const maximum_height{ static_cast<std::uint8_t>( 1 +            std::log( ( number_of_values + 1 ) / 2 ) / std::log( inner_node::min_children )       ) };
+        BOOST_ASSUME( depth >= minimum_height );
+        BOOST_ASSUME( depth <= maximum_height );
+        return total_count;
+    }
 }; // class bptree_base_wkey
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1311,11 +1417,11 @@ private:
     using parent_node    = base::parent_node;
     using fwd_iterator   = base::fwd_iterator;
     using  ra_iterator   = base:: ra_iterator;
+    using iter_pos       = base::iter_pos;
 
     using bptree_base::as;
     using bptree_base::can_borrow;
     using bptree_base::children;
-    using bptree_base::ihalf_ceil;
     using bptree_base::keys;
     using bptree_base::node;
     using bptree_base::num_chldrn;
@@ -1329,11 +1435,15 @@ private:
 
     using base::free;
     using base::insrt_child;
+    using base::leaf;
     using base::leaf_level;
+    using base::parent;
+    using base::right;
     using base::root;
 
 public:
     static constexpr auto unique{ true }; // TODO non unique
+    static constexpr auto transparent_comparator{ requires{ typename Comparator::is_transparent; } };
 
     using size_type       = base::size_type;
     using value_type      = base::value_type;
@@ -1389,7 +1499,7 @@ public:
         if ( locations.leaf_offset.exact_find ) [[ unlikely ]]
             return { { this->nodes_, { slot_of( locations.leaf ), locations.leaf_offset.pos } }, false };
 
-        auto const insert_pos_next{ base::insert( locations.leaf, locations.leaf_offset.pos, v, { /*insertion starts from leaves which do not have children*/ } ) };
+        auto const insert_pos_next{ base::insert( locations.leaf, locations.leaf_offset.pos, Key{ v }, { /*insertion starts from leaves which do not have children*/ } ) };
         ++this->hdr().size_;
         return { std::prev( iterator{ this->nodes_, { insert_pos_next.node, insert_pos_next.next_insert_offset } } ), true };
     }
@@ -1405,19 +1515,11 @@ public:
 
     size_type merge( bp_tree & other );
 
-    [[ using gnu: noinline, pure, sysv_abi ]]
-    const_iterator find( key_const_arg key ) const noexcept
-    {
-        if ( !empty() ) [[ likely ]]
-        {
-            auto const location{ const_cast<bp_tree &>( *this ).find_nodes_for( key ) };
-            if ( location.leaf_offset.exact_find ) [[ likely ]] {
-                return iterator{ const_cast<bp_tree &>( *this ).nodes_, { slot_of( location.leaf ), location.leaf_offset.pos } };
-            }
-        }
-
-        return this->cend();
-    }
+    [[ nodiscard ]] bool           contains   ( KeyType<transparent_comparator, Key> auto const & key ) const noexcept { return contains_impl   ( pass_in_reg{ key }; }
+    [[ nodiscard ]]       iterator find       ( KeyType<transparent_comparator, Key> auto const & key )       noexcept { return find_impl       ( pass_in_reg{ key } ); }
+    [[ nodiscard ]] const_iterator find       ( KeyType<transparent_comparator, Key> auto const & key ) const noexcept { return const_cast<bp_tree &>( *this ).find( key ); }
+    [[ nodiscard ]]       iterator lower_bound( KeyType<transparent_comparator, Key> auto const & key )       noexcept { return lower_bound_impl( pass_in_reg{ key }; }
+    [[ nodiscard ]] const_iterator lower_bound( KeyType<transparent_comparator, Key> auto const & key ) const noexcept { return const_cast<bp_tree &>( *this ).lower_bound( key ); }
 
     [[ nodiscard ]] BOOST_NOINLINE
     bool erase( key_const_arg key ) noexcept
@@ -1483,19 +1585,48 @@ public:
 
     void swap( bp_tree & other ) noexcept { base::swap( other ); }
 
-    Comparator const & comp() const noexcept { return *this; }
+    [[ nodiscard ]] Comparator const & comp() const noexcept { return *this; }
 
     // UB if the comparator is changed in such a way as to invalidate to order of elements already in the container
     [[ nodiscard ]] Comparator & mutable_comp() noexcept { return *this; }
 
+private: // pass-in-reg public function overloads/impls
+    bool contains_impl( Reg auto const key ) const noexcept { return !empty() && const_cast<bp_tree &>( *this ).find_nodes_for( key ).leaf_offset.exact_find; }
+
+    [[ using gnu: noinline, pure, sysv_abi ]]
+    iterator find_impl( Reg auto const key ) noexcept
+    {
+        if ( !empty() ) [[ likely ]]
+        {
+            auto const location{ find_nodes_for( key ) };
+            if ( location.leaf_offset.exact_find ) [[ likely ]] {
+                return iterator{ this->nodes_, { slot_of( location.leaf ), location.leaf_offset.pos } };
+            }
+        }
+
+        return this->end();
+    }
+
+    iterator lower_bound_impl( Reg auto const key ) noexcept
+    {
+        if ( !empty() ) [[ likely ]]
+        {
+            auto const location{ find_nodes_for( key ) };
+            return iterator{ this->nodes_, { slot_of( location.leaf ), location.leaf_offset.pos } };
+        }
+
+        return this->end();
+    }
+
 private:
+    // lower_bound find
     struct find_pos // msvc pass-in-reg facepalm
     {
         node_size_type pos        : ( sizeof( node_size_type ) * CHAR_BIT - 1 );
         node_size_type exact_find : 1;
     };
     [[ using gnu: pure, hot, noinline, sysv_abi ]]
-    find_pos find( Key const keys[], node_size_type const num_vals, key_const_arg value ) const noexcept
+    find_pos find( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept
     {
         // TODO branchless binary search, Alexandrescu's ideas, https://orlp.net/blog/bitwise-binary-search ...
         BOOST_ASSUME( num_vals > 0 );
@@ -1516,16 +1647,14 @@ private:
         auto const exact_find{ ( pos_idx != num_vals ) & !comp( value, keys[ std::min<node_size_type>( pos_idx, num_vals - 1 ) ] ) };
         return { pos_idx, reinterpret_cast<bool const &>( exact_find ) };
     }
-    auto find( auto const & node, key_const_arg value ) const noexcept
+    find_pos find( auto const & node, auto const & value ) const noexcept { return find( node.keys, node.num_vals, pass_in_reg{ value } ); }
+    [[ using gnu: pure, hot, sysv_abi ]]
+    find_pos find_with_offset( auto const & node, node_size_type const offset, Reg auto const value ) const noexcept
     {
-        return find( node.keys, node.num_vals, value );
-    }
-
-    template <typename N>
-    void insert( N & target_node, key_const_arg v, node_slot const right_child )
-    {
-        auto const pos{ find( target_node, v ).pos };
-        base::insert( target_node, pos, v, right_child );
+        BOOST_ASSUME( offset < node.num_vals );
+        auto result{ find( &node.keys[ offset ], node.num_vals - offset, value ) };
+        result.pos += offset;
+        return result;
     }
 
     struct key_locations
@@ -1538,13 +1667,13 @@ private:
     };
 
     [[ using gnu: pure, hot, sysv_abi ]]
-    key_locations find_nodes_for( key_const_arg key ) noexcept
+    key_locations find_nodes_for( Reg auto const key ) noexcept
     {
         node_slot      separator_key_node;
         node_size_type separator_key_offset{};
         // a leaf (lone) root is implicitly handled by the loop condition:
-        // depth_ == 1 so the loop is skipped entirely and the lone root is never examined
-        // through the incorrectly typed reference
+        // depth_ == 1 so the loop is skipped entirely and the lone root is
+        // never examined through the incorrectly typed reference
         auto       p_node{ &bptree_base::as<parent_node>( root() ) };
         auto const depth { this->hdr().depth_ };
         BOOST_ASSUME( depth >= 1 );
@@ -1554,7 +1683,7 @@ private:
             if ( exact_find )
             {
                 // separator key - it also means we have to traverse to the right
-                BOOST_ASSUME( !separator_key_node );
+                BOOST_ASSUME( !separator_key_node ); // exact_find may happen at most once
                 separator_key_node   = slot_of( *p_node );
                 separator_key_offset = pos;
                 ++pos; // traverse to the right child
@@ -1569,6 +1698,77 @@ private:
             separator_key_offset,
             separator_key_node
         };
+    }
+    key_locations find_nodes_for( Key const & key ) noexcept { return find_nodes_for( pass_in_reg{ key } ); }
+
+    auto find_next( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, Reg auto const key ) const noexcept
+    {
+        if ( leq( key, keys( starting_leaf ).back() ) )
+        {
+            auto const pos{ find_with_offset( starting_leaf, starting_leaf_offset, key ) };
+            BOOST_ASSUME( pos.pos != starting_leaf.num_vals );
+            BOOST_ASSUME( pos.pos >= starting_leaf_offset   );
+            return std::make_pair( const_cast<leaf_node *>( &starting_leaf ), pos );
+        }
+
+        if ( !starting_leaf.right ) [[ unlikely ]] // we are at the end of the tree/leaf level: key not present at all
+            return std::make_pair( const_cast<leaf_node *>( &starting_leaf ), find_pos{ starting_leaf.num_vals, false } );
+
+        // key in tree but not in starting leaf: go up the tree
+        auto const * prnt{ &parent( starting_leaf ) };
+        auto         parent_offset{ starting_leaf.parent_child_idx };
+        BOOST_ASSUME( ( parent_offset == prnt->num_vals ) || ge( prnt->keys[ parent_offset ], starting_leaf.keys[ 0 ] ) );
+        auto const depth{ this->hdr().depth_ }; BOOST_ASSUME( depth >= 1 );
+        auto       level{ depth - 1 };
+        while ( le( keys( *prnt ).back(), key ) )
+        {
+            if ( level == 1 ) [[ unlikely ]]
+            {
+                // reached the root
+                BOOST_ASSUME( !prnt->parent );
+                // the case where the key does not exist at all is handled at
+                // the beginning so the only case where parent_offset could
+                // point to the end is on intermediate inner/parent nodes (when
+                // depth is more then 2 levels)
+                // (and this has to be handled because otherwise the
+                // find_with_offset call below would get fed empty input which
+                // it does not support)
+                BOOST_ASSUME( depth > 2 || ( parent_offset < prnt->num_vals ) );
+                parent_offset = std::min( parent_offset, node_size_type( prnt->num_vals - 1 ) );
+                break;
+            }
+            parent_offset = prnt->parent_child_idx;
+            prnt          = &parent( *prnt );
+            --level;
+        }
+        BOOST_ASSUME( parent_offset < prnt->num_vals );
+        // descend to the leaf containing the key
+        for ( ; level < depth; ++level )
+        {
+            auto [pos, exact_find]{ find_with_offset( *prnt, parent_offset, key ) };
+            BOOST_ASSERT( !exact_find );
+            pos += exact_find; // traverse to the right child for separator keys
+            prnt = &node<inner_node>( children( *prnt )[ pos ] );
+            parent_offset = 0;
+        }
+        BOOST_ASSUME( parent_offset == 0 );
+        auto const & containing_leaf{ as<leaf_node>( *prnt ) };
+        auto const pos{ find( containing_leaf, key ) };
+        BOOST_ASSUME
+        (
+            ( &starting_leaf != &containing_leaf  ) ||
+            // the worst case: when the value falls between existing nodes we
+            // will land on the starting node again - TODO insert a new node
+            ( pos.pos == containing_leaf.num_vals )
+        );
+        return std::make_pair( const_cast<leaf_node *>( &containing_leaf ), pos );
+    }
+
+    template <typename N>
+    void insert( N & target_node, key_const_arg v, node_slot const right_child )
+    {
+        auto const pos{ find( target_node, v ).pos };
+        base::insert( target_node, pos, v, right_child );
     }
 
     size_type insert( typename base::bulk_copied_input );
@@ -1613,6 +1813,7 @@ private:
 #endif
 
     [[ gnu::pure ]] bool le( key_const_arg left, key_const_arg right ) const noexcept { return comp()( left, right ); }
+    [[ gnu::pure ]] bool ge( key_const_arg left, key_const_arg right ) const noexcept { return comp()( right, left ); }
     [[ gnu::pure ]] bool eq( key_const_arg left, key_const_arg right ) const noexcept
     {
         if constexpr ( requires{ comp().eq( left, right ); } )
@@ -1625,9 +1826,13 @@ private:
     {
         if constexpr ( requires{ comp().leq( left, right ); } )
             return comp().leq( left, right );
-        if constexpr ( detail::is_simple_comparator<Comparator> && requires { left == right; } )
-            return left <= right;
         return !comp()( right, left );
+    }
+    [[ gnu::pure ]] bool geq( key_const_arg left, key_const_arg right ) const noexcept
+    {
+        if constexpr ( requires{ comp().geq( left, right ); } )
+            return comp().geq( left, right );
+        return !comp()( left, right );
     }
 }; // class bp_tree
 
@@ -1654,7 +1859,8 @@ auto bp_tree<Key, Comparator>::merge
         auto const & new_separator{ src_keys[ 0 ] };
         BOOST_ASSUME( new_separator < tgt_keys[ 0 ] );
         base::update_separator( target, new_separator );
-        // TODO rather simply insert the source leaf into the parent
+        // TODO rather simply insert the source leaf into the parent (if all of
+        // its keys come before the first key in target)
     }
     if ( !available_space ) [[ unlikely ]]
     {
@@ -1665,23 +1871,18 @@ auto bp_tree<Key, Comparator>::merge
         {
             return std::make_tuple<node_size_type, node_size_type>( 0, 1, &target, target_offset );
         }
-        auto       [target_slot, next_tgt_offset]{ base::split_to_insert( target, target_offset, src_keys[ 0 ], {} ) };
-        auto const & src{ source_slot ? base::leaf( source_slot ) : source };
-        auto       & tgt{               base::leaf( target_slot )          };
+        auto       [target_slot, next_tgt_offset]{ base::split_to_insert( target, target_offset, pass_rv_in_reg{ auto{ src_keys[ 0 ] } }, {} ) };
+        auto const & src{ source_slot ? leaf( source_slot ) : source };
+        auto       & tgt{               leaf( target_slot )          };
         BOOST_ASSUME( next_tgt_offset <= tgt.num_vals );
         auto const next_src_offset{ static_cast<node_size_type>( source_offset + 1 ) };
         // next_tgt_offset returned by split_to_insert points to the
         // position in the target node that immediately follows the
         // position for the inserted src_keys[ 0 ] - IOW it need not be
         // the position for src.keys[ next_src_offset ]
-        if ( tgt.num_vals != next_tgt_offset ) // necessary check because find assumes non-empty input
+        if ( next_tgt_offset != tgt.num_vals ) // necessary check because find assumes non-empty input
         {
-            next_tgt_offset += find
-                (
-                    &tgt.keys[ next_tgt_offset ],
-                    tgt.num_vals - next_tgt_offset,
-                    src.keys[ next_src_offset ]
-                ).pos;
+            next_tgt_offset = find_with_offset( tgt, next_tgt_offset, pass_in_reg{ src.keys[ next_src_offset ] } ).pos;
         }
         return std::make_tuple<node_size_type, node_size_type>( 1, 1, &tgt, next_tgt_offset );
     }
@@ -1692,12 +1893,13 @@ auto bp_tree<Key, Comparator>::merge
     // size accordingly to maintain the sorted property).
     if ( target.right )
     {
-        auto const & right_delimiter    { base::leaf( target.right ).keys[ 0 ] };
-        auto const   less_than_right_pos{ find( src_keys, copy_size, right_delimiter ).pos };
-        if ( less_than_right_pos != copy_size )
+        auto const & right_delimiter    { right( target ).keys[ 0 ] };
+        auto const   less_than_right_pos{ find( src_keys, copy_size, pass_in_reg{ right_delimiter } ) };
+        BOOST_ASSUME( !less_than_right_pos.exact_find );
+        if ( less_than_right_pos.pos != copy_size )
         {
-            BOOST_ASSUME( less_than_right_pos < copy_size );
-            node_size_type const input_end_for_target( less_than_right_pos + source_offset );
+            BOOST_ASSUME( less_than_right_pos.pos < copy_size );
+            node_size_type const input_end_for_target( less_than_right_pos.pos + source_offset );
             BOOST_ASSUME( input_end_for_target >  source_offset   );
             BOOST_ASSUME( input_end_for_target <= source.num_vals );
             copy_size = static_cast<node_size_type>( input_end_for_target - source_offset );
@@ -1706,28 +1908,33 @@ auto bp_tree<Key, Comparator>::merge
 
     auto & tgt_size{ target.num_vals };
     node_size_type inserted_size;
+    node_size_type next_tgt_offset;
     if ( target_offset == tgt_size ) // a simple append
     {
         std::copy_n( src_keys, copy_size, &tgt_keys[ target_offset ] );
-        tgt_size      += copy_size;
-        inserted_size  = copy_size;
+        tgt_size        += copy_size;
+        inserted_size    = copy_size;
+        next_tgt_offset  = tgt_size;
     }
     else
     {
         BOOST_ASSUME( copy_size + tgt_size <= leaf_node::max_values );
-        std::move_backward( &tgt_keys[ 0 ], &tgt_keys[ tgt_size ], &tgt_keys[ tgt_size + copy_size ] );
-        auto const new_tgt_size{ merge_interleaved_values
+        // make room for merge: move existing values (beyond the insertion/merge
+        // point) to the end of the buffer
+        std::move_backward( &tgt_keys[ target_offset ], &tgt_keys[ tgt_size ], &tgt_keys[ tgt_size + copy_size ] );
+        auto const new_tgt_size{ target_offset + merge_interleaved_values
         (
-            &src_keys[         0 ], copy_size,
-            &tgt_keys[ copy_size ], tgt_size,
-            &tgt_keys[         0 ]
+            &src_keys[ 0                         ], copy_size,
+            &tgt_keys[ target_offset + copy_size ], tgt_size - target_offset,
+            &tgt_keys[ target_offset             ]
         ) };
-        inserted_size = static_cast<node_size_type>( new_tgt_size - tgt_size );
-        tgt_size      = new_tgt_size;
+        inserted_size   = static_cast<node_size_type>( new_tgt_size - tgt_size );
+        tgt_size        = new_tgt_size;
+        next_tgt_offset = target_offset + 1;
     }
     verify( target );
     BOOST_ASSUME( inserted_size <= copy_size );
-    return std::make_tuple( inserted_size, copy_size, &target, tgt_size );
+    return std::make_tuple( inserted_size, copy_size, &target, next_tgt_offset );
 }
 
 
@@ -1750,24 +1957,27 @@ bp_tree<Key, Comparator>::insert( typename base::bulk_copied_input const input )
         return total_size;
     }
 
+    auto p_new_keys{ p_new_nodes_begin };
+    auto [source_slot, source_slot_offset]{ p_new_keys.pos() };
+    auto src_leaf{ &leaf( source_slot ) };
+
+    auto const start_pos{ find_nodes_for( *p_new_keys ) };
+    auto       tgt_leaf         { &start_pos.leaf };
+    auto       tgt_leaf_next_pos{ start_pos.leaf_offset };
+
     size_type inserted{ 0 };
-    for ( auto p_new_keys{ p_new_nodes_begin }; p_new_keys != p_new_nodes_end; )
+    do
     {
-        auto const tgt_location{ find_nodes_for( *p_new_keys ) };
-        if ( tgt_location.leaf_offset.exact_find ) [[ unlikely ]]
+        if ( unique && tgt_leaf_next_pos.exact_find ) [[ unlikely ]]
         {
             ++p_new_keys;
             continue;
         }
-        auto tgt_leaf         { &tgt_location.leaf };
-        auto tgt_leaf_next_pos{  tgt_location.leaf_offset.pos };
 
-        auto const [source_slot, source_slot_offset]{ p_new_keys.pos() };
-        auto *     src_leaf{ &this->leaf( source_slot ) };
         BOOST_ASSUME( source_slot_offset < src_leaf->num_vals );
         // if we have reached the end of the rightmost leaf simply perform
         // a bulk_append
-        if ( ( tgt_leaf_next_pos == tgt_leaf->num_vals ) && !tgt_leaf->right )
+        if ( ( tgt_leaf_next_pos.pos == tgt_leaf->num_vals ) && !tgt_leaf->right )
         {
             auto const so_far_consumed{ static_cast<size_type>( p_new_keys - p_new_nodes_begin ) };
             BOOST_ASSUME( so_far_consumed < total_size );
@@ -1781,35 +1991,47 @@ bp_tree<Key, Comparator>::insert( typename base::bulk_copied_input const input )
             inserted += static_cast<size_type>( total_size - so_far_consumed );
             break;
         }
+        // TODO in-the-middle partial bulk-inserts
 
-        node_size_type inserted_count, consumed_source;
-        std::tie( inserted_count, consumed_source, tgt_leaf, tgt_leaf_next_pos ) =
+        auto const [inserted_count, consumed_source, tgt_next_leaf, tgt_next_offset]
+        {
             merge
             (
                 *src_leaf, source_slot_offset,
-                *tgt_leaf, tgt_leaf_next_pos
-            );
-        // TODO merge returns 'hints' for the next target position: use that
-        // for a faster version of find_nodes_for (that does not search from
-        // the beginning every time).
+                *tgt_leaf, tgt_leaf_next_pos.pos
+            )
+        };
+        tgt_leaf = tgt_next_leaf;
 
         // merge might have caused a relocation (by calling split_to_insert)
         // TODO use iter_pos directly
         p_new_keys     .update_pool_ptr( this->nodes_ );
         p_new_nodes_end.update_pool_ptr( this->nodes_ );
+        src_leaf = &leaf( source_slot );
+
         p_new_keys += consumed_source;
         inserted   += inserted_count;
-        if ( source_slot != p_new_keys.pos().node )
+
+        if ( source_slot != p_new_keys.pos().node ) // have we moved to the next node?
         {
             // merged leaves (their contents) were effectively copied into
             // existing leaves (instead of simply linked into the tree
             // structure) and now have to be returned to the free pool
             // TODO: add leak detection to/for the entire bp_tree class
-            src_leaf = &this->leaf( source_slot ); // could be invalidated by split_to_insert in merge
             base::unlink_right( *src_leaf );
             free( *src_leaf );
+
+            source_slot = p_new_keys.pos().node;
+            src_leaf    = &leaf( source_slot );
         }
-    }
+        source_slot_offset = p_new_keys.pos().value_offset;
+
+        // seek the next position starting from the current one (relying on the
+        // that we are using presorted data) rather than starting everytime from
+        // scratch (using find_nodes_for)
+        std::tie( tgt_leaf, tgt_leaf_next_pos ) =
+            find_next( *tgt_leaf, tgt_next_offset, pass_in_reg{ src_leaf->keys[ source_slot_offset ] } );
+    } while ( p_new_keys != p_new_nodes_end );
 
     BOOST_ASSUME( inserted <= total_size );
     this->hdr().size_ += inserted;
@@ -1823,7 +2045,7 @@ bp_tree<Key, Comparator>::merge( bp_tree & other )
     // This function follows nearly the same logic as bulk insert (consult it
     // for more comments), the main differences being:
     //  - no need to copy and sort the input
-    //  - the bulk_append phase has to first copy the remaining of the source
+    //  - the bulk_append phase has to first copy the remainder of the source
     //    nodes (they are not somehow 'extractable' from the source tree)
     //  - care has to be taken around the fact that source leaves are coming
     //    from a different tree instance (i.e. from a different container) e.g.
