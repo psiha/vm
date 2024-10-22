@@ -115,7 +115,7 @@ struct [[ clang::trivial_abi ]] pass_rv_in_reg
 }; // pass_rv_in_reg
 
 template <typename K, bool transparent_comparator, typename StoredKeyType>
-concept KeyType = transparent_comparator || std::is_same_v<StoredKeyType, K>;
+concept KeyType = ( transparent_comparator && std::is_convertible_v<K, StoredKeyType> ) || std::is_same_v<StoredKeyType, K>;
 
 template <typename T> bool constexpr reg                   { false };
 template <typename T> bool constexpr reg<pass_in_reg   <T>>{  true };
@@ -1482,27 +1482,15 @@ public:
     auto random_access()       noexcept { return std::ranges::subrange{ ra_begin(), ra_end(), size() }; }
     auto random_access() const noexcept { return std::ranges::subrange{ ra_begin(), ra_end(), size() }; }
 
-    BOOST_NOINLINE
-    std::pair<iterator, bool> insert( key_const_arg v )
-    {
-        if ( empty() )
-        {
-            auto & root{ static_cast<leaf_node &>( base::create_root() ) };
-            BOOST_ASSUME( root.num_vals == 1 );
-            root.keys[ 0 ] = v;
-            return { begin(), true };
-        }
+    [[ nodiscard ]] bool           contains   ( KeyType<transparent_comparator, Key> auto const & key ) const noexcept { return contains_impl   ( pass_in_reg{ key }; }
+    [[ nodiscard ]]       iterator find       ( KeyType<transparent_comparator, Key> auto const & key )       noexcept { return find_impl       ( pass_in_reg{ key } ); }
+    [[ nodiscard ]] const_iterator find       ( KeyType<transparent_comparator, Key> auto const & key ) const noexcept { return const_cast<bp_tree &>( *this ).find( key ); }
+    [[ nodiscard ]]       iterator lower_bound( KeyType<transparent_comparator, Key> auto const & key )       noexcept { return lower_bound_impl( pass_in_reg{ key } ); }
+    [[ nodiscard ]] const_iterator lower_bound( KeyType<transparent_comparator, Key> auto const & key ) const noexcept { return const_cast<bp_tree &>( *this ).lower_bound( key ); }
 
-        auto const locations{ find_nodes_for( v ) };
-        BOOST_ASSUME( !locations.inner );
-        BOOST_ASSUME( !locations.inner_offset );
-        if ( locations.leaf_offset.exact_find ) [[ unlikely ]]
-            return { { this->nodes_, { slot_of( locations.leaf ), locations.leaf_offset.pos } }, false };
+    std::pair<iterator, bool> insert( KeyType<transparent_comparator, Key> auto const & key ) { return insert_impl( pass_in_reg{ key } ); }
 
-        auto const insert_pos_next{ base::insert( locations.leaf, locations.leaf_offset.pos, Key{ v }, { /*insertion starts from leaves which do not have children*/ } ) };
-        ++this->hdr().size_;
-        return { std::prev( iterator{ this->nodes_, { insert_pos_next.node, insert_pos_next.next_insert_offset } } ), true };
-    }
+    iterator insert( const_iterator const pos_hint, KeyType<transparent_comparator, Key> auto const & key ) { return insert_impl( pos_hint, pass_in_reg{ key } ); }
 
     // bulk insert
     // performance note: insertion of existing values into a unique bp_tree is
@@ -1513,13 +1501,7 @@ public:
     size_type insert( InIter const begin, InIter const end ) { return insert( base::bulk_insert_prepare( std::ranges::subrange( begin, end ) ) ); }
     size_type insert( std::ranges::range auto const & keys ) { return insert( base::bulk_insert_prepare( std::ranges::subrange( keys       ) ) ); }
 
-    size_type merge( bp_tree & other );
-
-    [[ nodiscard ]] bool           contains   ( KeyType<transparent_comparator, Key> auto const & key ) const noexcept { return contains_impl   ( pass_in_reg{ key }; }
-    [[ nodiscard ]]       iterator find       ( KeyType<transparent_comparator, Key> auto const & key )       noexcept { return find_impl       ( pass_in_reg{ key } ); }
-    [[ nodiscard ]] const_iterator find       ( KeyType<transparent_comparator, Key> auto const & key ) const noexcept { return const_cast<bp_tree &>( *this ).find( key ); }
-    [[ nodiscard ]]       iterator lower_bound( KeyType<transparent_comparator, Key> auto const & key )       noexcept { return lower_bound_impl( pass_in_reg{ key }; }
-    [[ nodiscard ]] const_iterator lower_bound( KeyType<transparent_comparator, Key> auto const & key ) const noexcept { return const_cast<bp_tree &>( *this ).lower_bound( key ); }
+    size_type merge( bp_tree && other );
 
     [[ nodiscard ]] BOOST_NOINLINE
     bool erase( key_const_arg key ) noexcept
@@ -1616,6 +1598,40 @@ private: // pass-in-reg public function overloads/impls
         }
 
         return this->end();
+    }
+
+    std::pair<iterator, bool> insert_impl( Reg auto const v )
+    {
+        if ( empty() )
+        {
+            auto & root{ static_cast<leaf_node &>( base::create_root() ) };
+            BOOST_ASSUME( root.num_vals == 1 );
+            root.keys[ 0 ] = v;
+            return { begin(), true };
+        }
+
+        auto const locations{ find_nodes_for( v ) };
+        BOOST_ASSUME( !locations.inner );
+        BOOST_ASSUME( !locations.inner_offset );
+        if ( locations.leaf_offset.exact_find ) [[ unlikely ]]
+            return { { this->nodes_, { slot_of( locations.leaf ), locations.leaf_offset.pos } }, false };
+
+        auto const insert_pos_next{ base::insert( locations.leaf, locations.leaf_offset.pos, Key{ v }, { /*insertion starts from leaves which do not have children*/ } ) };
+        ++this->hdr().size_;
+        return { std::prev( iterator{ this->nodes_, { insert_pos_next.node, insert_pos_next.next_insert_offset } } ), true };
+    }
+
+    iterator insert_impl( const_iterator const pos_hint, Reg auto const v )
+    {
+        // yes, for starters generic 'hint as just a hint' is not supported
+        BOOST_ASSUME( !empty() );
+        BOOST_ASSERT_MSG( le( v, *pos_hint ), "Invalid insertion hint" );
+        BOOST_ASSERT_MSG( !unique || ge( v, *std::prev( pos_hint ) ), "Invalid insertion hint" );
+
+        auto const [hint_slot, hint_slot_offset]{ pos_hint.base().pos() };
+        auto const insert_pos_next{ base::insert( leaf( hint_slot ), hint_slot_offset, Key{ v }, { /*insertion starts from leaves which do not have children*/ } ) };
+        ++this->hdr().size_;
+        return std::prev( iterator{ this->nodes_, { insert_pos_next.node, insert_pos_next.next_insert_offset } } );
     }
 
 private:
@@ -2040,7 +2056,7 @@ bp_tree<Key, Comparator>::insert( typename base::bulk_copied_input const input )
 
 template <typename Key, typename Comparator>
 bp_tree<Key, Comparator>::size_type
-bp_tree<Key, Comparator>::merge( bp_tree & other )
+bp_tree<Key, Comparator>::merge( bp_tree && other )
 {
     // This function follows nearly the same logic as bulk insert (consult it
     // for more comments), the main differences being:
@@ -2057,28 +2073,31 @@ bp_tree<Key, Comparator>::merge( bp_tree & other )
     }
 
     auto const total_size{ other.size() };
-    this->reserve( total_size );
+    this->reserve_additional( total_size );
 
     auto const p_new_nodes_begin{ other.ra_begin() };
     auto const p_new_nodes_end  { other.ra_end  () };
 
+    auto p_new_keys{ p_new_nodes_begin };
+    auto src_leaf          { &other.leaf( p_new_keys.pos().node ) };
+    auto source_slot_offset{ p_new_keys.pos().value_offset };
+
+    auto const start_pos{ find_nodes_for( *p_new_keys ) };
+    auto       tgt_leaf         { &start_pos.leaf };
+    auto       tgt_leaf_next_pos{ start_pos.leaf_offset };
+
     size_type inserted{ 0 };
-    for ( auto p_new_keys{ p_new_nodes_begin }; p_new_keys != p_new_nodes_end; )
+    do
     {
-        auto const tgt_location{ find_nodes_for( *p_new_keys ) };
-        if ( tgt_location.leaf_offset.exact_find ) [[ unlikely ]]
+        if ( unique && tgt_leaf_next_pos.exact_find ) [[ unlikely ]]
         {
             ++p_new_keys;
             continue;
         }
-        auto &     tgt_leaf         { tgt_location.leaf };
-        auto const tgt_leaf_next_pos{ tgt_location.leaf_offset.pos };
 
-        auto *     src_leaf          { &other.leaf( p_new_keys.pos().node ) };
-        auto const source_slot_offset{ p_new_keys.pos().value_offset };
         BOOST_ASSUME( source_slot_offset < src_leaf->num_vals );
         // simple bulk_append at the end of the rightmost leaf
-        if ( ( tgt_leaf_next_pos == tgt_leaf.num_vals ) && !tgt_leaf.right )
+        if ( ( tgt_leaf_next_pos.pos == tgt_leaf->num_vals ) && !tgt_leaf->right )
         {
             // pre-copy the (remainder of the) source into fresh nodes in
             // order to simply call bulk_append
@@ -2093,7 +2112,7 @@ bp_tree<Key, Comparator>::merge( bp_tree & other )
                     this->move_keys( *src_leaf, source_slot_offset, src_leaf->num_vals, src_leaf_copy, 0 );
                     src_leaf_copy.num_vals = src_leaf->num_vals - source_slot_offset;
                     src_leaf->num_vals     = source_slot_offset;
-                    this->link( tgt_leaf, src_leaf_copy );
+                    this->link( *tgt_leaf, src_leaf_copy );
                     this->bulk_append_fill_incomplete_leaf( src_leaf_copy );
                 }
                 else
@@ -2114,22 +2133,31 @@ bp_tree<Key, Comparator>::merge( bp_tree & other )
 
             auto const so_far_consumed{ static_cast<size_type>( p_new_keys - p_new_nodes_begin ) };
             BOOST_ASSUME( so_far_consumed < total_size );
-            this->bulk_append( &this->leaf( src_copy_begin ), { tgt_leaf.parent, tgt_leaf.parent_child_idx } );
+            this->bulk_append( &this->leaf( src_copy_begin ), { tgt_leaf->parent, tgt_leaf->parent_child_idx } );
             inserted += static_cast<size_type>( total_size - so_far_consumed );
             break;
         }
+        // TODO in-the-middle partial bulk-inserts
 
-        node_size_type inserted_count, consumed_source;
-        std::tie( inserted_count, consumed_source, std::ignore, std::ignore ) =
+        auto const [inserted_count, consumed_source, tgt_next_leaf, tgt_next_offset]
+        {
             merge
             (
                 *src_leaf, source_slot_offset,
-                 tgt_leaf, tgt_leaf_next_pos
-            );
+                *tgt_leaf, tgt_leaf_next_pos.pos
+            )
+        };
+        tgt_leaf = tgt_next_leaf;
 
         p_new_keys += consumed_source;
         inserted   += inserted_count;
-    } // main loop
+
+        src_leaf           = &other.leaf( p_new_keys.pos().node );
+        source_slot_offset = p_new_keys.pos().value_offset;
+
+        std::tie( tgt_leaf, tgt_leaf_next_pos ) =
+            find_next( *tgt_leaf, tgt_next_offset, pass_in_reg{ src_leaf->keys[ source_slot_offset ] } );
+    } while ( p_new_keys != p_new_nodes_end );
 
     BOOST_ASSUME( inserted <= total_size );
     this->hdr().size_ += inserted;
