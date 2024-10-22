@@ -864,7 +864,7 @@ protected: // 'other'
             (
                 rightmost_parent,
                 rightmost_parent_pos.next_insert_offset,
-                key_rv_arg{ auto{ src_leaf->keys[ 0 ] } },
+                key_rv_arg{ /*mrmlj*/Key{ src_leaf->keys[ 0 ] } },
                 slot_of( *src_leaf )
             );
             if ( !next_src_slot )
@@ -964,7 +964,7 @@ protected: // 'other'
         first_root_right.parent_child_idx = 1;
         hdr->depth_                       = 1;
         auto const first_unconnected_node{ first_root_right.right };
-        new_root( begin_leaf, first_root_left.right, key_rv_arg{ auto{ first_root_right.keys[ 0 ] } } ); // may invalidate references
+        new_root( begin_leaf, first_root_left.right, key_rv_arg{ /*mrmlj*/Key{ first_root_right.keys[ 0 ] } } ); // may invalidate references
         hdr = &this->hdr();
         BOOST_ASSUME( hdr->depth_ == 2 );
         bulk_append( &leaf( first_unconnected_node ), { hdr->root_, 1 } );
@@ -1482,7 +1482,7 @@ public:
     auto random_access()       noexcept { return std::ranges::subrange{ ra_begin(), ra_end(), size() }; }
     auto random_access() const noexcept { return std::ranges::subrange{ ra_begin(), ra_end(), size() }; }
 
-    [[ nodiscard ]] bool           contains   ( KeyType<transparent_comparator, Key> auto const & key ) const noexcept { return contains_impl   ( pass_in_reg{ key }; }
+    [[ nodiscard ]] bool           contains   ( KeyType<transparent_comparator, Key> auto const & key ) const noexcept { return contains_impl   ( pass_in_reg{ key } ); }
     [[ nodiscard ]]       iterator find       ( KeyType<transparent_comparator, Key> auto const & key )       noexcept { return find_impl       ( pass_in_reg{ key } ); }
     [[ nodiscard ]] const_iterator find       ( KeyType<transparent_comparator, Key> auto const & key ) const noexcept { return const_cast<bp_tree &>( *this ).find( key ); }
     [[ nodiscard ]]       iterator lower_bound( KeyType<transparent_comparator, Key> auto const & key )       noexcept { return lower_bound_impl( pass_in_reg{ key } ); }
@@ -1887,7 +1887,7 @@ auto bp_tree<Key, Comparator>::merge
         {
             return std::make_tuple<node_size_type, node_size_type>( 0, 1, &target, target_offset );
         }
-        auto       [target_slot, next_tgt_offset]{ base::split_to_insert( target, target_offset, pass_rv_in_reg{ auto{ src_keys[ 0 ] } }, {} ) };
+        auto       [target_slot, next_tgt_offset]{ base::split_to_insert( target, target_offset, pass_rv_in_reg{ /*mrmlj*/Key{ src_keys[ 0 ] } }, {} ) };
         auto const & src{ source_slot ? leaf( source_slot ) : source };
         auto       & tgt{               leaf( target_slot )          };
         BOOST_ASSUME( next_tgt_offset <= tgt.num_vals );
