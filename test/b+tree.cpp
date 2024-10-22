@@ -35,8 +35,7 @@ TEST( bp_tree, playground )
     std::ranges::shuffle( nums.subspan( 3 * nums.size() / 4    ), rng );
     {
         bp_tree<int> bpt;
-        bpt.map_memory();
-        bpt.reserve( nums.size() );
+        bpt.map_memory( nums.size() );
         {
             auto const third{ nums.size() / 3 };
             auto const  first_third{ nums.subspan( 0 * third, third ) };
@@ -66,6 +65,11 @@ TEST( bp_tree, playground )
         EXPECT_EQ   ( *bpt.insert( 42 ).first, 42 );
         EXPECT_TRUE( std::ranges::equal(                      bpt.random_access()  ,                      sorted_numbers   ) );
         EXPECT_TRUE( std::ranges::equal( std::views::reverse( bpt.random_access() ), std::views::reverse( sorted_numbers ) ) );
+
+        EXPECT_TRUE( bpt.erase( 42 ) );
+        auto const hint42{ bpt.lower_bound( 42 ) };
+        EXPECT_EQ( *hint42, 42 + 1 );
+        EXPECT_EQ( *bpt.insert( hint42, 42 ), 42 );
         {
             auto const ra{ bpt.random_access() };
             for ( auto n : std::views::iota( 0, test_size / 55 ) ) // slow operation (not really amortized constant time): use a smaller subset of the input
@@ -93,7 +97,7 @@ TEST( bp_tree, playground )
             shuffled_even_numbers.append_range( merge_appendix );
             bpt_even.insert( shuffled_even_numbers );
 
-            EXPECT_EQ( bpt.merge( bpt_even ), bpt_even.size() );
+            EXPECT_EQ( bpt.merge( std::move( bpt_even ) ), bpt_even.size() );
         }
 
         EXPECT_TRUE( std::ranges::equal( std::ranges::iota_view{ 0, test_size + extra_entries_for_tree_merge }, bpt ) );
