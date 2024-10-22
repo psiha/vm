@@ -910,7 +910,7 @@ protected: // 'other'
             leaf_node & leaf{ this->leaf( leaf_slot ) };
             BOOST_ASSUME( leaf.num_vals == 0 );
             if constexpr ( can_preallocate ) {
-                auto const size_to_copy{ static_cast<node_size_type>( std::min<std::size_t>( leaf.max_values, keys.end() - p_keys ) ) };
+                auto const size_to_copy{ static_cast<node_size_type>( std::min<std::size_t>( leaf.max_values, static_cast<std::size_t>( keys.end() - p_keys ) ) ) };
                 BOOST_ASSUME( size_to_copy );
                 std::copy_n( p_keys, size_to_copy, leaf.keys );
                 leaf.num_vals  = size_to_copy;
@@ -1945,7 +1945,7 @@ auto bp_tree<Key, Comparator>::merge
             &tgt_keys[ target_offset             ]
         ) };
         inserted_size   = static_cast<node_size_type>( new_tgt_size - tgt_size );
-        tgt_size        = new_tgt_size;
+        tgt_size        = static_cast<node_size_type>( new_tgt_size            );
         next_tgt_offset = target_offset + 1;
     }
     verify( target );
