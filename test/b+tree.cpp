@@ -70,6 +70,10 @@ TEST( bp_tree, playground )
         auto const hint42{ bpt.lower_bound( 42 ) };
         EXPECT_EQ( *hint42, 42 + 1 );
         EXPECT_EQ( *bpt.insert( hint42, 42 ), 42 );
+
+        EXPECT_EQ( *bpt.erase( bpt.find( 42 ) ), 43 );
+        EXPECT_TRUE( bpt.insert( 42 ).second );
+
         {
             auto const ra{ bpt.random_access() };
             for ( auto n : std::views::iota( 0, test_size / 55 ) ) // slow operation (not really amortized constant time): use a smaller subset of the input

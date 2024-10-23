@@ -262,6 +262,8 @@ protected:
 protected:
     void swap( bptree_base & other ) noexcept;
 
+    base_iterator make_iter( iter_pos ) noexcept;
+
     [[ gnu::pure ]] iter_pos begin_pos() const noexcept;
     [[ gnu::pure ]] iter_pos   end_pos() const noexcept;
 
@@ -430,7 +432,24 @@ inline constexpr bptree_base::node_slot const bptree_base::node_slot::null{ stat
 
 class bptree_base::base_iterator
 {
+public:
+    constexpr base_iterator() noexcept = default;
+
+    base_iterator & operator++() noexcept;
+    base_iterator & operator--() noexcept;
+
+    bool operator==( base_iterator const & ) const noexcept;
+
+public: // extensions
+    iter_pos const & pos() const noexcept { return pos_; }
+
 protected:
+    friend class bptree_base;
+
+    base_iterator( node_pool &, iter_pos ) noexcept;
+
+    [[ gnu::pure ]] node_header & node() const noexcept;
+
     mutable
 #ifndef NDEBUG // for bounds checking
     std::span<node_placeholder>
@@ -440,25 +459,10 @@ protected:
              nodes_{};
     iter_pos pos_  {};
 
-                                               friend class bptree_base;
-    template <typename T, typename Comparator> friend class bp_tree;
-
-    base_iterator( node_pool &, iter_pos ) noexcept;
-
-    [[ gnu::pure ]] node_header & node() const noexcept;
-
+private:
+    template <typename T, typename Comparator>
+    friend class bp_tree;
     void update_pool_ptr( node_pool & ) const noexcept;
-
-public:
-    constexpr base_iterator() noexcept = default;
-
-    base_iterator & operator++() noexcept;
-    base_iterator & operator--() noexcept;
-
-    bool operator==( base_iterator const & ) const noexcept;
-
-public:
-    iter_pos const & pos() const noexcept { return pos_; }
 }; // class base_iterator
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -503,15 +507,32 @@ public:
 template <typename Key>
 class bptree_base_wkey : public bptree_base
 {
+private:
+    template <typename Impl, typename Tag>
+    using iter_impl = boost::stl_interfaces::iterator_interface
+    <
+#   if !BOOST_STL_INTERFACES_USE_DEDUCED_THIS
+        Impl,
+#   endif
+        Tag,
+        Key
+    >;
+
 public:
-    using key_type      = Key;
-    using value_type    = key_type; // TODO map support
+    using key_type   = Key;
+    using value_type = key_type; // TODO map support
 
     // support for non trivial types (for which move and pass-by-ref matters) is WiP, nowhere near complete
     static_assert( std::is_trivial_v<Key> );
 
     using key_rv_arg    = std::conditional_t<can_be_passed_in_reg<Key>, Key const, pass_rv_in_reg<Key>>;
     using key_const_arg = std::conditional_t<can_be_passed_in_reg<Key>, Key const, pass_in_reg   <Key>>;
+
+    class fwd_iterator;
+    class  ra_iterator;
+
+    using       iterator = fwd_iterator;
+    using const_iterator = std::basic_const_iterator<iterator>;
 
 public:
     storage_result map_memory( size_type initial_capacity = 0 ) noexcept { return bptree_base::map_memory( node_count_required_for_values( initial_capacity ) ); }
@@ -541,7 +562,9 @@ public:
     }
 
     void reserve_additional( size_type const additional_values ) { bptree_base::reserve_additional( node_count_required_for_values( additional_values ) ); }
-    void reserve           ( size_type const new_capacity      ) { bptree_base::reserve           ( node_count_required_for_values( new_capacity      ) ); };
+    void reserve           ( size_type const new_capacity      ) { bptree_base::reserve           ( node_count_required_for_values( new_capacity      ) ); }
+
+    iterator erase( const_iterator iter ) noexcept;
 
     // solely a debugging helper (include b+tree_print.hpp)
     void print() const;
@@ -599,20 +622,6 @@ protected: // node types
 
     static_assert( sizeof( inner_node ) == node_size );
     static_assert( sizeof(  leaf_node ) == node_size );
-
-protected: // iterators
-    template <typename Impl, typename Tag>
-    using iter_impl = boost::stl_interfaces::iterator_interface
-    <
-#   if !BOOST_STL_INTERFACES_USE_DEDUCED_THIS
-        Impl,
-#   endif
-        Tag,
-        Key
-    >;
-
-    class fwd_iterator;
-    class  ra_iterator;
 
 protected: // split_to_insert and its helpers
     root_node & new_root( node_slot const left_child, node_slot const right_child, key_rv_arg separator_key )
@@ -831,6 +840,60 @@ protected: // 'other'
         }
     }
 
+    iter_pos erase( leaf_node & leaf, node_size_type const leaf_key_offset ) noexcept
+    {
+        auto & hdr   { this->hdr() };
+        auto & depth_{ hdr.depth_ };
+
+        iter_pos next_pos{ slot_of( leaf ), leaf_key_offset };
+
+        lshift_keys( leaf, leaf_key_offset );
+        --leaf.num_vals;
+
+        if ( depth_ == 1 ) [[ unlikely ]] // handle 'leaf root' deletion directly to simplify handle_underflow()
+        {
+            auto & root_{ hdr.root_ };
+            BOOST_ASSUME( root_ == slot_of( leaf ) );
+            BOOST_ASSUME( leaf.is_root() );
+            BOOST_ASSUME( hdr.size_ == leaf.num_vals + 1 );
+            BOOST_ASSUME( !leaf.left  );
+            BOOST_ASSUME( !leaf.right );
+            if ( leaf.num_vals == 0 )
+            {
+                root_ = {};
+                free( leaf );
+                --depth_;
+                next_pos = bptree_base::end_pos();
+            }
+        }
+        else
+        {
+            auto p_leaf{ &leaf };
+            if ( underflowed( leaf ) )
+            {
+                BOOST_ASSUME( !leaf.is_root() );
+                BOOST_ASSUME( depth_ > 1 );
+                next_pos = handle_underflow( leaf, leaf_level() );
+                next_pos.value_offset += leaf_key_offset;
+                p_leaf                 = &this->leaf( next_pos.node );
+                BOOST_ASSUME( next_pos.value_offset <= p_leaf->num_vals );
+            }
+
+            if ( leaf_key_offset == p_leaf->num_vals ) // the last value in a node was erased
+            {
+                if ( !p_leaf->right ) {
+                    next_pos = bptree_base::end_pos();
+                } else {
+                    next_pos.node         = p_leaf->right;
+                    next_pos.value_offset = 0;
+                }
+            }
+        }
+
+        --hdr.size_;
+        return next_pos;
+    }
+
     // This function only serves the purpose of maintaining the rule about the
     // minimum number of children per node - that rule is actually only
     // 'academic' (for making sure that the performance/complexity guarantees
@@ -972,9 +1035,9 @@ protected: // 'other'
         hdr->size_ = total_size;
     }
 
-     leaf_node & leaf  ( node_slot const slot ) noexcept { return node< leaf_node>( slot ); }
-    inner_node & inner ( node_slot const slot ) noexcept { return node<inner_node>( slot ); }
-    inner_node & parent( node_header & child ) noexcept { return inner( child.parent ); }
+    [[ gnu::pure ]]  leaf_node & leaf  ( node_slot const slot ) noexcept { return node< leaf_node>( slot ); }
+    [[ gnu::pure ]] inner_node & inner ( node_slot const slot ) noexcept { return node<inner_node>( slot ); }
+    [[ gnu::pure ]] inner_node & parent( node_header & child ) noexcept { return inner( child.parent ); }
 
      leaf_node const & leaf  ( node_slot const slot ) const noexcept { return const_cast<bptree_base_wkey &>( *this ).leaf( slot ); }
     inner_node const & parent( node_header const & child  ) const noexcept { return const_cast<bptree_base_wkey &>( *this ).parent( const_cast<node_header &>( child ) ); }
@@ -1011,7 +1074,7 @@ protected: // 'other'
 
     template <typename N>
     BOOST_NOINLINE
-    void handle_underflow( N & node, depth_t const level ) noexcept
+    iter_pos handle_underflow( N & node, depth_t const level ) noexcept
     {
         BOOST_ASSUME( underflowed( node ) );
 
@@ -1042,6 +1105,11 @@ protected: // 'other'
         auto const  left_separator_key_idx{ std::min( static_cast<node_size_type>( right_separator_key_idx - 1 ), parent.num_vals ) }; // (ab)use unsigned wraparound
         auto const p_right_separator_key { has_right_sibling ? &parent.keys[ right_separator_key_idx ] : nullptr };
         auto const p_left_separator_key  { has_left_sibling  ? &parent.keys[  left_separator_key_idx ] : nullptr };
+
+        // save&return the node (and offset) that the underflowed node's values
+        // end up
+        auto           final_node                     { node_slot };
+        node_size_type final_node_original_keys_offset{ 0 };
 
         BOOST_ASSUME( has_right_sibling || has_left_sibling );
         BOOST_ASSERT( &node != p_left_sibling  );
@@ -1079,6 +1147,8 @@ protected: // 'other'
             p_left_sibling->num_vals--;
             verify( *p_left_sibling );
 
+            final_node_original_keys_offset = 1;
+
             BOOST_ASSUME( node.           num_vals == N::min_values );
             BOOST_ASSUME( p_left_sibling->num_vals >= N::min_values );
         }
@@ -1100,6 +1170,7 @@ protected: // 'other'
                 *p_right_separator_key = leftmost_right_key;
             } else {
                 // Move/rotate the smallest key from the right sibling to the current node 'through' the parent
+
                 // no comparator in base classes :/
                 //BOOST_ASSUME( le( parent.keys[ parent_child_idx ], p_right_sibling->keys[ 0 ] ) );
                 //BOOST_ASSERT( le( *( node_keys.end() - 2 ), *p_right_separator_key ) );
@@ -1123,6 +1194,8 @@ protected: // 'other'
                 verify( *p_left_sibling );
                 BOOST_ASSUME( parent_has_key_copy == leaf_node_type );
                 // Merge node -> left sibling
+                final_node                      = node.left;
+                final_node_original_keys_offset = p_left_sibling->num_vals;
                 merge_right_into_left( *p_left_sibling, node, parent, left_separator_key_idx, parent_child_idx );
             } else {
                 verify( *p_right_sibling );
@@ -1134,8 +1207,8 @@ protected: // 'other'
             }
 
             // propagate underflow
-            auto & __restrict depth_{ this->hdr().depth_ };
-            auto & __restrict root_ { this->hdr().root_  };
+            auto & depth_{ this->hdr().depth_ };
+            auto & root_ { this->hdr().root_  };
             if ( parent.is_root() ) [[ unlikely ]]
             {
                 BOOST_ASSUME( root_ == slot_of( parent ) );
@@ -1159,6 +1232,8 @@ protected: // 'other'
                 handle_underflow( parent, level - 1 );
             }
         }
+
+        return { final_node, final_node_original_keys_offset };
     } // handle_underflow()
 
     root_node       & root()       noexcept { return as<root_node>( bptree_base::root() ); }
@@ -1308,6 +1383,19 @@ public:
         return leaf.keys[ pos_.value_offset ];
     }
 
+    std::span<Key const> get_contiguous_span_and_move_to_next_node() noexcept
+    {
+        auto & leaf{ static_cast<leaf_node &>( node() ) };
+        BOOST_ASSUME( pos_.value_offset < leaf.num_vals );
+        std::span<Key const> const span{ &leaf.keys[ pos_.value_offset ], leaf.num_vals - pos_.value_offset };
+        if ( leaf.right ) [[ likely ]]
+        {
+            pos_.node         = leaf.right;
+            pos_.value_offset = 0;
+        }
+        return span;
+    }
+
     constexpr fwd_iterator & operator++() noexcept { return static_cast<fwd_iterator &>( base_iterator::operator++() ); }
     constexpr fwd_iterator & operator--() noexcept { return static_cast<fwd_iterator &>( base_iterator::operator--() ); }
     using impl::operator++;
@@ -1332,11 +1420,23 @@ private: friend class bptree_base_wkey<Key>;
 public:
     constexpr ra_iterator() noexcept = default;
 
+    // TODO deduplicate this w/ fwd_iterator
     Key & operator*() const noexcept
     {
         auto & leaf{ node() };
         BOOST_ASSUME( pos_.value_offset < leaf.num_vals );
         return leaf.keys[ pos_.value_offset ];
+    }
+
+    std::span<Key const> get_contiguous_span_and_move_to_next_node() noexcept
+    {
+        auto & leaf{ static_cast<leaf_node &>( node() ) };
+        BOOST_ASSUME( pos_.value_offset < leaf.num_vals );
+        std::span<Key const> const span{ &leaf.keys[ pos_.value_offset ], leaf.num_vals - pos_.value_offset };
+        index_            += span.size();
+        pos_.node          = leaf.right;
+        pos_.value_offset  = 0;
+        return span;
     }
 
     ra_iterator & operator+=( difference_type const n ) noexcept { return static_cast<ra_iterator &>( base_random_access_iterator::operator+=( n ) ); }
@@ -1350,6 +1450,15 @@ public:
 
     operator fwd_iterator() const noexcept { return static_cast<fwd_iterator const &>( static_cast<base_iterator const &>( *this ) ); }
 }; // class ra_iterator
+
+template <typename Key>
+typename
+bptree_base_wkey<Key>::iterator
+bptree_base_wkey<Key>::erase( const_iterator const iter ) noexcept
+{
+    auto const [node, key_offset]{ iter.base().pos() };
+    return static_cast<iterator &&>( make_iter( erase( leaf( node ), key_offset ) ) );
+}
 
 template <typename Key>
 template <typename N> [[ gnu::sysv_abi ]]
@@ -1451,8 +1560,8 @@ public:
     using const_pointer   = value_type const *;
     using       reference = value_type       &;
     using const_reference = value_type const &;
-    using       iterator  = fwd_iterator;
-    using const_iterator  = std::basic_const_iterator<iterator>;
+    using       iterator  = base::      iterator;
+    using const_iterator  = base::const_iterator;
 
     using base::empty;
     using base::size;
@@ -1503,18 +1612,17 @@ public:
 
     size_type merge( bp_tree && other );
 
+    using base::erase;
     [[ nodiscard ]] BOOST_NOINLINE
     bool erase( key_const_arg key ) noexcept
     {
-        auto & hdr{ base::hdr() };
-        auto & __restrict depth_{ hdr.depth_ };
-        auto & __restrict root_ { hdr.root_  };
-        auto & __restrict size_ { hdr.size_  };
-
         auto const location{ find_nodes_for( key ) };
-        // code below can go into base
+
+        if ( !location.leaf_offset.exact_find ) [[ unlikely ]]
+            return false;
+
         leaf_node & leaf{ location.leaf };
-        if ( depth_ != 1 )
+        if ( this->hdr().depth_ != 1 )
         {
             verify( leaf );
             BOOST_ASSUME( leaf.num_vals >= leaf.min_values );
@@ -1532,36 +1640,7 @@ public:
             separator_key = leaf.keys[ leaf_key_offset + 1 ];
         }
 
-
-        if ( !location.leaf_offset.exact_find ) [[ unlikely ]]
-            return false;
-
-        lshift_keys( leaf, leaf_key_offset );
-        BOOST_ASSUME( leaf.num_vals );
-        --leaf.num_vals;
-        if ( depth_ == 1 ) [[ unlikely ]] // handle 'leaf root' deletion directly to simplify handle_underflow()
-        {
-            BOOST_ASSUME( root_ == slot_of( leaf ) );
-            BOOST_ASSUME( leaf.is_root() );
-            BOOST_ASSUME( size_ == leaf.num_vals + 1 );
-            BOOST_ASSUME( !leaf.left  );
-            BOOST_ASSUME( !leaf.right );
-            if ( leaf.num_vals == 0 )
-            {
-                root_ = {};
-                base::free( leaf );
-                --depth_;
-            }
-        }
-        else
-        if ( base::underflowed( leaf ) )
-        {
-            BOOST_ASSUME( !leaf.is_root() );
-            BOOST_ASSUME( depth_ > 1 );
-            base::handle_underflow( leaf, base::leaf_level() );
-        }
-
-        --size_;
+        base::erase( leaf, leaf_key_offset );
         return true;
     }
 
@@ -1861,7 +1940,7 @@ auto bp_tree<Key, Comparator>::merge
 (
     leaf_node const & source, node_size_type const source_offset,
     leaf_node       & target, node_size_type const target_offset
-) noexcept
+) /*?*/noexcept
 {
     verify( source );
     verify( target );

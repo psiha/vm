@@ -267,8 +267,8 @@ bptree_base::base_random_access_iterator::operator+=( difference_type const n ) 
             } else {
                 un -= ( available_offset + 1 );
                 // Here we don't have to perform the same check as in the
-                // fwd_iterator increment as (end) iterator comparison is done
-                // solely through the index_ member.
+                // fwd_iterator increment since (end) iterator comparison is
+                // done solely through the index_ member.
                 pos_.node         = node.right;
                 pos_.value_offset = 0;
                 if ( un == 0 ) [[ unlikely ]]
@@ -315,14 +315,16 @@ void bptree_base::swap( bptree_base & other ) noexcept
 #endif
 }
 
+bptree_base::base_iterator bptree_base::make_iter( iter_pos const pos ) noexcept { return { nodes_, pos }; }
+
 [[ gnu::pure ]] bptree_base::iter_pos bptree_base::begin_pos() const noexcept { return { this->first_leaf(), 0 }; }
 [[ gnu::pure ]] bptree_base::iter_pos bptree_base::  end_pos() const noexcept {
     auto const last_leaf{ hdr().last_leaf_ };
     return { last_leaf, node( last_leaf ).num_vals };
 }
 
-[[ gnu::pure ]] bptree_base::base_iterator bptree_base::begin() noexcept { return { this->nodes_, begin_pos() }; }
-[[ gnu::pure ]] bptree_base::base_iterator bptree_base::end  () noexcept { return { this->nodes_,   end_pos() }; }
+[[ gnu::pure ]] bptree_base::base_iterator bptree_base::begin() noexcept { return make_iter( begin_pos() ); }
+[[ gnu::pure ]] bptree_base::base_iterator bptree_base::end  () noexcept { return make_iter(   end_pos() ); }
 
 [[ gnu::pure ]] bptree_base::base_random_access_iterator bptree_base::ra_begin() noexcept { return { *this, begin_pos(), 0      }; }
 [[ gnu::pure ]] bptree_base::base_random_access_iterator bptree_base::ra_end  () noexcept { return { *this,   end_pos(), size() }; }
