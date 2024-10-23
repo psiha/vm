@@ -69,7 +69,7 @@ namespace detail
         std::memcpy( prefixed_name + shm_prefix.size(), name, name_length + 1 );
     }
 
-    BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS, BOOST_WARN_UNUSED_RESULT )
+    BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS ) [[ nodiscard ]]
     file_handle::reference BOOST_CC_REG shm_open
     (
         char                 const * const name,

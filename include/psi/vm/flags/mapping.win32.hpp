@@ -72,7 +72,7 @@ struct [[ clang::trivial_abi ]] viewing
 
 namespace detail
 {
-    flags_t BOOST_CC_REG object_access_to_page_access( access_privileges::object, viewing::share_mode );
+    flags_t object_access_to_page_access( access_privileges::object, viewing::share_mode ) noexcept;
 } // namespace detail
 
 
