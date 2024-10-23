@@ -109,8 +109,11 @@ TEST( bp_tree, playground )
         std::shuffle( numbers.begin(), numbers.end(), rng );
         for ( auto const & n : numbers )
             EXPECT_TRUE( bpt.erase( n ) );
-        for ( auto const & n : merge_appendix )
-            EXPECT_TRUE( bpt.erase( n ) );
+        for ( auto const & n : merge_appendix ) {
+            // 
+            auto const next_it{ bpt.erase( bpt.find( n ) ) };
+            EXPECT_TRUE( ( next_it == bpt.end() ) || ( *next_it == n + 1 ) );
+        }
 
         EXPECT_TRUE( bpt.empty() );
     }

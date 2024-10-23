@@ -107,7 +107,7 @@ void bptree_base::update_right_sibling_link( node_header const & left_node, node
     }
 }
 
-void bptree_base::unlink_node( node_header & node, node_header & cached_left_sibling ) noexcept
+void bptree_base::unlink_and_free_node( node_header & node, node_header & cached_left_sibling ) noexcept
 {
     auto & left { cached_left_sibling };
     auto & right{ node };
@@ -117,6 +117,30 @@ void bptree_base::unlink_node( node_header & node, node_header & cached_left_sib
     update_right_sibling_link( left, right.left );
     free( node );
 }
+
+void bptree_base::update_leaf_list_ends( node_header & removed_leaf ) noexcept
+{
+    auto & first_leaf{ hdr().first_leaf_ };
+    auto &  last_leaf{ hdr().last_leaf_  };
+    auto const slot{ slot_of( removed_leaf ) };
+    if ( slot == first_leaf ) [[ unlikely ]]
+    {
+        BOOST_ASSUME( !removed_leaf.left );
+        first_leaf = removed_leaf.right;
+    }
+    if ( slot == last_leaf ) [[ unlikely ]]
+    {
+        BOOST_ASSUME( !removed_leaf.right );
+        last_leaf = removed_leaf.left;
+    }
+}
+
+void bptree_base::unlink_and_free_leaf( node_header & leaf, node_header & cached_left_sibling ) noexcept
+{
+    update_leaf_list_ends( leaf );
+    unlink_and_free_node( leaf, cached_left_sibling );
+}
+
 
 void bptree_base::unlink_left( node_header & nd ) noexcept
 {
@@ -320,7 +344,7 @@ bptree_base::base_iterator bptree_base::make_iter( iter_pos const pos ) noexcept
 [[ gnu::pure ]] bptree_base::iter_pos bptree_base::begin_pos() const noexcept { return { this->first_leaf(), 0 }; }
 [[ gnu::pure ]] bptree_base::iter_pos bptree_base::  end_pos() const noexcept {
     auto const last_leaf{ hdr().last_leaf_ };
-    return { last_leaf, node( last_leaf ).num_vals };
+    return { last_leaf, last_leaf ? node( last_leaf ).num_vals : node_size_type{} };
 }
 
 [[ gnu::pure ]] bptree_base::base_iterator bptree_base::begin() noexcept { return make_iter( begin_pos() ); }
@@ -400,6 +424,7 @@ void bptree_base::free( node_header & node ) noexcept
     auto & free_list{ hdr.free_list_ };
     auto & free_node{ static_cast<struct free_node &>( node ) };
     auto const free_node_slot{ slot_of( free_node ) };
+    BOOST_ASSUME( free_node_slot != hdr.last_leaf_ ); // should have been handled in the dedicated overload
 #ifndef NDEBUG
     if ( free_node.left )
         BOOST_ASSERT( left( free_node ).right != free_node_slot );
@@ -420,6 +445,12 @@ void bptree_base::free( node_header & node ) noexcept
     else             { BOOST_ASSUME( !hdr.free_node_count_ ); }
     free_list = free_node_slot;
     ++hdr.free_node_count_;
+}
+
+void bptree_base::free_leaf( node_header & leaf ) noexcept
+{
+    update_leaf_list_ends( leaf );
+    free( leaf );
 }
 
 //------------------------------------------------------------------------------

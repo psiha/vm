@@ -283,7 +283,8 @@ protected:
     [[ gnu::pure ]] depth_t    leaf_level(                     ) const noexcept;
     [[ gnu::pure ]] bool    is_leaf_level( depth_t const level ) const noexcept;
 
-    void free( node_header & ) noexcept;
+    void free     ( node_header & ) noexcept;
+    void free_leaf( node_header & ) noexcept;
 
     void reserve_additional( node_slot::value_type additional_nodes );
     void reserve           ( node_slot::value_type new_capacity_in_number_of_nodes );
@@ -364,7 +365,8 @@ protected:
 
     void rshift_sibling_parent_pos( node_header & node ) noexcept;
     void update_right_sibling_link( node_header const & left_node, node_slot left_node_slot ) noexcept;
-    void unlink_node( node_header & node, node_header & cached_left_sibling ) noexcept;
+    void unlink_and_free_node( node_header & node, node_header & cached_left_sibling ) noexcept;
+    void unlink_and_free_leaf( node_header & leaf, node_header & cached_left_sibling ) noexcept;
 
     void unlink_left ( node_header & nd ) noexcept;
     void unlink_right( node_header & nd ) noexcept;
@@ -384,8 +386,8 @@ protected:
     template <typename NodeType, typename SourceNode>
     static NodeType const & as( SourceNode const & slot ) noexcept { return as<NodeType>( const_cast<SourceNode &>( slot ) ); }
 
-    node_placeholder       & node( node_slot const offset )       noexcept { return nodes_[ *offset ]; }
-    node_placeholder const & node( node_slot const offset ) const noexcept { return nodes_[ *offset ]; }
+    [[ gnu::pure ]] node_placeholder       & node( node_slot const offset )       noexcept { return nodes_[ *offset ]; }
+    [[ gnu::pure ]] node_placeholder const & node( node_slot const offset ) const noexcept { return nodes_[ *offset ]; }
 
     auto       & root()       noexcept { return node( hdr().root_ ); }
     auto const & root() const noexcept { return const_cast<bptree_base &>( *this ).root(); }
@@ -415,6 +417,8 @@ private:
     auto header_data() noexcept { return detail::header_data<header>( nodes_.user_header_data() ); }
 
     void assign_nodes_to_free_pool( node_slot::value_type starting_node ) noexcept;
+
+    void update_leaf_list_ends( node_header & removed_leaf ) noexcept;
 
 protected:
     node_pool nodes_;
@@ -783,8 +787,8 @@ protected: // split_to_insert and its helpers
         auto const mid{ N::min_values };
         BOOST_ASSUME( node_to_split.num_vals == max );
         auto [node_slot, new_slot]{ bptree_base::new_spillover_node_for( node_to_split ) };
-        auto       p_node    { &node<N>( node_slot ) };
-        auto       p_new_node{ &node<N>(  new_slot ) };
+        auto p_node    { &node<N>( node_slot ) };
+        auto p_new_node{ &node<N>(  new_slot ) };
         verify( *p_node );
         BOOST_ASSUME( p_node->num_vals == max );
         BOOST_ASSERT
@@ -863,12 +867,17 @@ protected: // 'other'
                 root_ = {};
                 free( leaf );
                 --depth_;
-                next_pos = bptree_base::end_pos();
+                BOOST_ASSUME( depth_ == 0 );
+                BOOST_ASSUME( hdr.size_ == 1 );
+                BOOST_ASSUME( !hdr.first_leaf_ );
+                BOOST_ASSUME( !hdr.last_leaf_  );
+                next_pos = {}; // empty end_pos
             }
         }
         else
         {
             auto p_leaf{ &leaf };
+            bool last_node_value_was_erased{ leaf_key_offset == p_leaf->num_vals };
             if ( underflowed( leaf ) )
             {
                 BOOST_ASSUME( !leaf.is_root() );
@@ -877,9 +886,10 @@ protected: // 'other'
                 next_pos.value_offset += leaf_key_offset;
                 p_leaf                 = &this->leaf( next_pos.node );
                 BOOST_ASSUME( next_pos.value_offset <= p_leaf->num_vals );
+                last_node_value_was_erased = ( next_pos.value_offset == p_leaf->num_vals );
             }
 
-            if ( leaf_key_offset == p_leaf->num_vals ) // the last value in a node was erased
+            if ( last_node_value_was_erased )
             {
                 if ( !p_leaf->right ) {
                     next_pos = bptree_base::end_pos();
@@ -1240,16 +1250,10 @@ protected: // 'other'
     root_node const & root() const noexcept { return const_cast<bptree_base_wkey &>( *this ).root(); }
 
     using bptree_base::free;
-    void free( leaf_node & leaf ) noexcept {
-        auto & first_leaf{ hdr().first_leaf_ };
-        if ( first_leaf == slot_of( leaf ) )
-        {
-            BOOST_ASSUME( !leaf.left );
-            first_leaf = leaf.right;
-            unlink_right( leaf );
-        }
-        bptree_base::free( static_cast<node_header &>( leaf ) );
-    }
+    void free( leaf_node & leaf ) noexcept { bptree_base::free_leaf( leaf ); }
+
+    using bptree_base::unlink_and_free_node;
+    void unlink_and_free_node( leaf_node & leaf, leaf_node & cached_left_sibling ) noexcept { bptree_base::unlink_and_free_leaf( leaf, cached_left_sibling ); }
 
     template <typename N>
     [[ gnu::sysv_abi ]] static
@@ -1301,7 +1305,7 @@ protected: // 'other'
         BOOST_ASSUME( parent.num_vals );
         parent.num_vals--;
 
-        unlink_node( right, left );
+        unlink_and_free_node( right, left );
         verify( left  );
         verify( parent );
     }
@@ -1325,7 +1329,7 @@ protected: // 'other'
         left.num_vals += right.num_vals;
         BOOST_ASSUME( left.num_vals >= left.max_values - 1 ); BOOST_ASSUME( left.num_vals <= left.max_values );
         verify( left );
-        unlink_node( right, left );
+        unlink_and_free_node( right, left );
 
         lshift_keys  ( parent, parent_key_idx   );
         lshift_chldrn( parent, parent_child_idx );
@@ -1457,7 +1461,10 @@ bptree_base_wkey<Key>::iterator
 bptree_base_wkey<Key>::erase( const_iterator const iter ) noexcept
 {
     auto const [node, key_offset]{ iter.base().pos() };
-    return static_cast<iterator &&>( make_iter( erase( leaf( node ), key_offset ) ) );
+    auto & lf{ leaf( node ) };
+    if ( key_offset == 0 ) [[ unlikely ]]
+        update_separator( lf, lf.keys[ 1 ] );
+    return static_cast<iterator &&>( make_iter( erase( lf, key_offset ) ) );
 }
 
 template <typename Key>
