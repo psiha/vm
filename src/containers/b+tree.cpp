@@ -352,8 +352,14 @@ void bptree_base::swap( bptree_base & other ) noexcept
 }
 
 bptree_base::base_iterator bptree_base::make_iter( iter_pos const pos ) noexcept { return { nodes_, pos }; }
-bptree_base::base_iterator bptree_base::make_iter( node_slot const node, node_size_type const offset ) noexcept { return make_iter({ node, offset }); }
+bptree_base::base_iterator bptree_base::make_iter( node_slot const node, node_size_type const offset ) noexcept { return make_iter(iter_pos{ node, offset }); }
 bptree_base::base_iterator bptree_base::make_iter( node_header const & node, node_size_type const offset ) noexcept { return make_iter( slot_of( node ), offset ); }
+bptree_base::base_iterator bptree_base::make_iter( insert_pos_t const next_pos ) noexcept
+{
+    auto iter{ make_iter( next_pos.node, next_pos.next_insert_offset ) };
+    --iter;
+    return iter;
+}
 
 [[ gnu::pure ]] bptree_base::iter_pos bptree_base::begin_pos() const noexcept { return { this->first_leaf(), 0 }; }
 [[ gnu::pure ]] bptree_base::iter_pos bptree_base::  end_pos() const noexcept {

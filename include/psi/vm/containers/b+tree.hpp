@@ -258,6 +258,17 @@ protected:
 
     struct insert_pos_t { node_slot node; node_size_type next_insert_offset; }; // TODO 'merge' with iter_pos
 
+    struct find_pos0 // msvc pass-in-reg facepalm
+    {
+        node_size_type pos        : ( sizeof( node_size_type ) * CHAR_BIT - 1 );
+        node_size_type exact_find : 1;
+    };
+    struct find_pos1
+    {
+        node_size_type pos;
+        bool           exact_find;
+    };
+
     struct header // or persisted data members
     {
         node_slot             root_;
@@ -277,6 +288,7 @@ protected:
     base_iterator make_iter( iter_pos ) noexcept;
     base_iterator make_iter( node_slot, node_size_type offset ) noexcept;
     base_iterator make_iter( node_header const &, node_size_type offset ) noexcept;
+    base_iterator make_iter( insert_pos_t ) noexcept;
 
     [[ gnu::pure ]] iter_pos begin_pos() const noexcept;
     [[ gnu::pure ]] iter_pos   end_pos() const noexcept;
@@ -840,7 +852,25 @@ protected: // split_to_insert and its helpers
 
 
 protected: // 'other'
-    [[ gnu::pure, nodiscard ]] auto make_iter( auto const &... args ) noexcept { return static_cast<iterator &&>( bptree_base::make_iter( args... ) ); }
+    // key_locations (containing find_pos) should also be returnable through registers
+    using find_pos = std::conditional_t
+    <
+        ( sizeof( find_pos1 ) > 2 ) &&
+        ( leaf_node::max_values <= ( std::numeric_limits<node_size_type>::max() / 2 ) ), // we get only half the range if one bit is shaved off for exact_find
+        bptree_base::find_pos0,
+        bptree_base::find_pos1
+    >;
+    struct key_locations
+    {
+        leaf_node & leaf;
+        find_pos    leaf_offset;
+        // optional - if also present in an inner node as a separator key
+        node_size_type inner_offset; // ordered for compact layout
+        node_slot      inner;
+    }; // struct key_locations
+
+    [[ gnu::pure, nodiscard ]] iterator make_iter( auto const &... args ) noexcept { return static_cast<iterator &&>( bptree_base::make_iter( args... ) ); }
+    [[ gnu::pure, nodiscard ]] iterator make_iter( key_locations const loc ) noexcept { return make_iter( loc.leaf, loc.leaf_offset.pos ); }
 
     template <typename N>
     insert_pos_t insert( N & target_node, node_size_type const target_node_pos, key_rv_arg v, node_slot const right_child )
@@ -1571,6 +1601,7 @@ private:
     using parent_node    = base::parent_node;
     using fwd_iterator   = base::fwd_iterator;
     using  ra_iterator   = base:: ra_iterator;
+    using find_pos       = base::find_pos;
     using iter_pos       = base::iter_pos;
 
     using bptree_base::as;
@@ -1710,22 +1741,31 @@ private: // pass-in-reg public function overloads/impls
         {
             auto const location{ find_nodes_for( key ) };
             if ( location.leaf_offset.exact_find ) [[ likely ]] {
-                return iterator{ this->nodes_, { slot_of( location.leaf ), location.leaf_offset.pos } };
+                return base::make_iter( location );
             }
         }
 
         return this->end();
     }
-
+    [[ using gnu: pure, sysv_abi ]]
     iterator lower_bound_impl( Reg auto const key ) noexcept
     {
         if ( !empty() ) [[ likely ]]
         {
             auto const location{ find_nodes_for( key ) };
-            return base::make_iter( location.leaf, location.leaf_offset.pos );
+            // find_nodes_for() returns an insertion point, which can be one
+            // pass the end of a node (like an end iterator, indicating an
+            // append/push_back position) but iterators do not support this
+            // (have to be initialized with a valid position for the increment
+            // operator to work).
+            if ( location.leaf_offset.pos == location.leaf.num_vals ) [[ unlikely ]] {
+                BOOST_ASSUME( !location.leaf_offset.exact_find );
+                return base::make_iter( location.leaf.right, node_size_type{ 0 } );
+            }
+            return base::make_iter( location );
         }
 
-        return this->end();
+        return end();
     }
 
     [[ using gnu: pure, sysv_abi ]]
@@ -1735,7 +1775,7 @@ private: // pass-in-reg public function overloads/impls
         {
             auto const location{ find_nodes_for( key ) };
             if ( location.leaf_offset.exact_find ) [[ likely ]] {
-                auto const begin{ base::make_iter( location.leaf, location.leaf_offset.pos ) };
+                auto const begin{ base::make_iter( location ) };
                 return { begin, std::next( begin ) };
             }
         }
@@ -1758,46 +1798,33 @@ private: // pass-in-reg public function overloads/impls
         BOOST_ASSUME( !locations.inner );
         BOOST_ASSUME( !locations.inner_offset );
         if ( locations.leaf_offset.exact_find ) [[ unlikely ]]
-            return { base::make_iter( locations.leaf, locations.leaf_offset.pos ), false };
+            return { base::make_iter( locations ), false };
 
         auto const insert_pos_next{ base::insert( locations.leaf, locations.leaf_offset.pos, Key{ v }, { /*insertion starts from leaves which do not have children*/ } ) };
         ++this->hdr().size_;
-        return { std::prev( base::make_iter( insert_pos_next.node, insert_pos_next.next_insert_offset ) ), true };
+        return { base::make_iter( insert_pos_next ), true };
     }
 
     iterator insert_impl( const_iterator const pos_hint, Reg auto const v )
     {
-        // yes, for starters generic 'hint as just a hint' is not supported
+        // yes, for starters, generic 'hint as just a hint' is not supported
         BOOST_ASSUME( !empty() );
         BOOST_ASSERT_MSG( le( v, *pos_hint ), "Invalid insertion hint" );
         BOOST_ASSERT_MSG( !unique || ge( v, *std::prev( pos_hint ) ), "Invalid insertion hint" );
 
         auto const [hint_slot, hint_slot_offset]{ pos_hint.base().pos() };
-        auto const insert_pos_next{ base::insert( leaf( hint_slot ), hint_slot_offset, Key{ v }, { /*insertion starts from leaves which do not have children*/ } ) };
+        auto & hint_leaf{ leaf( hint_slot ) };
+        if ( hint_slot_offset == 0 ) [[ unlikely ]] {
+            base::update_separator( hint_leaf, v );
+        }
+        [[ maybe_unused ]]
+        auto const insert_pos_next{ base::insert( hint_leaf, hint_slot_offset, Key{ v }, {} ) };
+        BOOST_ASSERT( pos_hint == base::make_iter( insert_pos_next ) );
         ++this->hdr().size_;
-        return std::prev( base::make_iter( insert_pos_next.node, insert_pos_next.next_insert_offset ) );
+        return pos_hint.base();
     }
 
 private:
-    // key_locations (containing find_pos) has to returnable through registers
-    struct find_pos0 // msvc pass-in-reg facepalm
-    {
-        node_size_type pos        : ( sizeof( node_size_type ) * CHAR_BIT - 1 );
-        node_size_type exact_find : 1;
-    };
-    struct find_pos1
-    {
-        node_size_type pos;
-        bool           exact_find;
-    };
-    using find_pos = std::conditional_t
-    <
-        ( sizeof( find_pos1 ) > 2 ) &&
-        ( leaf_node::max_values <= ( std::numeric_limits<node_size_type>::max() / 2 ) ),
-        find_pos0,
-        find_pos1
-    >;
-
     // lower_bound find
     [[ using gnu: pure, hot, noinline, sysv_abi ]]
     static find_pos find( Key const keys[], node_size_type const num_vals, Reg auto const value, pass_in_reg<Comparator> const comparator ) noexcept
@@ -1845,17 +1872,8 @@ private:
         return result;
     }
 
-    struct key_locations
-    {
-        leaf_node & leaf;
-        find_pos    leaf_offset;
-        // optional - if also present in an inner node as a separator key
-        node_size_type inner_offset; // ordered for compact layout
-        node_slot      inner;
-    };
-
     [[ using gnu: pure, hot, sysv_abi, noinline ]]
-    key_locations find_nodes_for( Reg auto const key ) noexcept
+    base::key_locations find_nodes_for( Reg auto const key ) noexcept
     {
         node_slot      separator_key_node;
         node_size_type separator_key_offset{};
@@ -1887,7 +1905,7 @@ private:
             separator_key_node
         };
     }
-    key_locations find_nodes_for( Key const & key ) noexcept { return find_nodes_for<Key>( key ); }
+    auto find_nodes_for( Key const & key ) noexcept { return find_nodes_for<Key>( key ); }
 
     auto find_next( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, Reg auto const key ) const noexcept
     {
