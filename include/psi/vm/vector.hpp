@@ -33,10 +33,7 @@
 #include <type_traits>
 #include <stdexcept>
 //------------------------------------------------------------------------------
-namespace psi
-{
-//------------------------------------------------------------------------------
-namespace vm
+namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
@@ -55,7 +52,7 @@ public:
     contiguous_container_storage_base & operator=( contiguous_container_storage_base && ) = default;
 
     auto data()       noexcept { BOOST_ASSERT_MSG( mapping_, "Paging file not attached" ); return std::assume_aligned<commit_granularity>( view_.data() ); }
-    auto data() const noexcept { return const_cast< contiguous_container_storage_base & >( *this ).data(); }
+    auto data() const noexcept { return const_cast<contiguous_container_storage_base &>( *this ).data(); }
 
     void unmap() noexcept { view_.unmap(); }
 
@@ -353,7 +350,7 @@ bool constexpr is_trivially_moveable
 #ifdef __clang__
     __is_trivially_relocatable( T ) ||
 #endif
-    std::is_trivially_move_constructible_v< T >
+    std::is_trivially_move_constructible_v<T>
 };
 
 struct default_init_t{}; inline constexpr default_init_t default_init;
@@ -418,7 +415,7 @@ public:
     using const_pointer          = T const *;
     using       reference        = T       &;
     using const_reference        = T const &;
-    using param_const_ref        = std::conditional_t< std::is_trivial_v< T > && ( sizeof( T ) <= 2 * sizeof( void * ) ), T, const_reference >;
+    using param_const_ref        = std::conditional_t< std::is_trivial_v<T> && ( sizeof( T ) <= 2 * sizeof( void * ) ), T, const_reference >;
     using       size_type        = sz_t;
     using difference_type        = std::make_signed_t<size_type>;
     using         iterator       = typename span_t::      iterator;
@@ -585,7 +582,7 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard, gnu::pure ]] bool empty() const noexcept { return span().empty(); }
+    [[ nodiscard, gnu::pure ]] bool empty() const noexcept { return !storage_ || span().empty(); }
 
     //! <b>Effects</b>: Returns the number of the elements contained in the vector.
     //!
@@ -599,7 +596,7 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] static constexpr size_type max_size() noexcept { return static_cast< size_type >( std::numeric_limits< size_type >::max() / sizeof( value_type ) ); }
+    [[ nodiscard ]] static constexpr size_type max_size() noexcept { return static_cast<size_type>( std::numeric_limits< size_type >::max() / sizeof( value_type ) ); }
 
     //! <b>Effects</b>: Inserts or erases elements at the end such that
     //!   the size becomes n. New elements can be default or value initialized.
@@ -607,7 +604,7 @@ public:
     //! <b>Throws</b>: If memory allocation throws, or T's copy/move or value initialization throws.
     //!
     //! <b>Complexity</b>: Linear to the difference between size() and new_size.
-    void resize( size_type const new_size, default_init_t ) requires( std::is_trivial_v< T > )
+    void resize( size_type const new_size, default_init_t ) requires( std::is_trivial_v<T> )
     {
         storage_.resize( to_byte_sz( new_size ) );
     }
@@ -841,7 +838,7 @@ public:
     //!
     //! <b>Complexity</b>: Constant.
     [[ nodiscard ]] T       * data()       noexcept { return to_t_ptr( storage_.data() ); }
-    [[ nodiscard ]] T const * data() const noexcept { return const_cast< vector & >( *this ).data(); }
+    [[ nodiscard ]] T const * data() const noexcept { return const_cast<vector &>( *this ).data(); }
 
     [[ nodiscard ]]       span_t span()       noexcept { return { data(), size() }; }
     [[ nodiscard ]] const_span_t span() const noexcept { return { data(), size() }; }
@@ -916,7 +913,7 @@ public:
     //!   T's copy/move constructor throws.
     //!
     //! <b>Complexity</b>: Amortized constant time.
-    void push_back( T && x ) requires( !std::is_trivial_v< T > ) { emplace_back( std::move( x ) ); }
+    void push_back( T && x ) requires( !std::is_trivial_v<T> ) { emplace_back( std::move( x ) ); }
 
     //! <b>Requires</b>: position must be a valid iterator of *this.
     //!
@@ -936,7 +933,7 @@ public:
     //!
     //! <b>Complexity</b>: If position is end(), amortized constant time
     //!   Linear time otherwise.
-    iterator insert( const_iterator const position, T && x ) requires( !std::is_trivial_v< T > ) { return emplace( position, std::move( x ) ); }
+    iterator insert( const_iterator const position, T && x ) requires( !std::is_trivial_v<T> ) { return emplace( position, std::move( x ) ); }
 
     //! <b>Requires</b>: position must be a valid iterator of *this.
     //!
@@ -1223,15 +1220,15 @@ private:
 }; // class vector
 
 
-template < typename T, typename sz_t, bool headerless >
+template <typename T, typename sz_t, bool headerless>
 #if defined( _MSC_VER ) && !defined( NDEBUG )
 // Boost.Container flat_set is bugged: tries to dereference end iterators - asserts at runtime with secure/checked STL/containers
 // https://github.com/boostorg/container/issues/261
-requires is_trivially_moveable< T >
-class unchecked_vector : public vector< T, sz_t, headerless >
+requires is_trivially_moveable<T>
+class unchecked_vector : public vector<T, sz_t, headerless>
 {
 public:
-    using base = vector< T, sz_t, headerless >;
+    using base = vector<T, sz_t, headerless>;
 
     using       iterator = typename base::      pointer;
     using const_iterator = typename base::const_pointer;
@@ -1292,14 +1289,12 @@ public:
     }
 };
 #else
-using unchecked_vector = vector< T, sz_t, headerless >;
+using unchecked_vector = vector<T, sz_t, headerless>;
 #endif
 
-template < typename Vector >
-using unchecked = unchecked_vector< typename Vector::value_type, typename Vector::size_type, Vector::headerless >;
+template <typename Vector>
+using unchecked = unchecked_vector<typename Vector::value_type, typename Vector::size_type, Vector::headerless>;
 
 //------------------------------------------------------------------------------
-} // namespace vm
-//------------------------------------------------------------------------------
-} // namespace psi
+} // namespace psi::vm
 //------------------------------------------------------------------------------
