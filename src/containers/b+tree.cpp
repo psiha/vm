@@ -5,9 +5,11 @@ namespace psi::vm
 //------------------------------------------------------------------------------
 
 // https://en.wikipedia.org/wiki/B-tree
+// https://en.wikipedia.org/wiki/B%2B_tree
 // https://opendsa-server.cs.vt.edu/ODSA/Books/CS3/html/BTree.html
 // http://www.cburch.com/cs/340/reading/btree/index.html
 // https://www.programiz.com/dsa/b-plus-tree
+// https://courses.cs.washington.edu/courses/cse332/23su/lectures/9_B_Trees.pdf (version, as this impl, which has different key counts in inner vs leaf nodes)
 // https://www.geeksforgeeks.org/b-trees-implementation-in-c
 // https://github.com/jeffplaisance/BppTree
 // https://flatcap.github.io/linux-ntfs/ntfs/concepts/tree/index.html
@@ -17,6 +19,8 @@ namespace psi::vm
 // https://www.researchgate.net/publication/220225482_Cache-Oblivious_Databases_Limitations_and_Opportunities
 // https://www.postgresql.org/docs/current/btree.html
 // https://abseil.io/about/design/btree
+// https://www.scylladb.com/2021/11/23/the-taming-of-the-b-trees
+// https://www.scattered-thoughts.net/writing/smolderingly-fast-btrees
 // Data Structure Visualizations https://www.cs.usfca.edu/~galles/visualization/Algorithms.html
 // Griffin: Fast Transactional Database Index with Hash and B+-Tree https://ieeexplore.ieee.org/abstract/document/10678674
 // Restructuring the concurrent B+-tree with non-blocked search operations https://www.sciencedirect.com/science/article/abs/pii/S002002550200261X
@@ -37,6 +41,7 @@ void bptree_base::clear() noexcept
 std::span<std::byte>
 bptree_base::user_header_data() noexcept { return header_data().second; }
 
+[[ gnu::pure, gnu::hot, gnu::always_inline ]]
 bptree_base::header &
 bptree_base::hdr() noexcept { return *header_data().first; }
 
@@ -44,6 +49,10 @@ bptree_base::storage_result
 bptree_base::map_memory( std::uint32_t const initial_capacity_as_number_of_nodes ) noexcept
 {
     storage_result success{ nodes_.map_memory( initial_capacity_as_number_of_nodes, value_init ) };
+#ifndef NDEBUG
+    p_hdr_   = &hdr();
+    p_nodes_ = nodes_.data();
+#endif
     if ( std::move( success ) )
     {
         hdr() = {};
@@ -61,7 +70,8 @@ void bptree_base::reserve_additional( node_slot::value_type additional_nodes )
     auto const current_size{ nodes_.size() };
     nodes_.grow_by( additional_nodes, value_init );
 #ifndef NDEBUG
-    hdr_ = &hdr();
+    p_hdr_   = &hdr();
+    p_nodes_ = nodes_.data();
 #endif
     assign_nodes_to_free_pool( current_size );
 }
@@ -73,7 +83,8 @@ void bptree_base::reserve( node_slot::value_type new_capacity_in_number_of_nodes
     auto const current_size{ nodes_.size() };
     nodes_.grow_to( new_capacity_in_number_of_nodes, value_init );
 #ifndef NDEBUG
-    hdr_ = &hdr();
+    p_hdr_   = &hdr();
+    p_nodes_ = nodes_.data();
 #endif
     assign_nodes_to_free_pool( current_size );
 }
@@ -335,11 +346,14 @@ void bptree_base::swap( bptree_base & other ) noexcept
     using std::swap;
     swap( this->nodes_, other.nodes_ );
 #ifndef NDEBUG
-    swap( this->hdr_, other.hdr_ );
+    swap( this->p_hdr_  , other.p_hdr_   );
+    swap( this->p_nodes_, other.p_nodes_ );
 #endif
 }
 
 bptree_base::base_iterator bptree_base::make_iter( iter_pos const pos ) noexcept { return { nodes_, pos }; }
+bptree_base::base_iterator bptree_base::make_iter( node_slot const node, node_size_type const offset ) noexcept { return make_iter({ node, offset }); }
+bptree_base::base_iterator bptree_base::make_iter( node_header const & node, node_size_type const offset ) noexcept { return make_iter( slot_of( node ), offset ); }
 
 [[ gnu::pure ]] bptree_base::iter_pos bptree_base::begin_pos() const noexcept { return { this->first_leaf(), 0 }; }
 [[ gnu::pure ]] bptree_base::iter_pos bptree_base::  end_pos() const noexcept {
@@ -413,7 +427,8 @@ bptree_base::new_node()
     BOOST_ASSUME( !new_node.left     );
     BOOST_ASSUME( !new_node.right    );
 #ifndef NDEBUG
-    hdr_ = &this->hdr();
+    p_hdr_   = &this->hdr();
+    p_nodes_ = nodes_.data();
 #endif
     return new_node;
 }

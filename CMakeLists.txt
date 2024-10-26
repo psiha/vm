@@ -23,11 +23,15 @@ set( boost_ver boost-1.86.0 )
 CPMAddPackage( "gh:boostorg/static_assert#${boost_ver}"   ) # Boost::core dependency
 CPMAddPackage( "gh:boostorg/throw_exception#${boost_ver}" ) # Boost::core dependency
 CPMAddPackage( "gh:boostorg/config#${boost_ver}"          ) # Boost::core dependency
+CPMAddPackage( "gh:boostorg/intrusive#${boost_ver}"       ) # Boost::container dependency
 CPMAddPackage( "gh:boostorg/io#${boost_ver}"              ) # Boost::utility dependency
 CPMAddPackage( "gh:boostorg/type_traits#${boost_ver}"     ) # Boost::utility dependency
 CPMAddPackage( "gh:boostorg/predef#${boost_ver}"          ) # Boost::winapi dependency
 CPMAddPackage( "gh:boostorg/assert#${boost_ver}"          )
+CPMAddPackage( "gh:boostorg/container#${boost_ver}"       ) # used only for comparative benchmarking
 CPMAddPackage( "gh:boostorg/core#${boost_ver}"            )
+CPMAddPackage( "gh:boostorg/integer#${boost_ver}"         )
+CPMAddPackage( "gh:boostorg/move#${boost_ver}"            )
 CPMAddPackage( "gh:boostorg/preprocessor#${boost_ver}"    )
 CPMAddPackage( "gh:boostorg/stl_interfaces#${boost_ver}"  )
 CPMAddPackage( "gh:boostorg/winapi#${boost_ver}"          )
@@ -72,8 +76,11 @@ endif()
 include( vm.cmake )
 
 target_link_libraries( psi_vm PUBLIC
+  Boost::container
   Boost::core
   Boost::assert
+  Boost::integer
+  Boost::move
   Boost::preprocessor
   Boost::stl_interfaces
   Boost::winapi

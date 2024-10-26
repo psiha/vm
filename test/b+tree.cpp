@@ -2,9 +2,17 @@
 #include <psi/vm/containers/b+tree_print.hpp>
 
 #include <boost/assert.hpp>
+#include <boost/container/flat_set.hpp>
+
+#define HAVE_ABSL 0
+#if HAVE_ABSL
+#include <absl/container/btree_set.h>
+#endif
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <print>
 #include <random>
 #include <ranges>
 #include <utility>
@@ -13,6 +21,72 @@
 namespace psi::vm
 {
 //------------------------------------------------------------------------------
+
+#ifdef NDEBUG // bench only release builds
+
+namespace
+{
+    using timer    = std::chrono::high_resolution_clock;
+    using duration = std::chrono::nanoseconds;
+
+    duration time_insertion( auto & container, auto const & data )
+    {
+        auto const start{ timer::now() };
+        container.insert( data.begin(), data.end() );
+        return std::chrono::duration_cast<duration>( timer::now() - start ) / data.size();
+    }
+    duration time_lookup( auto const & container, auto const & data ) noexcept
+    {
+        auto const start{ timer::now() };
+        for ( auto const x : data ) {
+            EXPECT_EQ( *container.find( x ), x );
+        }
+        return std::chrono::duration_cast<duration>( timer::now() - start ) / data.size();
+    }
+} // anonymous namespace
+
+TEST( bp_tree, benchamrk )
+{
+    auto const   test_size{ 7654321 };
+    auto const   seed{ std::random_device{}() };
+    std::mt19937 rng{ seed };
+
+    std::ranges::iota_view constexpr sorted_numbers{ 0, test_size };
+    auto numbers{ std::ranges::to<std::vector>( sorted_numbers ) };
+    std::ranges::shuffle( numbers, rng );
+
+    psi::vm         ::bp_tree<int>   bpt; bpt.map_memory();
+    boost::container::flat_set<int>  flat_set;
+#if HAVE_ABSL
+    absl            ::btree_set<int> abpt;
+#endif
+
+    // bulk-insertion-into-empty
+    auto const flat_set_insert{ time_insertion( flat_set, sorted_numbers ) };
+    auto const bpt_insert     { time_insertion( bpt     , sorted_numbers ) };
+#if HAVE_ABSL
+    auto const abpt_insert    { time_insertion( abpt    , sorted_numbers ) };
+#endif
+
+    // random lookup
+    auto const flat_set_find{ time_lookup( flat_set, numbers ) };
+    auto const      bpt_find{ time_lookup( bpt     , numbers ) };
+#if HAVE_ABSL
+    auto const     abpt_find{ time_lookup( abpt    , numbers ) };
+#endif
+
+    std::println( "insert / lookup:" );
+    std::println( "\t boost::container::flat_set:\t{} / {}", flat_set_insert, flat_set_find );
+    std::println( "\t psi::vm::bpt:\t{} / {}", bpt_insert, bpt_find );
+#if HAVE_ABSL
+    std::println( "\t absl::bpt:\t{} / {}", abpt_insert, abpt_find );
+#endif
+
+#if 0 // CI servers are unreliable for comparative perf tests
+    EXPECT_LE( bpt_find, flat_set_find );
+#endif
+} // bp_tree.benchamrk
+#endif // release build
 
 static auto const test_file{ "test.bpt" };
 
@@ -26,7 +100,9 @@ TEST( bp_tree, playground )
     auto const test_size{  258735 };
 #endif
     std::ranges::iota_view constexpr sorted_numbers{ 0, test_size };
-    std::mt19937 rng{ std::random_device{}() };
+    auto const seed{ std::random_device{}() };
+    std::println( "Seed {}", seed );
+    std::mt19937 rng{ seed };
     auto numbers{ std::ranges::to<std::vector>( sorted_numbers ) };
     std::span const nums{ numbers };
     // leave the largest quarter of values at the end to trigger/exercise the
