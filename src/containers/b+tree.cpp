@@ -11,19 +11,26 @@ namespace psi::vm
 // https://www.programiz.com/dsa/b-plus-tree
 // https://courses.cs.washington.edu/courses/cse332/23su/lectures/9_B_Trees.pdf (version, as this impl, which has different key counts in inner vs leaf nodes)
 // https://www.geeksforgeeks.org/b-trees-implementation-in-c
-// https://github.com/jeffplaisance/BppTree
 // https://flatcap.github.io/linux-ntfs/ntfs/concepts/tree/index.html
 // https://benjamincongdon.me/blog/2021/08/17/B-Trees-More-Than-I-Thought-Id-Want-to-Know
 // https://stackoverflow.com/questions/59362113/b-tree-minimum-internal-children-count-explanation
 // https://web.archive.org/web/20190126073810/http://supertech.csail.mit.edu/cacheObliviousBTree.html
 // https://www.researchgate.net/publication/220225482_Cache-Oblivious_Databases_Limitations_and_Opportunities
 // https://www.postgresql.org/docs/current/btree.html
-// https://abseil.io/about/design/btree
 // https://www.scylladb.com/2021/11/23/the-taming-of-the-b-trees
 // https://www.scattered-thoughts.net/writing/smolderingly-fast-btrees
+// B+tree vs LSM-tree https://www.usenix.org/conference/fast22/presentation/qiao
 // Data Structure Visualizations https://www.cs.usfca.edu/~galles/visualization/Algorithms.html
 // Griffin: Fast Transactional Database Index with Hash and B+-Tree https://ieeexplore.ieee.org/abstract/document/10678674
 // Restructuring the concurrent B+-tree with non-blocked search operations https://www.sciencedirect.com/science/article/abs/pii/S002002550200261X
+// Cache-Friendly Search Trees https://arxiv.org/pdf/1907.01631
+// ZBTree: A Fast and Scalable B+-Tree for Persistent Memory https://ieeexplore.ieee.org/document/10638243
+
+// https://abseil.io/about/design/btree
+// https://github.com/tlx/tlx/tree/master/tlx/container
+// https://github.com/jeffplaisance/BppTree
+// https://github.com/postgres/postgres/blob/master/src/backend/access/nbtree/README
+// https://github.com/scylladb/scylladb/blob/master/utils/intrusive_btree.hh
 
 // https://en.wikipedia.org/wiki/Judy_array
 
@@ -50,8 +57,11 @@ bptree_base::map_memory( std::uint32_t const initial_capacity_as_number_of_nodes
 {
     storage_result success{ nodes_.map_memory( initial_capacity_as_number_of_nodes, value_init ) };
 #ifndef NDEBUG
-    p_hdr_   = &hdr();
-    p_nodes_ = nodes_.data();
+    if ( std::move( success ) )
+    {
+        p_hdr_   = &hdr();
+        p_nodes_ = nodes_.data();
+    }
 #endif
     if ( std::move( success ) )
     {

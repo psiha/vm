@@ -2,6 +2,7 @@
 
 #include <psi/vm/align.hpp>
 #include <psi/vm/allocation.hpp>
+#include <psi/vm/containers/abi.hpp>
 #include <psi/vm/vector.hpp>
 
 #include <psi/build/disable_warnings.hpp>
@@ -43,90 +44,11 @@ namespace detail
     }
 } // namespace detail
 
-////////////////////////////////////////////////////////////////////////////////
-// Modern(ized) attempt at 'automatized' boost::call_traits primarily to support
-// efficient transparent comparators & non-inlined generic lookup functions
-// which cause neither unnecessary copies of non-trivial types nor pass-by-ref
-// of trivial ones.
-// Largely still WiP...
-// Essentially this is 'explicit IPA SROA'.
-// https://gcc.gnu.org/onlinedocs/gccint/passes-and-files-of-the-compiler/inter-procedural-optimization-passes.html
-////////////////////////////////////////////////////////////////////////////////
-
-template <typename T>
-bool constexpr can_be_passed_in_reg
-{
-    (
-        std::is_trivial_v<T> &&
-        ( sizeof( T ) <= 2 * sizeof( void * ) ) // assuming a sane ABI like SysV (ignoring the MS x64 disaster)
-    )
-#if defined( __GNUC__ ) || defined( __clang__ )
-    || // detect SIMD types (this could also produce false positives for large compiler-native vectors that do not fit into the register file)
-    requires{ __builtin_convertvector( T{}, T ); }
-#endif
-    // This is certainly not an exhaustive list/'trait' - certain types that can
-    // be passed in reg cannot be detected as such by existing compiler
-    // functionality, e.g. Homogeneous Vector Aggregates
-    // https://devblogs.microsoft.com/cppblog/introducing-vector-calling-convention
-    // users are encouraged to provide specializations for such types.
-}; // can_be_passed_in_reg
-
-template <typename T>
-struct optimal_const_ref { using type = T const &; };
-
-template <typename Char>
-struct optimal_const_ref<std::basic_string<Char>> { using type = std::basic_string_view<char>; };
-
-template <std::ranges::contiguous_range Rng>
-struct optimal_const_ref<Rng> { using type = std::span<std::ranges::range_value_t<Rng> const>; };
-
-template <typename T>
-struct [[ clang::trivial_abi ]] pass_in_reg
-{
-    static auto constexpr pass_by_val{ can_be_passed_in_reg<T> };
-
-    using  value_type = T;
-    using stored_type = std::conditional_t<pass_by_val, T, typename optimal_const_ref<T>::type>;
-
-    constexpr pass_in_reg( T const & u ) noexcept : val{ u } {}
-
-    stored_type val;
-
-    [[ gnu::pure ]] BOOST_FORCEINLINE
-    constexpr operator stored_type const &() const noexcept { return val; }
-}; // pass_in_reg
-
-template <typename T>
-struct [[ clang::trivial_abi ]] pass_rv_in_reg
-{
-    static auto constexpr pass_by_val{ can_be_passed_in_reg<T> };
-
-    using  value_type = T;
-    using stored_type = std::conditional_t<pass_by_val, T, T &&>;
-
-    constexpr pass_rv_in_reg( T && u ) noexcept : val{ std::move( u ) } {} // move for not-trivially-moveable yet trivial_abi types (that can be passed in reg)
-
-    stored_type val;
-
-    [[ gnu::pure ]] BOOST_FORCEINLINE constexpr operator stored_type const & () const noexcept { return            val  ; }
-    [[ gnu::pure ]] BOOST_FORCEINLINE constexpr operator stored_type       &&()       noexcept { return std::move( val ); }
-}; // pass_rv_in_reg
-
 template <typename K, bool transparent_comparator, typename StoredKeyType>
 concept LookupType = transparent_comparator || std::is_same_v<StoredKeyType, K>;
 
 template <typename K, bool transparent_comparator, typename StoredKeyType>
 concept InsertableType = ( transparent_comparator && std::is_convertible_v<K, StoredKeyType> ) || std::is_same_v<StoredKeyType, K>;
-
-template <typename T> bool constexpr reg                   { can_be_passed_in_reg<T> };
-template <typename T> bool constexpr reg<pass_in_reg   <T>>{ true };
-template <typename T> bool constexpr reg<pass_rv_in_reg<T>>{ true };
-
-template <typename T>
-concept Reg = reg<T>;
-
-// 'Explicit IPA SROA' / pass-in-reg helper end
-////////////////////////////////////////////////////////////////////////////////
 
 
 // user specializations are allowed and intended:
@@ -174,8 +96,11 @@ public:
     {
         storage_result success{ nodes_.map_file( file, policy ) };
 #   ifndef NDEBUG
-        p_hdr_   = &hdr();
-        p_nodes_ = nodes_.data();
+        if ( std::move( success ) )
+        {
+            p_hdr_   = &hdr();
+            p_nodes_ = nodes_.data();
+        }
 #   endif
         if ( std::move( success ) && nodes_.empty() )
             hdr() = {};
