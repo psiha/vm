@@ -43,7 +43,7 @@ namespace detail
         {
             ::SECURITY_ATTRIBUTES sa;
             auto const p_security_attributes( flags::detail::make_sa_ptr( sa, flags.ap.system_access.p_sd, reinterpret_cast<bool const &>/*static_cast<bool>*/( flags.ap.child_access ) ) );
-            auto const handle
+            auto handle
             (
                 call_create
                 (
@@ -51,7 +51,10 @@ namespace detail
                 )
             );
             BOOST_ASSERT( ( handle == INVALID_HANDLE_VALUE ) || ( ::GetLastError() == NO_ERROR ) || ( ::GetLastError() == ERROR_ALREADY_EXISTS ) );
-
+            BOOST_ASSUME( handle != nullptr );
+            if ( ( file_handle::invalid_value != INVALID_HANDLE_VALUE ) && ( handle == INVALID_HANDLE_VALUE ) ) {
+                handle = file_handle::invalid_value; // normalize null handle values (see note for win32 handle invalid_value)
+            }
             return handle;
         }
     }; // struct create_file
