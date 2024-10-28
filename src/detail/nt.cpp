@@ -21,6 +21,8 @@
 //------------------------------------------------------------------------------
 #include <psi/vm/detail/nt.hpp>
 
+#include <psi/build/disable_warnings.hpp>
+
 #include <boost/assert.hpp>
 
 #pragma comment( lib, "ntdll.lib" )
@@ -37,8 +39,11 @@ namespace detail
     [[ gnu::constructor( 101 ) ]]
     void init_ntdll_handle() noexcept { ntdll = ::GetModuleHandleW( L"ntdll.dll" ); }
 #else
+    PSI_WARNING_DISABLE_PUSH()
+    PSI_WARNING_MSVC_DISABLE( 4073 ) // initializers put in library initialization area
     #pragma init_seg( lib )
     HMODULE const ntdll{ ::GetModuleHandleW( L"ntdll.dll" ) };
+    PSI_WARNING_DISABLE_POP()
 #endif
 
     BOOST_ATTRIBUTES( BOOST_COLD, BOOST_RESTRICTED_FUNCTION_L3, BOOST_RESTRICTED_FUNCTION_RETURN )

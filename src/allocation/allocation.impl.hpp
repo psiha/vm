@@ -13,26 +13,21 @@
 //------------------------------------------------------------------------------
 #pragma once
 
-#include <psi/vm/allocation.hpp>
+#include <cstdint>
 //------------------------------------------------------------------------------
-namespace psi
-{
-//------------------------------------------------------------------------------
-namespace vm
+namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
 namespace // internal header
 {
-    constexpr void       * add( void       * const ptr, auto const diff ) noexcept { return static_cast<std::byte       *>( ptr ) + diff; }
-    constexpr void const * add( void const * const ptr, auto const diff ) noexcept { return static_cast<std::byte const *>( ptr ) + diff; }
-    constexpr auto         add( auto         const x  , auto const diff ) noexcept { return                                 x     + diff; }
+    constexpr void add( void       * & ptr, auto const diff ) noexcept { reinterpret_cast<std::intptr_t &>( ptr ) += diff; }
+    constexpr void add( void const * & ptr, auto const diff ) noexcept { reinterpret_cast<std::intptr_t &>( ptr ) += diff; }
+    constexpr void add( auto         & x  , auto const diff ) noexcept {                                    x     += diff; }
 
-    constexpr auto         sub( auto         const x  , auto const diff ) noexcept { return                                 x     - diff; }
+    constexpr void sub( auto         & x  , auto const diff ) noexcept {                                    x     -= diff; }
 } // anonymous namespace
 
 //------------------------------------------------------------------------------
-} // namespace vm
-//------------------------------------------------------------------------------
-} // namespace psi
+} // namespace psi::vm
 //------------------------------------------------------------------------------

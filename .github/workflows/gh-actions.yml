@@ -104,4 +104,4 @@ jobs:
       # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
       run: >
         cd ${{ steps.strings.outputs.build-output-dir }}/test && 
-        ctest --build-config ${{ matrix.build_type }}
+        ctest --progress --output-on-failure --build-config ${{ matrix.build_type }}

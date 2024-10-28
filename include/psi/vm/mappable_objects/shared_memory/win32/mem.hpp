@@ -339,8 +339,7 @@ class native_named_memory //<lifetime_policy::scoped, resizing_policy::fixed>
 {
 public:
     static
-    fallible_result<native_named_memory>
-    BOOST_CC_REG create
+    fallible_result<native_named_memory> create
     (
         char                 const * const name,
         std::size_t                  const size,
@@ -350,16 +349,7 @@ public:
         return detail::create_mapping_impl::do_map( file_handle::reference{ file_handle::traits::invalid_value }, flags, size, name );
     }
 
-    fallible_result<std::size_t> size() const noexcept
-    {
-        auto const p_view( ::MapViewOfFile( get(), 0, 0, 0, 0 ) );
-        if ( BOOST_UNLIKELY( !p_view ) ) return error();
-        MEMORY_BASIC_INFORMATION info;
-        BOOST_VERIFY( ::VirtualQuery( p_view, &info, sizeof( info ) ) == sizeof( info ) );
-        BOOST_VERIFY( ::UnmapViewOfFile( p_view ) );
-        BOOST_ASSUME( info.RegionSize % page_size == 0 );
-        return info.RegionSize;
-    }
+    auto size() const noexcept { return get_size( *this ); }
 
 private:
     /// \note Required to enable the emplacement constructors of err

@@ -33,16 +33,16 @@
 #include <type_traits>
 #include <stdexcept>
 //------------------------------------------------------------------------------
-namespace psi
-{
-//------------------------------------------------------------------------------
-namespace vm
+namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
 namespace detail
 {
     [[ noreturn ]] inline void throw_out_of_range() { throw std::out_of_range( "vm::vector access out of bounds" ); }
+
+    template <typename T, bool> struct size           { T value; };
+    template <typename T      > struct size<T, false> {};
 } // namespace detail
 
 class contiguous_container_storage_base
@@ -52,7 +52,7 @@ public:
     contiguous_container_storage_base & operator=( contiguous_container_storage_base && ) = default;
 
     auto data()       noexcept { BOOST_ASSERT_MSG( mapping_, "Paging file not attached" ); return std::assume_aligned<commit_granularity>( view_.data() ); }
-    auto data() const noexcept { return const_cast< contiguous_container_storage_base & >( *this ).data(); }
+    auto data() const noexcept { return const_cast<contiguous_container_storage_base &>( *this ).data(); }
 
     void unmap() noexcept { view_.unmap(); }
 
@@ -155,6 +155,11 @@ private:
             std::move( file ),
             ap::object{ ap::readwrite },
             ap::child_process::does_not_inherit,
+#       ifdef __linux__
+            // TODO solve in a cleaner/'in a single place' way
+            // https://bugzilla.kernel.org/show_bug.cgi?id=8691 mremap: Wrong behaviour expanding a MAP_SHARED anonymous mapping
+            !file ? flags::share_mode::hidden :
+#       endif
             flags::share_mode::shared,
             mapping::supports_zero_sized_mappings
                 ? mapping_size
@@ -176,11 +181,11 @@ private:
     mapping     mapping_;
 }; // contiguous_container_storage_base
 
-template < typename sz_t, bool headerless >
+template <typename sz_t, bool headerless>
 class contiguous_container_storage
     :
     public  contiguous_container_storage_base,
-    private std::conditional_t<headerless, std::false_type, std::tuple<sz_t>>
+    private detail::size<sz_t, !headerless>
     // checkout a revision prior to March the 21st 2024 for a version that used statically sized header sizes
     // this approach is more versatile while the overhead should be less than negligible
 {
@@ -189,16 +194,17 @@ public:
 
 private:
     static constexpr auto size_size{ headerless ? 0 : sizeof( size_type ) };
+    using size_holder = detail::size<sz_t, !headerless>;
 
 public:
              contiguous_container_storage(                             ) noexcept requires(  headerless ) = default;
-    explicit contiguous_container_storage( size_type const header_size ) noexcept requires( !headerless ) : std::tuple<sz_t>{ header_size } {}
+    explicit contiguous_container_storage( size_type const header_size ) noexcept requires( !headerless ) : size_holder{ header_size } {}
 
     static constexpr std::uint8_t header_size() noexcept requires( headerless ) { return 0; }
 
     [[ gnu::pure ]] size_type header_size() const noexcept requires( !headerless )
     {
-        auto const sz{ std::get<0>( *this ) };
+        auto const sz{ size_holder::value };
         BOOST_ASSUME( sz >= sizeof( sz_t ) );
         return sz;
     }
@@ -329,7 +335,7 @@ private:
     [[ gnu::pure, nodiscard ]] size_type & stored_size() noexcept requires( !headerless )
     {
         auto const p_size{ contiguous_container_storage_base::data() + header_size() - size_size };
-        BOOST_ASSERT( reinterpret_cast<std::intptr_t>( p_size ) % alignof( size_type ) == 0 );
+        BOOST_ASSERT( reinterpret_cast<std::uintptr_t>( p_size ) % alignof( size_type ) == 0 );
         return *reinterpret_cast<size_type *>( p_size );
     }
     [[ gnu::pure, nodiscard ]] size_type   stored_size() const noexcept requires( !headerless )
@@ -344,7 +350,7 @@ bool constexpr is_trivially_moveable
 #ifdef __clang__
     __is_trivially_relocatable( T ) ||
 #endif
-    std::is_trivially_move_constructible_v< T >
+    std::is_trivially_move_constructible_v<T>
 };
 
 struct default_init_t{}; inline constexpr default_init_t default_init;
@@ -352,12 +358,14 @@ struct value_init_t  {}; inline constexpr value_init_t   value_init  ;
 
 struct header_info
 {
+    using align_t = std::uint16_t; // fit page_size
+
     constexpr header_info() = default;
-    constexpr header_info( std::uint32_t const size, std::uint8_t const alignment ) noexcept : header_size{ size }, data_extra_alignment{ alignment } {}
+    constexpr header_info( std::uint32_t const size, align_t const alignment ) noexcept : header_size{ size }, data_extra_alignment{ alignment } {}
     template <typename T>
-    constexpr header_info( std::in_place_type_t<T>, std::uint8_t const extra_alignment = 1 ) noexcept : header_info{ sizeof( T ), extra_alignment } {}
+    constexpr header_info( std::in_place_type_t<T>, align_t const extra_alignment = 1 ) noexcept : header_info{ sizeof( T ), extra_alignment } {}
     template <typename T>
-    static constexpr header_info make( std::uint8_t const extra_alignment = 1 ) noexcept { return { sizeof( T ), extra_alignment }; }
+    static constexpr header_info make( align_t const extra_alignment = 1 ) noexcept { return { sizeof( T ), extra_alignment }; }
 
     template <typename AdditionalHeader>
     header_info add_header() const noexcept // support chained headers (class hierarchies)
@@ -374,13 +382,13 @@ struct header_info
     header_info with_alignment_for() const noexcept
     {
         BOOST_ASSUME( data_extra_alignment >= 1 );
-        return { this->header_size, std::max<std::uint8_t>({ this->data_extra_alignment, alignof( T )... }) };
+        return { this->header_size, std::max<align_t>({ this->data_extra_alignment, alignof( T )... }) };
     }
 
     std::uint32_t final_header_size() const noexcept { return align_up( header_size, data_extra_alignment ); }
 
     std::uint32_t header_size         { 0 };
-    std::uint8_t  data_extra_alignment{ 1 }; // e.g. for vectorization or overlaying complex types over std::byte storage
+    align_t       data_extra_alignment{ 1 }; // e.g. for vectorization or overlaying complex types over std::byte storage
 }; // header_info
 
 // Standard-vector-like/compatible _presistent_ container class template
@@ -388,8 +396,8 @@ struct header_info
 // to trivial_abi types.
 // Used the Boost.Container vector as a starting skeleton.
 
-template < typename T, typename sz_t = std::size_t, bool headerless_param = true >
-requires is_trivially_moveable< T >
+template <typename T, typename sz_t = std::size_t, bool headerless_param = true>
+requires is_trivially_moveable<T>
 class vector
 {
 private:
@@ -407,7 +415,7 @@ public:
     using const_pointer          = T const *;
     using       reference        = T       &;
     using const_reference        = T const &;
-    using param_const_ref        = std::conditional_t< std::is_trivial_v< T > && ( sizeof( T ) <= 2 * sizeof( void * ) ), T, const_reference >;
+    using param_const_ref        = std::conditional_t< std::is_trivial_v<T> && ( sizeof( T ) <= 2 * sizeof( void * ) ), T, const_reference >;
     using       size_type        = sz_t;
     using difference_type        = std::make_signed_t<size_type>;
     using         iterator       = typename span_t::      iterator;
@@ -574,7 +582,7 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard, gnu::pure ]] bool empty() const noexcept { return span().empty(); }
+    [[ nodiscard, gnu::pure ]] bool empty() const noexcept { return !storage_ || span().empty(); }
 
     //! <b>Effects</b>: Returns the number of the elements contained in the vector.
     //!
@@ -588,7 +596,7 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] static constexpr size_type max_size() noexcept { return static_cast< size_type >( std::numeric_limits< size_type >::max() / sizeof( value_type ) ); }
+    [[ nodiscard ]] static constexpr size_type max_size() noexcept { return static_cast<size_type>( std::numeric_limits< size_type >::max() / sizeof( value_type ) ); }
 
     //! <b>Effects</b>: Inserts or erases elements at the end such that
     //!   the size becomes n. New elements can be default or value initialized.
@@ -596,7 +604,7 @@ public:
     //! <b>Throws</b>: If memory allocation throws, or T's copy/move or value initialization throws.
     //!
     //! <b>Complexity</b>: Linear to the difference between size() and new_size.
-    void resize( size_type const new_size, default_init_t ) requires( std::is_trivial_v< T > )
+    void resize( size_type const new_size, default_init_t ) requires( std::is_trivial_v<T> )
     {
         storage_.resize( to_byte_sz( new_size ) );
     }
@@ -830,7 +838,7 @@ public:
     //!
     //! <b>Complexity</b>: Constant.
     [[ nodiscard ]] T       * data()       noexcept { return to_t_ptr( storage_.data() ); }
-    [[ nodiscard ]] T const * data() const noexcept { return const_cast< vector & >( *this ).data(); }
+    [[ nodiscard ]] T const * data() const noexcept { return const_cast<vector &>( *this ).data(); }
 
     [[ nodiscard ]]       span_t span()       noexcept { return { data(), size() }; }
     [[ nodiscard ]] const_span_t span() const noexcept { return { data(), size() }; }
@@ -854,10 +862,11 @@ public:
     reference emplace_back( Args &&...args )
     {
         storage_.expand( to_byte_sz( size() + 1 ) );
+        auto & placeholder{ back() };
         if constexpr ( sizeof...( args ) )
-            return *std::construct_at( &back(), std::forward< Args >( args )... );
+            return *std::construct_at( &placeholder, std::forward<Args>( args )... );
         else
-            return *new ( &back() ) T; // default init
+            return *new ( &placeholder ) T; // default init
     }
 
    //! <b>Effects</b>: Inserts an object of type T constructed with
@@ -904,7 +913,7 @@ public:
     //!   T's copy/move constructor throws.
     //!
     //! <b>Complexity</b>: Amortized constant time.
-    void push_back( T && x ) requires( !std::is_trivial_v< T > ) { emplace_back( std::move( x ) ); }
+    void push_back( T && x ) requires( !std::is_trivial_v<T> ) { emplace_back( std::move( x ) ); }
 
     //! <b>Requires</b>: position must be a valid iterator of *this.
     //!
@@ -924,7 +933,7 @@ public:
     //!
     //! <b>Complexity</b>: If position is end(), amortized constant time
     //!   Linear time otherwise.
-    iterator insert( const_iterator const position, T && x ) requires( !std::is_trivial_v< T > ) { return emplace( position, std::move( x ) ); }
+    iterator insert( const_iterator const position, T && x ) requires( !std::is_trivial_v<T> ) { return emplace( position, std::move( x ) ); }
 
     //! <b>Requires</b>: position must be a valid iterator of *this.
     //!
@@ -1038,7 +1047,7 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    void swap( vector & x ) noexcept { swap( this->storage, x.storage ); }
+    void swap( vector & x ) noexcept { using std::swap; swap( this->storage_, x.storage_ ); }
 
     //! <b>Effects</b>: Erases all the elements of the vector.
     //!
@@ -1072,7 +1081,16 @@ public:
     ///////////////////////////////////////////////////////////////////////////
 
     auto map_file  ( auto      const file, flags::named_object_construction_policy const policy ) noexcept { BOOST_ASSERT( !has_attached_storage() ); return storage_.map_file  ( file, policy ); }
-    auto map_memory( size_type const size                                                       ) noexcept { BOOST_ASSERT( !has_attached_storage() ); return storage_.map_memory( to_byte_sz( size ) ); }
+    template <typename InitPolicy = value_init_t>
+    auto map_memory( size_type const initial_size = 0, InitPolicy init_policy = {} ) noexcept
+    {
+        BOOST_ASSERT( !has_attached_storage() );
+        auto result{ storage_.map_memory( to_byte_sz( initial_size ) ) };
+        if ( std::is_same_v<decltype( init_policy ), value_init_t> && initial_size && std::move( result ) ) {
+            std::uninitialized_default_construct( begin(), end() );
+        }
+        return result;
+    }
 
     bool has_attached_storage() const noexcept { return static_cast<bool>( storage_ ); }
 
@@ -1091,7 +1109,7 @@ public:
     //! <b>Note</b>: Non-standard extension.
     bool stable_reserve( size_type new_cap ) = /*TODO*/ delete;
 
-    void grow_to( size_type const target_size, default_init_t ) requires( std::is_trivial_v<T> )
+    void grow_to( size_type const target_size, default_init_t ) requires( std::is_trivially_default_constructible_v<T> )
     {
         storage_.expand( to_byte_sz( target_size ) );
     }
@@ -1118,10 +1136,7 @@ public:
         }
         else
         {
-            for ( auto & element : span().subspan( current_size ) )
-            {
-                std::construct_at( &element );
-            }
+            std::uninitialized_default_construct( nth( current_size ), end() );
         }
     }
     PSI_WARNING_DISABLE_POP()
@@ -1162,7 +1177,12 @@ private:
     PSI_WARNING_GCC_OR_CLANG_DISABLE( -Wsign-conversion )
     static T *  to_t_ptr  ( mapped_view::value_type * const ptr     ) noexcept {                                             return reinterpret_cast<T *>( ptr ); }
     static sz_t to_t_sz   ( auto                      const byte_sz ) noexcept { BOOST_ASSUME( byte_sz % sizeof( T ) == 0 ); return static_cast<sz_t>( byte_sz / sizeof( T ) ); }
-    static sz_t to_byte_sz( auto                      const sz      ) noexcept {                                             return static_cast<sz_t>(      sz * sizeof( T ) ); }
+    static sz_t to_byte_sz( auto                      const sz      ) noexcept
+    {
+        auto const rez{ sz * sizeof( T ) };
+        BOOST_ASSERT( rez <= std::numeric_limits<sz_t>::max() );
+        return static_cast<sz_t>( rez );
+    }
     PSI_WARNING_DISABLE_POP()
 
     void shrink_storage_to( size_type const target_size ) noexcept
@@ -1178,8 +1198,6 @@ private:
 
     iterator make_space_for_insert( const_iterator const position, size_type const n )
     {
-        using ssize_type = std::make_signed_t<size_type>;
-
         verify_iterator( position );
         auto const position_index{ index_of( position ) };
         auto const current_size  { size() };
@@ -1202,15 +1220,15 @@ private:
 }; // class vector
 
 
-template < typename T, typename sz_t, bool headerless >
+template <typename T, typename sz_t, bool headerless>
 #if defined( _MSC_VER ) && !defined( NDEBUG )
 // Boost.Container flat_set is bugged: tries to dereference end iterators - asserts at runtime with secure/checked STL/containers
 // https://github.com/boostorg/container/issues/261
-requires is_trivially_moveable< T >
-class unchecked_vector : public vector< T, sz_t, headerless >
+requires is_trivially_moveable<T>
+class unchecked_vector : public vector<T, sz_t, headerless>
 {
 public:
-    using base = vector< T, sz_t, headerless >;
+    using base = vector<T, sz_t, headerless>;
 
     using       iterator = typename base::      pointer;
     using const_iterator = typename base::const_pointer;
@@ -1271,14 +1289,12 @@ public:
     }
 };
 #else
-using unchecked_vector = vector< T, sz_t, headerless >;
+using unchecked_vector = vector<T, sz_t, headerless>;
 #endif
 
-template < typename Vector >
-using unchecked = unchecked_vector< typename Vector::value_type, typename Vector::size_type, Vector::headerless >;
+template <typename Vector>
+using unchecked = unchecked_vector<typename Vector::value_type, typename Vector::size_type, Vector::headerless>;
 
 //------------------------------------------------------------------------------
-} // namespace vm
-//------------------------------------------------------------------------------
-} // namespace psi
+} // namespace psi::vm
 //------------------------------------------------------------------------------
