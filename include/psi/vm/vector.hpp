@@ -1080,7 +1080,7 @@ public:
     // Extensions
     ///////////////////////////////////////////////////////////////////////////
 
-    auto map_file  ( auto      const file, flags::named_object_construction_policy const policy ) noexcept { BOOST_ASSERT( !has_attached_storage() ); return storage_.map_file  ( file, policy ); }
+    auto map_file  ( auto const file, flags::named_object_construction_policy const policy ) noexcept { BOOST_ASSERT( !has_attached_storage() ); return storage_.map_file( file, policy ); }
     template <typename InitPolicy = value_init_t>
     auto map_memory( size_type const initial_size = 0, InitPolicy init_policy = {} ) noexcept
     {
