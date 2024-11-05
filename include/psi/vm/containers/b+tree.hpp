@@ -1,9 +1,10 @@
 #pragma once
 
+#include "vector.hpp"
+
 #include <psi/vm/align.hpp>
 #include <psi/vm/allocation.hpp>
 #include <psi/vm/containers/abi.hpp>
-#include <psi/vm/vector.hpp>
 
 #include <psi/build/disable_warnings.hpp>
 

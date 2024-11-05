@@ -1,4 +1,4 @@
-#include <psi/vm/vector.hpp>
+#include <psi/vm/containers/vector.hpp>
 
 #include <gtest/gtest.h>
 

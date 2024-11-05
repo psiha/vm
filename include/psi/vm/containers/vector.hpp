@@ -13,12 +13,12 @@
 //------------------------------------------------------------------------------
 #pragma once
 
-#include "align.hpp"
-#include "mapping/mapping.hpp"
-#include "mapped_view/mapped_view.hpp"
-#include "mapped_view/ops.hpp"
-#include "mappable_objects/file/file.hpp"
-#include "mappable_objects/file/utility.hpp"
+#include <psi/vm/align.hpp>
+#include <psi/vm/mapping/mapping.hpp>
+#include <psi/vm/mapped_view/mapped_view.hpp>
+#include <psi/vm/mapped_view/ops.hpp>
+#include <psi/vm/mappable_objects/file/file.hpp>
+#include <psi/vm/mappable_objects/file/utility.hpp>
 
 #include <psi/build/disable_warnings.hpp>
 
