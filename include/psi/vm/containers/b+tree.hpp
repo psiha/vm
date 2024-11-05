@@ -520,7 +520,9 @@ public:
     void reserve_additional( size_type const additional_values ) { bptree_base::reserve_additional( node_count_required_for_values( additional_values ) ); }
     void reserve           ( size_type const new_capacity      ) { bptree_base::reserve           ( node_count_required_for_values( new_capacity      ) ); }
 
-    iterator erase( const_iterator iter ) noexcept;
+    const_iterator erase( const_iterator iter ) noexcept;
+
+    auto flatten( std::output_iterator<Key> auto output, size_type available_space ) const noexcept;
 
     // solely a debugging helper (include b+tree_print.hpp)
     void print() const;
@@ -794,8 +796,8 @@ protected: // 'other'
         node_slot      inner;
     }; // struct key_locations
 
-    [[ gnu::pure, nodiscard ]] iterator make_iter( auto const &... args ) noexcept { return static_cast<iterator &&>( bptree_base::make_iter( args... ) ); }
-    [[ gnu::pure, nodiscard ]] iterator make_iter( key_locations const loc ) noexcept { return make_iter( loc.leaf, loc.leaf_offset.pos ); }
+    [[ gnu::pure, nodiscard ]] const_iterator make_iter( auto const &... args    ) const noexcept { return static_cast<iterator &&>( const_cast<bptree_base_wkey &>( *this ).bptree_base::make_iter( args... ) ); }
+    [[ gnu::pure, nodiscard ]] const_iterator make_iter( key_locations const loc ) const noexcept { return make_iter( loc.leaf, loc.leaf_offset.pos ); }
 
     template <typename N>
     insert_pos_t insert( N & target_node, node_size_type const target_node_pos, key_rv_arg v, node_slot const right_child )
@@ -1033,8 +1035,8 @@ protected: // 'other'
     [[ gnu::pure ]] inner_node & inner ( node_slot const slot ) noexcept { return node<inner_node>( slot ); }
     [[ gnu::pure ]] inner_node & parent( node_header & child ) noexcept { return inner( child.parent ); }
 
-     leaf_node const & leaf  ( node_slot const slot ) const noexcept { return const_cast<bptree_base_wkey &>( *this ).leaf( slot ); }
-    inner_node const & parent( node_header const & child  ) const noexcept { return const_cast<bptree_base_wkey &>( *this ).parent( const_cast<node_header &>( child ) ); }
+     leaf_node const & leaf  ( node_slot   const   slot  ) const noexcept { return const_cast<bptree_base_wkey &>( *this ).leaf( slot ); }
+    inner_node const & parent( node_header const & child ) const noexcept { return const_cast<bptree_base_wkey &>( *this ).parent( const_cast<node_header &>( child ) ); }
 
     void update_separator( leaf_node & leaf, Key const & new_separator ) noexcept
     {
@@ -1450,7 +1452,7 @@ public:
 
 template <typename Key>
 typename
-bptree_base_wkey<Key>::iterator
+bptree_base_wkey<Key>::const_iterator
 bptree_base_wkey<Key>::erase( const_iterator const iter ) noexcept
 {
     auto const [node, key_offset]{ iter.base().pos() };
@@ -1458,6 +1460,20 @@ bptree_base_wkey<Key>::erase( const_iterator const iter ) noexcept
     if ( key_offset == 0 ) [[ unlikely ]]
         update_separator( lf, lf.keys[ 1 ] );
     return make_iter( erase( lf, key_offset ) );
+}
+
+template <typename Key>
+auto bptree_base_wkey<Key>::flatten( std::output_iterator<Key> auto output, size_type const available_space ) const noexcept {
+    BOOST_VERIFY( available_space >= this->size() );
+    if ( empty() ) [[ unlikely ]]
+        return output;
+    auto node{ first_leaf() };
+    do {
+        auto const & lf{ leaf( node ) };
+        output = std::uninitialized_copy_n( lf.keys, lf.num_vals, output );
+        node   = lf.right;
+    } while ( node );
+    return output;
 }
 
 template <typename Key>
@@ -1564,6 +1580,8 @@ public:
     using       iterator  = base::      iterator;
     using const_iterator  = base::const_iterator;
 
+    using const_ra_iterator = std::basic_const_iterator<ra_iterator>;
+
     using       iter_pair = std::pair<      iterator,       iterator>;
     using const_iter_pair = std::pair<const_iterator, const_iterator>;
 
@@ -1584,27 +1602,22 @@ public:
         return max_sz;
     }
 
-    [[ gnu::pure ]] iterator begin() noexcept { return static_cast<iterator &&>( base::begin() ); } using stl_impl::begin;
-    [[ gnu::pure ]] iterator   end() noexcept { return static_cast<iterator &&>( base::  end() ); } using stl_impl::end  ;
+    [[ gnu::pure ]] const_iterator begin() const noexcept { return static_cast<iterator &&>( mutable_this().base::begin() ); }
+    [[ gnu::pure ]] const_iterator   end() const noexcept { return static_cast<iterator &&>( mutable_this().base::  end() ); }
 
-    [[ gnu::pure ]]                           ra_iterator  ra_begin()       noexcept { return static_cast<ra_iterator &&>( base::ra_begin() ); }
-    [[ gnu::pure ]]                           ra_iterator  ra_end  ()       noexcept { return static_cast<ra_iterator &&>( base::ra_end  () ); }
-    [[ gnu::pure ]] std::basic_const_iterator<ra_iterator> ra_begin() const noexcept { return const_cast<bp_tree &>( *this ).ra_begin(); }
-    [[ gnu::pure ]] std::basic_const_iterator<ra_iterator> ra_end  () const noexcept { return const_cast<bp_tree &>( *this ).ra_end  (); }
-
-    auto random_access()       noexcept { return std::ranges::subrange{ ra_begin(), ra_end(), size() }; }
-    auto random_access() const noexcept { return std::ranges::subrange{ ra_begin(), ra_end(), size() }; }
+    [[ gnu::pure ]] auto random_access() const noexcept { return std::ranges::subrange{ ra_begin(), ra_end(), size() }; }
+    [[ gnu::pure ]] const_ra_iterator ra_begin() const noexcept { return static_cast<ra_iterator &&>( mutable_this().base::ra_begin() ); }
+    [[ gnu::pure ]] const_ra_iterator ra_end  () const noexcept { return static_cast<ra_iterator &&>( mutable_this().base::ra_end  () ); }
 
     [[ nodiscard ]] bool            contains   ( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return contains_impl   ( pass_in_reg{ key } ); }
-    [[ nodiscard ]]       iterator  find       ( LookupType<transparent_comparator, Key> auto const & key )       noexcept { return find_impl       ( pass_in_reg{ key } ); }
-    [[ nodiscard ]] const_iterator  find       ( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return const_cast<bp_tree &>( *this ).find( key ); }
-    [[ nodiscard ]]       iterator  lower_bound( LookupType<transparent_comparator, Key> auto const & key )       noexcept { return lower_bound_impl( pass_in_reg{ key } ); }
-    [[ nodiscard ]] const_iterator  lower_bound( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return const_cast<bp_tree &>( *this ).lower_bound( key ); }
-    [[ nodiscard ]]       iter_pair equal_range( LookupType<transparent_comparator, Key> auto const & key )       noexcept { return equal_range_impl( pass_in_reg{ key } ); }
-    [[ nodiscard ]] const_iter_pair equal_range( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return const_cast<bp_tree &>( *this ).equal_range( key ); }
+    [[ nodiscard ]] const_iterator  find       ( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return find_impl       ( pass_in_reg{ key } ); }
+    [[ nodiscard ]] const_iterator  lower_bound( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return lower_bound_impl( pass_in_reg{ key } ); }
+    [[ nodiscard ]] const_iter_pair equal_range( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return equal_range_impl( pass_in_reg{ key } ); }
 
-    std::pair<iterator, bool> insert(                                InsertableType<transparent_comparator, Key> auto const & key ) { return insert_impl(           pass_in_reg{ key } ); }
-              iterator        insert( const_iterator const pos_hint, InsertableType<transparent_comparator, Key> auto const & key ) { return insert_impl( pos_hint, pass_in_reg{ key } ); }
+    [[ nodiscard ]] const_iterator  find_after ( const_iterator const pos, LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return find_after( pos, pass_in_reg{ key } ); }
+
+    std::pair<const_iterator, bool> insert(                                InsertableType<transparent_comparator, Key> auto const & key ) { return insert_impl(           pass_in_reg{ key } ); }
+              const_iterator        insert( const_iterator const pos_hint, InsertableType<transparent_comparator, Key> auto const & key ) { return insert_impl( pos_hint, pass_in_reg{ key } ); }
 
     // bulk insert
     // performance note: insertion of existing values into a unique bp_tree is
@@ -1649,7 +1662,7 @@ public:
         return true;
     }
 
-    void swap( bp_tree & other ) noexcept { base::swap( other ); }
+    void swap( bp_tree  & other ) noexcept { base::swap( other ); }
 
     [[ nodiscard ]] Comparator const & comp() const noexcept { return *this; }
 
@@ -1657,27 +1670,41 @@ public:
     [[ nodiscard ]] Comparator & mutable_comp() noexcept { return *this; }
 
 private: // pass-in-reg public function overloads/impls
-    bool contains_impl( Reg auto const key ) const noexcept { return !empty() && const_cast<bp_tree &>( *this ).find_nodes_for( key ).leaf_offset.exact_find; }
+    bp_tree & mutable_this() const noexcept { return const_cast<bp_tree &>( *this ); }
+    base    & mutable_base() const noexcept { return mutable_this(); }
+
+    bool contains_impl( Reg auto const key ) const noexcept { return !empty() && mutable_this().find_nodes_for( key ).leaf_offset.exact_find; }
 
     [[ using gnu: pure, sysv_abi ]]
-    iterator find_impl( Reg auto const key ) noexcept
+    const_iterator find_impl( Reg auto const key ) const noexcept
     {
         if ( !empty() ) [[ likely ]]
         {
-            auto const location{ find_nodes_for( key ) };
+            auto const location{ mutable_this().find_nodes_for( key ) };
             if ( location.leaf_offset.exact_find ) [[ likely ]] {
                 return base::make_iter( location );
             }
         }
-
         return this->end();
     }
+
     [[ using gnu: pure, sysv_abi ]]
-    iterator lower_bound_impl( Reg auto const key ) noexcept
+    const_iterator find_after_impl( iter_pos const pos, Reg auto const key ) const noexcept
+    {
+        BOOST_ASSUME( !empty() ); // otherwise where do we get pos from?
+        auto const [p_leaf, next_pos]{ find_next( leaf( pos.node ), pos.value_offset, key ) };
+        if ( pos.exact_find ) [[ likely ]] {
+            return base::make_iter( *p_leaf, next_pos.pos );
+        }
+        return this->end();
+    }
+
+    [[ using gnu: pure, sysv_abi ]]
+    const_iterator lower_bound_impl( Reg auto const key ) const noexcept
     {
         if ( !empty() ) [[ likely ]]
         {
-            auto const location{ find_nodes_for( key ) };
+            auto const location{ mutable_this().find_nodes_for( key ) };
             // find_nodes_for() returns an insertion point, which can be one
             // pass the end of a node (like an end iterator, indicating an
             // append/push_back position) but iterators do not support this
@@ -1694,11 +1721,11 @@ private: // pass-in-reg public function overloads/impls
     }
 
     [[ using gnu: pure, sysv_abi ]]
-    iter_pair equal_range_impl( Reg auto const key ) noexcept
+    const_iter_pair equal_range_impl( Reg auto const key ) const noexcept
     {
         if ( !empty() ) [[ likely ]]
         {
-            auto const location{ find_nodes_for( key ) };
+            auto const location{ mutable_this().find_nodes_for( key ) };
             if ( location.leaf_offset.exact_find ) [[ likely ]] {
                 auto const begin{ base::make_iter( location ) };
                 return { begin, std::next( begin ) };
@@ -1709,7 +1736,7 @@ private: // pass-in-reg public function overloads/impls
         return { end_iter, end_iter };
     }
 
-    std::pair<iterator, bool> insert_impl( Reg auto const v )
+    std::pair<const_iterator, bool> insert_impl( Reg auto const v )
     {
         if ( empty() )
         {
@@ -1730,7 +1757,7 @@ private: // pass-in-reg public function overloads/impls
         return { base::make_iter( insert_pos_next ), true };
     }
 
-    iterator insert_impl( const_iterator const pos_hint, Reg auto const v )
+    const_iterator insert_impl( const_iterator const pos_hint, Reg auto const v )
     {
         // yes, for starters, generic 'hint as just a hint' is not supported
         BOOST_ASSUME( !empty() );
@@ -1861,7 +1888,7 @@ private:
                 // the beginning so the only case where parent_offset could
                 // point to the end is on intermediate inner/parent nodes (when
                 // depth is more then 2 levels)
-                // (and this has to be handled because otherwise the
+                // (and this has to be handled explicitly because otherwise the
                 // find_with_offset call below would get fed empty input which
                 // it does not support)
                 BOOST_ASSUME( depth > 2 || ( parent_offset < prnt->num_vals ) );
@@ -2168,8 +2195,8 @@ bp_tree<Key, Comparator>::insert( typename base::bulk_copied_input const input )
         source_slot_offset = p_new_keys.pos().value_offset;
 
         // seek the next position starting from the current one (relying on the
-        // that we are using presorted data) rather than starting everytime from
-        // scratch (using find_nodes_for)
+        // fact that we are using presorted data) rather than starting every
+        // time from scratch (using find_nodes_for)
         std::tie( tgt_leaf, tgt_leaf_next_pos ) =
             find_next( *tgt_leaf, tgt_next_offset, key_const_arg{ src_leaf->keys[ source_slot_offset ] } );
     } while ( p_new_keys != p_new_nodes_end );
@@ -2204,8 +2231,8 @@ bp_tree<Key, Comparator>::merge( bp_tree && other )
     auto const p_new_nodes_end  { other.ra_end  () };
 
     auto p_new_keys{ p_new_nodes_begin };
-    auto src_leaf          { &other.leaf( p_new_keys.pos().node ) };
-    auto source_slot_offset{ p_new_keys.pos().value_offset };
+    auto src_leaf          { &other.leaf( p_new_keys.base().pos().node ) };
+    auto source_slot_offset{ p_new_keys.base().pos().value_offset };
 
     auto const start_pos{ find_nodes_for( *p_new_keys ) };
     auto       tgt_leaf         { &start_pos.leaf };
@@ -2277,8 +2304,8 @@ bp_tree<Key, Comparator>::merge( bp_tree && other )
         p_new_keys += consumed_source;
         inserted   += inserted_count;
 
-        src_leaf           = &other.leaf( p_new_keys.pos().node );
-        source_slot_offset = p_new_keys.pos().value_offset;
+        src_leaf           = &other.leaf( p_new_keys.base().pos().node );
+        source_slot_offset = p_new_keys.base().pos().value_offset;
 
         std::tie( tgt_leaf, tgt_leaf_next_pos ) =
             find_next( *tgt_leaf, tgt_next_offset, pass_in_reg{ src_leaf->keys[ source_slot_offset ] } );
