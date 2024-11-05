@@ -1694,7 +1694,7 @@ private: // pass-in-reg public function overloads/impls
     {
         BOOST_ASSUME( !empty() ); // otherwise where do we get pos from?
         auto const [p_leaf, next_pos]{ find_next( leaf( pos.node ), pos.value_offset, key ) };
-        if ( pos.exact_find ) [[ likely ]] {
+        if ( next_pos.exact_find ) [[ likely ]] {
             return base::make_iter( *p_leaf, next_pos.pos );
         }
         return this->end();
