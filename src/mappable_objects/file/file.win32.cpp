@@ -68,7 +68,7 @@ file_handle create_file( wchar_t const * const file_name, flags::opening const f
 bool delete_file( char    const * const file_name ) noexcept { return ::DeleteFileA( file_name ) != false; }
 bool delete_file( wchar_t const * const file_name ) noexcept { return ::DeleteFileW( file_name ) != false; }
 
-
+BOOST_NOINLINE
 err::fallible_result<void, error> set_size( file_handle::reference const file_handle, std::uint64_t const desired_size ) noexcept
 {
     // It is 'OK' to send null/invalid handles to Windows functions (they will
