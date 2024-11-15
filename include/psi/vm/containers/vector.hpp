@@ -87,7 +87,16 @@ protected:
 
     void expand( std::size_t const target_size )
     {
-        set_size( mapping_, target_size );
+        BOOST_ASSUME( target_size > mapped_size() );
+        // basic (1.5x) geometric growth implementation
+        // TODO: make this configurable (and probably move out/down to container
+        // class templates)
+        auto const current_capacity{ storage_size() };
+        if ( current_capacity < target_size )
+        {
+            auto const new_capacity{ std::max( target_size, current_capacity * 3U / 2U ) };
+            set_size( mapping_, new_capacity );
+        }
         expand_view( target_size );
     }
 
