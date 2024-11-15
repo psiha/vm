@@ -87,7 +87,7 @@ void basic_mapped_view<read_only>::shrink( std::size_t const target_size ) noexc
 }
 
 
-template <bool read_only>
+template <bool read_only> BOOST_NOINLINE
 fallible_result<void>
 basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & original_mapping ) noexcept
 {

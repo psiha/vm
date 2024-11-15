@@ -4,6 +4,11 @@
 CPMAddPackage( "gh:google/googletest@1.15.2" )
 
 include( GoogleTest )
+if ( MSVC )
+    target_compile_options( gtest PRIVATE /fp:precise )
+else()
+    target_compile_options( gtest PRIVATE -fno-fast-math )
+endif()
 
 set( vm_test_sources
     "${CMAKE_CURRENT_SOURCE_DIR}/b+tree.cpp"
