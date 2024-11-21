@@ -1790,7 +1790,7 @@ protected: // pass-in-reg public function overloads/impls
 private:
     // lower_bound find >limited to/within a node<
     [[ using gnu: pure, hot, noinline, sysv_abi, leaf ]]
-    static find_pos find( Key const keys[], node_size_type const num_vals, Reg auto const value, pass_in_reg<Comparator> const comparator ) noexcept
+    static find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const value, pass_in_reg<Comparator> const comparator ) noexcept
     {
         // TODO branchless binary search, Alexandrescu's TLC,
         // https://orlp.net/blog/bitwise-binary-search
@@ -1824,13 +1824,13 @@ private:
         }
         std::unreachable();
     }
-    find_pos find( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return find( keys, num_vals, value, pass_in_reg{ comp() } ); }
-    find_pos find( auto const & node, auto const & value ) const noexcept { return find( node.keys, node.num_vals, pass_in_reg{ value } ); }
+    find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return lower_bound( keys, num_vals, value, pass_in_reg{ comp() } ); }
+    find_pos lower_bound( auto const & node, auto const & value ) const noexcept { return lower_bound( node.keys, node.num_vals, pass_in_reg{ value } ); }
     [[ using gnu: pure, hot, sysv_abi ]]
-    find_pos find_with_offset( auto const & node, node_size_type const offset, Reg auto const value ) const noexcept
+    find_pos lower_bound( auto const & node, node_size_type const offset, Reg auto const value ) const noexcept
     {
         BOOST_ASSUME( offset < node.num_vals );
-        auto result{ find( &node.keys[ offset ], node.num_vals - offset, value ) };
+        auto result{ lower_bound( &node.keys[ offset ], node.num_vals - offset, value ) };
         result.pos += offset;
         return result;
     }
@@ -1907,7 +1907,7 @@ protected:
         for ( auto level{ 0 }; level < depth - 1; ++level )
         {
             auto const & node{ this->inner( current_node ) };
-            auto [pos, exact_find]{ find( node, key ) };
+            auto [pos, exact_find]{ lower_bound( node, key ) };
             if ( exact_find ) [[ unlikely ]] // "most keys are in leaves"
             {
                 // separator key - it also means we have to traverse to the right
@@ -1954,7 +1954,7 @@ protected:
         return
         {
             leaf,
-            BOOST_LIKELY( !separator_key_node ) ? find( leaf, key ) : find_pos{ 0, true }, // shortcircuit since we know separator key only exist for first keys
+            BOOST_LIKELY( !separator_key_node ) ? lower_bound( leaf, key ) : find_pos{ 0, true }, // short circuit since we know separator key only exist for first keys
             separator_key_offset,
             separator_key_node
         };
@@ -2029,7 +2029,7 @@ private:
     {
         if ( leq( key, keys( starting_leaf ).back() ) )
         {
-            auto const pos{ find_with_offset( starting_leaf, starting_leaf_offset, key ) };
+            auto const pos{ lower_bound( starting_leaf, starting_leaf_offset, key ) };
             BOOST_ASSUME( pos.pos != starting_leaf.num_vals );
             BOOST_ASSUME( pos.pos >= starting_leaf_offset   );
             return { const_cast<leaf_node *>( &starting_leaf ), pos };
@@ -2055,7 +2055,7 @@ private:
                 // point to the end is on intermediate inner/parent nodes (when
                 // depth is more then 2 levels)
                 // (and this has to be handled explicitly because otherwise the
-                // find_with_offset call below would get fed empty input which
+                // lower_bound call below would get fed empty input which
                 // it does not support)
                 BOOST_ASSUME( depth > 2 || ( parent_offset < prnt->num_vals ) );
                 parent_offset = std::min( parent_offset, node_size_type( prnt->num_vals - 1 ) );
@@ -2069,7 +2069,7 @@ private:
         // descend to the leaf containing the key
         for ( ; level < depth; ++level )
         {
-            auto [pos, exact_find]{ find_with_offset( *prnt, parent_offset, key ) };
+            auto [pos, exact_find]{ lower_bound( *prnt, parent_offset, key ) };
             BOOST_ASSERT( !exact_find );
             pos += exact_find; // traverse to the right child for separator keys
             prnt = &base::inner( children( *prnt )[ pos ] );
@@ -2077,7 +2077,7 @@ private:
         }
         BOOST_ASSUME( parent_offset == 0 );
         auto const & containing_leaf{ as<leaf_node>( *prnt ) };
-        auto const pos{ find( containing_leaf, key ) };
+        auto const pos{ lower_bound( containing_leaf, key ) };
         BOOST_ASSUME
         (
             ( &starting_leaf != &containing_leaf  ) ||
@@ -2086,13 +2086,6 @@ private:
             ( pos.pos == containing_leaf.num_vals )
         );
         return { const_cast<leaf_node *>( &containing_leaf ), pos };
-    }
-
-    template <typename N>
-    void insert( N & target_node, key_const_arg v, node_slot const right_child )
-    {
-        auto const pos{ find( target_node, v ).pos };
-        base::insert( target_node, pos, v, right_child );
     }
 
     // bulk insert helper: merge a new, presorted leaf into an existing leaf
@@ -2142,7 +2135,7 @@ auto bp_tree_impl<Key, Comparator>::merge
     {
         // support merging nodes from another tree instance:
         auto const source_slot{ base::is_my_node( source ) ? slot_of( source ) : node_slot{} };
-        BOOST_ASSERT( find( target, src_keys[ 0 ] ).pos == target_offset );
+        BOOST_ASSERT( lower_bound( target, src_keys[ 0 ] ).pos == target_offset );
         if ( eq( target.keys[ target_offset ], src_keys[ 0 ] ) ) [[ unlikely ]]
         {
             return std::make_tuple<node_size_type, node_size_type>( 0, 1, &target, target_offset );
@@ -2163,7 +2156,7 @@ auto bp_tree_impl<Key, Comparator>::merge
             false                                  // not really worth it: the caller still has to call find on/for returns from all the other branches
         )
         {
-            next_tgt_offset = find_with_offset( tgt, next_tgt_offset, key_const_arg{ src.keys[ next_src_offset ] } ).pos;
+            next_tgt_offset = lower_bound( tgt, next_tgt_offset, key_const_arg{ src.keys[ next_src_offset ] } ).pos;
         }
         return std::make_tuple<node_size_type, node_size_type>( 1, 1, &tgt, next_tgt_offset );
     }
@@ -2175,7 +2168,7 @@ auto bp_tree_impl<Key, Comparator>::merge
     if ( target.right )
     {
         auto const & right_delimiter    { right( target ).keys[ 0 ] };
-        auto const   less_than_right_pos{ find( src_keys, copy_size, key_const_arg{ right_delimiter } ) };
+        auto const   less_than_right_pos{ lower_bound( src_keys, copy_size, key_const_arg{ right_delimiter } ) };
         BOOST_ASSUME( !less_than_right_pos.exact_find );
         if ( less_than_right_pos.pos != copy_size )
         {
@@ -2485,8 +2478,8 @@ class bp_tree
 private:
     using impl_base = bp_tree_impl<Key, Comparator>;
 
-    using impl_base::ge;
     using impl_base::eq;
+    using impl_base::le;
     using impl_base::leaf;
     using impl_base::make_iter;
 
@@ -2569,13 +2562,13 @@ public:
         leaf_node & leaf{ location.leaf };
         auto const leaf_key_offset{ location.leaf_offset.pos };
         // Complex check to see if there is only one key to erase, i.e. expect
-        // nonuniqe keys to be an unlikely occurrence.
+        // nonunique keys to be an unlikely occurrence.
         // TODO measure if this is worth it.
         if
         (
-            ( ( leaf_key_offset < leaf.num_vals ) && ge( leaf.keys[ leaf_key_offset + 1 ], key ) ) ||
+            ( ( ( leaf_key_offset + 1 ) < leaf.num_vals  ) && le( key, leaf.keys[ leaf_key_offset + 1 ] ) ) ||
             ( !leaf.right ) ||
-            ge( this->right( leaf ).keys[ 0 ], key )
+            le( key, this->right( leaf ).keys[ 0 ] )
         ) [[ likely ]]
         {
             return this->erase_single( location );
