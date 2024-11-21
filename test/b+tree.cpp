@@ -55,10 +55,10 @@ TEST( bp_tree, benchamrk )
     auto numbers{ std::ranges::to<std::vector>( sorted_numbers ) };
     std::ranges::shuffle( numbers, rng );
 
-    psi::vm         ::bp_tree<int>   bpt; bpt.map_memory();
-    boost::container::flat_set<int>  flat_set;
+    psi::vm         ::bptree_set<int> bpt; bpt.map_memory();
+    boost::container::flat_set  <int> flat_set;
 #if HAVE_ABSL
-    absl            ::btree_set<int> abpt;
+    absl            ::btree_set <int> abpt;
 #endif
 
     // bulk-insertion-into-empty
@@ -95,7 +95,7 @@ TEST( bp_tree, playground )
     // TODO different types, insertion from non contiguous containers
 
 #ifdef NDEBUG
-    auto const test_size{ 6853735 };
+    auto const test_size{ 4853735 };
 #else
     auto const test_size{  258735 };
 #endif
@@ -108,9 +108,9 @@ TEST( bp_tree, playground )
     // leave the largest quarter of values at the end to trigger/exercise the
     // bulk_append branch in insert()
     std::ranges::shuffle( nums.subspan( 0, 3 * nums.size() / 4 ), rng );
-    std::ranges::shuffle( nums.subspan( 3 * nums.size() / 4    ), rng );
+    std::ranges::shuffle( nums.subspan(    3 * nums.size() / 4 ), rng );
     {
-        bp_tree<int> bpt;
+        bptree_set<int> bpt;
         bpt.map_memory( nums.size() );
         {
             auto const third{ nums.size() / 3 };
@@ -124,7 +124,7 @@ TEST( bp_tree, playground )
             EXPECT_EQ( bpt.insert( second_third ), 0 );
         }
 
-        static_assert( std::forward_iterator<bp_tree<int>::const_iterator> );
+        static_assert( std::forward_iterator<bptree_set<int>::const_iterator> );
 
         EXPECT_EQ  ( std::distance( bpt.   begin(), bpt.   end() ), bpt.size() );
         EXPECT_EQ  ( std::distance( bpt.ra_begin(), bpt.ra_end() ), bpt.size() );
@@ -172,7 +172,7 @@ TEST( bp_tree, playground )
                 EXPECT_TRUE( bpt.erase( n ) );
             }
 
-            bp_tree<int> bpt_even;
+            bptree_set<int> bpt_even;
             bpt_even.map_memory();
             shuffled_even_numbers.append_range( merge_appendix );
             bpt_even.insert( shuffled_even_numbers );
@@ -185,8 +185,8 @@ TEST( bp_tree, playground )
         std::shuffle( numbers.begin(), numbers.end(), rng );
         for ( auto const & n : numbers )
             EXPECT_TRUE( bpt.erase( n ) );
+        // iterator erase test
         for ( auto const & n : merge_appendix ) {
-            // 
             auto const next_it{ bpt.erase( bpt.find( n ) ) };
             EXPECT_TRUE( ( next_it == bpt.end() ) || ( *next_it == n + 1 ) );
         }
@@ -195,14 +195,12 @@ TEST( bp_tree, playground )
     }
 
     {
-        bp_tree<int> bpt;
+        bp_tree<int, true> bpt;
         bpt.map_file( test_file, flags::named_object_construction_policy::create_new_or_truncate_existing );    
 
         for ( auto const & n : numbers )
             EXPECT_TRUE( bpt.insert( n ).second );
     
-        static_assert( std::forward_iterator<bp_tree<int>::const_iterator> );
-
         EXPECT_TRUE( std::ranges::is_sorted( std::as_const( bpt ), bpt.comp() ) );
         EXPECT_TRUE( std::ranges::equal( bpt, sorted_numbers ) );
         EXPECT_NE  ( bpt.find( +42 ), bpt.end() );
@@ -211,7 +209,7 @@ TEST( bp_tree, playground )
         EXPECT_EQ  ( bpt.find( +42 ), bpt.end() );
     }
     {
-        bp_tree<int> bpt;
+        bptree_set<int> bpt;
         bpt.map_file( test_file, flags::named_object_construction_policy::open_existing );    
 
         EXPECT_EQ  ( bpt.size(), sorted_numbers.size() - 1 );
@@ -225,6 +223,44 @@ TEST( bp_tree, playground )
         bpt.clear();
         bpt.print();
     }
+}
+
+TEST( bp_tree, nonunique )
+{
+    auto const test_num{ 33 };
+#ifdef NDEBUG
+    auto const test_size{ 853735 };
+#else
+    auto const test_size{  23567 };
+#endif
+    bp_tree<int, false> bpt;
+    bpt.map_memory( test_size );
+
+    std::ranges::iota_view constexpr sorted_numbers{ 0, test_size };
+    auto const seed{ std ::random_device{}() };
+    std::println( "Seed {}", seed );
+    std::mt19937 rng{ seed };
+    auto numbers{ std::ranges::to<std::vector>( sorted_numbers ) };
+    std::ranges::shuffle( numbers, rng );
+
+    for ( auto const n : numbers )
+    {
+        EXPECT_EQ( *bpt.insert( n        ), n        );
+        EXPECT_EQ( *bpt.insert( test_num ), test_num );
+    }
+    EXPECT_EQ( bpt.size(), numbers.size() * 2 );
+
+    auto const eq_rng{ bpt.equal_range( test_num ) };
+    std::vector<int> eq_range_nums{ eq_rng.first, eq_rng.second };
+    EXPECT_EQ( eq_range_nums.size(), numbers.size() + 1 );
+    std::erase( eq_range_nums, test_num );
+    EXPECT_TRUE( eq_range_nums.empty() );
+
+    std::ranges::shuffle( numbers, rng );
+    EXPECT_EQ( bpt.erase( test_num ), numbers.size() + 1 );
+    for ( auto const n : numbers )
+        EXPECT_EQ( bpt.erase( n ), n != test_num );
+    EXPECT_TRUE( bpt.empty() );
 }
 
 //------------------------------------------------------------------------------
