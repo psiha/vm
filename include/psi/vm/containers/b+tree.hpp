@@ -870,7 +870,7 @@ protected: // 'other'
             {
                 BOOST_ASSUME( !leaf.is_root() );
                 BOOST_ASSUME( depth_ > 1 );
-                next_pos = handle_underflow( leaf, leaf_level() );
+                next_pos = handle_underflow( leaf );
                 next_pos.value_offset += leaf_key_offset;
                 p_leaf                 = &this->leaf( next_pos.node );
                 BOOST_ASSUME( next_pos.value_offset <= p_leaf->num_vals );
@@ -926,12 +926,12 @@ protected: // 'other'
         auto p_node( &node );
         while ( underflowed( *p_node ) )
         {
-            auto const new_pos{ handle_underflow( *p_node, leaf_level() ) };
+            auto const new_pos{ handle_underflow( *p_node ) };
             p_node = &this->leaf( new_pos.node );
         }
     }
 
-    void remove_from_parent( inner_node & __restrict parent, node_size_type const child_idx, depth_t const level ) noexcept
+    void remove_from_parent( inner_node & __restrict parent, node_size_type const child_idx ) noexcept
     {
         verify( parent );
         // for the leftmost child we also/simply delete the lead key (and the
@@ -948,8 +948,6 @@ protected: // 'other'
         if ( parent.is_root() ) [[ unlikely ]]
         {
             BOOST_ASSUME( root_ == slot_of( parent ) );
-            BOOST_ASSUME( level == 1     );
-            BOOST_ASSUME( depth_ > level ); // 'leaf root' should be handled directly by the special case in erase()
             auto & root{ as<root_node>( parent ) };
             BOOST_ASSUME( !!root.children[ 0 ] );
             if ( underflowed( root ) )
@@ -964,14 +962,12 @@ protected: // 'other'
         else
         if ( underflowed( parent ) )
         {
-            BOOST_ASSUME( level > 0      );
-            BOOST_ASSUME( level < depth_ );
-            handle_underflow( parent, level - 1 );
+            handle_underflow( parent );
         }
     }
-    void remove_from_parent( node_header const & node, depth_t const level ) noexcept
+    void remove_from_parent( node_header const & node ) noexcept
     {
-        remove_from_parent( inner( node.parent ), node.parent_child_idx, level );
+        remove_from_parent( inner( node.parent ), node.parent_child_idx );
     }
 
     // This function only serves the purpose of maintaining the rule about the
@@ -1164,8 +1160,8 @@ protected: // 'other'
     }
 
     template <typename N>
-    BOOST_NOINLINE
-    iter_pos handle_underflow( N & node, depth_t const level ) noexcept
+    [[ gnu::noinline, gnu::sysv_abi ]]
+    iter_pos handle_underflow( N & node ) noexcept
     {
         BOOST_ASSUME( underflowed( node ) );
         BOOST_ASSUME( !node.is_root() );
@@ -1173,8 +1169,6 @@ protected: // 'other'
         auto constexpr parent_node_type{ requires{ node.children; } };
         auto constexpr leaf_node_type  { !parent_node_type };
 
-        BOOST_ASSUME( level > 0 );
-        BOOST_ASSUME( !leaf_node_type || level == leaf_level() );
         auto const node_slot{ slot_of( node ) };
         auto & parent{ inner( node.parent ) };
         verify( parent );
@@ -1291,14 +1285,14 @@ protected: // 'other'
                 // Merge node -> left sibling
                 final_node                      = node.left;
                 final_node_original_keys_offset = p_left_sibling->num_vals;
-                merge_right_into_left( parent, level, *p_left_sibling, node );
+                merge_right_into_left( parent, *p_left_sibling, node );
             } else {
                 verify( *p_right_sibling );
                 BOOST_ASSUME( parent_key_idx == 0 );
                 // no comparator in base classes :/
                 //BOOST_ASSUME( leq( parent.keys[ parent_key_idx ], p_right_sibling->keys[ 0 ] ) );
                 // Merge right sibling -> node
-                merge_right_into_left( parent, level, node, *p_right_sibling );
+                merge_right_into_left( parent, node, *p_right_sibling );
             }
         }
 
@@ -1357,11 +1351,10 @@ protected: // 'other'
     [[ gnu::sysv_abi ]]
     void merge_right_into_left
     (
-        inner_node & __restrict parent, depth_t const level,
+        inner_node & __restrict parent,
          leaf_node & __restrict left, leaf_node & __restrict right
     ) noexcept
     {
-        BOOST_ASSUME( level == leaf_level() );
 #   if 0 // need not hold for nonunique trees
         auto constexpr min{ leaf_node::min_values };
         BOOST_ASSUME( right.num_vals >= min - 1 ); BOOST_ASSUME( right.num_vals <= min );
@@ -1371,16 +1364,15 @@ protected: // 'other'
         BOOST_ASSUME( right.left  == slot_of( left  ) );
         auto const parent_child_idx{ right.parent_child_idx };
         append_and_free( left, right );
-        remove_from_parent( parent, parent_child_idx, level );
+        remove_from_parent( parent, parent_child_idx );
     }
     [[ gnu::sysv_abi ]]
     void merge_right_into_left
     (
-        inner_node & __restrict parent, depth_t const level,
+        inner_node & __restrict parent,
         inner_node & __restrict left, inner_node & __restrict right
     ) noexcept
     {
-        BOOST_ASSUME( level < leaf_level() );
         auto constexpr min{ inner_node::min_values };
         BOOST_ASSUME( right.num_vals >= min - 1 ); BOOST_ASSUME( right.num_vals <= min );
         BOOST_ASSUME( left .num_vals >= min - 1 ); BOOST_ASSUME( left .num_vals <= min );
@@ -1395,7 +1387,7 @@ protected: // 'other'
         BOOST_ASSUME( left.num_vals >= left.max_values - 1 ); BOOST_ASSUME( left.num_vals <= left.max_values );
 
         verify( left );
-        remove_from_parent( parent, right.parent_child_idx, level );
+        remove_from_parent( parent, right.parent_child_idx );
         unlink_and_free_node( right, left );
     }
 
@@ -2588,7 +2580,7 @@ public:
             auto const next_node{ node.right };
             if ( erased_count == node.num_vals ) // entire node erased
             {
-                this->remove_from_parent  ( node, this->leaf_level() );
+                this->remove_from_parent  ( node );
                 this->unlink_and_free_node( node, this->left( node ) );
             }
             else
