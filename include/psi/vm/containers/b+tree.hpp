@@ -106,7 +106,7 @@ public:
             p_nodes_ = nodes_.data();
         }
 #   endif
-        if ( std::move( success ) && nodes_.empty() )
+        if ( success && nodes_.empty() )
             hdr() = {};
         return success;
     }
