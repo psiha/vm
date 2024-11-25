@@ -42,7 +42,7 @@ void contiguous_container_storage_base::expand( std::size_t const target_size )
     // TODO: make this configurable (and probably move out/down to container
     // class templates)
     auto const current_capacity{ storage_size() };
-    if ( current_capacity < target_size )
+    if ( current_capacity < target_size ) [[ unlikely ]]
     {
         auto const new_capacity{ std::max( target_size, current_capacity * 3U / 2U ) };
         set_size( mapping_, new_capacity );
@@ -128,10 +128,18 @@ contiguous_container_storage_base::map( file_handle && file, std::size_t const m
     if ( !mapping_ )
         return error{};
 
-    auto view{ mapped_view::map( mapping_, 0, mapping_size ).as_result_or_error() };
-    if ( !view )
-        return view.error();
-    view_ = *std::move( view );
+    if ( mapping_size ) [[ likely ]]
+    {
+        auto view{ mapped_view::map( mapping_, 0, mapping_size ).as_result_or_error() };
+        if ( !view )
+            return view.error();
+        view_ = *std::move( view );
+        BOOST_ASSERT( view_.size() == mapping_size );
+    }
+    else
+    {
+        view_.unmap();
+    }
 
     return std::size_t{ mapping_size };
 }
