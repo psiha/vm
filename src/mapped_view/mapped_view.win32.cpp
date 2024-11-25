@@ -21,6 +21,8 @@
 #include <psi/vm/mapped_view/ops.hpp>
 
 #include <boost/assert.hpp>
+
+#pragma comment( lib, "onecore.lib" ) // for MapViewOfFile2
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -42,19 +44,20 @@ map
     // http://msdn.microsoft.com/en-us/library/aa366537(VS.85).aspx
     //                                    (26.03.2010.) (Domagoj Saric)
 
-#if 1
-    ULARGE_INTEGER const win32_offset{ .QuadPart = offset };
+#if 0
     auto const view_start
     {
         static_cast<mapped_span::value_type *>
         (
-            ::MapViewOfFile
+            ::MapViewOfFile2
             (
                 source_mapping,
-                flags.map_view_flags,
-                win32_offset.HighPart,
-                win32_offset.LowPart,
-                desired_size
+                nt::current_process,
+                offset,
+                nullptr, // base
+                desired_size,
+                0,
+                flags.page_protection
             )
         )
     };
@@ -64,7 +67,6 @@ map
         view_start ? desired_size : 0
     };
 #else
-    // TODO flags parameter
     LARGE_INTEGER nt_offset{ .QuadPart = static_cast<LONGLONG>( offset ) };
     auto   sz{ desired_size };
     void * view_startv{ nullptr };
@@ -76,19 +78,21 @@ map
             nt::current_process,
             &view_startv,
             0,
-            0,
+            sz,
             &nt_offset,
             &sz,
             nt::SECTION_INHERIT::ViewUnmap,
-            0,
-            PAGE_READWRITE
+            0, flags.page_protection
         )
     };
     if ( success == nt::STATUS_SUCCESS ) [[ likely ]]
     {
-        BOOST_ASSUME( sz          >= desired_size );
+        BOOST_ASSUME( sz          == align_up( desired_size, page_size ) );
         BOOST_ASSUME( view_startv != nullptr      );
-        return { static_cast<std::byte *>( view_startv ), sz };
+        // Return the requested desired_size rather than the actual (page
+        // aligned size) as calling code can rely on this size e.g. to track the
+        // size of a mapped file.
+        return { static_cast<std::byte *>( view_startv ), desired_size };
     }
     else
     {
@@ -108,7 +112,7 @@ namespace
     void unmap_concatenated( void * address, std::size_t size ) noexcept
     {
         // emulate support for adjacent/concatenated regions (as supported by mmap)
-        // (duplicated logic from free() in allocaiton.win32.cpp)
+        // (duplicated logic from free() in allocation.win32.cpp)
         for ( ;; )
         {
             auto const region_size{ mem_info( address ).RegionSize };
@@ -134,8 +138,8 @@ void unmap_partial( mapped_span const range ) noexcept
     // Windows does not offer this functionality (altering VMAs), the best
     // we can do is:
     discard( range );
-    // TODO add a mem_info query to see if there maybe is  (sub)range we
-    // can actually fully unmap here (connected to the todo in umap and expand)
+    // TODO add a mem_info query to see if there maybe is a (sub)range we can
+    // actually fully unmap here (connected to the todo in umap and expand)
 }
 
 void discard( mapped_span const range ) noexcept

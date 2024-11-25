@@ -115,38 +115,40 @@ namespace detail
         BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_FORCEINLINE HANDLE call_open  ( char    const * __restrict const file_name, auto const ... args ) { return ::OpenFileMappingA  ( args..., file_name ); }
         BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_FORCEINLINE HANDLE call_open  ( wchar_t const * __restrict const file_name, auto const ... args ) { return ::OpenFileMappingW  ( args..., file_name ); }
 
+        // Windows (11 23H2) does not (still) seem to support resizing of pagefile-backed mappings
+        // so we emulate those by creating a 2GB one and counting on:
+        // - the NT kernel to be lazy and
+        // - that amount to be 'enough for everyone'.
+        extern std::size_t const max_anonymous_pf_mapping_size{ std::numeric_limits<std::int32_t>::max() };
+
+        using desired_access_t = flags::mapping::access_rights::object;
+
         BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
-        HANDLE map_file( file_handle::reference const file, flags::flags_t const flags, std::uint64_t const size ) noexcept
+        HANDLE map_file( file_handle::reference const file, desired_access_t const ap, flags::flags_t const page_protection, std::uint64_t const size ) noexcept
         {
             HANDLE handle{ handle_traits::invalid_value };
             LARGE_INTEGER maximum_size{ .QuadPart = static_cast<LONGLONG>( size ) };
             BOOST_ASSERT_MSG( std::uint64_t( maximum_size.QuadPart ) == size, "Unsupported section size" );
-            if ( !file )
-            {
-                // Windows (11 23H2) does not (still) seem to support resizing of pagefile-backed mappings
-                // so we emulate those by creating a 2GB one and counting on:
-                // - the NT kernel to be lazy and
-                // - that amount to be 'enough for everyone'.
-                maximum_size.QuadPart = std::numeric_limits<std::int32_t>::max();
-            }
-
+            if ( !file ) // ignoring size?
+                maximum_size.QuadPart = max_anonymous_pf_mapping_size;
+        
             auto const nt_result
             {
                 nt::NtCreateSection // TODO use it for named sections also
                 (
                     &handle,
-                    SECTION_EXTEND_SIZE | SECTION_MAP_READ | SECTION_MAP_WRITE | SECTION_QUERY | STANDARD_RIGHTS_REQUIRED,
+                    SECTION_EXTEND_SIZE | SECTION_QUERY | STANDARD_RIGHTS_REQUIRED | ap.privileges,
                     nullptr, // OBJECT_ATTRIBUTES
                     &maximum_size,
-                    flags,
-                    SEC_COMMIT,
+                    page_protection,
+                    SEC_RESERVE, // SEC_COMMIT can quickly hit into STATUS_COMMITMENT_LIMIT so we rely on committing on demand when mapping views
                     file
                 )
             };
-            BOOST_VERIFY( NT_SUCCESS( nt_result ) || handle == handle_traits::invalid_value );
+            BOOST_VERIFY( NT_SUCCESS( nt_result ) ); // TODO SetLastError until fully switching to NTAPI
             return handle;
         }
-        HANDLE map_file( file_handle::reference const file, flags::flags_t const flags ) noexcept { return map_file( file, flags, 0 ); }
+        HANDLE map_file( file_handle::reference const file, desired_access_t const ap, flags::flags_t const page_protection ) noexcept { return map_file( file, ap, page_protection, 0 ); }
 
         void clear( HANDLE & mapping_handle )
         {
@@ -155,21 +157,21 @@ namespace detail
         }
 
         BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_FORCEINLINE
-        mapping do_map( file_handle::reference file, flags::mapping const flags, std::uint64_t const maximum_size, auto const * __restrict const name ) noexcept
+        mapping do_map( file_handle && file, flags::mapping const flags, std::uint64_t const maximum_size, auto const * __restrict const name ) noexcept
         {
-            if ( file == file_handle::invalid_value )
-                file.value = INVALID_HANDLE_VALUE; // CreateFileMapping wants this instead of null
+            // CreateFileMapping wants this instead of null
+            auto const fh{ ( file.get() == file_handle::invalid_value ) ? INVALID_HANDLE_VALUE : file.get() };
 
             ::SECURITY_ATTRIBUTES sa;
-            auto const p_security_attributes( flags::detail::make_sa_ptr( sa, flags.system_access.p_sd, reinterpret_cast<bool const &>/*static_cast<bool>*/( flags.child_access ) ) );
+            auto const p_security_attributes( flags::detail::make_sa_ptr( sa, flags.ap.system_access.p_sd, reinterpret_cast<bool const &>/*static_cast<bool>*/( flags.ap.child_access ) ) );
             auto const max_sz               ( reinterpret_cast<ULARGE_INTEGER const &>( maximum_size ) );
             auto /*const*/ mapping_handle
             (
-                call_create( name, file, const_cast<::LPSECURITY_ATTRIBUTES>( p_security_attributes ), flags.create_mapping_flags, max_sz.HighPart, max_sz.LowPart )
+                call_create( name, fh, const_cast<::LPSECURITY_ATTRIBUTES>( p_security_attributes ), flags.page_protection, max_sz.HighPart, max_sz.LowPart )
             );
             BOOST_ASSERT_MSG
             (
-                ( file != handle_traits::invalid_value ) || maximum_size,
+                ( fh != INVALID_HANDLE_VALUE ) || maximum_size,
                 "CreateFileMapping accepts INVALID_HANDLE_VALUE as valid input but only "
                 "if the size parameter is not zero."
             );
@@ -194,14 +196,14 @@ namespace detail
                 case disposition::create_new                     : if (  preexisting )                                                       clear( mapping_handle ); break;
             }
 
-            return { mapping_handle, flags.map_view_flags };
+            return { mapping_handle, flags.map_view_flags(), flags.ap.object_access, std::move( file ) };
         }
     } // namepsace create_mapping_impl
 } // namespace detail
 
-mapping create_mapping( file_handle::reference const file, flags::mapping const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
+mapping create_mapping( file_handle && file, flags::mapping const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
 {
-    return detail::create_mapping_impl::do_map( file, flags, maximum_size, name );
+    return detail::create_mapping_impl::do_map( std::move( file ), flags, maximum_size, name );
 }
 
 #if 0
@@ -225,12 +227,12 @@ mapping create_mapping
     std  ::size_t                              const size
 ) noexcept
 {
-    auto const create_mapping_flags{ flags::detail::object_access_to_page_access( object_access, share_mode ) };
+    auto const page_protection{ flags::detail::object_access_to_page_access( object_access, share_mode ) };
     auto const mapping_handle
     (
-        detail::create_mapping_impl::map_file( file, create_mapping_flags, size )
+        detail::create_mapping_impl::map_file( file, object_access, page_protection, size )
     );
-    return { mapping_handle, flags::viewing::create( object_access, share_mode ), create_mapping_flags, std::move( file ) };
+    return { mapping_handle, { page_protection }, object_access, std::move( file ) };
 }
 
 //------------------------------------------------------------------------------

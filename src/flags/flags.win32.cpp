@@ -43,14 +43,13 @@ static_assert( access_privileges::all     == ( GENERIC_ALL     | FILE_MAP_ALL_AC
 
 namespace detail
 {
-    BOOST_ATTRIBUTES( BOOST_DOES_NOT_RETURN, BOOST_COLD )
+    [[ noreturn, gnu::cold ]]
     void throw_bad_alloc()
     {
-    #ifdef _MSC_VER
-        __if_exists    ( std::_Xbad_alloc ) { std::_Xbad_alloc(); }
-        __if_not_exists( std::_Xbad_alloc )
-    #endif // _MSC_VER
-        { BOOST_THROW_EXCEPTION( std::bad_alloc() ); }
+        if constexpr ( requires{ std::_Xbad_alloc(); } )
+            std::_Xbad_alloc();
+        else
+            throw std::bad_alloc{};
     }
 
     // https://msdn.microsoft.com/en-us/library/windows/desktop/aa446595(v=vs.85).aspx Creating a Security Descriptor for a New Object in C++

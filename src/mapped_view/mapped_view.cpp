@@ -146,17 +146,17 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
     auto const additional_tail_size{ target_size - kernel_current_size };
     auto const tail_target_address { current_address + kernel_current_size };
 #ifdef _WIN32
-    ULARGE_INTEGER const win32_offset{ .QuadPart = target_offset };
     auto const new_address
     {
-        ::MapViewOfFileEx
+        ::MapViewOfFile2
         (
             original_mapping.get(),
-            original_mapping.view_mapping_flags.map_view_flags,
-            win32_offset.HighPart,
-            win32_offset.LowPart,
+            nt::current_process,
+            target_offset,
+            tail_target_address,
             additional_tail_size,
-            tail_target_address
+            0,
+            original_mapping.view_mapping_flags.page_protection
         )
     };
 #else

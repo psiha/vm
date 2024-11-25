@@ -43,6 +43,8 @@ std::uint64_t                     get_size( file_handle::reference              
 
 // https://msdn.microsoft.com/en-us/library/ms810613.aspx Managing Memory-Mapped Files
 
+mapping create_mapping( file_handle && file, flags::mapping, std::uint64_t maximum_size, char const * name ) noexcept;
+
 mapping create_mapping
 (
     file_handle &&,
