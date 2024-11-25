@@ -11,6 +11,8 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
+#include "mapped_view.win32.hpp"
+
 #include <psi/vm/align.hpp>
 #include <psi/vm/mapped_view/mapped_view.hpp>
 
@@ -29,7 +31,8 @@ map
     mapping::handle  source_mapping,
     flags ::viewing  flags         ,
     std   ::uint64_t offset        ,
-    std   ::size_t   desired_size
+    std   ::size_t   desired_size  ,
+    bool             file_backed
 ) noexcept;
 
 BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
@@ -50,7 +53,7 @@ basic_mapped_view<read_only>::map
     std::size_t      const desired_size
 ) noexcept
 {
-    auto const mapped_span{ vm::map( source_mapping, flags, offset, desired_size ) };
+    auto const mapped_span{ vm::map( source_mapping, flags, offset, desired_size, source_mapping.is_file_based() ) };
     if ( mapped_span.size() != desired_size ) [[ unlikely ]]
     {
         BOOST_ASSERT( mapped_span.empty() );
@@ -86,6 +89,9 @@ void basic_mapped_view<read_only>::shrink( std::size_t const target_size ) noexc
     static_cast<span &>( *this ) = { this->data(), target_size };
 }
 
+#ifdef _WIN32
+std::size_t mem_region_size( void * const address ) noexcept;
+#endif
 
 template <bool read_only> BOOST_NOINLINE
 fallible_result<void>
@@ -93,13 +99,11 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
 {
     // TODO kill duplication with remap.cpp::expand()
 
-    auto const current_address    { const_cast<std::byte *>( this->data() )      };
-    auto const current_size       {                          this->size()        };
-    auto const kernel_current_size{ align_up( current_size, commit_granularity ) };
-    if ( kernel_current_size >= target_size )
+    auto const current_address    { const_cast<std::byte *>( this->data() )       };
+    auto const current_size       {                          this->size()         };
+    auto const kernel_current_size{ align_up( current_size, reserve_granularity ) };
+    if ( kernel_current_size >= target_size ) [[ likely ]]
     {
-        BOOST_ASSUME( current_address );
-        BOOST_ASSUME( current_size    );
         static_cast<span &>( *this ) = { current_address, target_size };
         return err::success;
     }
@@ -148,16 +152,15 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
 #ifdef _WIN32
     auto const new_address
     {
-        ::MapViewOfFile2
+        windows_mmap
         (
-            original_mapping.get(),
-            nt::current_process,
-            target_offset,
+            original_mapping,
             tail_target_address,
             additional_tail_size,
-            0,
-            original_mapping.view_mapping_flags.page_protection
-        )
+            target_offset,
+            original_mapping.view_mapping_flags,
+            original_mapping.is_file_based() ? mapping_object_type::file : mapping_object_type::memory
+        ).data()
     };
 #else
     auto new_address

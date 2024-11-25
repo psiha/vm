@@ -31,10 +31,26 @@ namespace psi::vm::nt
 //------------------------------------------------------------------------------
 
 // TODO move to https://github.com/winsiderss/phnt
+// https://www.jeremyong.com/winapi/io/2024/11/03/windows-memory-mapped-file-io
+// https://devblogs.microsoft.com/oldnewthing/20160701-00/?p=93785 How exactly are page tables allocated on demand for large reserved regions?
 
 #ifndef STATUS_SUCCESS
+struct NTSTATUS_BITS
+{
+    std::uint32_t code     : 16;
+    std::uint32_t facility : 12;
+    std::uint32_t reserved : 1;
+    std::uint32_t customer : 1;
+
+    // 0x0: Success
+    // 0x1: Informational
+    // 0x2: Warning
+    // 0x3: Error
+    std::uint32_t severity : 2;
+};
 using NTSTATUS = LONG;
-NTSTATUS constexpr STATUS_SUCCESS{ 0 };
+static_assert( sizeof( NTSTATUS_BITS ) == sizeof( NTSTATUS ) );
+NTSTATUS constexpr STATUS_SUCCESS{};
 #endif // STATUS_SUCCESS
 #ifndef STATUS_CONFLICTING_ADDRESSES
 auto constexpr STATUS_CONFLICTING_ADDRESSES{ NTSTATUS( 0xC0000018 ) };

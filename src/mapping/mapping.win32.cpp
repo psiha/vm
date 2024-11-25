@@ -56,7 +56,7 @@ err::fallible_result<void, nt::error> set_size( mapping & the_mapping, std::uint
             return result;
 
         BOOST_ASSERT( ntsz.QuadPart >= static_cast<LONGLONG>( new_size ) );
-        if ( ntsz.QuadPart > static_cast<LONGLONG>( new_size ) )
+        if ( ntsz.QuadPart > static_cast<LONGLONG>( new_size ) ) [[ unlikely ]]
         {
             // NtExtendSection does not support downsizing - can at least be used as a size getter (avoid get_size call)
             BOOST_ASSERT( ntsz.QuadPart == static_cast<LONGLONG>( get_size( the_mapping ) ) );

@@ -45,7 +45,7 @@ auto alloc( void * & desired_location, std::size_t & size, allocation_type const
         NtAllocateVirtualMemory
         (
             nt::current_process,
-            reinterpret_cast< PVOID * >( &desired_location ),
+            reinterpret_cast<PVOID *>( &desired_location ),
             0, // address zero bits
             &sz,
             std::to_underlying( type ),
@@ -96,10 +96,12 @@ void dealloc( void * & address, std::size_t & size, deallocation_type const type
 WIN32_MEMORY_REGION_INFORMATION mem_info( void * const address ) noexcept
 {
     WIN32_MEMORY_REGION_INFORMATION info;
-    BOOST_VERIFY( nt::NtQueryVirtualMemory( nt::current_process, address, nt::MemoryRegionInformation, &info, sizeof( info ), nullptr ) == nt::STATUS_SUCCESS );
+    auto const nt_result{ nt::NtQueryVirtualMemory( nt::current_process, address, nt::MemoryRegionInformation, &info, sizeof( info ), nullptr ) };
+    BOOST_VERIFY( nt_result == nt::STATUS_SUCCESS );
     BOOST_ASSUME( info.AllocationBase == address );
     return info;
 }
+std::size_t mem_region_size( void * const address ) noexcept { return mem_info( address ).RegionSize; }
 
 void * allocate( std::size_t & size ) noexcept { using namespace nt; void * address{ nullptr }; BOOST_VERIFY( alloc( address, size, allocation_type( std::to_underlying( allocation_type::reserve ) | std::to_underlying( allocation_type::commit ) ) ) == STATUS_SUCCESS || !address ); return address; }
 void * reserve ( std::size_t & size ) noexcept { using namespace nt; void * address{ nullptr }; BOOST_VERIFY( alloc( address, size,                                      allocation_type::reserve                                                     ) == STATUS_SUCCESS || !address ); return address; }
@@ -120,7 +122,7 @@ bool commit( void * const desired_location, std::size_t const size ) noexcept
             auto const info{ mem_info( final_address ) };
             BOOST_ASSUME( info.AllocationProtect == PAGE_READWRITE );
             BOOST_ASSUME( info.Private                             );
-            auto region_size{ std::min( static_cast< std::size_t >( info.RegionSize ), size - final_size ) };
+            auto region_size{ std::min( static_cast<std::size_t>( info.RegionSize ), size - final_size ) };
             auto const partial_result{ alloc( final_address, region_size, allocation_type::commit ) };
             if ( partial_result != STATUS_SUCCESS )
             {

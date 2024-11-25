@@ -44,7 +44,7 @@ namespace detail
 {
     flags_t object_access_to_page_access( access_privileges::object const object_access, viewing::share_mode const share_mode ) noexcept
     {
-        // Generate CreateFileMapping flags from access_privileges::object/MapViewOfFile flags
+        // Generate CreateFileMapping flags from access_privileges::object flags
         using access_rights = access_privileges;
         auto const combined_handle_access_flags( object_access.privileges );
         flags_t page_protection

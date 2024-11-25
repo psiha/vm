@@ -227,12 +227,14 @@ mapping create_mapping
     std  ::size_t                              const size
 ) noexcept
 {
-    auto const page_protection{ flags::detail::object_access_to_page_access( object_access, share_mode ) };
+    auto section_object_access{ object_access };
+    section_object_access.privileges &= 0xFF; // mask bits unrelated to sections/mappings
+    auto const page_protection{ flags::detail::object_access_to_page_access( section_object_access, share_mode ) };
     auto const mapping_handle
     (
-        detail::create_mapping_impl::map_file( file, object_access, page_protection, size )
+        detail::create_mapping_impl::map_file( file, section_object_access, page_protection, size )
     );
-    return { mapping_handle, { page_protection }, object_access, std::move( file ) };
+    return { mapping_handle, { page_protection }, section_object_access, std::move( file ) };
 }
 
 //------------------------------------------------------------------------------
