@@ -98,9 +98,9 @@ public:
 
     storage_result map_file( auto const file, flags::named_object_construction_policy const policy ) noexcept
     {
-        storage_result success{ nodes_.map_file( file, policy ) };
+        auto success{ nodes_.map_file( file, policy )() };
 #   ifndef NDEBUG
-        if ( std::move( success ) )
+        if ( success )
         {
             p_hdr_   = &hdr();
             p_nodes_ = nodes_.data();
@@ -536,6 +536,7 @@ public:
     void reserve           ( size_type const new_capacity      ) { bptree_base::reserve           ( node_count_required_for_values( new_capacity      ) ); }
 
     const_iterator erase( const_iterator iter ) noexcept;
+    const_iterator erase( const_iterator first, const_iterator last ) noexcept;
 
     auto flatten( std::output_iterator<Key> auto output, size_type available_space ) const noexcept;
 
@@ -912,13 +913,14 @@ protected: // 'other'
         return true; // courtesy return to enable tail calls
     }
 
-    // underflow handler helper for nonunique erase
-    void check_and_handle_bulk_erase_underflow( leaf_node & node ) noexcept
+    // underflow handler helper for nonunique or bulk/range erase
+    iter_pos check_and_handle_bulk_erase_underflow( leaf_node & node ) noexcept
     {
+        iter_pos pos{ slot_of( node ), 0 };
         if ( node.is_root() ) [[ unlikely ]]
         {
             BOOST_ASSERT( !underflowed( as<root_node>( node ) ) ); // otherwise it should have been erased completely (underflowed root == empty root)
-            return;
+            return pos;
         }
         // handle_underflow is designed for unique data, as such it may fill in
         // only a single missing value - for now call it in a loop (until a
@@ -926,9 +928,10 @@ protected: // 'other'
         auto p_node( &node );
         while ( underflowed( *p_node ) )
         {
-            auto const new_pos{ handle_underflow( *p_node ) };
-            p_node = &this->leaf( new_pos.node );
+            pos = handle_underflow( *p_node );
+            p_node = &this->leaf( pos.node );
         }
+        return pos;
     }
 
     void remove_from_parent( inner_node & __restrict parent, node_size_type const child_idx ) noexcept
@@ -1158,6 +1161,7 @@ protected: // 'other'
         auto & parent_key{ parent->keys[ parent_child_idx - 1 ] };
         parent_key = new_separator;
     }
+    void update_separator( leaf_node & leaf ) noexcept { update_separator( leaf, leaf.keys[ 0 ] ); }
 
     template <typename N>
     [[ gnu::noinline, gnu::sysv_abi ]]
@@ -1529,6 +1533,73 @@ bptree_base_wkey<Key>::erase( const_iterator const iter ) noexcept
     if ( key_offset == 0 ) [[ unlikely ]]
         update_separator( lf, lf.keys[ 1 ] );
     return make_iter( erase( lf, key_offset ) );
+}
+
+template <typename Key>
+typename
+bptree_base_wkey<Key>::const_iterator
+bptree_base_wkey<Key>::erase( const_iterator const first, const_iterator const last ) noexcept
+{
+    auto const end_pos{ last.base().pos() };
+    auto pos{ first.base().pos() };
+    if ( pos == end_pos ) [[ unlikely ]]
+        return last;
+
+    if ( pos.value_offset != 0 )
+    {
+        auto & node{ leaf( pos.node ) };
+        auto const single_node_bulk_erase{ pos.node == end_pos.node };
+        auto const node_end_offset{ single_node_bulk_erase ? end_pos.value_offset : node.num_vals };
+        auto const erased_count{ static_cast<node_size_type>( node_end_offset - pos.value_offset ) };
+        std::shift_left( &node.keys[ pos.value_offset ], &node.keys[ node.num_vals ], erased_count );
+        node.num_vals -= erased_count;
+        if ( single_node_bulk_erase ) {
+            auto new_pos{ check_and_handle_bulk_erase_underflow( node ) };
+            new_pos.value_offset += pos.value_offset;
+            return make_iter( new_pos );
+        }
+        pos = { node.right, 0 };
+    }
+
+    while ( pos != end_pos )
+    {
+        BOOST_ASSUME( pos.value_offset == 0 );
+        auto & node{ leaf( pos.node ) };
+        if ( pos.node == end_pos.node ) 
+        {
+            pos.value_offset = end_pos.value_offset;
+            if ( end_pos.value_offset < node.num_vals ) // partial, certainly last, node
+            {
+                auto const erased_count{ end_pos.value_offset };
+                std::shift_left( &node.keys[ 0 ], &node.keys[ node.num_vals ], erased_count );
+                node.num_vals -= erased_count;
+                // erasure not to the end but from the beginning of the node -
+                // this also means we've reached the end of the erasure loop
+                // (i.e. no more keys to erase)
+                this->update_separator                     ( node );
+                this->check_and_handle_bulk_erase_underflow( node );
+                break;
+            }
+        } else {
+            pos.node = node.right;
+        }
+        // entire node erased
+        this->remove_from_parent  ( node );
+        this->unlink_and_free_node( node, this->left( node ) );
+    }
+
+    // handling of possible underflow of the starting node is delayed to
+    // avoid constant moving/refilling of values from succeeding right
+    // leaves - rather this case is handled faster by removing entire
+    // same-valued nodes (in case there are any) and then the starting and
+    // ending, potentially partially erased, leaves are handled for possible
+    // underflow
+    this->check_and_handle_bulk_erase_underflow( leaf( first.base().pos().node ) );
+    // pos cannot point to the starting node here as that case is handled at the
+    // beginning of the function so no need to check/use the return of the above
+    // call
+
+    return make_iter( pos );
 }
 
 template <typename Key>
@@ -2593,7 +2664,7 @@ public:
                     // is handled first/above) - this means we've reached the
                     // end of the erasure loop (i.e. no more keys to erase)
                     BOOST_ASSUME( end_pos < node.num_vals + erased_count );
-                    this->update_separator( node, node.keys[ 0 ] );
+                    this->update_separator                     ( node );
                     this->check_and_handle_bulk_erase_underflow( node );
                     break;
                 } else {

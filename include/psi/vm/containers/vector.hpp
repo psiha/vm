@@ -324,7 +324,7 @@ requires is_trivially_moveable<T>
 class vector
 {
 private:
-    using storage_t = contiguous_container_storage< sz_t, headerless_param >;
+    using storage_t = contiguous_container_storage<sz_t, headerless_param>;
     storage_t storage_;
 
 public:
@@ -1008,11 +1008,11 @@ public:
     auto map_memory( size_type const initial_size = 0, InitPolicy init_policy = {} ) noexcept
     {
         BOOST_ASSERT( !has_attached_storage() );
-        auto result{ storage_.map_memory( to_byte_sz( initial_size ) ) };
-        if ( std::is_same_v<decltype( init_policy ), value_init_t> && initial_size && std::move( result ) ) {
+        auto result{ storage_.map_memory( to_byte_sz( initial_size ) )() };
+        if ( std::is_same_v<decltype( init_policy ), value_init_t> && initial_size && result ) {
             std::uninitialized_default_construct( begin(), end() );
         }
-        return result;
+        return result.as_fallible_result();
     }
 
     bool has_attached_storage() const noexcept { return static_cast<bool>( storage_ ); }
@@ -1092,8 +1092,11 @@ public:
     // corresponding vm::vector)
     contiguous_container_storage_base & storage_base() noexcept { return storage_; }
 
-    void flush_async   ( std::size_t const beginning, std::size_t const size ) const noexcept { storage_.flush_async   ( beginning, size ); }
-    void flush_blocking( std::size_t const beginning, std::size_t const size ) const noexcept { storage_.flush_blocking( beginning, size ); }
+    void flush_async   ( std::size_t const byteOffset, std::size_t const byteSize ) const noexcept { storage_.flush_async   ( byteOffset, byteSize ); }
+    void flush_blocking( std::size_t const byteOffset, std::size_t const byteSize ) const noexcept { storage_.flush_blocking( byteOffset, byteSize ); }
+
+    void flush_async   () const noexcept { flush_async   ( 0, storage_.size() ); }
+    void flush_blocking() const noexcept { flush_blocking( 0, storage_.size() ); }
 
 private:
     PSI_WARNING_DISABLE_PUSH()

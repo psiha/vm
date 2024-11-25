@@ -130,8 +130,8 @@ err::fallible_result<void, error> set_size( mapping & mapping, std::size_t const
         mapping.maximum_size = align_up( desired_size, reserve_granularity );
         return err::success;
     }
-    auto result{ set_size( mapping.underlying_file(), desired_size ) };
-    if ( std::move( result ) )
+    auto result{ set_size( mapping.underlying_file(), desired_size )() };
+    if ( result )
         mapping.maximum_size = align_up( desired_size, reserve_granularity );
     return result;
 }
