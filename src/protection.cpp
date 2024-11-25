@@ -40,7 +40,7 @@ protection const no_access { protection::access_none };
 protection const read_only { protection::rd_only     };
 protection const read_write{ protection::rw          };
 
-err::void_or_error< error > protect( void * const region_begin, std::size_t const region_size, std::underlying_type_t<protection> const access_flags ) noexcept
+err::void_or_error<error> protect( void * const region_begin, std::size_t const region_size, std::underlying_type_t<protection> const access_flags ) noexcept
 {
 #ifdef _WIN32
     DWORD previous_flags;
