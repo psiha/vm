@@ -195,7 +195,7 @@ TEST( bp_tree, playground )
     }
 
     {
-        bp_tree<int, true> bpt;
+        bptree_set<int> bpt;
         bpt.map_file( test_file, flags::named_object_construction_policy::create_new_or_truncate_existing );    
 
         for ( auto const & n : numbers )
@@ -233,7 +233,7 @@ TEST( bp_tree, nonunique )
 #else
     auto const test_size{  23567 };
 #endif
-    bp_tree<int, false> bpt;
+    bptree_multiset<int> bpt;
     bpt.map_memory( test_size );
 
     std::ranges::iota_view constexpr sorted_numbers{ 0, test_size };
