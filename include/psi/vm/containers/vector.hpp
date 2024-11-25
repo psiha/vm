@@ -157,6 +157,7 @@ public:
         auto const sz{ contiguous_container_storage_base::map_memory( size + header_size() )() };
         if ( !sz )
             return sz.error();
+        BOOST_ASSERT( *sz == size + header_size() );
         if constexpr ( !headerless )
         {
             auto & stored_size{ this->stored_size() };
