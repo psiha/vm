@@ -24,6 +24,13 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
+// in order for the resizeability/extending of file-backed mappings we have to
+// introduce this (runtime) discriminator (idiom for files is reserved mappings
+// _and_ views w/ NtExtendSection automatically doing the committing - this also
+// helps/solves handling view extensions, specifically committing of the slack
+// space in the 64kB allocation/reservation-granularity chunks - while for
+// memory it is the more standard explicit mapping-and-committing at the same
+// time logic)
 enum struct mapping_object_type : std::uint32_t
 {
     memory = 0,
