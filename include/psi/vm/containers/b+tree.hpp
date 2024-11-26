@@ -538,7 +538,9 @@ public:
     const_iterator erase( const_iterator iter ) noexcept;
     const_iterator erase( const_iterator first, const_iterator last ) noexcept;
 
-    auto flatten( std::output_iterator<Key> auto output, size_type available_space ) const noexcept;
+    // optimized version of std::copy( bpt.begin(), bpt.end(), vec.begin() )
+    auto flatten(                                           std::output_iterator<Key> auto output, size_type available_space ) const noexcept;
+    auto flatten( const_iterator begin, const_iterator end, std::output_iterator<Key> auto output, size_type available_space ) const noexcept;
 
     // solely a debugging helper (include b+tree_print.hpp)
     void print() const;
@@ -1428,6 +1430,8 @@ private:
         auto tree_structure_overhead{ total_count - leaf_count };
         return total_count;
     }
+
+    auto flatten( node_slot begin_node, node_slot end_node, std::output_iterator<Key> auto output ) const noexcept;
 }; // class bptree_base_wkey
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1603,16 +1607,55 @@ bptree_base_wkey<Key>::erase( const_iterator const first, const_iterator const l
 }
 
 template <typename Key>
-auto bptree_base_wkey<Key>::flatten( std::output_iterator<Key> auto output, size_type const available_space ) const noexcept {
+auto bptree_base_wkey<Key>::flatten( node_slot const begin_node, node_slot const end_node, std::output_iterator<Key> auto output ) const noexcept {
+    auto node{ begin_node };
+    do {
+        auto const & lf{ leaf( node ) };
+        output = std::uninitialized_copy_n( lf.keys, lf.num_vals, output );
+        node   = lf.right;
+    } while ( node != end_node );
+    return output;
+}
+
+template <typename Key>
+auto bptree_base_wkey<Key>::flatten( std::output_iterator<Key> auto const output, size_type const available_space ) const noexcept {
     BOOST_VERIFY( available_space >= this->size() );
     if ( empty() ) [[ unlikely ]]
         return output;
+    return flatten( first_leaf(), hdr().last_leaf_, output );
+
     auto node{ first_leaf() };
     do {
         auto const & lf{ leaf( node ) };
         output = std::uninitialized_copy_n( lf.keys, lf.num_vals, output );
         node   = lf.right;
     } while ( node );
+    return output;
+}
+
+template <typename Key>
+auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator const end, std::output_iterator<Key> auto output, [[ maybe_unused ]] size_type const available_space ) const noexcept {
+    BOOST_ASSERT( available_space >= std::distance( begin, end ) );
+    auto start_pos{ begin.base().pos() };
+    if ( start_pos.value_offset )
+    {
+        auto const & lf{ leaf( start_pos.node ) };
+        auto const lf_keys{ keys( lf ).subspan( start_pos.value_offset ) };
+        output = std::uninitialized_copy( lf_keys.begin(), lf_keys.end(), output );
+        start_pos = { lf.right, 0 };
+    }
+
+    auto const end_pos{ end.base().pos() };
+    if ( start_pos.node != end_pos.node )
+        output = flatten( start_pos.node, end_pos.node, output );
+
+    if ( end_pos.node )
+    {
+        auto const & lf{ leaf( end_pos.node ) };
+        auto const lf_keys{ keys( lf ).subspan( 0, end_pos.value_offset ) };
+        output = std::uninitialized_copy( lf_keys.begin(), lf_keys.end(), output );
+    }
+
     return output;
 }
 
@@ -1935,22 +1978,24 @@ protected:
     }
 
     // upper_bound find >from a starting point, across nodes within the level/depth of the starting node<
-    iter_pos upper_bound_across_nodes( auto const & node, node_size_type offset, Reg auto const value ) const noexcept
+    std::pair<iter_pos, size_type> upper_bound_across_nodes( auto const & node, node_size_type const offset, Reg auto const value ) const noexcept
     {
-        [[ maybe_unused ]] size_type count{ 0 };
         // 'optimized' (simplified to linear across the leaves) for the
         // assumption/prevalence of shorter equal-range spans that will mostly
         // fit within a single node (making it not worth it to go up the tree
         // like find_next, the lower_bound version, does).
         auto * p_node{ &node };
+        // extracted initial call to upper_bound that as it is the only one that
+        // has to take the offset in to account (simplifies the loop slightly)
+        auto pos  { upper_bound( *p_node, offset, value ) };
+        auto count{ static_cast<size_type>( pos - offset ) };
         for ( ; ; )
         {
-            auto const pos{ upper_bound( *p_node, offset, value ) };
-            count += pos;
             if ( ( pos < p_node->num_vals ) || !p_node->right ) [[ likely ]]
-                return { slot_of( *p_node ), pos };
+                return { { slot_of( *p_node ), pos }, count };
             p_node = &right( *p_node );
-            offset = 0;
+            pos    = upper_bound( *p_node, value );
+            count += pos;
         }
         std::unreachable();
     }
@@ -2563,10 +2608,9 @@ public:
     using impl_base::end;
     using impl_base::erase;
 
-    [[ nodiscard ]] const_iterator  find       ( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return impl_base::find_impl       ( pass_in_reg{ key }, unique ); }
-    [[ nodiscard ]] const_iterator  lower_bound( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return impl_base::lower_bound_impl( pass_in_reg{ key }, unique ); }
-
-    [[ nodiscard ]] const_iter_pair equal_range( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return equal_range_impl( pass_in_reg{ key } ); }
+    [[ nodiscard ]] const_iterator find       ( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return impl_base::find_impl       ( pass_in_reg{ key }, unique ); }
+    [[ nodiscard ]] const_iterator lower_bound( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return impl_base::lower_bound_impl( pass_in_reg{ key }, unique ); }
+    [[ nodiscard ]] auto           equal_range( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return            equal_range_impl( pass_in_reg{ key } ); }
 
     const_iterator insert( const_iterator const pos_hint, InsertableType<transparent_comparator, Key> auto const & key ) { return impl_base::insert_impl( pos_hint, pass_in_reg{ key }, unique ); }
     auto           insert(                                InsertableType<transparent_comparator, Key> auto const & key )
@@ -2692,24 +2736,26 @@ public:
 
 private:
     [[ using gnu: pure, sysv_abi ]]
-    const_iter_pair equal_range_impl( Reg auto const key ) const noexcept
+    auto equal_range_impl( Reg auto const key ) const noexcept
     {
-        auto const find_result{ this->find_internal( key, unique ) };
+                auto const find_result{ this->find_internal( key, unique ) };
         if ( find_result.first ) [[ likely ]] {
             auto const begin{ make_iter( *find_result.first, find_result.second ) };
             if constexpr ( unique ) {
-                return { begin, std::next( begin ) };
+                return std::ranges::subrange( begin, std::next( begin ), 1 );
             } else {
-                return
-                {
+                auto const [pos, count]{ this->upper_bound_across_nodes( *find_result.first, find_result.second, key ) };
+                return std::ranges::subrange
+                (
                     begin,
-                    make_iter( this->upper_bound_across_nodes( *find_result.first, find_result.second, key ) )
-                };
+                    make_iter( pos ),
+                    count
+                );
             }
         }
 
         auto const end_iter{ end() };
-        return { end_iter, end_iter };
+        return std::ranges::subrange( end_iter, end_iter, 0 );
     }
 }; // class bp_tree
 

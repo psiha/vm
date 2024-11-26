@@ -250,8 +250,7 @@ TEST( bp_tree, nonunique )
     }
     EXPECT_EQ( bpt.size(), numbers.size() * 2 );
 
-    auto const eq_rng{ bpt.equal_range( test_num ) };
-    std::vector<int> eq_range_nums{ eq_rng.first, eq_rng.second };
+    auto eq_range_nums{ std::ranges::to<std::vector<int>>( bpt.equal_range( test_num ) ) };
     EXPECT_EQ( eq_range_nums.size(), numbers.size() + 1 );
     std::erase( eq_range_nums, test_num );
     EXPECT_TRUE( eq_range_nums.empty() );
