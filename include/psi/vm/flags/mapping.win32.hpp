@@ -43,7 +43,7 @@ struct [[ clang::trivial_abi ]] viewing
     enum struct share_mode : std::uint8_t
     {
         shared = 0,
-        hidden = 0x0001
+        hidden = 0x08
     };
 
     bool is_cow   () const noexcept;
@@ -58,16 +58,16 @@ struct [[ clang::trivial_abi ]] viewing
     bool operator< ( viewing const other ) const noexcept
     {
         return
-            ( ( other.map_view_flags & access_privileges::write   ) && !( this->map_view_flags & access_privileges::write   ) ) ||
-            ( ( other.map_view_flags & access_privileges::execute ) && !( this->map_view_flags & access_privileges::execute ) );
+            ( ( other.page_protection & PAGE_READWRITE ) && !( this->page_protection & PAGE_READWRITE ) ) ||
+            ( ( other.page_protection > PAGE_EXECUTE   ) && !( this->page_protection > PAGE_EXECUTE   ) );
     }
 
     bool operator<=( viewing const other ) const noexcept
     {
-        return ( this->map_view_flags == other.map_view_flags ) || ( *this < other );
+        return ( this->page_protection == other.page_protection ) || ( *this < other );
     }
 
-    flags_t map_view_flags;
+    flags_t page_protection;
 }; // struct viewing
 
 namespace detail
@@ -81,20 +81,18 @@ struct mapping
     using access_rights = viewing::access_rights;
     using share_mode    = viewing::share_mode   ;
 
-    static mapping BOOST_CC_REG create
+    static mapping create
     (
-        access_privileges,
+        access_rights,
         named_object_construction_policy,
         share_mode
     ) noexcept;
 
-  //access_privileges                ap; //desired_access      ; // flProtect object child_process system
-    flags_t                          create_mapping_flags;
-    access_privileges::object        object_access       ; // ...mrmlj...for file-based named_memory
-    access_privileges::child_process child_access        ;
-    access_privileges::system        system_access       ;
+    viewing map_view_flags() const noexcept { return { page_protection }; }
+
+    flags_t                          page_protection;
+    access_rights                    ap; // access_privileges::object part required for file-based named_memory
     named_object_construction_policy creation_disposition;
-    viewing                          map_view_flags      ;
 }; // struct mapping
 
 //------------------------------------------------------------------------------

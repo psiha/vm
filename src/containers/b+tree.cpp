@@ -55,20 +55,17 @@ bptree_base::hdr() noexcept { return *header_data().first; }
 bptree_base::storage_result
 bptree_base::map_memory( std::uint32_t const initial_capacity_as_number_of_nodes ) noexcept
 {
-    storage_result success{ nodes_.map_memory( initial_capacity_as_number_of_nodes, value_init ) };
-#ifndef NDEBUG
-    if ( std::move( success ) )
-    {
-        p_hdr_   = &hdr();
-        p_nodes_ = nodes_.data();
-    }
-#endif
-    if ( std::move( success ) )
+    auto success{ nodes_.map_memory( initial_capacity_as_number_of_nodes, value_init )() };
+    if ( success )
     {
         hdr() = {};
         if ( initial_capacity_as_number_of_nodes ) {
             assign_nodes_to_free_pool( 0 );
         }
+#   ifndef NDEBUG
+        p_hdr_   = &hdr();
+        p_nodes_ = nodes_.data();
+#   endif
     }
     return success;
 }

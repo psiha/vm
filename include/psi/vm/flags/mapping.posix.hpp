@@ -53,8 +53,8 @@ struct [[ clang::trivial_abi ]] viewing
     bool operator< ( viewing const other ) const noexcept
     {
         return
-            ( ( static_cast< std::uint32_t >( other.protection ) & access_privileges::write   ) && !( static_cast< std::uint32_t >( this->protection ) & access_privileges::write   ) ) ||
-            ( ( static_cast< std::uint32_t >( other.protection ) & access_privileges::execute ) && !( static_cast< std::uint32_t >( this->protection ) & access_privileges::execute ) );
+            ( ( static_cast<std::uint32_t>( other.protection ) & access_privileges::write   ) && !( static_cast<std::uint32_t>( this->protection ) & access_privileges::write   ) ) ||
+            ( ( static_cast<std::uint32_t>( other.protection ) & access_privileges::execute ) && !( static_cast<std::uint32_t>( this->protection ) & access_privileges::execute ) );
     }
 
     bool operator<=( viewing const other ) const noexcept

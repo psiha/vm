@@ -25,55 +25,29 @@ namespace flags
 {
 //------------------------------------------------------------------------------
 
-static_assert(         ( viewing::access_rights::read    & 0xFF ) == FILE_MAP_READ   , "Psi.VM internal inconsistency" );
-static_assert(         ( viewing::access_rights::write   & 0xFF ) == FILE_MAP_WRITE  , "Psi.VM internal inconsistency" );
-static_assert(         ( viewing::access_rights::execute & 0xFF ) == FILE_MAP_EXECUTE, "Psi.VM internal inconsistency" );
+static_assert(         ( viewing::access_rights::read    & 0xFF ) == SECTION_MAP_READ            , "Psi.VM internal inconsistency" );
+static_assert(         ( viewing::access_rights::write   & 0xFF ) == SECTION_MAP_WRITE           , "Psi.VM internal inconsistency" );
+static_assert(         ( viewing::access_rights::execute & 0xFF ) == SECTION_MAP_EXECUTE_EXPLICIT, "Psi.VM internal inconsistency" );
 
-static_assert( unsigned( viewing::share_mode   ::shared         ) == 0               , "Psi.VM internal inconsistency" );
-static_assert( unsigned( viewing::share_mode   ::hidden         ) == FILE_MAP_COPY   , "Psi.VM internal inconsistency" );
+static_assert( unsigned( viewing::share_mode   ::shared         ) == 0             , "Psi.VM internal inconsistency" );
+static_assert( unsigned( viewing::share_mode   ::hidden         ) == PAGE_WRITECOPY, "Psi.VM internal inconsistency" );
 
-viewing viewing::create
-(
-    access_privileges::object const object_access,
-    share_mode                const share_mode
-) noexcept
+viewing viewing::create( access_privileges::object const object_access, share_mode const share_mode ) noexcept
 {
-    /// \note According to the explicit documentation for the FILE_MAP_WRITE
-    /// value, it can actually be combined with FILE_MAP_READ (it is also
-    /// implicit from the definition of the FILE_MAP_ALL_ACCESS value).
-    /// https://msdn.microsoft.com/en-us/library/aa366542(v=vs.85).aspx
-    ///                                       (11.08.2015.) (Domagoj Saric)
-    flags_t combined_handle_access_flags{ object_access.privileges & 0xFF };
-    if ( BOOST_UNLIKELY( share_mode == share_mode::hidden ) )
-    {
-        combined_handle_access_flags &= ~access_rights::write;
-        combined_handle_access_flags |= static_cast<flags_t>( share_mode::hidden );
-    }
-    return { combined_handle_access_flags };
+    return { detail::object_access_to_page_access( object_access, share_mode ) };
 }
 
-
-bool viewing::is_cow() const noexcept
-{
-    /// \note Mind the Win32 vs NativeNT flags mess: FILE_MAP_ALL_ACCESS maps
-    /// to (NativeNT) SECTION_ALL_ACCESS which includes SECTION_QUERY which in
-    /// turn has the same value as FILE_MAP_COPY (which according to
-    /// MapViewOfFile() documentation, is supposed to be a 'distinct' flag
-    /// WRT the FILE_MAP_ALL_ACCESS flag).
-    ///                                       (05.09.2015.) (Domagoj Saric)
-    static_assert( FILE_MAP_ALL_ACCESS & FILE_MAP_COPY );
-    return ( map_view_flags & FILE_MAP_ALL_ACCESS ) == FILE_MAP_COPY;
-}
+bool viewing::is_cow() const noexcept { return page_protection & ( PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY ); }
 
 
 namespace detail
 {
     flags_t object_access_to_page_access( access_privileges::object const object_access, viewing::share_mode const share_mode ) noexcept
     {
-        // Generate CreateFileMapping flags from access_privileges::object/MapViewOfFile flags
+        // Generate CreateFileMapping flags from access_privileges::object flags
         using access_rights = access_privileges;
         auto const combined_handle_access_flags( object_access.privileges );
-        flags_t create_mapping_flags
+        flags_t page_protection
         (
             ( combined_handle_access_flags & access_rights::execute ) ? PAGE_EXECUTE : PAGE_NOACCESS
         );
@@ -84,17 +58,17 @@ namespace detail
         static_assert( PAGE_EXECUTE_READWRITE == PAGE_EXECUTE  * 4, "" );
         static_assert( PAGE_EXECUTE_WRITECOPY == PAGE_EXECUTE  * 8, "" );
         if ( share_mode == viewing::share_mode::hidden ) // WRITECOPY
-            create_mapping_flags *= 8;
+            page_protection *= 8;
         else
         if ( combined_handle_access_flags & access_rights::write )
-            create_mapping_flags *= 4;
+            page_protection *= 4;
         else
         {
             BOOST_ASSUME( combined_handle_access_flags & access_rights::read );
-            create_mapping_flags *= 2;
+            page_protection *= 2;
         }
 
-        return create_mapping_flags;
+        return page_protection;
     }
 } // namespace detail
 
@@ -109,11 +83,8 @@ mapping mapping::create
     return
     {
         detail::object_access_to_page_access( ap.object_access, share_mode ),
-        ap.object_access   ,
-        ap.child_access    ,
-        ap.system_access   ,
-        construction_policy,
-        viewing::create( ap.object_access, share_mode )
+        ap,
+        construction_policy
     };
 }
 

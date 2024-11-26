@@ -38,7 +38,11 @@ std::uint64_t get_size( mapping::const_handle const mapping_handle ) noexcept
     return info.SectionSize.QuadPart;
 }
 
-namespace detail::create_mapping_impl { HANDLE map_file( file_handle::reference file, flags::flags_t flags, std::uint64_t size ) noexcept; }
+namespace detail::create_mapping_impl
+{
+    HANDLE map_file( file_handle::reference file, flags::mapping::access_rights::object, flags::flags_t, std::uint64_t size ) noexcept;
+    extern std::size_t const max_anonymous_pf_mapping_size;
+}
 
 err::fallible_result<void, nt::error> set_size( mapping & the_mapping, std::uint64_t const new_size ) noexcept
 {
@@ -52,15 +56,15 @@ err::fallible_result<void, nt::error> set_size( mapping & the_mapping, std::uint
             return result;
 
         BOOST_ASSERT( ntsz.QuadPart >= static_cast<LONGLONG>( new_size ) );
-        if ( ntsz.QuadPart > static_cast<LONGLONG>( new_size ) )
+        if ( ntsz.QuadPart > static_cast<LONGLONG>( new_size ) ) [[ unlikely ]]
         {
-            // NtExtendSection does not support downsizing - use it also as a size getter (avoid get_size call)
+            // NtExtendSection does not support downsizing - can at least be used as a size getter (avoid get_size call)
             BOOST_ASSERT( ntsz.QuadPart == static_cast<LONGLONG>( get_size( the_mapping ) ) );
             the_mapping.close(); // no strong guarantee :/
             auto const file_reisze_result{ set_size( the_mapping.underlying_file(), new_size )() };
             if ( !file_reisze_result )
                 return nt::error/*...mrmlj...*/( file_reisze_result.error().get() ); // TODO fully move to NativeNT API https://cpp.hotexamples.com/examples/-/-/NtSetInformationFile/cpp-ntsetinformationfile-function-examples.html
-            auto const new_mapping_handle{ detail::create_mapping_impl::map_file( the_mapping.file, the_mapping.create_mapping_flags, new_size ) };
+            auto const new_mapping_handle{ detail::create_mapping_impl::map_file( the_mapping.file, the_mapping.ap, the_mapping.view_mapping_flags.page_protection, new_size ) };
             the_mapping.reset( new_mapping_handle );
             if ( !the_mapping )
                 return nt::error/*...mrmlj...*/( err::last_win32_error::get() );
@@ -68,7 +72,8 @@ err::fallible_result<void, nt::error> set_size( mapping & the_mapping, std::uint
     }
     else
     {
-        if ( new_size > get_size( the_mapping ) ) [[ unlikely ]]
+        BOOST_ASSERT( get_size( the_mapping ) == detail::create_mapping_impl::max_anonymous_pf_mapping_size );
+        if ( new_size > detail::create_mapping_impl::max_anonymous_pf_mapping_size ) [[ unlikely ]]
             return nt::STATUS_SECTION_NOT_EXTENDED;
     }
     return err::success;

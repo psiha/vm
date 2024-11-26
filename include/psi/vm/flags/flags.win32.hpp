@@ -22,10 +22,7 @@
 #include <array>
 #include <cstdint>
 //------------------------------------------------------------------------------
-namespace psi
-{
-//------------------------------------------------------------------------------
-namespace vm
+namespace psi::vm
 {
 //------------------------------------------------------------------------------
 inline namespace win32
@@ -95,11 +92,11 @@ struct access_privileges
         /// the same flags for all objects (i.e. like on POSIX systems).
         ///                                   (08.09.2015.) (Domagoj Saric)
         metaread  = 0           | SECTION_QUERY,
-        read      = 0x80000000L | 0x0004, // GENERIC_READ    | FILE_MAP_READ ,
-        write     = 0x40000000L | 0x0002, // GENERIC_WRITE   | FILE_MAP_WRITE,
+        read      = 0x80000000L | 0x0004, // GENERIC_READ    | SECTION_MAP_READ,
+        write     = 0x40000000L | 0x0002, // GENERIC_WRITE   | SECTION_MAP_WRITE,
         readwrite = read | write,
-        execute   = 0x20000000L | 0x0020, // GENERIC_EXECUTE | FILE_MAP_EXECUTE,
-        all       = 0x10000000L | FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE // GENERIC_ALL
+        execute   = 0x20000000L | 0x0020, // GENERIC_EXECUTE | SECTION_MAP_EXECUTE_EXPLICIT,
+        all       = 0x10000000L | SECTION_ALL_ACCESS | SECTION_MAP_EXECUTE_EXPLICIT // GENERIC_ALL
     };
 
     constexpr static bool unrestricted( flags_t const privileges ) { return ( ( privileges & all ) == all ) || ( ( privileges & ( readwrite | execute ) ) == ( readwrite | execute ) ); }
@@ -225,7 +222,5 @@ struct access_privileges
 //------------------------------------------------------------------------------
 } // namespace win32
 //------------------------------------------------------------------------------
-} // namespace vm
-//------------------------------------------------------------------------------
-} // namespace psi
+} // namespace psi::vm
 //------------------------------------------------------------------------------

@@ -57,10 +57,10 @@ struct [[ clang::trivial_abi ]] mapping
     constexpr mapping(            ) noexcept = default;
     constexpr mapping( mapping && ) noexcept = default;
 
-    constexpr mapping( native_handle_t const native_mapping_handle, flags::viewing const _view_mapping_flags, flags::flags_t const _create_mapping_flags = 0, file_handle && _file = {} ) noexcept
-        : vm::handle{ native_mapping_handle }, view_mapping_flags{ _view_mapping_flags }, create_mapping_flags{ _create_mapping_flags }, file{ std::move( _file ) } {}
+    constexpr mapping( native_handle_t const native_mapping_handle, flags::viewing const _view_mapping_flags, flags::mapping::access_rights::object _ap = {}, file_handle && _file = {} ) noexcept
+        : vm::handle{ native_mapping_handle }, view_mapping_flags{ _view_mapping_flags }, ap{ _ap }, file{ std::move( _file ) } {}
 
-    bool is_read_only() const noexcept { return ( view_mapping_flags.map_view_flags & flags::mapping::access_rights::write ) == 0; }
+    bool is_read_only() const noexcept { return ( ap.privileges & flags::mapping::access_rights::write ) == 0; }
 
     bool is_file_based() const noexcept { return static_cast<bool>( file ); }
 
@@ -71,17 +71,17 @@ struct [[ clang::trivial_abi ]] mapping
     {
         vm::handle::operator=( std::move( source ) );
         file                 = std::move( source.file );
-          view_mapping_flags = source.  view_mapping_flags;
-        create_mapping_flags = source.create_mapping_flags;
-        source.  view_mapping_flags = {};
-        source.create_mapping_flags = {};
+        view_mapping_flags = source.view_mapping_flags;
+        ap                 = source.ap;
+        source.view_mapping_flags = {};
+        source.ap                 = {};
     }
 
     flags::viewing view_mapping_flags{};
     // members below are only required for downsizeable mappings (and is_file_based() info)
     // TODO create a separate mapping type
-    flags::flags_t create_mapping_flags;
-    file_handle    file;
+    flags::mapping::access_rights::object ap;
+    file_handle                           file;
 }; // struct mapping
 
 #ifdef __clang__

@@ -27,8 +27,8 @@ namespace flags
 {
 //------------------------------------------------------------------------------
 
-static_assert( (unsigned)shared_memory::system_hints::default_                   == SEC_COMMIT , "Psi.VM internal inconsistency" );
-static_assert( (unsigned)shared_memory::system_hints::only_reserve_address_space == SEC_RESERVE, "Psi.VM internal inconsistency" );
+static_assert( std::to_underlying( shared_memory::system_hints::default_                   ) == SEC_COMMIT , "Psi.VM internal inconsistency" );
+static_assert( std::to_underlying( shared_memory::system_hints::only_reserve_address_space ) == SEC_RESERVE, "Psi.VM internal inconsistency" );
 
 shared_memory BOOST_CC_REG shared_memory::create
 (
@@ -38,7 +38,7 @@ shared_memory BOOST_CC_REG shared_memory::create
 ) noexcept
 {
     auto flags( mapping::create( ap, nocp, share_mode::shared ) );
-    flags.create_mapping_flags |= static_cast<flags_t>( system_hint );
+    flags.page_protection |= static_cast<flags_t>( system_hint ); //...mrmlj...add a separate member as view mapping requires pure page_protection flags
     return static_cast<shared_memory &&>( flags );
 }
 
