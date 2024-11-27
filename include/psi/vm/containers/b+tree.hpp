@@ -1622,20 +1622,12 @@ auto bptree_base_wkey<Key>::flatten( std::output_iterator<Key> auto const output
     BOOST_VERIFY( available_space >= this->size() );
     if ( empty() ) [[ unlikely ]]
         return output;
-    return flatten( first_leaf(), hdr().last_leaf_, output );
-
-    auto node{ first_leaf() };
-    do {
-        auto const & lf{ leaf( node ) };
-        output = std::uninitialized_copy_n( lf.keys, lf.num_vals, output );
-        node   = lf.right;
-    } while ( node );
-    return output;
+    return flatten( first_leaf(), leaf( hdr().last_leaf_ ).right, output );
 }
 
 template <typename Key>
 auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator const end, std::output_iterator<Key> auto output, [[ maybe_unused ]] size_type const available_space ) const noexcept {
-    BOOST_ASSERT( available_space >= std::distance( begin, end ) );
+    BOOST_ASSERT( available_space >= static_cast<std::size_t>( std::distance( begin, end ) ) );
     auto start_pos{ begin.base().pos() };
     if ( start_pos.value_offset )
     {
