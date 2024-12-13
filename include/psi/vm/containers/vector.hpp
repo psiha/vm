@@ -13,23 +13,13 @@
 //------------------------------------------------------------------------------
 #pragma once
 
-#include <psi/vm/align.hpp>
+#include <psi/vm/containers/vector_impl.hpp>
 #include <psi/vm/mapping/mapping.hpp>
 #include <psi/vm/mapped_view/mapped_view.hpp>
 #include <psi/vm/mappable_objects/file/file.hpp>
 #include <psi/vm/mappable_objects/file/utility.hpp>
 
-#include <psi/build/disable_warnings.hpp>
-
-#include <algorithm>
-#include <array>
-#include <concepts>
-#include <climits>
-#include <cstdint>
-#include <cstring>
-#include <memory>
-#include <span>
-#include <type_traits>
+#include <boost/assert.hpp>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -37,36 +27,52 @@ namespace psi::vm
 
 namespace detail
 {
-    [[ noreturn, gnu::cold ]] void throw_out_of_range();
-
     template <typename T, bool> struct size           { T value; };
     template <typename T      > struct size<T, false> {};
 } // namespace detail
 
-class contiguous_container_storage_base
+class [[ clang::trivial_abi ]] contiguous_container_storage_base
 {
 public:
+    // TODO shallow/COW copy construction, + OSX vm_copy
     contiguous_container_storage_base( contiguous_container_storage_base && ) = default;
     contiguous_container_storage_base & operator=( contiguous_container_storage_base && ) = default;
 
-    auto data()       noexcept { BOOST_ASSERT_MSG( mapping_, "Paging file not attached" ); return std::assume_aligned<commit_granularity>( view_.data() ); }
-    auto data() const noexcept { return const_cast<contiguous_container_storage_base &>( *this ).data(); }
+    [[ nodiscard, gnu::pure, gnu::assume_aligned( reserve_granularity ) ]] auto * data()       noexcept { BOOST_ASSERT_MSG( mapping_, "Paging file not attached" ); return std::assume_aligned<commit_granularity>( view_.data() ); }
+    [[ nodiscard, gnu::pure, gnu::assume_aligned( reserve_granularity ) ]] auto * data() const noexcept { return const_cast<contiguous_container_storage_base &>( *this ).data(); }
+
+    //! <b>Effects</b>: Tries to deallocate the excess of memory created
+    //!   with previous allocations. The size of the vector is unchanged
+    //!
+    //! <b>Throws</b>: nothing.
+    //!
+    //! <b>Complexity</b>: Constant.
+    void shrink_to_fit() noexcept;
 
     void unmap() noexcept { view_.unmap(); }
 
     void close() noexcept;
 
-    [[ gnu::pure ]] auto storage_size() const noexcept { return get_size( mapping_ ); }
-    [[ gnu::pure ]] auto  mapped_size() const noexcept { return view_.size(); }
+    [[ nodiscard, gnu::pure ]] auto storage_size() const noexcept { return get_size( mapping_ ); }
+    [[ nodiscard, gnu::pure ]] auto  mapped_size() const noexcept { return view_.size(); }
+
+    void flush_async   () const noexcept { flush_async   ( 0, mapped_size() ); }
+    void flush_blocking() const noexcept { flush_blocking( 0, mapped_size() ); }
 
     void flush_async   ( std::size_t beginning, std::size_t size ) const noexcept;
     void flush_blocking( std::size_t beginning, std::size_t size ) const noexcept;
 
-    bool file_backed() const noexcept { return mapping_.is_file_based(); }
+    [[ nodiscard, gnu::pure ]] bool file_backed() const noexcept { return mapping_.is_file_based(); }
 
-    explicit operator bool() const noexcept { return static_cast<bool>( mapping_ ); }
+    [[ nodiscard, gnu::pure ]] bool has_attached_storage() const noexcept { return static_cast<bool>( mapping_ ); }
+
+    explicit operator bool() const noexcept { return has_attached_storage(); }
+
+    void swap( contiguous_container_storage_base & other ) noexcept { std::swap( *this, other ); }
 
 protected:
+    static bool constexpr storage_zero_initialized{ true };
+
     constexpr contiguous_container_storage_base() = default;
 
     err::fallible_result<std::size_t, error>
@@ -75,25 +81,24 @@ protected:
         return map_file( create_file( file_name, create_rw_file_flags( policy ) ), header_size );
     }
 
-    err::fallible_result<std::size_t, error>
-    map_memory( std::size_t const size ) noexcept { return map( {}, size ); }
-
-
-    void expand( std::size_t target_size );
-
-    void expand_view( std::size_t target_size );
-
-    void shrink( std::size_t target_size ) noexcept;
-
-    void shrink_to_fit() noexcept;
-
-    void resize( std::size_t target_size );
-
-    void reserve( std::size_t new_capacity );
-
     // template (char type) independent portion of map_file
     err::fallible_result<std::size_t, error>
     map_file( file_handle && file, std::size_t header_size ) noexcept;
+
+    err::fallible_result<std::size_t, error>
+    map_memory( std::size_t const size ) noexcept { return map( {}, size ); }
+
+    void   reserve( std::size_t new_capacity );
+    void * resize ( std::size_t target_size  );
+
+    void * shrink_to( std::size_t target_size ) noexcept( mapping::views_downsizeable );
+    void *   grow_to( std::size_t target_size );
+
+    void * expand_view( std::size_t target_size );
+
+    void shrink_mapped_size_to( std::size_t target_size ) noexcept( mapping::views_downsizeable );
+
+    void free() noexcept;
 
 private:
     err::fallible_result<std::size_t, error>
@@ -105,12 +110,13 @@ private:
 }; // contiguous_container_storage_base
 
 template <typename sz_t, bool headerless>
-class contiguous_container_storage
+class [[ clang::trivial_abi ]] contiguous_container_storage
     :
     public  contiguous_container_storage_base,
     private detail::size<sz_t, !headerless>
-    // checkout a revision prior to March the 21st 2024 for a version that used statically sized header sizes
-    // this approach is more versatile while the overhead should be less than negligible
+    // Checkout a revision prior to March the 21st 2024 for a version that used
+    // statically sized header sizes. The current approach is more versatile
+    // while the overhead should be less than negligible.
 {
 public:
     using size_type = sz_t;
@@ -170,45 +176,53 @@ public:
     auto data()       noexcept { return contiguous_container_storage_base::data() + header_size(); }
     auto data() const noexcept { return contiguous_container_storage_base::data() + header_size(); }
 
-    [[ gnu::pure, nodiscard ]] auto storage_size() const noexcept { return static_cast<size_type>( contiguous_container_storage_base::storage_size() ); }
-    [[ gnu::pure, nodiscard ]] auto  mapped_size() const noexcept { return static_cast<size_type>( contiguous_container_storage_base:: mapped_size() ); }
+    //! <b>Effects</b>: Returns true if the vector contains no elements.
+    //! <b>Throws</b>: Nothing.
+    //! <b>Complexity</b>: Constant.
+    [[ nodiscard, gnu::pure ]] bool empty() const noexcept { return !has_attached_storage() || !size(); }
 
-    [[ gnu::pure, nodiscard ]] auto size    () const noexcept { if constexpr ( headerless ) return  mapped_size(); else return stored_size(); }
-    [[ gnu::pure, nodiscard ]] auto capacity() const noexcept { if constexpr ( headerless ) return storage_size(); else return mapped_size() - header_size(); }
+    [[ nodiscard, gnu::pure ]] auto storage_size() const noexcept { return static_cast<size_type>( contiguous_container_storage_base::storage_size() ); }
+    [[ nodiscard, gnu::pure ]] auto  mapped_size() const noexcept { return static_cast<size_type>( contiguous_container_storage_base:: mapped_size() ); }
 
-    void expand( size_type const target_size )
+    [[ nodiscard, gnu::pure ]] auto size    () const noexcept { if constexpr ( headerless ) return  mapped_size(); else return stored_size(); }
+    [[ nodiscard, gnu::pure ]] auto capacity() const noexcept { if constexpr ( headerless ) return storage_size(); else return mapped_size() - header_size(); }
+
+protected:
+    void * grow_to( size_type const target_size )
     {
         BOOST_ASSUME( target_size >= size() );
         if constexpr ( headerless )
         {
             if ( target_size > size() )
-                contiguous_container_storage_base::expand( target_size );
+                contiguous_container_storage_base::grow_to( target_size );
         }
         else
         {
             if ( target_size > capacity() )
-                contiguous_container_storage_base::expand( target_size + header_size() );
+                contiguous_container_storage_base::grow_to( target_size + header_size() );
             stored_size() = target_size;
         }
+        return data();
     }
 
-    void shrink( size_type const target_size ) noexcept
+    void * shrink_to( size_type const target_size ) noexcept
     {
-        contiguous_container_storage_base::shrink( target_size + header_size() );
+        auto const data_ptr{ contiguous_container_storage_base::shrink_to( target_size + header_size() ) };
         if constexpr ( !headerless )
             stored_size() = target_size;
+        return data_ptr;
     }
 
     void resize( size_type const target_size )
     {
         if ( target_size > size() )
-        {
+        { // partial replication of grow_to logic to avoid a double target_size > size() check
             if constexpr ( headerless )
-                expand( target_size );
+                grow_to( target_size );
             else
             {
                 if ( target_size > capacity() )
-                    expand( target_size );
+                    grow_to( target_size );
                 else
                     stored_size() = target_size;
             }
@@ -216,10 +230,12 @@ public:
         else
         {
             // or skip this like std::vector and rely on an explicit shrink_to_fit() call?
-            shrink( target_size );
+            shrink_to( target_size );
         }
         if constexpr ( !headerless )
-            { BOOST_ASSUME( stored_size() == target_size ); }
+        {
+            BOOST_ASSUME( stored_size() == target_size );
+        }
     }
 
     void reserve( size_type const new_capacity )
@@ -228,16 +244,15 @@ public:
             contiguous_container_storage_base::reserve( new_capacity );
         else
         if ( new_capacity > capacity() )
-            contiguous_container_storage_base::expand( new_capacity + header_size() );
+            contiguous_container_storage_base::grow_to( new_capacity + header_size() );
     }
 
     void shrink_to_fit() noexcept
     {
         if constexpr ( headerless )
             contiguous_container_storage_base::shrink_to_fit();
-        else {
-            contiguous_container_storage_base::shrink( stored_size() + header_size() );
-        }
+        else
+            contiguous_container_storage_base::shrink_to( stored_size() + header_size() );
     }
 
     bool has_extra_capacity() const noexcept
@@ -246,39 +261,122 @@ public:
         return size() != capacity();
     }
 
-    void allocate_available_capacity( size_type const sz ) noexcept
+    void grow_into_available_capacity_by( size_type const sz_delta ) noexcept
     {
-        BOOST_ASSERT_MSG( sz <= ( capacity() - size() ), "Out of preallocated space" );
+        BOOST_ASSERT_MSG( sz_delta <= ( capacity() - size() ), "Out of preallocated space" );
         if constexpr ( headerless )
-            contiguous_container_storage_base::expand_view( mapped_size() + sz );
+            contiguous_container_storage_base::expand_view( mapped_size() + sz_delta );
         else
-            stored_size() += sz;
+            stored_size() += sz_delta;
     }
 
-private:
-    [[ gnu::pure, nodiscard ]] size_type & stored_size() noexcept requires( !headerless )
+    void shrink_size_to( sz_t const new_size ) noexcept
+    {
+        BOOST_ASSUME( new_size <= capacity() );
+        if constexpr ( headerless )
+            contiguous_container_storage_base::shrink_mapped_size_to( new_size );
+        else
+            stored_size() = new_size;
+    }
+
+protected:
+    void free() noexcept
+    {
+        if constexpr ( headerless )
+            contiguous_container_storage_base::free();
+        else
+            shrink_to( 0 );
+    }
+
+    [[ nodiscard, gnu::pure ]] size_type & stored_size() noexcept requires( !headerless )
     {
         auto const p_size{ contiguous_container_storage_base::data() + header_size() - size_size };
         BOOST_ASSERT( reinterpret_cast<std::uintptr_t>( p_size ) % alignof( size_type ) == 0 );
         return *reinterpret_cast<size_type *>( p_size );
     }
-    [[ gnu::pure, nodiscard ]] size_type   stored_size() const noexcept requires( !headerless )
+    [[ nodiscard, gnu::pure ]] size_type   stored_size() const noexcept requires( !headerless )
     {
         return const_cast<contiguous_container_storage &>( *this ).stored_size();
     }
 }; // contiguous_container_storage
 
-template < typename T >
-bool constexpr is_trivially_moveable
+template <typename T, typename sz_t, bool headerless>
+class [[ clang::trivial_abi ]] typed_contiguous_container_storage
+    :
+    public contiguous_container_storage<sz_t, headerless>,
+    public vector_impl<typed_contiguous_container_storage<T, sz_t, headerless>, T, sz_t>
 {
-#ifdef __clang__
-    __is_trivially_relocatable( T ) ||
-#endif
-    std::is_trivially_move_constructible_v<T>
-};
+private:
+    using base     = contiguous_container_storage<sz_t, headerless>;
+    using vec_impl = vector_impl<typed_contiguous_container_storage<T, sz_t, headerless>, T, sz_t>;
 
-struct default_init_t{}; inline constexpr default_init_t default_init;
-struct value_init_t  {}; inline constexpr value_init_t   value_init  ;
+public:
+    using value_type = T;
+
+    using base::base;
+
+    using base::empty;
+    using vec_impl::grow_to;
+    using vec_impl::shrink_to;
+    using vec_impl::resize;
+
+    [[ nodiscard, gnu::pure ]] T       * data()       noexcept { return to_t_ptr( base::data() ); }
+    //using vec_impl::data;
+    [[ nodiscard, gnu::pure ]] T const * data() const noexcept { return const_cast<typed_contiguous_container_storage &>( *this ).data(); }
+
+    //! <b>Effects</b>: Returns the number of the elements contained in the vector.
+    //!
+    //! <b>Throws</b>: Nothing.
+    //!
+    //! <b>Complexity</b>: Constant.
+    [[ nodiscard, gnu::pure ]] sz_t size() const noexcept { return to_t_sz( base::size() ); }
+
+    //! <b>Effects</b>: Number of elements for which memory has been allocated.
+    //!   capacity() is always greater than or equal to size().
+    //!
+    //! <b>Throws</b>: Nothing.
+    //!
+    //! <b>Complexity</b>: Constant.
+    [[ nodiscard, gnu::pure ]] sz_t capacity() const noexcept{ return to_t_sz( base::capacity() ); }
+
+    void reserve( sz_t const new_capacity ) { base::reserve( to_byte_sz( new_capacity ) ); }
+
+    decltype( auto ) user_header_data() noexcept { return base::header_storage(); }
+
+    // helper getter for generic code that wishes to do basic manipulation on
+    // vm::vectors w/o being templated (contiguous_container_storage_base does not
+    // publicize functionality that could be used to make it out of sync with the
+    // corresponding vm::vector)
+    contiguous_container_storage_base & storage_base() noexcept { return *this; }
+
+private: friend vec_impl;
+    //! <b>Effects</b>: If n is less than or equal to capacity(), this call has no
+    //!   effect. Otherwise, it is a request for allocation of additional memory.
+    //!   If the request is successful, then capacity() is greater than or equal to
+    //!   n; otherwise, capacity() is unchanged. In either case, size() is unchanged.
+    //!
+    //! <b>Throws</b>: If memory allocation allocation throws or T's copy/move constructor throws.
+    T * storage_shrink_to( sz_t const target_size ) noexcept { return static_cast<T *>( base::shrink_to( to_byte_sz( target_size ) ) ); }
+    T * storage_grow_to  ( sz_t const target_size )          { return static_cast<T *>( base::grow_to  ( to_byte_sz( target_size ) ) ); }
+
+    void storage_shrink_size_to( sz_t const new_size ) noexcept { base::shrink_size_to( to_byte_sz( new_size ) ); }
+    void storage_dec_size() noexcept { storage_shrink_size_to( size() - 1 ); }
+    void storage_inc_size() noexcept; // TODO
+
+protected:
+    PSI_WARNING_DISABLE_PUSH()
+    PSI_WARNING_GCC_OR_CLANG_DISABLE( -Wsign-conversion )
+    static T *  to_t_ptr  ( mapped_view::value_type * const ptr     ) noexcept {                                             return reinterpret_cast<T *>( ptr ); }
+    static sz_t to_t_sz   ( auto                      const byte_sz ) noexcept { BOOST_ASSUME( byte_sz % sizeof( T ) == 0 ); return static_cast<sz_t>( byte_sz / sizeof( T ) ); }
+    static sz_t to_byte_sz( auto                      const sz      ) noexcept
+    {
+        auto const rez{ sz * sizeof( T ) };
+        BOOST_ASSERT( rez <= std::numeric_limits<sz_t>::max() );
+        return static_cast<sz_t>( rez );
+    }
+    PSI_WARNING_DISABLE_POP()
+}; // class typed_contiguous_container_storage
+
 
 struct header_info
 {
@@ -322,40 +420,21 @@ struct header_info
 
 template <typename T, typename sz_t = std::size_t, bool headerless_param = true>
 requires is_trivially_moveable<T>
-class vector
+class [[ clang::trivial_abi ]] vector
+    :
+    public typed_contiguous_container_storage<T, sz_t, headerless_param>
 {
 private:
-    using storage_t = contiguous_container_storage<sz_t, headerless_param>;
-    storage_t storage_;
+    using storage_t = typed_contiguous_container_storage<T, sz_t, headerless_param>;
+    //using impl = vector_impl<T, sz_t>;
+    using impl = storage_t;
 
 public:
     static constexpr auto headerless{ headerless_param };
 
-    using       span_t = std::span<T      >;
-    using const_span_t = std::span<T const>;
-
-    using value_type             = T;
-    using       pointer          = T       *;
-    using const_pointer          = T const *;
-    using       reference        = T       &;
-    using const_reference        = T const &;
-    using param_const_ref        = std::conditional_t< std::is_trivial_v<T> && ( sizeof( T ) <= 2 * sizeof( void * ) ), T, const_reference >;
-    using       size_type        = sz_t;
-    using difference_type        = std::make_signed_t<size_type>;
-    using         iterator       = typename span_t::      iterator;
-    using reverse_iterator       = typename span_t::      reverse_iterator;
-#if defined( _LIBCPP_VERSION ) // no span::const_iterators yet (as of v17)
-    using const_iterator         = typename const_span_t::iterator;
-    using const_reverse_iterator = typename const_span_t::reverse_iterator;
-#else
-    using const_iterator         = typename span_t::const_iterator;
-    using const_reverse_iterator = typename span_t::const_reverse_iterator;
-#endif
-
     // not really a standard allocator: providing the alias simply to have boost::container::flat* compileable with this container.
-    using allocator_type = std::allocator<value_type>;
+    using allocator_type = std::allocator<T>;
 
-public:
     vector() noexcept requires( headerless ) {}
     // Allowing for a header to store/persist the 'actual' size of the container can be generalized
     // to storing arbitrary (types of) headers. This however makes this class template no longer
@@ -365,862 +444,47 @@ public:
     // Awaiting a better name for the idiom, considering its usefulness, the library exposes this
     // ability/functionality publicly - as a runtime parameter (instead of a Header template type
     // parameter) - the relative runtime cost should be near non-existent vs all the standard
-    // benefits (having concrete base clasess, less template instantiations and codegen copies...).
+    // benefits (having concrete base classes, less template instantiations and codegen copies...).
     explicit vector( header_info const hdr_info = {} ) noexcept requires( !headerless )
         // TODO: use slack space (if any) in the object placed (by user code) in the header space
         // to store the size (to avoid wasting even more slack space due to alignment padding
         // after appending the size ('member').
         :
-        storage_
+        storage_t
         (
             hdr_info
-                .         add_header<size_type>()
-                .template with_alignment_for<size_type, T>()
+                .         add_header<sz_t>()
+                .template with_alignment_for<sz_t, T>()
                 .         final_header_size()
         ) {}
 
-    vector( vector const & ) = delete;
-    vector( vector && ) = default;
+    vector( vector const &  ) = delete;
+    vector( vector       && ) = default;
 
    ~vector() noexcept = default;
 
-    vector & operator=( vector && ) = default;
-    vector & operator=( vector const & x )
+    vector & operator=( vector &&      ) = default;
+    vector & operator=( vector const & ) = default;
+
+    auto map_file  ( auto const file, flags::named_object_construction_policy const policy ) noexcept { BOOST_ASSUME( !storage_t::has_attached_storage() ); return storage_t::map_file( file, policy ); }
+    template <typename InitPolicy = value_init_t>
+    auto map_memory( sz_t const initial_size = 0, InitPolicy init_policy = {} ) noexcept
     {
-        BOOST_ASSUME( &x != this ); // not going to support self assignment
-        assign( x );
-        return *this;
-    }
-
-   vector & operator=( std::initializer_list<value_type> const data ) { this->assign( data ); return *this; }
-
-    //! <b>Effects</b>: Assigns the the range [first, last) to *this.
-    //!
-    //! <b>Throws</b>: If memory allocation throws or T's copy/move constructor/assignment or
-    //!   T's constructor/assignment from dereferencing InpIt throws.
-    //!
-    //! <b>Complexity</b>: Linear to n.
-    template < std::input_iterator It>
-    void assign( It first, It const last )
-    {
-        //Overwrite all elements we can from [first, last)
-        auto       cur   { this->begin() };
-        auto const end_it{ this->end  () };
-        for ( ; first != last && cur != end_it; ++cur, ++first )
-            *cur = *first;
-
-        if ( first == last )
-        {
-            auto const target_size{ static_cast<size_type>( cur - begin() ) };
-            //There are no more elements in the sequence, erase remaining
-            while ( cur != end_it )
-                (*cur++).~value_type();
-            shrink_storage_to( target_size );
+        BOOST_ASSUME( !storage_t::has_attached_storage() );
+        auto result{ storage_t::map_memory( storage_t::to_byte_sz( initial_size ) )() };
+        if ( std::is_same_v<decltype( init_policy ), value_init_t> && initial_size && result ) {
+            std::uninitialized_default_construct( impl::begin(), impl::end() );
         }
-        else
-        {
-            //There are more elements in the range, insert the remaining ones
-            this->append_range( std::span{ first, last } );
-        }
+        return result.as_fallible_result();
     }
-
-    void assign( std::initializer_list<T> const data ) { this->assign( data.begin(), data.end() ); }
-
-    //! <b>Effects</b>: Assigns the n copies of val to *this.
-    //!
-    //! <b>Throws</b>: If memory allocation throws or
-    //!   T's copy/move constructor/assignment throws.
-    //!
-    //! <b>Complexity</b>: Linear to n.
-    void assign( size_type const n, param_const_ref val ) = /*TODO*/delete;
 
     //! <b>Effects</b>: Returns a copy of the internal allocator.
     //!
     //! <b>Throws</b>: If allocator's copy constructor throws.
     //!
     //! <b>Complexity</b>: Constant.
-    auto const & get_stored_allocator() const noexcept { return storage_; }
-
-    //////////////////////////////////////////////
-    //
-    //                iterators
-    //
-    //////////////////////////////////////////////
-
-    //! <b>Effects</b>: Returns an iterator to the first element contained in the vector.
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto  begin()       noexcept { return span().begin(); }
-    [[ nodiscard ]] auto  begin() const noexcept { return cbegin(); }
-    [[ nodiscard ]] auto cbegin() const noexcept
-#if defined( _MSC_VER )
-    { return const_cast<vector &>( *this ).span().cbegin(); } // wrkrnd for span<T> and span<T const> iterators not being compatible w/ MS STL
-#else
-    { return span().begin(); }
-#endif
-
-    //! <b>Effects</b>: Returns an iterator to the end of the vector.
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto  end()       noexcept { return span().end(); }
-    [[ nodiscard ]] auto  end() const noexcept { return cend(); }
-    [[ nodiscard ]] auto cend() const noexcept
-#if defined( _MSC_VER )
-    { return const_cast<vector &>( *this ).span().cend(); }
-#else
-    { return span().end(); }
-#endif
-
-    //! <b>Effects</b>: Returns a reverse_iterator pointing to the beginning
-    //! of the reversed vector.
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto  rbegin()       noexcept { return span().rbegin(); }
-    [[ nodiscard ]] auto  rbegin() const noexcept { return span().rbegin(); }
-    [[ nodiscard ]] auto crbegin() const noexcept { return        rbegin(); }
-
-    //! <b>Effects</b>: Returns a reverse_iterator pointing to the end
-    //! of the reversed vector.
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto  rend()       noexcept { return span().rend(); }
-    [[ nodiscard ]] auto  rend() const noexcept { return static_cast<span_t const &>( const_cast<vector &>( *this ).span() ).rend(); }
-    [[ nodiscard ]] auto crend() const noexcept { return        rend(); }
-
-    //////////////////////////////////////////////
-    //
-    //                capacity
-    //
-    //////////////////////////////////////////////
-
-    //! <b>Effects</b>: Returns true if the vector contains no elements.
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    [[ nodiscard, gnu::pure ]] bool empty() const noexcept { return !storage_ || span().empty(); }
-
-    //! <b>Effects</b>: Returns the number of the elements contained in the vector.
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    [[ nodiscard, gnu::pure ]] size_type size() const noexcept { return to_t_sz( storage_.size() ); }
-
-    //! <b>Effects</b>: Returns the largest possible size of the vector.
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] static constexpr size_type max_size() noexcept { return static_cast<size_type>( std::numeric_limits< size_type >::max() / sizeof( value_type ) ); }
-
-    //! <b>Effects</b>: Inserts or erases elements at the end such that
-    //!   the size becomes n. New elements can be default or value initialized.
-    //!
-    //! <b>Throws</b>: If memory allocation throws, or T's copy/move or value initialization throws.
-    //!
-    //! <b>Complexity</b>: Linear to the difference between size() and new_size.
-    void resize( size_type const new_size, default_init_t ) requires( std::is_trivial_v<T> )
-    {
-        storage_.resize( to_byte_sz( new_size ) );
-    }
-    void resize( size_type const new_size, value_init_t )
-    {
-        if ( new_size > size() )   grow_to( new_size, value_init );
-        else                     shrink_to( new_size             );
-    }
-
-    //! <b>Effects</b>: Inserts or erases elements at the end such that
-    //!   the size becomes n. New elements are copy constructed from x.
-    //!
-    //! <b>Throws</b>: If memory allocation throws, or T's copy/move constructor throws.
-    //!
-    //! <b>Complexity</b>: Linear to the difference between size() and new_size.
-    void resize( size_type const new_size, param_const_ref x )
-    {
-        auto const current_size{ size() };
-        BOOST_ASSUME( new_size >= current_size );
-        storage_.resize( to_byte_sz( new_size ) );
-        auto uninitialized_span{ span().subspan( current_size ) };
-        std::uninitialized_fill( uninitialized_span.begin(), uninitialized_span.end(), x );
-    }
-
-    //! <b>Effects</b>: Number of elements for which memory has been allocated.
-    //!   capacity() is always greater than or equal to size().
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] size_type capacity() const noexcept{ return to_t_sz( storage_.capacity() ); }
-
-    //! <b>Effects</b>: If n is less than or equal to capacity(), this call has no
-    //!   effect. Otherwise, it is a request for allocation of additional memory.
-    //!   If the request is successful, then capacity() is greater than or equal to
-    //!   n; otherwise, capacity() is unchanged. In either case, size() is unchanged.
-    //!
-    //! <b>Throws</b>: If memory allocation allocation throws or T's copy/move constructor throws.
-    void reserve( size_type const new_capacity ) { storage_.reserve( to_byte_sz( new_capacity ) ); }
-
-    //! <b>Effects</b>: Tries to deallocate the excess of memory created
-    //!   with previous allocations. The size of the vector is unchanged
-    //!
-    //! <b>Throws</b>: If memory allocation throws, or T's copy/move constructor throws.
-    //!
-    //! <b>Complexity</b>: Linear to size().
-    void shrink_to_fit() { storage_.shrink_to_fit(); }
-
-    //////////////////////////////////////////////
-    //
-    //               element access
-    //
-    //////////////////////////////////////////////
-
-    //! <b>Requires</b>: !empty()
-    //!
-    //! <b>Effects</b>: Returns a reference to the first
-    //!   element of the container.
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] reference front() noexcept { return span().front(); }
-
-    //! <b>Requires</b>: !empty()
-    //!
-    //! <b>Effects</b>: Returns a const reference to the first
-    //!   element of the container.
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] const_reference front() const noexcept { return span().front(); }
-
-    //! <b>Requires</b>: !empty()
-    //!
-    //! <b>Effects</b>: Returns a reference to the last
-    //!   element of the container.
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] reference back() noexcept { return span().back(); }
-
-    //! <b>Requires</b>: !empty()
-    //!
-    //! <b>Effects</b>: Returns a const reference to the last
-    //!   element of the container.
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] const_reference back() const noexcept { return span().back(); }
-
-    //! <b>Requires</b>: size() > n.
-    //!
-    //! <b>Effects</b>: Returns a reference to the nth element
-    //!   from the beginning of the container.
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] reference operator[]( size_type const n ) noexcept { return span()[ n ]; }
-
-    //! <b>Requires</b>: size() > n.
-    //!
-    //! <b>Effects</b>: Returns a const reference to the nth element
-    //!   from the beginning of the container.
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] const_reference operator[]( size_type const n ) const noexcept { return span()[ n ]; }
-
-    //! <b>Requires</b>: size() >= n.
-    //!
-    //! <b>Effects</b>: Returns an iterator to the nth element
-    //!   from the beginning of the container. Returns end()
-    //!   if n == size().
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    //!
-    //! <b>Note</b>: Non-standard extension
-    [[ nodiscard ]] iterator nth( size_type const n ) noexcept
-    {
-        BOOST_ASSERT( n <= size() );
-        return begin() + static_cast<difference_type>( n );
-    }
-
-    //! <b>Requires</b>: size() >= n.
-    //!
-    //! <b>Effects</b>: Returns a const_iterator to the nth element
-    //!   from the beginning of the container. Returns end()
-    //!   if n == size().
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    //!
-    //! <b>Note</b>: Non-standard extension
-    [[ nodiscard ]] const_iterator nth( size_type const n ) const noexcept
-    {
-        BOOST_ASSERT( n <= size() );
-        return begin() + static_cast<difference_type>( n );
-    }
-
-    //! <b>Requires</b>: begin() <= p <= end().
-    //!
-    //! <b>Effects</b>: Returns the index of the element pointed by p
-    //!   and size() if p == end().
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    //!
-    //! <b>Note</b>: Non-standard extension
-    [[ nodiscard ]] size_type index_of( iterator const p ) noexcept
-    {
-        verify_iterator( p );
-        return static_cast<size_type>( p - begin() );
-    }
-
-    //! <b>Requires</b>: begin() <= p <= end().
-    //!
-    //! <b>Effects</b>: Returns the index of the element pointed by p
-    //!   and size() if p == end().
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    //!
-    //! <b>Note</b>: Non-standard extension
-    [[ nodiscard ]] size_type index_of( const_iterator const p ) const noexcept
-    {
-        verify_iterator( p );
-        return static_cast<size_type>( p - begin() );
-    }
-
-    //! <b>Requires</b>: size() > n.
-    //!
-    //! <b>Effects</b>: Returns a reference to the nth element
-    //!   from the beginning of the container.
-    //!
-    //! <b>Throws</b>: range_error if n >= size()
-    //!
-    //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] reference at( size_type const n )
-    {
-        if constexpr ( requires{ span().at( n ); } ) // cpp23
-            return span().at( n );
-        else
-        {
-            if ( n >= size() )
-                detail::throw_out_of_range();
-            return (*this)[ n ];
-        }
-    }
-
-    //! <b>Requires</b>: size() > n.
-    //!
-    //! <b>Effects</b>: Returns a const reference to the nth element
-    //!   from the beginning of the container.
-    //!
-    //! <b>Throws</b>: range_error if n >= size()
-    //!
-    //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] const_reference at( size_type const n ) const
-    {
-        if constexpr ( requires{ span().at( n ); } ) // cpp23
-            return span().at( n );
-        else
-        {
-            if ( n >= size() )
-                detail::throw_out_of_range();
-            return (*this)[ n ];
-        }
-    }
-
-    //////////////////////////////////////////////
-    //
-    //                 data access
-    //
-    //////////////////////////////////////////////
-
-    //! <b>Returns</b>: A pointer such that [data(),data() + size()) is a valid range.
-    //!   For a non-empty vector, data() == &front().
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] T       * data()       noexcept { return to_t_ptr( storage_.data() ); }
-    [[ nodiscard ]] T const * data() const noexcept { return const_cast<vector &>( *this ).data(); }
-
-    [[ nodiscard ]]       span_t span()       noexcept { return { data(), size() }; }
-    [[ nodiscard ]] const_span_t span() const noexcept { return { data(), size() }; }
-
-    //////////////////////////////////////////////
-    //
-    //                modifiers
-    //
-    //////////////////////////////////////////////
-
-    //! <b>Effects</b>: Inserts an object of type T constructed with
-    //!   std::forward<Args>(args)... in the end of the vector.
-    //!
-    //! <b>Returns</b>: A reference to the created object.
-    //!
-    //! <b>Throws</b>: If memory allocation throws or the in-place constructor throws or
-    //!   T's copy/move constructor throws.
-    //!
-    //! <b>Complexity</b>: Amortized constant time.
-    template <class ...Args>
-    reference emplace_back( Args &&...args )
-    {
-        storage_.expand( to_byte_sz( size() + 1 ) );
-        auto & placeholder{ back() };
-        if constexpr ( sizeof...( args ) )
-            return *std::construct_at( &placeholder, std::forward<Args>( args )... );
-        else
-            return *new ( &placeholder ) T; // default init
-    }
-
-   //! <b>Effects</b>: Inserts an object of type T constructed with
-   //!   std::forward<Args>(args)... in the end of the vector.
-   //!
-   //! <b>Throws</b>: If the in-place constructor throws.
-   //!
-   //! <b>Complexity</b>: Constant time.
-   //!
-   //! <b>Note</b>: Non-standard extension.
-   template<class ...Args>
-   bool stable_emplace_back(Args &&...args) = /*TODO*/delete;
-
-    //! <b>Requires</b>: position must be a valid iterator of *this.
-    //!
-    //! <b>Effects</b>: Inserts an object of type T constructed with
-    //!   std::forward<Args>(args)... before position
-    //!
-    //! <b>Throws</b>: If memory allocation throws or the in-place constructor throws or
-    //!   T's copy/move constructor/assignment throws.
-    //!
-    //! <b>Complexity</b>: If position is end(), amortized constant time
-    //!   Linear time otherwise.
-    template<class ...Args>
-    iterator emplace( const_iterator const position, Args && ...args )
-    {
-        auto const iter{ make_space_for_insert( position, 1 ) };
-        std::construct_at( &*iter, std::forward< Args >( args )... );
-        return iter;
-    }
-
-    //! <b>Effects</b>: Inserts a copy of x at the end of the vector.
-    //!
-    //! <b>Throws</b>: If memory allocation throws or
-    //!   T's copy/move constructor throws.
-    //!
-    //! <b>Complexity</b>: Amortized constant time.
-    void push_back( param_const_ref x ) { emplace_back( x ); }
-
-    //! <b>Effects</b>: Constructs a new element in the end of the vector
-    //!   and moves the resources of x to this new element.
-    //!
-    //! <b>Throws</b>: If memory allocation throws or
-    //!   T's copy/move constructor throws.
-    //!
-    //! <b>Complexity</b>: Amortized constant time.
-    void push_back( T && x ) requires( !std::is_trivial_v<T> ) { emplace_back( std::move( x ) ); }
-
-    //! <b>Requires</b>: position must be a valid iterator of *this.
-    //!
-    //! <b>Effects</b>: Insert a copy of x before position.
-    //!
-    //! <b>Throws</b>: If memory allocation throws or T's copy/move constructor/assignment throws.
-    //!
-    //! <b>Complexity</b>: If position is end(), amortized constant time
-    //!   Linear time otherwise.
-    iterator insert( const_iterator const position, param_const_ref x ) { return emplace( position, x ); }
-
-    //! <b>Requires</b>: position must be a valid iterator of *this.
-    //!
-    //! <b>Effects</b>: Insert a new element before position with x's resources.
-    //!
-    //! <b>Throws</b>: If memory allocation throws.
-    //!
-    //! <b>Complexity</b>: If position is end(), amortized constant time
-    //!   Linear time otherwise.
-    iterator insert( const_iterator const position, T && x ) requires( !std::is_trivial_v<T> ) { return emplace( position, std::move( x ) ); }
-
-    //! <b>Requires</b>: position must be a valid iterator of *this.
-    //!
-    //! <b>Effects</b>: Insert n copies of x before pos.
-    //!
-    //! <b>Returns</b>: an iterator to the first inserted element or p if n is 0.
-    //!
-    //! <b>Throws</b>: If memory allocation throws or T's copy/move constructor throws.
-    //!
-    //! <b>Complexity</b>: Linear to n.
-    iterator insert( const_iterator const position, size_type const n, param_const_ref x )
-    {
-        auto const iter{ make_space_for_insert( position, n ) };
-        std::fill_n( iter, n, x );
-        return iter;
-    }
-
-    //! <b>Requires</b>: position must be a valid iterator of *this.
-    //!
-    //! <b>Effects</b>: Insert a copy of the [first, last) range before pos.
-    //!
-    //! <b>Returns</b>: an iterator to the first inserted element or pos if first == last.
-    //!
-    //! <b>Throws</b>: If memory allocation throws, T's constructor from a
-    //!   dereferenced InpIt throws or T's copy/move constructor/assignment throws.
-    //!
-    //! <b>Complexity</b>: Linear to boost::container::iterator_distance [first, last).
-    template <std::input_iterator InIt>
-    iterator insert( const_iterator const position, InIt const first, InIt const last )
-    {
-        auto const n{ static_cast<size_type>( std::distance( first, last ) ) };
-        auto const iter{ make_space_for_insert( position, n ) };
-        std::copy_n( first, n, iter );
-        return iter;
-    }
-
-    //! <b>Requires</b>: position must be a valid iterator of *this.
-    //!
-    //! <b>Effects</b>: Insert a copy of the [il.begin(), il.end()) range before position.
-    //!
-    //! <b>Returns</b>: an iterator to the first inserted element or position if first == last.
-    //!
-    //! <b>Complexity</b>: Linear to the range [il.begin(), il.end()).
-    iterator insert( const_iterator const position, std::initializer_list<value_type> const il )
-    {
-        return insert( position, il.begin(), il.end() );
-    }
-
-    void append_range( std::ranges::range auto && __restrict rng )
-    {
-        auto const current_size{ size() };
-        storage_.expand( to_byte_sz( current_size + std::size( rng ) ) );
-        std::uninitialized_copy( std::begin( rng ), std::end( rng ), nth( current_size ) );
-    }
-    void append_range( std::initializer_list< value_type > const rng ) { append_range( std::span{ rng.begin(), rng.end() } ); }
-
-    //! <b>Effects</b>: Removes the last element from the container.
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant time.
-    void pop_back() noexcept
-    {
-        BOOST_ASSERT(!this->empty());
-        std::destroy_at( &back() );
-        shrink_storage_to( size() - 1 );
-    }
-
-    //! <b>Effects</b>: Erases the element at position pos.
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Linear to the elements between pos and the
-    //!   last element. Constant if pos is the last element.
-    iterator erase( const_iterator const position ) noexcept
-    {
-        verify_iterator( position );
-        auto const pos_index{ index_of( position ) };
-        auto const mutable_pos{ nth( pos_index ) };
-        std::move( mutable_pos + 1, end(), mutable_pos );
-        pop_back();
-        return nth( pos_index );
-    }
-
-    //! <b>Effects</b>: Erases the elements pointed by [first, last).
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Linear to the distance between first and last
-    //!   plus linear to the elements between pos and the last element.
-    iterator erase( const_iterator const first, const_iterator const last ) noexcept
-    {
-        verify_iterator( first );
-        verify_iterator( last  );
-        BOOST_ASSERT( first <= last );
-        auto const first_index{ index_of( first ) };
-        if ( first != last ) [[ likely ]]
-        {
-            auto const mutable_start{ nth( first_index      ) };
-            auto const mutable_end  { nth( index_of( last ) ) };
-            auto const new_end      { std::move( mutable_end, end(), mutable_start ) };
-            for ( auto & element : { new_end, end() } )
-                std::destroy_at( &element );
-            shrink_storage_to( static_cast<size_type>( new_end - begin() ) );
-        }
-        return nth( first_index );
-    }
-
-    //! <b>Effects</b>: Swaps the contents of *this and x.
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Constant.
-    void swap( vector & x ) noexcept { using std::swap; swap( this->storage_, x.storage_ ); }
-
-    //! <b>Effects</b>: Erases all the elements of the vector.
-    //!
-    //! <b>Throws</b>: Nothing.
-    //!
-    //! <b>Complexity</b>: Linear to the number of elements in the container.
-    void clear() noexcept
-    {
-        for ( auto & element : span() )
-            std::destroy_at( &element );
-        shrink_storage_to( 0 );
-    }
-
-    //! <b>Effects</b>: Returns true if x and y are equal
-    //!
-    //! <b>Complexity</b>: Linear to the number of elements in the container.
-    [[ nodiscard ]] friend bool operator==( vector const & x, vector const & y ) noexcept {  return std::equal( x.begin(), x.end(), y.begin(), y.end() ); }
-
-    //! <b>Effects</b>: Returns true if x and y are unequal
-    //!
-    //! <b>Complexity</b>: Linear to the number of elements in the container.
-    [[ nodiscard ]] friend bool operator!=(const vector& x, const vector& y) noexcept {  return !(x == y); }
-
-    //! <b>Effects</b>: x.swap(y)
-    //!
-    //! <b>Complexity</b>: Constant.
-    friend void swap( vector & x, vector & y ) noexcept { x.swap( y ); }
-
-    ///////////////////////////////////////////////////////////////////////////
-    // Extensions
-    ///////////////////////////////////////////////////////////////////////////
-
-    auto map_file  ( auto const file, flags::named_object_construction_policy const policy ) noexcept { BOOST_ASSERT( !has_attached_storage() ); return storage_.map_file( file, policy ); }
-    template <typename InitPolicy = value_init_t>
-    auto map_memory( size_type const initial_size = 0, InitPolicy init_policy = {} ) noexcept
-    {
-        BOOST_ASSERT( !has_attached_storage() );
-        auto result{ storage_.map_memory( to_byte_sz( initial_size ) )() };
-        if ( std::is_same_v<decltype( init_policy ), value_init_t> && initial_size && result ) {
-            std::uninitialized_default_construct( begin(), end() );
-        }
-        return result.as_fallible_result();
-    }
-
-    bool has_attached_storage() const noexcept { return static_cast<bool>( storage_ ); }
-
-    bool file_backed() const noexcept { return storage_.file_backed(); }
-
-    void close() noexcept { storage_.close(); }
-
-    //! <b>Effects</b>: If n is less than or equal to capacity(), this call has no
-    //!   effect. Otherwise, it is a request for allocation of additional memory
-    //!   (memory expansion) that will not invalidate iterators.
-    //!   If the request is successful, then capacity() is greater than or equal to
-    //!   n; otherwise, capacity() is unchanged. In either case, size() is unchanged.
-    //!
-    //! <b>Throws</b>: If memory allocation throws or T's copy/move constructor throws.
-    //!
-    //! <b>Note</b>: Non-standard extension.
-    bool stable_reserve( size_type new_cap ) = /*TODO*/ delete;
-
-    void grow_to( size_type const target_size, default_init_t ) requires( std::is_trivially_default_constructible_v<T> )
-    {
-        storage_.expand( to_byte_sz( target_size ) );
-    }
-    PSI_WARNING_DISABLE_PUSH()
-    PSI_WARNING_MSVC_DISABLE( 4702 ) // unreachable code
-    void grow_to( size_type const target_size, value_init_t )
-    {
-        auto const current_size{ size() };
-        BOOST_ASSUME( target_size >= current_size );
-        storage_.expand( to_byte_sz( target_size ) );
-        if constexpr ( std::is_trivially_constructible_v<value_type> )
-        {
-            [[ maybe_unused ]] auto const newSpaceBegin{ reinterpret_cast<unsigned char const *>( data() + current_size ) };
-            [[ maybe_unused ]] auto const newSpaceSize { ( target_size - current_size ) * sizeof( value_type ) };
-#       if 0
-            std::memset( newSpaceBegin, 0, newSpaceSize );
-#       else
-            BOOST_ASSERT_MSG
-            (
-                *std::max_element( newSpaceBegin, newSpaceBegin + newSpaceSize ) == 0,
-                "Expecting files to be zero-extended"
-            );
-#       endif
-        }
-        else
-        {
-            std::uninitialized_default_construct( nth( current_size ), end() );
-        }
-    }
-    PSI_WARNING_DISABLE_POP()
-    void grow_by( size_type const delta, auto const init_policy )
-    {
-        grow_to( size() + delta, init_policy );
-    }
-
-    void shrink_to( size_type const target_size ) noexcept
-    {
-        auto const current_size{ size() };
-        BOOST_ASSUME( target_size <= current_size );
-        if ( !std::is_trivially_destructible_v<T> )
-        {
-            for ( auto & element : span().subspan( target_size ) )
-                std::destroy_at( &element );
-        }
-        storage_.shrink( to_byte_sz( target_size ) );
-    }
-    void shrink_by( size_type const delta ) noexcept
-    {
-        shrink_to( size() - delta );
-    }
-
-    decltype( auto ) user_header_data() noexcept { return storage_.header_storage(); }
-
-    // helper getter for generic code that wishes to do basic manipulation on
-    // vm::vectors w/o being templated (contiguous_container_storage_base does not
-    // publicize functionality that could be used to make it out of sync with the
-    // corresponding vm::vector)
-    contiguous_container_storage_base & storage_base() noexcept { return storage_; }
-
-    void flush_async   ( std::size_t const byteOffset, std::size_t const byteSize ) const noexcept { storage_.flush_async   ( byteOffset, byteSize ); }
-    void flush_blocking( std::size_t const byteOffset, std::size_t const byteSize ) const noexcept { storage_.flush_blocking( byteOffset, byteSize ); }
-
-    void flush_async   () const noexcept { flush_async   ( 0, storage_.size() ); }
-    void flush_blocking() const noexcept { flush_blocking( 0, storage_.size() ); }
-
-private:
-    PSI_WARNING_DISABLE_PUSH()
-    PSI_WARNING_GCC_OR_CLANG_DISABLE( -Wsign-conversion )
-    static T *  to_t_ptr  ( mapped_view::value_type * const ptr     ) noexcept {                                             return reinterpret_cast<T *>( ptr ); }
-    static sz_t to_t_sz   ( auto                      const byte_sz ) noexcept { BOOST_ASSUME( byte_sz % sizeof( T ) == 0 ); return static_cast<sz_t>( byte_sz / sizeof( T ) ); }
-    static sz_t to_byte_sz( auto                      const sz      ) noexcept
-    {
-        auto const rez{ sz * sizeof( T ) };
-        BOOST_ASSERT( rez <= std::numeric_limits<sz_t>::max() );
-        return static_cast<sz_t>( rez );
-    }
-    PSI_WARNING_DISABLE_POP()
-
-    void shrink_storage_to( size_type const target_size ) noexcept
-    {
-        storage_.shrink( to_byte_sz( target_size ) );
-    }
-
-    void verify_iterator( [[ maybe_unused ]] const_iterator const iter ) const noexcept
-    {
-        BOOST_ASSERT( iter >= begin() );
-        BOOST_ASSERT( iter <= end  () );
-    }
-
-    iterator make_space_for_insert( const_iterator const position, size_type const n )
-    {
-        verify_iterator( position );
-        auto const position_index{ index_of( position ) };
-        auto const current_size  { size() };
-        auto const new_size      { current_size + n };
-        storage_.expand( to_byte_sz( new_size ) );
-        auto const elements_to_move{ static_cast<size_type>( current_size - position_index ) };
-        if constexpr ( is_trivially_moveable<T> )
-        {
-            std::move( nth( position_index ), nth( position_index + elements_to_move ), nth( position_index + n ) );
-        }
-        else // future support for generic types
-        {
-            auto const elements_to_move_to_uninitialized_space{ n };
-            auto const elements_to_move_to_the_current_end    { static_cast<size_type>( elements_to_move - elements_to_move_to_uninitialized_space ) };
-            std::uninitialized_move_n( nth( current_size - elements_to_move_to_uninitialized_space ),                       elements_to_move_to_uninitialized_space, nth( current_size       ) );
-            std::move                ( nth( position_index                                         ), nth( position_index + elements_to_move_to_the_current_end )  , nth( position_index + n ) );
-        }
-        return nth( position_index );
-    }
+    storage_t const & get_stored_allocator() const noexcept { return *this; }
 }; // class vector
-
-
-template <typename T, typename sz_t, bool headerless>
-#if defined( _MSC_VER ) && !defined( NDEBUG )
-// Boost.Container flat_set is bugged: tries to dereference end iterators - asserts at runtime with secure/checked STL/containers
-// https://github.com/boostorg/container/issues/261
-requires is_trivially_moveable<T>
-class unchecked_vector : public vector<T, sz_t, headerless>
-{
-public:
-    using base = vector<T, sz_t, headerless>;
-
-    using       iterator = typename base::      pointer;
-    using const_iterator = typename base::const_pointer;
-
-    using base::base;
-
-    [[ nodiscard ]] auto  begin()       noexcept { return base::data(); }
-    [[ nodiscard ]] auto  begin() const noexcept { return base::data(); }
-    [[ nodiscard ]] auto cbegin() const noexcept { return begin(); }
-
-    [[ nodiscard ]] auto  end()       noexcept { return begin() + base::size(); }
-    [[ nodiscard ]] auto  end() const noexcept { return begin() + base::size(); }
-    [[ nodiscard ]] auto cend() const noexcept { return end(); }
-
-    iterator erase( const_iterator const first, const_iterator const last ) noexcept
-    {
-        return
-            begin()
-                +
-            base::index_of
-            (
-                base::erase
-                (
-                    base::nth( static_cast<typename base::size_type>( first - cbegin() ) ),
-                    base::nth( static_cast<typename base::size_type>( last  - cbegin() ) )
-                )
-            );
-    }
-
-    iterator erase( const_iterator const position ) noexcept
-    {
-        return
-            begin()
-                +
-            base::index_of
-            (
-                base::erase
-                (
-                    base::cbegin() + ( position - cbegin() )
-                )
-            );
-    }
-
-    template < typename ... Args >
-    iterator insert( const_iterator const position, Args &&... args ) noexcept
-    {
-        return
-            begin()
-                +
-            base::index_of
-            (
-                base::insert
-                (
-                    base::nth( static_cast<typename base::size_type>( position - begin() ) ),
-                    std::forward< Args >( args )...
-                )
-            );
-    }
-};
-#else
-using unchecked_vector = vector<T, sz_t, headerless>;
-#endif
-
-template <typename Vector>
-using unchecked = unchecked_vector<typename Vector::value_type, typename Vector::size_type, Vector::headerless>;
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm
