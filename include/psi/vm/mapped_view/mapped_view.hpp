@@ -42,7 +42,7 @@ namespace psi::vm
 ////////////////////////////////////////////////////////////////////////////////
 
 template <bool read_only>
-class basic_mapped_view : public std::conditional_t<read_only, read_only_mapped_span, mapped_span>
+class [[ clang::trivial_abi ]] basic_mapped_view : public std::conditional_t<read_only, read_only_mapped_span, mapped_span>
 {
 public:
     using error_t    = error;
@@ -87,6 +87,11 @@ public:
         span as_span{ *this };
         static_cast<span &>( *this ) = {};
         return as_span;
+    }
+
+    void swap( basic_mapped_view & other ) noexcept
+    {
+        std::swap( *this, other );
     }
 
 public: // Factory methods.

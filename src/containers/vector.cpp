@@ -23,7 +23,8 @@ namespace psi::vm
 
 namespace detail
 {
-    [[ noreturn ]] void throw_out_of_range() { throw std::out_of_range( "vm::vector access out of bounds" ); }
+    [[ noreturn, gnu::cold ]] void throw_out_of_range() { throw std::out_of_range( "vm::vector access out of bounds" ); }
+    [[ noreturn, gnu::cold ]] void throw_bad_alloc   () { throw std::bad_alloc(); }
 } // namespace detail
 
 void contiguous_container_storage_base::close() noexcept
@@ -35,7 +36,7 @@ void contiguous_container_storage_base::close() noexcept
 void contiguous_container_storage_base::flush_async   ( std::size_t const beginning, std::size_t const size ) const noexcept { vm::flush_async   ( mapped_span({ view_.subspan( beginning, size ) }) ); }
 void contiguous_container_storage_base::flush_blocking( std::size_t const beginning, std::size_t const size ) const noexcept { vm::flush_blocking( mapped_span({ view_.subspan( beginning, size ) }), mapping_.underlying_file() ); }
 
-void contiguous_container_storage_base::expand( std::size_t const target_size )
+void * contiguous_container_storage_base::grow_to( std::size_t const target_size )
 {
     BOOST_ASSUME( target_size > mapped_size() );
     // basic (1.5x) geometric growth implementation
@@ -47,16 +48,17 @@ void contiguous_container_storage_base::expand( std::size_t const target_size )
         auto const new_capacity{ std::max( target_size, current_capacity * 3U / 2U ) };
         set_size( mapping_, new_capacity );
     }
-    expand_view( target_size );
+    return expand_view( target_size );
 }
 
-void contiguous_container_storage_base::expand_view( std::size_t const target_size )
+void * contiguous_container_storage_base::expand_view( std::size_t const target_size )
 {
     BOOST_ASSERT( get_size( mapping_ ) >= target_size );
     view_.expand( target_size, mapping_ );
+    return data();
 }
 
-void contiguous_container_storage_base::shrink( std::size_t const target_size ) noexcept
+void * contiguous_container_storage_base::shrink_to( std::size_t const target_size ) noexcept( mapping::views_downsizeable )
 {
     if constexpr ( mapping::views_downsizeable )
     {
@@ -69,6 +71,26 @@ void contiguous_container_storage_base::shrink( std::size_t const target_size ) 
         set_size( mapping_, target_size )().assume_succeeded();
         view_ = mapped_view::map( mapping_, 0, target_size );
     }
+    return data();
+}
+
+void contiguous_container_storage_base::shrink_mapped_size_to( std::size_t const target_size ) noexcept( mapping::views_downsizeable )
+{
+    if constexpr ( mapping::views_downsizeable )
+    {
+        view_.shrink( target_size );
+    }
+    else
+    {
+        view_.unmap();
+        view_ = mapped_view::map( mapping_, 0, target_size );
+    }
+}
+
+void contiguous_container_storage_base::free() noexcept
+{
+    view_.unmap();
+    set_size( mapping_, 0 )().assume_succeeded();
 }
 
 void contiguous_container_storage_base::shrink_to_fit() noexcept
@@ -76,10 +98,10 @@ void contiguous_container_storage_base::shrink_to_fit() noexcept
     set_size( mapping_, mapped_size() )().assume_succeeded();
 }
 
-void contiguous_container_storage_base::resize( std::size_t const target_size )
+void * contiguous_container_storage_base::resize( std::size_t const target_size )
 {
-    if ( target_size > mapped_size() ) expand( target_size );
-    else                               shrink( target_size );
+    if ( target_size > mapped_size() ) return grow_to( target_size );
+    else                               return shrink_to( target_size );
 }
 
 void contiguous_container_storage_base::reserve( std::size_t const new_capacity )

@@ -26,14 +26,14 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
-namespace detail { [[ noreturn ]] inline void throw_bad_alloc() { throw std::bad_alloc(); } }
+namespace detail { [[ noreturn, gnu::cold ]] inline void throw_bad_alloc() { throw std::bad_alloc(); } }
 
 class allocator_backing_mapping
 {
 public:
     constexpr allocator_backing_mapping() = default;
 
-    err::fallible_result< std::size_t, error > open( auto const * const file_name ) noexcept { return open( create_file( file_name, create_rw_file_flags() ) ); }
+    err::fallible_result<std::size_t, error> open( auto const * const file_name ) noexcept { return open( create_file( file_name, create_rw_file_flags() ) ); }
 
     auto data() const noexcept { return view_.data(); }
 

@@ -52,7 +52,7 @@ jobs:
         submodules: true
     - uses: actions/setup-java@v3
       with:
-        java-version: '17'
+        java-version: '23'
         distribution: 'temurin'
 
     - name: Setup latest Xcode on MacOS
@@ -60,8 +60,22 @@ jobs:
       uses: maxim-lobanov/setup-xcode@v1
       with:
         xcode-version: latest
+
+    # For x64 OSX this action offers only v15 https://github.com/KyleMayes/install-llvm-action/blob/master/assets.json
+    # luckily latest is now ARM by default:
+    # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#supported-runners-and-hardware-resources
+    - name: Install LLVM and Clang on MacOS
+      if: matrix.os == 'macos-latest'
+      uses: KyleMayes/install-llvm-action@v2.0.5
+      with:
+        # https://github.com/KyleMayes/install-llvm-action/issues/65
+        arch: arm64
+        version: 18
+        env: true
+
     - name: Install LLVM and Clang on Linux
       if: matrix.os == 'ubuntu-latest'
+      # https://apt.llvm.org
       run: |
         wget https://apt.llvm.org/llvm.sh
         chmod u+x llvm.sh
@@ -86,9 +100,11 @@ jobs:
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
       run: >
         cmake -B ${{ steps.strings.outputs.build-output-dir }}
+        ${{ matrix.cmake_toolchain }}
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
         -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+        -DGitHubCIRun=true
         -S ${{ github.workspace }}
 
     - name: Build
