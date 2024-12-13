@@ -163,13 +163,15 @@ protected:
 
         [[ gnu::pure ]] bool is_root() const noexcept { return !parent; }
 
+#   ifndef __clang__ // https://github.com/llvm/llvm-project/issues/36032
     protected: // merely to prevent slicing (in return-node-by-ref cases)
-        constexpr node_header( node_header const & ) noexcept = default;
-        constexpr node_header( node_header &&      ) noexcept = default;
+        constexpr node_header            ( node_header const & ) noexcept = default;
+        constexpr node_header            ( node_header &&      ) noexcept = default;
     public:
-        constexpr node_header(                     ) noexcept = default;
+        constexpr node_header            (                     ) noexcept = default;
         constexpr node_header & operator=( node_header &&      ) noexcept = default;
         constexpr node_header & operator=( node_header const & ) noexcept = default;
+#   endif
     }; // struct node_header
     using node_size_type = node_header::size_type;
 
@@ -1346,7 +1348,7 @@ protected: // 'other'
     {
         BOOST_ASSUME( target.num_vals + source.num_vals <= target.max_values );
 
-        std::ranges::move( keys( source ), keys( target ).end() );
+        std::ranges::move( keys( source ), &target.keys[ target.num_vals ] );
         target.num_vals += source.num_vals;
         source.num_vals  = 0;
 
@@ -1387,8 +1389,9 @@ protected: // 'other'
         move_chldrn( right, 0, num_chldrn( right ), left, num_chldrn( left ) );
         auto & separator_key{ parent.keys[ parent_key_idx ] };
         left.num_vals += 1;
-        keys( left ).back() = std::move( separator_key );
-        std::ranges::move( keys( right ), keys( left ).end() );
+        auto & last_left_key{ keys( left ).back() };
+        last_left_key = std::move( separator_key );
+        std::ranges::move( keys( right ), std::next( &last_left_key ) );
         left.num_vals += right.num_vals;
         BOOST_ASSUME( left.num_vals >= left.max_values - 1 ); BOOST_ASSUME( left.num_vals <= left.max_values );
 
