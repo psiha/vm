@@ -34,6 +34,14 @@ namespace detail
 class [[ clang::trivial_abi ]] contiguous_container_storage_base
 {
 public:
+    // Mitigation for alignment codegen being sprayed allover at header_data
+    // call sites - allow it to assume a small, 'good enough for most',
+    // guaranteed alignment (event at the possible expense of slack space in
+    // header hierarchies) so that alignment fixups can be skipped for such
+    // headers.
+    static std::uint8_t constexpr minimal_subheader_alignment{ alignof( int ) };
+    static std::uint8_t constexpr minimal_total_header_size_alignment{ 16 };
+
     // TODO shallow/COW copy construction, + OSX vm_copy
     contiguous_container_storage_base( contiguous_container_storage_base && ) = default;
     contiguous_container_storage_base & operator=( contiguous_container_storage_base && ) = default;
@@ -127,7 +135,7 @@ private:
 
 public:
              contiguous_container_storage(                             ) noexcept requires(  headerless ) = default;
-    explicit contiguous_container_storage( size_type const header_size ) noexcept requires( !headerless ) : size_holder{ header_size } {}
+    explicit contiguous_container_storage( size_type const header_size ) noexcept requires( !headerless ) : size_holder{ align_up( header_size, minimal_total_header_size_alignment ) } {}
 
     static constexpr std::uint8_t header_size() noexcept requires( headerless ) { return 0; }
 
@@ -135,6 +143,7 @@ public:
     {
         auto const sz{ size_holder::value };
         BOOST_ASSUME( sz >= sizeof( sz_t ) );
+        BOOST_ASSUME( is_aligned( sz, minimal_total_header_size_alignment ) );
         return sz;
     }
 
@@ -321,7 +330,6 @@ public:
     using vec_impl::resize;
 
     [[ nodiscard, gnu::pure ]] T       * data()       noexcept { return to_t_ptr( base::data() ); }
-    //using vec_impl::data;
     [[ nodiscard, gnu::pure ]] T const * data() const noexcept { return const_cast<typed_contiguous_container_storage &>( *this ).data(); }
 
     //! <b>Effects</b>: Returns the number of the elements contained in the vector.
@@ -382,36 +390,73 @@ struct header_info
 {
     using align_t = std::uint16_t; // fit page_size
 
+    static align_t constexpr minimal_subheader_alignment{ contiguous_container_storage_base::minimal_subheader_alignment };
+
     constexpr header_info() = default;
-    constexpr header_info( std::uint32_t const size, align_t const alignment ) noexcept : header_size{ size }, data_extra_alignment{ alignment } {}
+    constexpr header_info( std::uint32_t const size, align_t const alignment ) noexcept : header_size{ size }, data_extra_alignment{ std::max( alignment, minimal_subheader_alignment ) } {}
     template <typename T>
-    constexpr header_info( std::in_place_type_t<T>, align_t const extra_alignment = 1 ) noexcept : header_info{ sizeof( T ), extra_alignment } {}
+    constexpr header_info( std::in_place_type_t<T>, align_t const extra_alignment = alignof( T ) ) noexcept : header_info{ sizeof( T ), extra_alignment } {}
     template <typename T>
-    static constexpr header_info make( align_t const extra_alignment = 1 ) noexcept { return { sizeof( T ), extra_alignment }; }
+    static constexpr header_info make( align_t const extra_alignment = alignof( T ) ) noexcept { return { sizeof( T ), extra_alignment }; }
 
     template <typename AdditionalHeader>
-    header_info add_header() const noexcept // support chained headers (class hierarchies)
+    constexpr header_info add_header() const noexcept // support chained headers (class hierarchies)
     {
-        auto const aligned_size{ align_up( this->header_size, alignof( AdditionalHeader ) ) };
+        auto const alignment{ std::max<align_t>( alignof( AdditionalHeader ), minimal_subheader_alignment ) };
+        auto const padded_size{ align_up( this->header_size, alignment ) };
         return
         {
-            static_cast<std::uint32_t>( aligned_size + sizeof( AdditionalHeader ) ),
-            this->data_extra_alignment
+            static_cast<std::uint32_t>( padded_size + sizeof( AdditionalHeader ) ),
+            std::max( final_alignment(), alignment )
         };
     }
 
     template <typename ... T>
-    header_info with_alignment_for() const noexcept
+    constexpr header_info with_alignment_for() const noexcept
     {
-        BOOST_ASSUME( data_extra_alignment >= 1 );
-        return { this->header_size, std::max<align_t>({ this->data_extra_alignment, alignof( T )... }) };
+        return { this->header_size, std::max<align_t>( { this->final_alignment(), alignof( T )... } ) };
     }
 
-    std::uint32_t final_header_size() const noexcept { return align_up( header_size, data_extra_alignment ); }
+    constexpr std::uint32_t final_header_size() const noexcept { return align_up( header_size, final_alignment() ); }
+    constexpr align_t       final_alignment  () const noexcept
+    {
+        BOOST_ASSUME( data_extra_alignment >= minimal_subheader_alignment );
+        auto const is_pow2{ std::has_single_bit( data_extra_alignment ) };
+        BOOST_ASSUME( is_pow2 );
+        return data_extra_alignment;
+    }
 
     std::uint32_t header_size         { 0 };
-    align_t       data_extra_alignment{ 1 }; // e.g. for vectorization or overlaying complex types over std::byte storage
+    align_t       data_extra_alignment{ minimal_subheader_alignment }; // e.g. for vectorization or overlaying complex types over std::byte storage
 }; // header_info
+
+// utility function for extracting 'sub-header' data (i.e. intermediate headers
+// in an inheritance hierarchy)
+template <typename Header>
+[[ gnu::const ]] auto header_data( std::span<std::byte> const hdr_storage ) noexcept
+{
+    auto const in_alignment{ header_info::minimal_subheader_alignment };
+    if constexpr ( alignof( Header ) <= in_alignment ) // even with all the assume hints Clang v18 still cannot eliminate redundant fixups so we have to do it explicitly
+    {
+        return std::pair
+        {
+            reinterpret_cast<Header *>( hdr_storage.data() ),
+            hdr_storage.subspan( align_up<in_alignment>( sizeof( Header ) ) )
+        };
+    }
+    else
+    {
+        auto const     raw_data { std::assume_aligned<in_alignment>( hdr_storage.data() ) };
+        auto const aligned_data { align_up<alignof( Header )>( raw_data ) };
+        auto const aligned_space{ static_cast<std::uint32_t>( hdr_storage.size() ) - unsigned( aligned_data - raw_data ) };
+        BOOST_ASSUME( aligned_space >= sizeof( Header ) );
+        return std::pair
+        {
+            reinterpret_cast<Header *>( aligned_data ),
+            std::span{ align_up<in_alignment>( aligned_data + sizeof( Header ) ), aligned_space - sizeof( Header ) }
+        };
+    }
+}
 
 // Standard-vector-like/compatible _presistent_ container class template
 // which uses VM/a mapped object for its backing storage. Currently limited

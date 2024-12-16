@@ -113,6 +113,7 @@ void contiguous_container_storage_base::reserve( std::size_t const new_capacity 
 err::fallible_result<std::size_t, error>
 contiguous_container_storage_base::map_file( file_handle && file, std::size_t const header_size ) noexcept
 {
+    BOOST_ASSUME( is_aligned( header_size, minimal_total_header_size_alignment ) );
     if ( !file )
         return error{};
     auto const file_size{ get_size( file ) };

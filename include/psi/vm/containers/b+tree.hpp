@@ -36,18 +36,6 @@ namespace psi::vm
 PSI_WARNING_DISABLE_PUSH()
 PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
 
-namespace detail
-{
-    template <typename Header>
-    [[ gnu::const ]] auto header_data( std::span<std::byte> const hdr_storage ) noexcept
-    {
-        auto const data           { align_up<alignof( Header )>( hdr_storage.data() ) };
-        auto const remaining_space{ hdr_storage.size() - unsigned( data - hdr_storage.data() ) };
-        BOOST_ASSERT( remaining_space >= sizeof( Header ) );
-        return std::pair{ reinterpret_cast<Header *>( data ), std::span{ data + sizeof( Header ), remaining_space - sizeof( Header ) } };
-    }
-} // namespace detail
-
 template <typename K, bool transparent_comparator, typename StoredKeyType>
 concept LookupType = transparent_comparator || std::is_same_v<StoredKeyType, K>;
 
@@ -372,7 +360,7 @@ protected:
     [[ nodiscard ]] N & new_node() { return as<N>( new_node() ); }
 
 private:
-    auto header_data() noexcept { return detail::header_data<header>( nodes_.user_header_data() ); }
+    auto header_data() noexcept { return vm::header_data<header>( nodes_.user_header_data() ); }
 
     void assign_nodes_to_free_pool( node_slot::value_type starting_node ) noexcept;
 
