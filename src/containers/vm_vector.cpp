@@ -29,7 +29,7 @@ namespace detail
     [[ noreturn, gnu::cold ]] void throw_bad_alloc   () PSI_NOEXCEPT_EXCEPT_BADALLOC
     {
 #   if PSI_MALLOC_OVERCOMMIT == PSI_OVERCOMMIT_Full
-        BOOST_ASSERT( !"Unexpected allocation failure" );
+        BOOST_ASSERT_MSG( false, "Unexpected allocation failure" );
         std::unreachable();
 #   else
         throw std::bad_alloc();

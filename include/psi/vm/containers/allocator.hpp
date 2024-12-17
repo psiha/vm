@@ -26,7 +26,7 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
-namespace detail { [[ noreturn, gnu::cold ]] void throw_bad_alloc(); }
+namespace detail { [[ noreturn, gnu::cold ]] void throw_bad_alloc() PSI_NOEXCEPT_EXCEPT_BADALLOC; }
 
 class allocator_backing_mapping
 {
