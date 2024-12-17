@@ -50,7 +50,15 @@ namespace psi::vm
 namespace detail
 {
     [[ noreturn, gnu::cold ]] void throw_out_of_range();
+#if PSI_MALLOC_OVERCOMMIT != PSI_OVERCOMMIT_Full
     [[ noreturn, gnu::cold ]] void throw_bad_alloc   ();
+#else
+    [[ gnu::cold ]] inline void throw_bad_alloc() noexcept
+    {
+        BOOST_ASSERT_MSG( false, "Unexpected allocation failure" );
+        std::unreachable();
+    }
+#endif
 
     template <typename T>
     constexpr T * mutable_iter( T const * const ptr ) noexcept { return const_cast<T *>( ptr ); }
@@ -217,7 +225,7 @@ public:
     {
         if constexpr ( std::random_access_iterator<It> )
         {
-            auto const sz{ std::distance( first, last ) };
+            auto const sz{ static_cast<size_type>( std::distance( first, last ) ) };
             auto & impl{ initialized_impl( sz, no_init ) };
             // STL utility functions handle EH safety - no need to catch to
             // reset size as Impl/the derived class should not attempt cleanup
@@ -335,14 +343,14 @@ public:
     //! of the reversed vector.
     //! <b>Throws</b>: Nothing.
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto                    rbegin( this auto       & self ) noexcept { return std::make_reverse_iterator( self.begin() ); }
+    [[ nodiscard ]] auto                    rbegin( this auto       & self ) noexcept { return std::make_reverse_iterator( self.end() ); }
     [[ nodiscard ]] const_reverse_iterator crbegin( this Impl const & self ) noexcept { return self.rbegin(); }
 
     //! <b>Effects</b>: Returns a reverse_iterator pointing to the end
     //! of the reversed vector.
     //! <b>Throws</b>: Nothing.
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto                    rend( this auto       & self ) noexcept { return std::make_reverse_iterator( self.end() ); }
+    [[ nodiscard ]] auto                    rend( this auto       & self ) noexcept { return std::make_reverse_iterator( self.begin() ); }
     [[ nodiscard ]] const_reverse_iterator crend( this Impl const & self ) noexcept { return self.rend(); }
 
     //////////////////////////////////////////////
@@ -751,16 +759,6 @@ public:
         self.free();
     }
 
-    //! <b>Effects</b>: Returns true if x and y are equal
-    //!
-    //! <b>Complexity</b>: Linear to the number of elements in the container.
-    [[ nodiscard ]] bool operator==( this auto const & self, std::ranges::range auto const & other ) noexcept { return std::equal( self.begin(), self.end(), other.begin(), other.end() ); }
-
-    //! <b>Effects</b>: Returns true if x and y are unequal
-    //!
-    //! <b>Complexity</b>: Linear to the number of elements in the container.
-    [[ nodiscard ]] bool operator!=( this auto const & self, std::ranges::range auto const & other ) noexcept { return !(self == other); }
-
     void swap( this auto & self, auto & other ) noexcept { std::swap( self, other ); }
 
 
@@ -872,6 +870,13 @@ private:
         return self.make_iterator( &data[ position_index ] );
     }
 }; // class vector_impl
+
+
+//! <b>Effects</b>: Returns the result of std::lexicographical_compare_three_way
+//!
+//! <b>Complexity</b>: Linear to the number of elements in the container.
+[[ nodiscard ]] constexpr auto operator<=>( std::ranges::range auto const & left, std::ranges::range auto const & right ) noexcept { return std::lexicographical_compare_three_way( left.begin(), left.end(), right.begin(), right.end() ); }
+[[ nodiscard ]] constexpr auto operator== ( std::ranges::range auto const & left, std::ranges::range auto const & right ) noexcept { return std::equal                            ( left.begin(), left.end(), right.begin(), right.end() ); }
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm

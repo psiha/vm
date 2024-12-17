@@ -51,8 +51,7 @@ void * mmap( void * const target_address, std::size_t const size, int const prot
     if ( succeeded ) [[ likely ]]
     {
         BOOST_ASSERT( !target_address || ( actual_address == target_address ) || ( ( flags & MAP_FIXED ) == 0 ) );
-        BOOST_ASSERT( is_aligned( actual_address, reserve_granularity ) );
-        return actual_address;
+        return std::assume_aligned<reserve_granularity>( actual_address );
     }
 
     return nullptr;
@@ -91,8 +90,8 @@ void decommit( void * const address, std::size_t const size ) noexcept
 #if 0 // should not be neccessary?
     BOOST_VERIFY
     (
-        ::madvise( actual_address, newSize, MADV_FREE     ) == 0 ||
-        ::madvise( actual_address, newSize, MADV_DONTNEED ) == 0
+        ::madvise( actual_address, size, MADV_FREE     ) == 0 ||
+        ::madvise( actual_address, size, MADV_DONTNEED ) == 0
     );
 #endif
 }

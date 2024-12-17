@@ -41,14 +41,14 @@ union noninitialized_array
     T data[ size ];
 }; // noninitialized_array
 
-struct assert_on_overflow {
-    [[ noreturn ]] static void operator()() noexcept {
+struct assert_on_overflow { // VS17.12.3 MSVC still does not support static operator()
+    [[ noreturn ]] void operator()() const noexcept {
         BOOST_ASSERT_MSG( false, "Static vector overflow!" );
         std::unreachable();
     }
 }; // assert_on_overflow
 struct throw_on_overflow {
-    [[ noreturn ]] static void operator()() { detail::throw_out_of_range(); }
+    [[ noreturn ]] void operator()() const { detail::throw_out_of_range(); }
 }; // throw_on_overflow
 
 template <typename T, std::uint32_t maximum_size, auto overflow_handler = assert_on_overflow{}>

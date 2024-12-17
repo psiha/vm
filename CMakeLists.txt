@@ -19,7 +19,7 @@ include( ${CMAKE_CURRENT_BINARY_DIR}/cmake/get_cpm.cmake )
 
 # Add packages
 
-set( boost_ver boost-1.86.0 )
+set( boost_ver boost-1.87.0 )
 CPMAddPackage( "gh:boostorg/static_assert#${boost_ver}"   ) # Boost::core dependency
 CPMAddPackage( "gh:boostorg/throw_exception#${boost_ver}" ) # Boost::core dependency
 CPMAddPackage( "gh:boostorg/config#${boost_ver}"          ) # Boost::core dependency

@@ -11,9 +11,11 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#include <psi/vm/containers/vector.hpp>
+#include <psi/vm/containers/vm_vector.hpp>
 
 #include <psi/vm/mapped_view/ops.hpp>
+
+#include <boost/assert.hpp>
 
 #include <stdexcept>
 //------------------------------------------------------------------------------
@@ -24,19 +26,21 @@ namespace psi::vm
 namespace detail
 {
     [[ noreturn, gnu::cold ]] void throw_out_of_range() { throw std::out_of_range( "vm::vector access out of bounds" ); }
+#if PSI_MALLOC_OVERCOMMIT != PSI_OVERCOMMIT_Full
     [[ noreturn, gnu::cold ]] void throw_bad_alloc   () { throw std::bad_alloc(); }
+#endif
 } // namespace detail
 
-void contiguous_container_storage_base::close() noexcept
+void contiguous_storage_base::close() noexcept
 {
     mapping_.close();
     unmap();
 }
 
-void contiguous_container_storage_base::flush_async   ( std::size_t const beginning, std::size_t const size ) const noexcept { vm::flush_async   ( mapped_span({ view_.subspan( beginning, size ) }) ); }
-void contiguous_container_storage_base::flush_blocking( std::size_t const beginning, std::size_t const size ) const noexcept { vm::flush_blocking( mapped_span({ view_.subspan( beginning, size ) }), mapping_.underlying_file() ); }
+void contiguous_storage_base::flush_async   ( std::size_t const beginning, std::size_t const size ) const noexcept { vm::flush_async   ( mapped_span({ view_.subspan( beginning, size ) }) ); }
+void contiguous_storage_base::flush_blocking( std::size_t const beginning, std::size_t const size ) const noexcept { vm::flush_blocking( mapped_span({ view_.subspan( beginning, size ) }), mapping_.underlying_file() ); }
 
-void * contiguous_container_storage_base::grow_to( std::size_t const target_size )
+void * contiguous_storage_base::grow_to( std::size_t const target_size )
 {
     BOOST_ASSUME( target_size > mapped_size() );
     // basic (1.5x) geometric growth implementation
@@ -51,14 +55,14 @@ void * contiguous_container_storage_base::grow_to( std::size_t const target_size
     return expand_view( target_size );
 }
 
-void * contiguous_container_storage_base::expand_view( std::size_t const target_size )
+void * contiguous_storage_base::expand_view( std::size_t const target_size )
 {
     BOOST_ASSERT( get_size( mapping_ ) >= target_size );
     view_.expand( target_size, mapping_ );
     return data();
 }
 
-void * contiguous_container_storage_base::shrink_to( std::size_t const target_size ) noexcept( mapping::views_downsizeable )
+void * contiguous_storage_base::shrink_to( std::size_t const target_size ) noexcept( mapping::views_downsizeable )
 {
     if constexpr ( mapping::views_downsizeable )
     {
@@ -74,7 +78,7 @@ void * contiguous_container_storage_base::shrink_to( std::size_t const target_si
     return data();
 }
 
-void contiguous_container_storage_base::shrink_mapped_size_to( std::size_t const target_size ) noexcept( mapping::views_downsizeable )
+void contiguous_storage_base::shrink_mapped_size_to( std::size_t const target_size ) noexcept( mapping::views_downsizeable )
 {
     if constexpr ( mapping::views_downsizeable )
     {
@@ -87,32 +91,33 @@ void contiguous_container_storage_base::shrink_mapped_size_to( std::size_t const
     }
 }
 
-void contiguous_container_storage_base::free() noexcept
+void contiguous_storage_base::free() noexcept
 {
     view_.unmap();
     set_size( mapping_, 0 )().assume_succeeded();
 }
 
-void contiguous_container_storage_base::shrink_to_fit() noexcept
+void contiguous_storage_base::shrink_to_fit() noexcept
 {
     set_size( mapping_, mapped_size() )().assume_succeeded();
 }
 
-void * contiguous_container_storage_base::resize( std::size_t const target_size )
+void * contiguous_storage_base::resize( std::size_t const target_size )
 {
     if ( target_size > mapped_size() ) return grow_to( target_size );
     else                               return shrink_to( target_size );
 }
 
-void contiguous_container_storage_base::reserve( std::size_t const new_capacity )
+void contiguous_storage_base::reserve( std::size_t const new_capacity )
 {
     if ( new_capacity > storage_size() )
         set_size( mapping_, new_capacity );
 }
 
 err::fallible_result<std::size_t, error>
-contiguous_container_storage_base::map_file( file_handle && file, std::size_t const header_size ) noexcept
+contiguous_storage_base::map_file( file_handle && file, std::size_t const header_size ) noexcept
 {
+    BOOST_ASSUME( is_aligned( header_size, minimal_total_header_size_alignment ) );
     if ( !file )
         return error{};
     auto const file_size{ get_size( file ) };
@@ -128,7 +133,7 @@ contiguous_container_storage_base::map_file( file_handle && file, std::size_t co
 }
 
 err::fallible_result<std::size_t, error>
-contiguous_container_storage_base::map( file_handle && file, std::size_t const mapping_size ) noexcept
+contiguous_storage_base::map( file_handle && file, std::size_t const mapping_size ) noexcept
 {
     using ap    = flags::access_privileges;
     using flags = flags::mapping;

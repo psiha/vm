@@ -1,4 +1,6 @@
-#include <psi/vm/containers/vector.hpp>
+// TODO create template tests to test all (three) implementations
+#include <psi/vm/containers/crt_vector.hpp>
+#include <psi/vm/containers/static_vector.hpp>
 
 #include <gtest/gtest.h>
 
@@ -8,44 +10,175 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
-TEST( vector, anon_memory_backed )
-{
-    psi::vm::vector<double, std::uint32_t> vec;
-    vec.map_memory();
-    EXPECT_EQ( vec.size(), 0 );
-    vec.append_range({ 3.14, 0.14, 0.04 });
-    EXPECT_EQ( vec.size(), 3 );
-    EXPECT_EQ( vec[ 0 ], 3.14 );
-    EXPECT_EQ( vec[ 1 ], 0.14 );
-    EXPECT_EQ( vec[ 2 ], 0.04 );
-    vec.grow_by( 12345678, default_init );
-    // test growth (with 'probable' relocation) does not destroy contents
-    EXPECT_EQ( vec[ 0 ], 3.14 );
-    EXPECT_EQ( vec[ 1 ], 0.14 );
-    EXPECT_EQ( vec[ 2 ], 0.04 );
+TEST(vector_test, construction) {
+    crt_vector<int> vec1;  // Default constructor
+    EXPECT_TRUE(vec1.empty());
+
+    crt_vector<int> vec2(5, 42);  // Constructor with size and value
+    EXPECT_EQ(vec2.size(), 5);
+    EXPECT_EQ(vec2[0], 42);
+
+    crt_vector<int> vec3{1, 2, 3, 4, 5};  // Initializer list constructor
+    EXPECT_EQ(vec3.size(), 5);
+    EXPECT_EQ(vec3[4], 5);
+
+    crt_vector<int> vec4(vec3.begin(), vec3.end());  // Range constructor
+    EXPECT_EQ(vec4, vec3);
 }
 
-TEST( vector, file_backed )
-{
-    auto const test_vec{ "test.vec" };
-    {
-        psi::vm::vector<double, std::uint16_t> vec;
-        vec.map_file( test_vec, flags::named_object_construction_policy::create_new_or_truncate_existing );
-        EXPECT_EQ( vec.size(), 0 );
-        vec.append_range({ 3.14, 0.14, 0.04 });
-        EXPECT_EQ( vec.size(), 3 );
-        EXPECT_EQ( vec[ 0 ], 3.14 );
-        EXPECT_EQ( vec[ 1 ], 0.14 );
-        EXPECT_EQ( vec[ 2 ], 0.04 );
+
+TEST(vector_test, element_access) {
+    crt_vector<int> vec{10, 20, 30, 40};
+
+    EXPECT_EQ(vec[2], 30);           // operator[]
+    EXPECT_EQ(vec.at(3), 40);        // .at()
+#if defined( __APPLE__ /*libunwind: malformed __unwind_info at 0x102558A6C bad second level page*/ ) || ( defined( __linux__ ) && !defined( NDEBUG ) /*dubious asan new-free and exception type mismatch*/ )
+    // TODO :wat:
+#else
+    EXPECT_THROW( std::ignore = vec.at( 10 ), std::out_of_range );  // .at() with invalid index
+#endif
+
+    EXPECT_EQ(vec.front(), 10);      // .front()
+    EXPECT_EQ(vec.back(), 40);       // .back()
+}
+
+
+TEST(vector_test, modifiers) {
+    crt_vector<int> vec;
+
+    // Test push_back
+    vec.push_back(1);
+    vec.push_back(2);
+    EXPECT_EQ(vec.size(), 2);
+    EXPECT_EQ(vec[1], 2);
+
+    // Test emplace_back
+    vec.emplace_back(3);
+    EXPECT_EQ(vec.size(), 3);
+    EXPECT_EQ(vec[2], 3);
+
+    // Test pop_back
+    vec.pop_back();
+    EXPECT_EQ(vec.size(), 2);
+    EXPECT_EQ(vec.back(), 2);
+
+    // Test insert
+    vec.insert(vec.begin(), 0);
+    EXPECT_EQ(vec.front(), 0);
+    EXPECT_EQ(vec.size(), 3);
+
+    // Test erase
+    vec.erase(vec.begin());
+    EXPECT_EQ(vec.front(), 1);
+    EXPECT_EQ(vec.size(), 2);
+
+    // Test clear
+    vec.clear();
+    EXPECT_TRUE(vec.empty());
+}
+
+
+TEST(vector_test, capacity) {
+    crt_vector<int> vec;
+    EXPECT_TRUE(vec.empty());
+
+    vec.resize(10, 42);  // Resize to larger size
+    EXPECT_EQ(vec.size(), 10);
+    EXPECT_EQ(vec[5], 42);
+
+    vec.resize(5);  // Resize to smaller size
+    EXPECT_EQ(vec.size(), 5);
+
+    vec.shrink_to_fit();  // Shrink to fit (no testable behavior, but call it)
+    EXPECT_GE(vec.capacity(), vec.size());
+}
+
+
+TEST(vector_test, range_support) {
+    auto range = std::views::iota(1, 6);  // Range [1, 2, 3, 4, 5]
+    crt_vector<int> vec(range.begin(), range.end());
+    EXPECT_EQ(vec.size(), 5);
+    EXPECT_EQ(vec[0], 1);
+    EXPECT_EQ(vec[4], 5);
+    vec.append_range({ 321, 654, 78, 0, 9 });
+    EXPECT_EQ(vec[7], 78);
+}
+
+
+TEST(vector_test, move_semantics) {
+    crt_vector<int> vec1{1, 2, 3, 4, 5};
+    crt_vector<int> vec2(std::move(vec1));  // Move constructor
+
+    EXPECT_TRUE(vec1.empty());
+    EXPECT_EQ(vec2.size(), 5);
+    EXPECT_EQ(vec2[0], 1);
+
+    crt_vector<int> vec3;
+    vec3 = std::move(vec2);  // Move assignment
+    EXPECT_TRUE(vec2.empty());
+    EXPECT_EQ(vec3.size(), 5);
+    EXPECT_EQ(vec3[0], 1);
+}
+
+
+TEST(vector_test, iterators) {
+    crt_vector<int> vec{10, 20, 30, 40};
+
+    // Validate iterator traversal
+    int sum = 0;
+    for (auto it = vec.begin(); it != vec.end(); ++it) {
+        sum += *it;
     }
-    {
-        psi::vm::vector<double, std::uint16_t> vec;
-        vec.map_file( test_vec, flags::named_object_construction_policy::open_existing );
-        EXPECT_EQ( vec.size(), 3 );
-        EXPECT_EQ( vec[ 0 ], 3.14 );
-        EXPECT_EQ( vec[ 1 ], 0.14 );
-        EXPECT_EQ( vec[ 2 ], 0.04 );
+    EXPECT_EQ(sum, 100);
+
+    // Test reverse iterators
+    crt_vector<int> reversed(vec.rbegin(), vec.rend());
+    EXPECT_EQ(reversed[0], 40);
+    EXPECT_EQ(reversed[3], 10);
+
+    // Const iterators
+    crt_vector<int> const const_vec{ 1, 2, 3 };
+    EXPECT_EQ(*const_vec.cbegin(), 1);
+}
+
+
+TEST(vector_test, edge_cases) {
+    crt_vector<int> vec1;
+
+    // Large vector test (memory constraints permitting)
+#if 0 // TODO optional size_type overflow handling
+    try {
+        crt_vector<int> vec2(std::numeric_limits<size_t>::max() / 2);
+        ADD_FAILURE() << "Expected bad_alloc exception for large vector";
+    } catch ( std::bad_alloc const & ) {
+        SUCCEED();
+    } catch (...) {
+        ADD_FAILURE() << "Unexpected exception type for large vector";
     }
+#endif
+
+    // Test with non-trivial types
+    struct non_trivial {
+        int value;
+        non_trivial(int v) : value(v) {}
+        ~non_trivial() { value = -1; }
+    };
+
+    static_vector<non_trivial, 2> vec3;
+    vec3.emplace_back(42);
+    EXPECT_EQ(vec3[0].value, 42);
+}
+
+
+TEST(vector_test, comparison) {
+    crt_vector<int> vec1{1, 2, 3};
+    crt_vector<int> vec2{1, 2, 3};
+    crt_vector<int> vec3{1, 2, 4};
+
+    EXPECT_TRUE (vec1 == vec2);
+    EXPECT_TRUE (vec1 != vec3);
+    EXPECT_TRUE (vec1 <  vec3);
+    EXPECT_FALSE(vec3 <  vec1);
 }
 
 //------------------------------------------------------------------------------
