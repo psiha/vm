@@ -50,7 +50,7 @@ namespace psi::vm
 namespace detail
 {
     [[ noreturn, gnu::cold ]] void throw_out_of_range();
-    [[ noreturn, gnu::cold ]] void throw_bad_alloc   ();
+    [[ noreturn, gnu::cold ]] void throw_bad_alloc   () PSI_NOEXCEPT_EXCEPT_BADALLOC;
 
     template <typename T>
     constexpr T * mutable_iter( T const * const ptr ) noexcept { return const_cast<T *>( ptr ); }
