@@ -59,7 +59,7 @@ namespace detail
     {
 #   if defined( _MSC_VER )
         if constexpr ( alignment > guaranteed_alignment )
-            return _aligned_msize( const_cast<void *>( address ) );
+            return _aligned_msize( const_cast<void *>( address ), alignment, 0 );
 #   endif
         return crt_alloc_size( address );
     }
