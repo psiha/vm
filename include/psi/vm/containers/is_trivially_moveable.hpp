@@ -23,6 +23,7 @@ inline namespace __1 {
     template <class E, class T, class A> class basic_string;
     template <class T, class D> class unique_ptr;
     template <typename S> class function;
+    template <class T1, class T2> struct pair;
 #ifdef _LIBCPP_VERSION
 } // namespace __1
 #endif
@@ -54,6 +55,8 @@ bool constexpr is_trivially_moveable
     std::is_trivially_copyable_v<T>
 }; // is_trivially_moveable
 
+template <typename T1, typename T2>
+bool constexpr is_trivially_moveable<std::pair<T1, T2>>{ is_trivially_moveable<T1> && is_trivially_moveable<T2> };
 #if !defined( _LIBCPP_DEBUG )
 template <typename E, typename T, typename A> bool constexpr is_trivially_moveable<std::basic_string<E, T, A>>{ is_trivially_moveable<A> };
 template <typename T            , typename A> bool constexpr is_trivially_moveable<std::vector      <T, A   >>{ is_trivially_moveable<A> };
