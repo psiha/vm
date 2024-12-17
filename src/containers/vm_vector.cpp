@@ -26,15 +26,9 @@ namespace psi::vm
 namespace detail
 {
     [[ noreturn, gnu::cold ]] void throw_out_of_range() { throw std::out_of_range( "vm::vector access out of bounds" ); }
-    [[ noreturn, gnu::cold ]] void throw_bad_alloc   () PSI_NOEXCEPT_EXCEPT_BADALLOC
-    {
-#   if PSI_MALLOC_OVERCOMMIT == PSI_OVERCOMMIT_Full
-        BOOST_ASSERT_MSG( false, "Unexpected allocation failure" );
-        std::unreachable();
-#   else
-        throw std::bad_alloc();
-#   endif
-    }
+#if PSI_MALLOC_OVERCOMMIT != PSI_OVERCOMMIT_Full
+    [[ noreturn, gnu::cold ]] void throw_bad_alloc   () { throw std::bad_alloc(); }
+#endif
 } // namespace detail
 
 void contiguous_storage_base::close() noexcept

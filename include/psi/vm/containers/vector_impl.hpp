@@ -50,7 +50,15 @@ namespace psi::vm
 namespace detail
 {
     [[ noreturn, gnu::cold ]] void throw_out_of_range();
-    [[ noreturn, gnu::cold ]] void throw_bad_alloc   () PSI_NOEXCEPT_EXCEPT_BADALLOC;
+#if PSI_MALLOC_OVERCOMMIT != PSI_OVERCOMMIT_Full
+    [[ noreturn, gnu::cold ]] void throw_bad_alloc   ();
+#else
+    [[ gnu::cold ]] inline void throw_bad_alloc() noexcept
+    {
+        BOOST_ASSERT_MSG( false, "Unexpected allocation failure" );
+        std::unreachable();
+    }
+#endif
 
     template <typename T>
     constexpr T * mutable_iter( T const * const ptr ) noexcept { return const_cast<T *>( ptr ); }
