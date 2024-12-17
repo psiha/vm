@@ -1,6 +1,6 @@
 #pragma once
 
-#include "vector.hpp"
+#include "vm_vector.hpp"
 
 #include <psi/vm/align.hpp>
 #include <psi/vm/allocation.hpp>
@@ -200,7 +200,7 @@ protected:
         depth_t               depth_{};
     }; // struct header
 
-    using node_pool = vm::vector<node_placeholder, node_slot::value_type, false>;
+    using node_pool = vm::vm_vector<node_placeholder, node_slot::value_type, false>;
 
 protected:
     void swap( bptree_base & other ) noexcept;

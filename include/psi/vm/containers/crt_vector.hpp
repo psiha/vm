@@ -20,6 +20,8 @@
 #include <psi/vm/containers/vector_impl.hpp>
 
 #include <boost/assert.hpp>
+#include <boost/container/detail/allocation_type.hpp>
+#include <boost/container/detail/version_type.hpp>
 
 #include <cstdlib>
 
@@ -390,17 +392,17 @@ private:
 
 public:
     using base::base;
-    crt_vector() noexcept : p_array_{ nullptr }, size_{ 0 }, capacity_{ 0 } {}
-    explicit crt_vector( crt_vector const & other )
+    constexpr crt_vector() noexcept : p_array_{ nullptr }, size_{ 0 }, capacity_{ 0 } {}
+    constexpr explicit crt_vector( crt_vector const & other )
     {
         auto const data{ storage_init( other.size() ) };
         try { std::uninitialized_copy_n( other.data(), other.size(), data ); }
         catch(...) { al::deallocate( data, capacity() ); throw; }
     }
-    crt_vector( crt_vector && other ) noexcept : p_array_{ other.p_array_ }, size_{ other.size_ }, capacity_{ other.capacity_ } { other.mark_freed(); }
+    constexpr crt_vector( crt_vector && other ) noexcept : p_array_{ other.p_array_ }, size_{ other.size_ }, capacity_{ other.capacity_ } { other.mark_freed(); }
 
-    crt_vector & operator=( crt_vector const & other ) { *this = crt_vector( other ); }
-    crt_vector & operator=( crt_vector && other ) noexcept( std::is_nothrow_move_constructible_v<T> )
+    constexpr crt_vector & operator=( crt_vector const & other ) { *this = crt_vector( other ); }
+    constexpr crt_vector & operator=( crt_vector && other ) noexcept( std::is_nothrow_move_constructible_v<T> )
     {
         std::swap( this->p_array_ , other.p_array_  );
         std::swap( this->size_    , other.size_     );
@@ -408,7 +410,7 @@ public:
         other.free();
         return *this;
     }
-    ~crt_vector() noexcept { free(); }
+    constexpr ~crt_vector() noexcept { free(); }
 
     [[ nodiscard, gnu::pure ]] size_type size    () const noexcept { return size_; }
     [[ nodiscard, gnu::pure ]] size_type capacity() const noexcept

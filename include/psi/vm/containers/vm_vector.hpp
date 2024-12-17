@@ -31,7 +31,7 @@ namespace detail
     template <typename T      > struct size<T, false> {};
 } // namespace detail
 
-class [[ clang::trivial_abi ]] contiguous_container_storage_base
+class [[ clang::trivial_abi ]] contiguous_storage_base
 {
 public:
     // Mitigation for alignment codegen being sprayed allover at header_data
@@ -43,11 +43,11 @@ public:
     static std::uint8_t constexpr minimal_total_header_size_alignment{ 16 };
 
     // TODO shallow/COW copy construction, + OSX vm_copy
-    contiguous_container_storage_base( contiguous_container_storage_base && ) = default;
-    contiguous_container_storage_base & operator=( contiguous_container_storage_base && ) = default;
+    contiguous_storage_base( contiguous_storage_base && ) = default;
+    contiguous_storage_base & operator=( contiguous_storage_base && ) = default;
 
     [[ nodiscard, gnu::pure, gnu::assume_aligned( reserve_granularity ) ]] auto * data()       noexcept { BOOST_ASSERT_MSG( mapping_, "Paging file not attached" ); return std::assume_aligned<commit_granularity>( view_.data() ); }
-    [[ nodiscard, gnu::pure, gnu::assume_aligned( reserve_granularity ) ]] auto * data() const noexcept { return const_cast<contiguous_container_storage_base &>( *this ).data(); }
+    [[ nodiscard, gnu::pure, gnu::assume_aligned( reserve_granularity ) ]] auto * data() const noexcept { return const_cast<contiguous_storage_base &>( *this ).data(); }
 
     //! <b>Effects</b>: Tries to deallocate the excess of memory created
     //!   with previous allocations. The size of the vector is unchanged
@@ -76,12 +76,12 @@ public:
 
     explicit operator bool() const noexcept { return has_attached_storage(); }
 
-    void swap( contiguous_container_storage_base & other ) noexcept { std::swap( *this, other ); }
+    void swap( contiguous_storage_base & other ) noexcept { std::swap( *this, other ); }
 
 protected:
     static bool constexpr storage_zero_initialized{ true };
 
-    constexpr contiguous_container_storage_base() = default;
+    constexpr contiguous_storage_base() = default;
 
     err::fallible_result<std::size_t, error>
     map_file( auto const * const file_name, std::size_t const header_size, flags::named_object_construction_policy const policy ) noexcept
@@ -115,12 +115,12 @@ private:
 private:
     mapped_view view_;
     mapping     mapping_;
-}; // contiguous_container_storage_base
+}; // contiguous_storage_base
 
 template <typename sz_t, bool headerless>
-class [[ clang::trivial_abi ]] contiguous_container_storage
+class [[ clang::trivial_abi ]] contiguous_storage
     :
-    public  contiguous_container_storage_base,
+    public  contiguous_storage_base,
     private detail::size<sz_t, !headerless>
     // Checkout a revision prior to March the 21st 2024 for a version that used
     // statically sized header sizes. The current approach is more versatile
@@ -134,8 +134,8 @@ private:
     using size_holder = detail::size<sz_t, !headerless>;
 
 public:
-             contiguous_container_storage(                             ) noexcept requires(  headerless ) = default;
-    explicit contiguous_container_storage( size_type const header_size ) noexcept requires( !headerless ) : size_holder{ align_up( header_size, minimal_total_header_size_alignment ) } {}
+             contiguous_storage(                             ) noexcept requires(  headerless ) = default;
+    explicit contiguous_storage( size_type const header_size ) noexcept requires( !headerless ) : size_holder{ align_up( header_size, minimal_total_header_size_alignment ) } {}
 
     static constexpr std::uint8_t header_size() noexcept requires( headerless ) { return 0; }
 
@@ -147,14 +147,14 @@ public:
         return sz;
     }
 
-    using contiguous_container_storage_base::operator bool;
+    using contiguous_storage_base::operator bool;
 
-    [[ gnu::pure, nodiscard ]] auto header_storage()       noexcept { return std::span{ contiguous_container_storage_base::data(), header_size() - size_size }; }
-    [[ gnu::pure, nodiscard ]] auto header_storage() const noexcept { return std::span{ contiguous_container_storage_base::data(), header_size() - size_size }; }
+    [[ gnu::pure, nodiscard ]] auto header_storage()       noexcept { return std::span{ contiguous_storage_base::data(), header_size() - size_size }; }
+    [[ gnu::pure, nodiscard ]] auto header_storage() const noexcept { return std::span{ contiguous_storage_base::data(), header_size() - size_size }; }
 
     err::fallible_result<void, error> map_file( auto const * const file_name, flags::named_object_construction_policy const policy ) noexcept
     {
-        auto const sz{ contiguous_container_storage_base::map_file( file_name, header_size(), policy )() };
+        auto const sz{ contiguous_storage_base::map_file( file_name, header_size(), policy )() };
         if ( !sz )
             return sz.error();
         if constexpr ( !headerless )
@@ -169,7 +169,7 @@ public:
 
     err::fallible_result<void, error> map_memory( size_type const size ) noexcept
     {
-        auto const sz{ contiguous_container_storage_base::map_memory( size + header_size() )() };
+        auto const sz{ contiguous_storage_base::map_memory( size + header_size() )() };
         if ( !sz )
             return sz.error();
         BOOST_ASSERT( *sz == size + header_size() );
@@ -182,16 +182,16 @@ public:
         return err::success;
     }
 
-    auto data()       noexcept { return contiguous_container_storage_base::data() + header_size(); }
-    auto data() const noexcept { return contiguous_container_storage_base::data() + header_size(); }
+    auto data()       noexcept { return contiguous_storage_base::data() + header_size(); }
+    auto data() const noexcept { return contiguous_storage_base::data() + header_size(); }
 
     //! <b>Effects</b>: Returns true if the vector contains no elements.
     //! <b>Throws</b>: Nothing.
     //! <b>Complexity</b>: Constant.
     [[ nodiscard, gnu::pure ]] bool empty() const noexcept { return !has_attached_storage() || !size(); }
 
-    [[ nodiscard, gnu::pure ]] auto storage_size() const noexcept { return static_cast<size_type>( contiguous_container_storage_base::storage_size() ); }
-    [[ nodiscard, gnu::pure ]] auto  mapped_size() const noexcept { return static_cast<size_type>( contiguous_container_storage_base:: mapped_size() ); }
+    [[ nodiscard, gnu::pure ]] auto storage_size() const noexcept { return static_cast<size_type>( contiguous_storage_base::storage_size() ); }
+    [[ nodiscard, gnu::pure ]] auto  mapped_size() const noexcept { return static_cast<size_type>( contiguous_storage_base:: mapped_size() ); }
 
     [[ nodiscard, gnu::pure ]] auto size    () const noexcept { if constexpr ( headerless ) return  mapped_size(); else return stored_size(); }
     [[ nodiscard, gnu::pure ]] auto capacity() const noexcept { if constexpr ( headerless ) return storage_size(); else return mapped_size() - header_size(); }
@@ -203,12 +203,12 @@ protected:
         if constexpr ( headerless )
         {
             if ( target_size > size() )
-                contiguous_container_storage_base::grow_to( target_size );
+                contiguous_storage_base::grow_to( target_size );
         }
         else
         {
             if ( target_size > capacity() )
-                contiguous_container_storage_base::grow_to( target_size + header_size() );
+                contiguous_storage_base::grow_to( target_size + header_size() );
             stored_size() = target_size;
         }
         return data();
@@ -216,7 +216,7 @@ protected:
 
     void * shrink_to( size_type const target_size ) noexcept
     {
-        auto const data_ptr{ contiguous_container_storage_base::shrink_to( target_size + header_size() ) };
+        auto const data_ptr{ contiguous_storage_base::shrink_to( target_size + header_size() ) };
         if constexpr ( !headerless )
             stored_size() = target_size;
         return data_ptr;
@@ -250,18 +250,18 @@ protected:
     void reserve( size_type const new_capacity )
     {
         if constexpr ( headerless )
-            contiguous_container_storage_base::reserve( new_capacity );
+            contiguous_storage_base::reserve( new_capacity );
         else
         if ( new_capacity > capacity() )
-            contiguous_container_storage_base::grow_to( new_capacity + header_size() );
+            contiguous_storage_base::grow_to( new_capacity + header_size() );
     }
 
     void shrink_to_fit() noexcept
     {
         if constexpr ( headerless )
-            contiguous_container_storage_base::shrink_to_fit();
+            contiguous_storage_base::shrink_to_fit();
         else
-            contiguous_container_storage_base::shrink_to( stored_size() + header_size() );
+            contiguous_storage_base::shrink_to( stored_size() + header_size() );
     }
 
     bool has_extra_capacity() const noexcept
@@ -274,7 +274,7 @@ protected:
     {
         BOOST_ASSERT_MSG( sz_delta <= ( capacity() - size() ), "Out of preallocated space" );
         if constexpr ( headerless )
-            contiguous_container_storage_base::expand_view( mapped_size() + sz_delta );
+            contiguous_storage_base::expand_view( mapped_size() + sz_delta );
         else
             stored_size() += sz_delta;
     }
@@ -283,7 +283,7 @@ protected:
     {
         BOOST_ASSUME( new_size <= capacity() );
         if constexpr ( headerless )
-            contiguous_container_storage_base::shrink_mapped_size_to( new_size );
+            contiguous_storage_base::shrink_mapped_size_to( new_size );
         else
             stored_size() = new_size;
     }
@@ -292,32 +292,32 @@ protected:
     void free() noexcept
     {
         if constexpr ( headerless )
-            contiguous_container_storage_base::free();
+            contiguous_storage_base::free();
         else
             shrink_to( 0 );
     }
 
     [[ nodiscard, gnu::pure ]] size_type & stored_size() noexcept requires( !headerless )
     {
-        auto const p_size{ contiguous_container_storage_base::data() + header_size() - size_size };
+        auto const p_size{ contiguous_storage_base::data() + header_size() - size_size };
         BOOST_ASSERT( reinterpret_cast<std::uintptr_t>( p_size ) % alignof( size_type ) == 0 );
         return *reinterpret_cast<size_type *>( p_size );
     }
     [[ nodiscard, gnu::pure ]] size_type   stored_size() const noexcept requires( !headerless )
     {
-        return const_cast<contiguous_container_storage &>( *this ).stored_size();
+        return const_cast<contiguous_storage &>( *this ).stored_size();
     }
-}; // contiguous_container_storage
+}; // contiguous_storage
 
 template <typename T, typename sz_t, bool headerless>
-class [[ clang::trivial_abi ]] typed_contiguous_container_storage
+class [[ clang::trivial_abi ]] typed_contiguous_storage
     :
-    public contiguous_container_storage<sz_t, headerless>,
-    public vector_impl<typed_contiguous_container_storage<T, sz_t, headerless>, T, sz_t>
+    public contiguous_storage<sz_t, headerless>,
+    public vector_impl<typed_contiguous_storage<T, sz_t, headerless>, T, sz_t>
 {
 private:
-    using base     = contiguous_container_storage<sz_t, headerless>;
-    using vec_impl = vector_impl<typed_contiguous_container_storage<T, sz_t, headerless>, T, sz_t>;
+    using base     = contiguous_storage<sz_t, headerless>;
+    using vec_impl = vector_impl<typed_contiguous_storage<T, sz_t, headerless>, T, sz_t>;
 
 public:
     using value_type = T;
@@ -330,7 +330,7 @@ public:
     using vec_impl::resize;
 
     [[ nodiscard, gnu::pure ]] T       * data()       noexcept { return to_t_ptr( base::data() ); }
-    [[ nodiscard, gnu::pure ]] T const * data() const noexcept { return const_cast<typed_contiguous_container_storage &>( *this ).data(); }
+    [[ nodiscard, gnu::pure ]] T const * data() const noexcept { return const_cast<typed_contiguous_storage &>( *this ).data(); }
 
     //! <b>Effects</b>: Returns the number of the elements contained in the vector.
     //!
@@ -352,10 +352,10 @@ public:
     decltype( auto ) user_header_data() noexcept { return base::header_storage(); }
 
     // helper getter for generic code that wishes to do basic manipulation on
-    // vm::vectors w/o being templated (contiguous_container_storage_base does not
+    // vm::vectors w/o being templated (contiguous_storage_base does not
     // publicize functionality that could be used to make it out of sync with the
     // corresponding vm::vector)
-    contiguous_container_storage_base & storage_base() noexcept { return *this; }
+    contiguous_storage_base & storage_base() noexcept { return *this; }
 
 private: friend vec_impl;
     //! <b>Effects</b>: If n is less than or equal to capacity(), this call has no
@@ -383,14 +383,14 @@ protected:
         return static_cast<sz_t>( rez );
     }
     PSI_WARNING_DISABLE_POP()
-}; // class typed_contiguous_container_storage
+}; // class typed_contiguous_storage
 
 
 struct header_info
 {
     using align_t = std::uint16_t; // fit page_size
 
-    static align_t constexpr minimal_subheader_alignment{ contiguous_container_storage_base::minimal_subheader_alignment };
+    static align_t constexpr minimal_subheader_alignment{ contiguous_storage_base::minimal_subheader_alignment };
 
     constexpr header_info() = default;
     constexpr header_info( std::uint32_t const size, align_t const alignment ) noexcept : header_size{ size }, data_extra_alignment{ std::max( alignment, minimal_subheader_alignment ) } {}
@@ -465,12 +465,12 @@ template <typename Header>
 
 template <typename T, typename sz_t = std::size_t, bool headerless_param = true>
 requires is_trivially_moveable<T>
-class [[ clang::trivial_abi ]] vector
+class [[ clang::trivial_abi ]] vm_vector
     :
-    public typed_contiguous_container_storage<T, sz_t, headerless_param>
+    public typed_contiguous_storage<T, sz_t, headerless_param>
 {
 private:
-    using storage_t = typed_contiguous_container_storage<T, sz_t, headerless_param>;
+    using storage_t = typed_contiguous_storage<T, sz_t, headerless_param>;
     //using impl = vector_impl<T, sz_t>;
     using impl = storage_t;
 
@@ -480,7 +480,7 @@ public:
     // not really a standard allocator: providing the alias simply to have boost::container::flat* compileable with this container.
     using allocator_type = std::allocator<T>;
 
-    vector() noexcept requires( headerless ) {}
+    vm_vector() noexcept requires( headerless ) {}
     // Allowing for a header to store/persist the 'actual' size of the container can be generalized
     // to storing arbitrary (types of) headers. This however makes this class template no longer
     // model just a vector like container but rather a structure consisting of a fixed-sized part
@@ -490,7 +490,7 @@ public:
     // ability/functionality publicly - as a runtime parameter (instead of a Header template type
     // parameter) - the relative runtime cost should be near non-existent vs all the standard
     // benefits (having concrete base classes, less template instantiations and codegen copies...).
-    explicit vector( header_info const hdr_info = {} ) noexcept requires( !headerless )
+    explicit vm_vector( header_info const hdr_info = {} ) noexcept requires( !headerless )
         // TODO: use slack space (if any) in the object placed (by user code) in the header space
         // to store the size (to avoid wasting even more slack space due to alignment padding
         // after appending the size ('member').
@@ -503,13 +503,13 @@ public:
                 .         final_header_size()
         ) {}
 
-    vector( vector const &  ) = delete;
-    vector( vector       && ) = default;
+    vm_vector( vm_vector const &  ) = delete;
+    vm_vector( vm_vector       && ) = default;
 
-   ~vector() noexcept = default;
+   ~vm_vector() noexcept = default;
 
-    vector & operator=( vector &&      ) = default;
-    vector & operator=( vector const & ) = default;
+    vm_vector & operator=( vm_vector &&      ) = default;
+    vm_vector & operator=( vm_vector const & ) = default;
 
     auto map_file  ( auto const file, flags::named_object_construction_policy const policy ) noexcept { BOOST_ASSUME( !storage_t::has_attached_storage() ); return storage_t::map_file( file, policy ); }
     template <typename InitPolicy = value_init_t>
