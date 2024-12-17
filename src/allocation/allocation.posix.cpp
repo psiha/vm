@@ -20,6 +20,7 @@
 #include <boost/config_ex.hpp>
 
 #include <cerrno>
+#include <memory>
 #include <utility>
 
 #if defined( __APPLE__ )
