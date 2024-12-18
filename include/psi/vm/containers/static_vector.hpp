@@ -33,7 +33,7 @@ namespace psi::vm
 //------------------------------------------------------------------------------
 
 template <typename T, std::uint32_t size>
-union noninitialized_array
+union [[ clang::trivial_abi ]] noninitialized_array
 {
     constexpr  noninitialized_array() noexcept {}
     constexpr ~noninitialized_array() noexcept {}
