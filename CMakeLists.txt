@@ -47,6 +47,10 @@ if ( ${CMAKE_SYSTEM_NAME} MATCHES "Linux" )
 endif()
 include( ${build_SOURCE_DIR}/build_options.cmake )
 
+if ( APPLE ) #...mrmlj...link error wrkrnd exploration
+    unset( CMAKE_OSX_ARCHITECTURES )
+endif()
+
 PSI_add_compile_options( Debug ${PSI_compiler_runtime_sanity_checks} )
 PSI_add_link_options   ( Debug ${PSI_linker_runtime_sanity_checks}   )
   
