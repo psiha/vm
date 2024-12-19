@@ -49,7 +49,7 @@ include( ${build_SOURCE_DIR}/build_options.cmake )
 
 PSI_add_compile_options( Debug ${PSI_compiler_runtime_sanity_checks} )
 PSI_add_link_options   ( Debug ${PSI_linker_runtime_sanity_checks}   )
-  
+
 PSI_add_compile_options( Release ${PSI_compiler_LTO} ${PSI_compiler_optimize_for_size} ${PSI_compiler_disable_thread_safe_init} ${PSI_compiler_fastmath} ${PSI_compiler_debug_symbols} )
 
 if ( WIN32 )
