@@ -439,6 +439,8 @@ public:
         }
     }
 
+    static constexpr al get_allocator() noexcept { return {}; }
+
 private: friend base;
     [[ using gnu: cold, assume_aligned( alignment ), malloc, returns_nonnull, noinline ]]
 #ifdef _MSC_VER
