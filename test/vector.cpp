@@ -44,37 +44,87 @@ TEST(vector_test, element_access) {
 
 
 TEST(vector_test, modifiers) {
-    crt_vector<int> vec;
+    if constexpr ( is_trivially_moveable<std::string> )
+    {
+        crt_vector<std::string> vec;
 
-    // Test push_back
-    vec.push_back(1);
-    vec.push_back(2);
-    EXPECT_EQ(vec.size(), 2);
-    EXPECT_EQ(vec[1], 2);
+        // Test push_back
+        vec.emplace_back("1");
+        vec.emplace_back("2");
+        EXPECT_EQ(vec.size(), 2);
+        EXPECT_EQ(vec[1], "2");
 
-    // Test emplace_back
-    vec.emplace_back(3);
-    EXPECT_EQ(vec.size(), 3);
-    EXPECT_EQ(vec[2], 3);
+        // Test emplace_back
+        vec.emplace_back("3");
+        EXPECT_EQ(vec.size(), 3);
+        EXPECT_EQ(vec[2], "3");
 
-    // Test pop_back
-    vec.pop_back();
-    EXPECT_EQ(vec.size(), 2);
-    EXPECT_EQ(vec.back(), 2);
+        // Test pop_back
+        vec.pop_back();
+        EXPECT_EQ(vec.size(), 2);
+        EXPECT_EQ(vec.back(), "2");
 
-    // Test insert
-    vec.insert(vec.begin(), 0);
-    EXPECT_EQ(vec.front(), 0);
-    EXPECT_EQ(vec.size(), 3);
+        // Test insert
+        std::string_view const sbo_overflower{ "01234567898765432100123456789876543210" };
+        vec.emplace( vec.end  () , sbo_overflower );
+        vec.emplace( vec.begin() , "0" );
+        vec.emplace( vec.nth( 3 ), "3" );
+        EXPECT_EQ( vec.front(), "0" );
+        EXPECT_EQ( vec[ 1 ]   , "1" );
+        EXPECT_EQ( vec[ 2 ]   , "2" );
+        EXPECT_EQ( vec[ 3 ]   , "3" );
+        EXPECT_EQ( vec[ 4 ]   , sbo_overflower );
+        EXPECT_EQ( vec.size(), 5 );
 
-    // Test erase
-    vec.erase(vec.begin());
-    EXPECT_EQ(vec.front(), 1);
-    EXPECT_EQ(vec.size(), 2);
+        // Test erase
+        vec.erase(vec.begin());
+        EXPECT_EQ(vec.front(), "1");
+        EXPECT_EQ(vec.size(), 4);
 
-    // Test clear
-    vec.clear();
-    EXPECT_TRUE(vec.empty());
+        // Test clear
+        vec.clear();
+        EXPECT_TRUE(vec.empty());
+    }
+    else
+    {
+        crt_vector<int> vec;
+
+        // Test push_back
+        vec.push_back( 1 );
+        vec.push_back( 2 );
+        EXPECT_EQ( vec.size(), 2 );
+        EXPECT_EQ( vec[ 1 ], 2 );
+
+        // Test emplace_back
+        vec.emplace_back( 3 );
+        EXPECT_EQ( vec.size(), 3 );
+        EXPECT_EQ( vec[ 2 ], 3 );
+
+        // Test pop_back
+        vec.pop_back();
+        EXPECT_EQ( vec.size(), 2 );
+        EXPECT_EQ( vec.back(), 2 );
+
+        // Test insert
+        vec.emplace( vec.end  () , INT_MAX );
+        vec.emplace( vec.begin() , 0 );
+        vec.emplace( vec.nth( 3 ), 3 );
+        EXPECT_EQ( vec.front(), 0 );
+        EXPECT_EQ( vec[ 1 ]   , 1 );
+        EXPECT_EQ( vec[ 2 ]   , 2 );
+        EXPECT_EQ( vec[ 3 ]   , 3 );
+        EXPECT_EQ( vec[ 4 ]   , INT_MAX );
+        EXPECT_EQ( vec.size(), 5 );
+
+        // Test erase
+        vec.erase( vec.begin() );
+        EXPECT_EQ( vec.front(), 1 );
+        EXPECT_EQ( vec.size(), 4 );
+
+        // Test clear
+        vec.clear();
+        EXPECT_TRUE( vec.empty() );
+    }
 }
 
 

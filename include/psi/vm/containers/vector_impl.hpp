@@ -39,6 +39,7 @@
 #include <cstring>
 #include <iterator>
 #include <memory>
+#include <ranges>
 #include <span>
 #include <type_traits>
 #include <std_fix/const_iterator.hpp>
@@ -858,14 +859,27 @@ private:
         auto const elements_to_move{ static_cast<size_type>( current_size - position_index ) };
         if constexpr ( is_trivially_moveable<value_type> )
         {
-            std::uninitialized_move_n( &data[ position_index ], elements_to_move, &data[ position_index + n ] );
+            // does not use is_trivially_moveable/trivial_abi and is incorrect
+            // (i.e. an uninitialized_move_backwards is required)
+            //std::uninitialized_move_n( &data[ position_index ], elements_to_move, &data[ position_index + n ] );
+            std::memmove( &data[ position_index + n ], &data[ position_index ], elements_to_move * sizeof( *data ) );
         }
-        else // future support for generic types
+        else
         {
             auto const elements_to_move_to_uninitialized_space{ n };
             auto const elements_to_move_to_the_current_end    { static_cast<size_type>( elements_to_move - elements_to_move_to_uninitialized_space ) };
-            std::uninitialized_move_n( &data[ current_size - elements_to_move_to_uninitialized_space ],                       elements_to_move_to_uninitialized_space, &data[ current_size       ] );
-            std::move                ( &data[ position_index                                         ], &data[ position_index + elements_to_move_to_the_current_end ], &data[ position_index + n ] );
+            std::uninitialized_move
+            (
+                &data[ current_size - elements_to_move_to_uninitialized_space ],
+                &data[ current_size ],
+                &data[ current_size ]
+            );
+            std::move_backward
+            (
+                &data[ position_index ],
+                &data[ position_index + elements_to_move_to_the_current_end ],
+                &data[ position_index + elements_to_move_to_the_current_end + n ]
+            );
         }
         return self.make_iterator( &data[ position_index ] );
     }
