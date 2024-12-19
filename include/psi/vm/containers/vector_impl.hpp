@@ -757,7 +757,7 @@ public:
     void clear( this Impl & self ) noexcept
     {
         std::destroy( self.begin(), self.end() );
-        self.free();
+        self.storage_free();
     }
 
     void swap( this auto & self, auto & other ) noexcept { std::swap( self, other ); }

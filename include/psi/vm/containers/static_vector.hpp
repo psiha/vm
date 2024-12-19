@@ -151,8 +151,10 @@ private: friend base;
         BOOST_ASSUME( size_ >= target_size );
         size_ = target_size;
     }
-    void storage_dec_size() noexcept { BOOST_ASSUME( size_ >= 1 ); --size_; }
-    void storage_inc_size() noexcept; // TODO
+    constexpr void storage_dec_size() noexcept { BOOST_ASSUME( size_ >= 1 ); --size_; }
+    constexpr void storage_inc_size() noexcept; // TODO
+
+    constexpr void storage_free() noexcept { size_ = 0; }
 
 private:
     void fixed_copy( static_vector const & __restrict source ) noexcept
