@@ -407,10 +407,10 @@ public:
         std::swap( this->p_array_ , other.p_array_  );
         std::swap( this->size_    , other.size_     );
         std::swap( this->capacity_, other.capacity_ );
-        other.free();
+        other.clear();
         return *this;
     }
-    constexpr ~crt_vector() noexcept { free(); }
+    constexpr ~crt_vector() noexcept { base::clear(); }
 
     [[ nodiscard, gnu::pure ]] size_type size    () const noexcept { return size_; }
     [[ nodiscard, gnu::pure ]] size_type capacity() const noexcept
@@ -485,6 +485,12 @@ private: friend base;
     void storage_dec_size() noexcept { BOOST_ASSUME( size_ >= 1 ); --size_; }
     void storage_inc_size() noexcept; // TODO
 
+    void storage_free() noexcept
+    {
+        al::deallocate( data(), capacity() );
+        mark_freed();
+    }
+
 private:
     [[ gnu::cold, gnu::noinline, clang::preserve_most ]]
     void do_grow( size_type const target_size, size_type const cached_current_capacity )
@@ -512,13 +518,6 @@ private:
             BOOST_ASSUME( capacity_.value >= requested_capacity );
 #       endif
         }
-    }
-
-    void free() noexcept
-    {
-        std::destroy_n( data(), size() );
-        al::deallocate( data(), capacity() );
-        mark_freed();
     }
 
     void mark_freed() noexcept { std::memset( this, 0, sizeof( *this ) ); }

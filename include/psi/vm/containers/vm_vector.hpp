@@ -364,12 +364,14 @@ private: friend vec_impl;
     //!   n; otherwise, capacity() is unchanged. In either case, size() is unchanged.
     //!
     //! <b>Throws</b>: If memory allocation allocation throws or T's copy/move constructor throws.
-    T * storage_shrink_to( sz_t const target_size ) noexcept { return static_cast<T *>( base::shrink_to( to_byte_sz( target_size ) ) ); }
     T * storage_grow_to  ( sz_t const target_size )          { return static_cast<T *>( base::grow_to  ( to_byte_sz( target_size ) ) ); }
+    T * storage_shrink_to( sz_t const target_size ) noexcept { return static_cast<T *>( base::shrink_to( to_byte_sz( target_size ) ) ); }
 
     void storage_shrink_size_to( sz_t const new_size ) noexcept { base::shrink_size_to( to_byte_sz( new_size ) ); }
     void storage_dec_size() noexcept { storage_shrink_size_to( size() - 1 ); }
     void storage_inc_size() noexcept; // TODO
+
+    void storage_free() noexcept { base::free(); }
 
 protected:
     PSI_WARNING_DISABLE_PUSH()
@@ -471,8 +473,7 @@ class [[ clang::trivial_abi ]] vm_vector
 {
 private:
     using storage_t = typed_contiguous_storage<T, sz_t, headerless_param>;
-    //using impl = vector_impl<T, sz_t>;
-    using impl = storage_t;
+    using impl      = storage_t;
 
 public:
     static constexpr auto headerless{ headerless_param };
