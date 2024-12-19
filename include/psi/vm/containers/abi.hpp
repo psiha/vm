@@ -52,6 +52,7 @@ template <typename Char>
 struct optimal_const_ref<std::basic_string<Char>> { using type = std::basic_string_view<Char>; };
 
 template <std::ranges::contiguous_range Rng>
+requires( not std::ranges::borrowed_range<Rng> )
 struct optimal_const_ref<Rng> { using type = std::span<std::ranges::range_value_t<Rng> const>; };
 
 template <typename T>
