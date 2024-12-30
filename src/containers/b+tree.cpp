@@ -233,6 +233,8 @@ bptree_base::base_iterator::base_iterator( node_pool & nodes, iter_pos const pos
     pos_{ pos }
 {
     update_pool_ptr( nodes );
+
+    BOOST_ASSERT( !pos_.node || ( pos_.value_offset <= node().num_vals ) );
 }
 
 void bptree_base::base_iterator::update_pool_ptr( node_pool & nodes ) const noexcept
@@ -248,25 +250,6 @@ void bptree_base::base_iterator::update_pool_ptr( node_pool & nodes ) const noex
 bptree_base::node_header &
 bptree_base::base_iterator::node() const noexcept { return nodes_[ *pos_.node ]; }
 
-bptree_base::base_iterator &
-bptree_base::base_iterator::operator++() noexcept
-{
-    auto & node{ this->node() };
-    BOOST_ASSERT_MSG( pos_.value_offset < node.num_vals, "Iterator at end: not incrementable" );
-    BOOST_ASSUME( node.num_vals >= 1 );
-    BOOST_ASSUME( pos_.value_offset < node.num_vals );
-    if ( ++pos_.value_offset == node.num_vals ) [[ unlikely ]]
-    {
-        // have to perform this additional check to allow an iterator to arrive
-        // to the end position
-        if ( node.right ) [[ likely ]]
-        {
-            pos_.node         = node.right;
-            pos_.value_offset = 0;
-        }
-    }
-    return *this;
-}
 [[ clang::no_sanitize( "implicit-conversion" ) ]]
 bptree_base::base_iterator &
 bptree_base::base_iterator::operator--() noexcept
@@ -283,63 +266,27 @@ bptree_base::base_iterator::operator--() noexcept
     return *this;
 }
 
-bool bptree_base::base_iterator::operator==( base_iterator const & other ) const noexcept
+bptree_base::base_iterator &
+bptree_base::base_iterator::operator+=( difference_type const n ) noexcept
 {
-    BOOST_ASSERT_MSG( &this->nodes_[ 0 ] == &other.nodes_[ 0 ], "Comparing iterators from different containers" );
-    return ( this->pos_.node == other.pos_.node ) && ( this->pos_.value_offset == other.pos_.value_offset );
-}
-
-
-bptree_base::base_random_access_iterator &
-bptree_base::base_random_access_iterator::operator+=( difference_type const n ) noexcept
-{
-    BOOST_ASSERT_MSG( pos_.node, "Iterator at end: not incrementable" );
+#if __has_builtin( __builtin_constant_p )
+    if ( __builtin_constant_p( n ) )
+    {
+             if ( n == +1 ) return ++(*this);
+        else if ( n == -1 ) return --(*this);
+        else if ( n ==  0 ) return   (*this);
+    }
+#endif
 
     if ( n >= 0 )
     {
-        auto un{ static_cast<size_type>( n ) };
-        for ( ;; )
-        {
-            auto & node{ this->node() };
-            auto const available_offset{ static_cast<size_type>( node.num_vals - 1 - pos_.value_offset ) };
-            if ( available_offset >= un ) {
-                pos_.value_offset += static_cast<node_size_type>( un );
-                BOOST_ASSUME( pos_.value_offset < node.num_vals );
-                break;
-            } else {
-                un -= ( available_offset + 1 );
-                // Here we don't have to perform the same check as in the
-                // fwd_iterator increment since (end) iterator comparison is
-                // done solely through the index_ member.
-                pos_.node         = node.right;
-                pos_.value_offset = 0;
-                if ( un == 0 ) [[ unlikely ]]
-                    break;
-                BOOST_ASSERT_MSG( pos_.node, "Incrementing out of bounds" );
-            }
-        }
-        index_ += static_cast<size_type>( n );
+        auto const un{ static_cast<size_type>( n ) };
+        this->pos_ = at_positive_offset<true>( un );
     }
     else
     {
-        auto un{ static_cast<size_type>( -n ) };
-        BOOST_ASSERT_MSG( index_ >= un, "Moving iterator out of bounds" );
-        for ( ;; )
-        {
-            auto const available_offset{ pos_.value_offset };
-            if ( available_offset >= un ) {
-                pos_.value_offset -= static_cast<node_size_type>( un );
-                BOOST_ASSUME( pos_.value_offset < node().num_vals );
-                break;
-            } else {
-                un -= ( available_offset + 1 );
-                pos_.node         = node().left;
-                pos_.value_offset = node().num_vals - 1;
-                BOOST_ASSERT_MSG( pos_.node, "Incrementing out of bounds" );
-                BOOST_ASSUME( pos_.value_offset < node().num_vals );
-            }
-        }
-        index_ -= static_cast<size_type>( -n );
+        auto const un{ static_cast<size_type>( -n ) };
+        this->pos_ = at_negative_offset( un );
     }
 
     BOOST_ASSUME( !pos_.node || ( pos_.value_offset < node().num_vals ) );
@@ -347,6 +294,92 @@ bptree_base::base_random_access_iterator::operator+=( difference_type const n ) 
     return *this;
 }
 
+template <bool precise_end_handling> [[ using gnu: sysv_abi, hot, const ]]
+bptree_base::base_iterator
+bptree_base::base_iterator::incremented( this base_iterator iter ) noexcept
+{
+    auto & node{ iter.node() };
+    BOOST_ASSERT_MSG( iter.pos_.value_offset < node.num_vals, "Iterator at end: not incrementable" );
+    BOOST_ASSUME( node.num_vals >= 1 );
+    BOOST_ASSUME( iter.pos_.value_offset < node.num_vals );
+    if ( ++iter.pos_.value_offset == node.num_vals ) [[ unlikely ]]
+    {
+        // additional check to allow the iterator to arrive to the end position
+        // (if required by the precise_end_handling flag)
+        if ( !precise_end_handling || node.right ) [[ likely ]]
+        {
+            iter.pos_.node         = node.right;
+            iter.pos_.value_offset = 0;
+        }
+    }
+    return iter;
+}
+template bptree_base::base_iterator bptree_base::base_iterator::incremented<true >( this base_iterator ) noexcept;
+template bptree_base::base_iterator bptree_base::base_iterator::incremented<false>( this base_iterator ) noexcept;
+
+template <bool precise_end_handling> [[ using gnu: noinline, hot, leaf, const ]][[ clang::preserve_most ]]
+bptree_base::iter_pos
+bptree_base::base_iterator::at_positive_offset( nodes_t const nodes, iter_pos const pos, size_type n ) noexcept
+{
+    BOOST_ASSERT_MSG( pos.node || !n, "Iterator at end: not incrementable" );
+    base_iterator iter{ nodes, pos };
+    for ( ;; )
+    {
+        auto & node{ iter.node() };
+        auto const available_offset{ static_cast<size_type>( node.num_vals - 1 - iter.pos_.value_offset ) };
+        if ( available_offset >= n ) {
+            iter.pos_.value_offset += static_cast<node_size_type>( n );
+            BOOST_ASSUME( iter.pos_.value_offset < node.num_vals );
+            break;
+        } else {
+            n -= ( available_offset + 1 );
+            if ( !precise_end_handling || node.right ) [[ likely ]]
+            {
+                iter.pos_.node         = node.right;
+                iter.pos_.value_offset = 0;
+            }
+            if ( n == 0 ) [[ unlikely ]]
+                break;
+            BOOST_ASSERT_MSG( iter.pos_.node, "Incrementing out of bounds" );
+        }
+    }
+    return iter.pos_;
+}
+template bptree_base::iter_pos bptree_base::base_iterator::at_positive_offset<true >( nodes_t const nodes, iter_pos const pos, size_type n ) noexcept;
+template bptree_base::iter_pos bptree_base::base_iterator::at_positive_offset<false>( nodes_t const nodes, iter_pos const pos, size_type n ) noexcept;
+[[ using gnu: noinline, hot, leaf, const ]][[ clang::preserve_most ]]
+bptree_base::iter_pos
+bptree_base::base_iterator::at_negative_offset( nodes_t const nodes, iter_pos const pos, size_type n ) noexcept
+{
+    base_iterator iter{ nodes, pos };
+    for ( ;; )
+    {
+        auto const available_offset{ iter.pos_.value_offset };
+        if ( available_offset >= n ) {
+            iter.pos_.value_offset -= static_cast<node_size_type>( n );
+            BOOST_ASSUME( iter.pos_.value_offset < iter.node().num_vals );
+            break;
+        } else {
+            n -= ( available_offset + 1 );
+            iter.pos_.node         = iter.node().left;
+            iter.pos_.value_offset = iter.node().num_vals - 1;
+            BOOST_ASSERT_MSG( iter.pos_.node, "Incrementing out of bounds" );
+            BOOST_ASSUME( iter.pos_.value_offset < iter.node().num_vals );
+        }
+    }
+    return iter.pos_;
+}
+
+bool bptree_base::base_iterator::operator==( base_iterator const & other ) const noexcept
+{
+    BOOST_ASSERT_MSG( &this->nodes_[ 0 ] == &other.nodes_[ 0 ], "Comparing iterators from different containers" );
+#ifdef NDEBUG
+    BOOST_ASSUME( this->nodes_ == other.nodes_ );
+#else
+    BOOST_ASSERT( this->nodes_.data() == other.nodes_.data() );
+#endif
+    return ( this->pos_.node == other.pos_.node ) && ( this->pos_.value_offset == other.pos_.value_offset );
+}
 
 void bptree_base::swap( bptree_base & other ) noexcept
 {
@@ -357,6 +390,41 @@ void bptree_base::swap( bptree_base & other ) noexcept
     swap( this->p_nodes_, other.p_nodes_ );
 #endif
 }
+
+[[ using gnu: sysv_abi, hot, pure ]]
+bptree_base::base_random_access_iterator
+bptree_base::base_random_access_iterator::operator+( difference_type const n ) const noexcept
+{
+#if __has_builtin( __builtin_constant_p )
+    if ( __builtin_constant_p( n ) )
+    {
+             if ( n == +1 ) return ++auto(*this);
+        else if ( n == -1 ) return --auto(*this);
+        else if ( n ==  0 ) return       (*this);
+    }
+#endif
+
+    iter_pos new_pos;
+    if ( n >= 0 )
+    {
+        auto const un{ static_cast<size_type>( n ) };
+        // Here we don't have to perform the same check as in the generic/
+        // fwd_iterator increment since (end) iterator comparison is done solely
+        // through the index_ member...
+        // ...but we do need it if we want the 'arrived at end iterators' to be
+        // decrementable (and some sort algorithms rely on this).
+        new_pos = at_positive_offset<true>( un );
+    }
+    else
+    {
+        auto const un{ static_cast<size_type>( -n ) };
+        BOOST_ASSERT_MSG( index_ >= un, "Moving iterator out of bounds" );
+        new_pos = at_negative_offset( un );
+    }
+
+    return { base_iterator{ nodes_, new_pos }, static_cast<size_type>( static_cast<difference_type>( index_ ) + n ) };
+}
+
 
 bptree_base::base_iterator bptree_base::make_iter( iter_pos const pos ) noexcept { return { nodes_, pos }; }
 bptree_base::base_iterator bptree_base::make_iter( node_slot const node, node_size_type const offset ) noexcept { return make_iter(iter_pos{ node, offset }); }

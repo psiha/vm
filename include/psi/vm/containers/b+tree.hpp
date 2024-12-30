@@ -173,8 +173,8 @@ protected:
         node_size_type value_offset{};
     };
 
-    class base_iterator;
-    class base_random_access_iterator;
+    class [[ clang::trivial_abi ]] base_iterator;
+    class [[ clang::trivial_abi ]] base_random_access_iterator;
 
     struct insert_pos_t { node_slot node; node_size_type next_insert_offset; }; // TODO 'merge' with iter_pos
 
@@ -381,38 +381,52 @@ inline constexpr bptree_base::node_slot const bptree_base::node_slot::null{ stat
 // \class bptree_base::base_iterator
 ////////////////////////////////////////////////////////////////////////////////
 
-class bptree_base::base_iterator
+class [[ clang::trivial_abi ]] bptree_base::base_iterator
 {
 public:
     constexpr base_iterator() noexcept = default;
 
-    base_iterator & operator++() noexcept;
+    base_iterator & operator++() noexcept { return ( *this = incremented<true>() ); }
     base_iterator & operator--() noexcept;
 
     bool operator==( base_iterator const & ) const noexcept;
 
+    base_iterator & operator+=( difference_type n ) noexcept;
+
 public: // extensions
     iter_pos const & pos() const noexcept { return pos_; }
 
-protected:
-    friend class bptree_base;
+protected: friend class bptree_base;
+    using nodes_t =
+#ifndef NDEBUG // for bounds checking
+        std::span<node_placeholder>;
+#else
+        node_placeholder * __restrict;
+#endif
 
     base_iterator( node_pool &, iter_pos ) noexcept;
 
     [[ gnu::pure ]] node_header & node() const noexcept;
 
-    mutable
-#ifndef NDEBUG // for bounds checking
-    std::span<node_placeholder>
-#else
-    node_placeholder * __restrict
-#endif
-             nodes_{};
-    iter_pos pos_  {};
+    template <bool precise_end_handling> [[ using gnu: sysv_abi, hot, const ]]
+    base_iterator incremented( this base_iterator ) noexcept; // similarly this pass-by-val to avoid going through the stack
+
+    template <bool precise_end_handling>
+    iter_pos at_positive_offset( size_type const n ) const noexcept { return at_positive_offset<precise_end_handling>( nodes_, pos_, n ); }
+    iter_pos at_negative_offset( size_type const n ) const noexcept { return at_negative_offset                      ( nodes_, pos_, n ); }
 
 private:
-    template <typename T, typename Comparator>
-    friend class bp_tree_impl;
+    // noninlined core pass-in-reg functionality for random-access iterator movement
+    template <bool precise_end_handling>
+    [[ using gnu: hot, leaf, const ]][[ clang::preserve_most ]] static iter_pos at_positive_offset( nodes_t, iter_pos, size_type n ) noexcept;
+    [[ using gnu: hot, leaf, const ]][[ clang::preserve_most ]] static iter_pos at_negative_offset( nodes_t, iter_pos, size_type n ) noexcept;
+
+protected:
+    mutable nodes_t  nodes_{};
+            iter_pos pos_  {};
+
+private: template <typename T, typename Comparator> friend class bp_tree_impl;
+    constexpr base_iterator( nodes_t const nodes, iter_pos const pos ) noexcept : nodes_{ nodes }, pos_{ pos } {}
     void update_pool_ptr( node_pool & ) const noexcept;
 }; // class base_iterator
 
@@ -422,32 +436,52 @@ private:
 
 class bptree_base::base_random_access_iterator : public base_iterator
 {
-protected:
-    size_type index_;
+public:
+    constexpr base_random_access_iterator() noexcept = default;
 
+    [[ clang::no_sanitize( "unsigned-integer-overflow" ) ]]
+    difference_type operator-( base_random_access_iterator const & other ) const noexcept
+    {
+#   ifdef NDEBUG
+        BOOST_ASSUME( this->nodes_ == other.nodes_ );
+#   else
+        BOOST_ASSERT( this->nodes_.data() == other.nodes_.data() );
+#   endif
+        return static_cast<difference_type>( this->index_ - other.index_ );
+    }
+    [[ using gnu: sysv_abi, hot, pure ]]
+    base_random_access_iterator   operator+ ( difference_type n ) const noexcept;
+    base_random_access_iterator & operator+=( difference_type n )       noexcept { return (*this = *this + n); }
+
+    // same reason for 'precise_end_handling=true' as in operator+
+    base_random_access_iterator & operator++(   ) noexcept { static_cast<base_iterator &>( *this ) = base_iterator::incremented<true>(); ++index_; return *this; }
+    base_random_access_iterator   operator++(int) noexcept { auto current{ *this }; operator++(); return current; }
+    base_random_access_iterator & operator--(   ) noexcept { base_iterator::operator--(); --index_; return *this; }
+    base_random_access_iterator   operator--(int) noexcept { auto current{ *this }; operator--(); return current; }
+
+    // should implicitly handle end iterator comparison also (this requires the
+    // start_index constructor argument for the construction of end iterators)
+    [[ gnu::pure ]]
+    friend constexpr auto operator<=>( base_random_access_iterator const & left, base_random_access_iterator const & right ) noexcept
+    {
+#   ifdef NDEBUG
+        BOOST_ASSUME( left.nodes_ == right.nodes_ );
+#   else
+        BOOST_ASSERT( left.nodes_.data() == right.nodes_.data() );
+#   endif
+        return left.index_ == right.index_;
+    }
+
+protected:
                                                friend class bptree_base;
     template <typename T, typename Comparator> friend class bp_tree_impl;
 
     base_random_access_iterator( bptree_base & parent, iter_pos const pos, size_type const start_index ) noexcept
         : base_iterator{ parent.nodes_, pos }, index_{ start_index } {}
+    base_random_access_iterator( base_iterator const base, size_type const start_index ) noexcept
+        : base_iterator{ base }, index_{ start_index } {}
 
-public:
-    constexpr base_random_access_iterator() noexcept = default;
-
-    [[ clang::no_sanitize( "unsigned-integer-overflow" ) ]]
-    difference_type operator-( base_random_access_iterator const & other ) const noexcept { return static_cast<difference_type>( this->index_ - other.index_ ); }
-
-    base_random_access_iterator & operator+=( difference_type n ) noexcept;
-
-    base_random_access_iterator & operator++(   ) noexcept { base_iterator::operator++(); ++index_; return *this; }
-    base_random_access_iterator   operator++(int) noexcept { auto current{ *this }; operator++(); return current; }
-    base_random_access_iterator & operator--(   ) noexcept { base_iterator::operator--(); --index_; return *this; }
-    base_random_access_iterator   operator--(int) noexcept { auto current{ *this }; operator--(); return current; }
-
-    // should implicitly handle end iterator comparison also (this requires the start_index constructor argument for the construction of end iterators)
-    friend constexpr bool operator==( base_random_access_iterator const & left, base_random_access_iterator const & right ) noexcept { return left.index_ == right.index_; }
-
-    auto operator<=>( base_random_access_iterator const & other ) const noexcept { return this->index_ <=> other.index_; }
+    size_type index_;
 }; // class base_random_access_iterator
 
 
@@ -1506,14 +1540,15 @@ public:
         return span;
     }
 
-    ra_iterator & operator+=( difference_type const n ) noexcept { return static_cast<ra_iterator &>( base_random_access_iterator::operator+=( n ) ); }
+    ra_iterator   operator+ ( difference_type const n ) const noexcept { return static_cast<ra_iterator &&>( base_random_access_iterator::operator+ (  n ) ); }
+    ra_iterator & operator+=( difference_type const n )       noexcept { return static_cast<ra_iterator & >( base_random_access_iterator::operator+=(  n ) ); }
+    ra_iterator   operator- ( difference_type const n ) const noexcept { return static_cast<ra_iterator &&>( base_random_access_iterator::operator+ ( -n ) ); }
+    using base_random_access_iterator::operator-;
 
-    ra_iterator & operator++(   ) noexcept { return static_cast<ra_iterator       & >( base_random_access_iterator::operator++( ) ); }
-    ra_iterator   operator++(int) noexcept { return static_cast<ra_iterator const &&>( base_random_access_iterator::operator++(0) ); }
-    ra_iterator & operator--(   ) noexcept { return static_cast<ra_iterator       & >( base_random_access_iterator::operator--( ) ); }
-    ra_iterator   operator--(int) noexcept { return static_cast<ra_iterator const &&>( base_random_access_iterator::operator--(0) ); }
-
-    friend constexpr bool operator==( ra_iterator const & left, ra_iterator const & right ) noexcept { return left.index_ == right.index_; }
+    ra_iterator & operator++(   ) noexcept { return static_cast<ra_iterator & >( base_random_access_iterator::operator++( ) ); }
+    ra_iterator   operator++(int) noexcept { return static_cast<ra_iterator &&>( base_random_access_iterator::operator++(0) ); }
+    ra_iterator & operator--(   ) noexcept { return static_cast<ra_iterator & >( base_random_access_iterator::operator--( ) ); }
+    ra_iterator   operator--(int) noexcept { return static_cast<ra_iterator &&>( base_random_access_iterator::operator--(0) ); }
 
     operator fwd_iterator() const noexcept { return static_cast<fwd_iterator const &>( static_cast<base_iterator const &>( *this ) ); }
 }; // class ra_iterator
@@ -2327,6 +2362,15 @@ bp_tree_impl<Key, Comparator>::merge_interleaved_values
     }
 }
 
+namespace detail
+{
+    template <typename Comparator>
+    struct comp_ref
+    {
+        [[ gnu::pure, gnu::always_inline ]] decltype( auto ) operator()( auto const &... args ) noexcept { return impl( args... ); }
+        Comparator const & __restrict impl;
+    }; // struct comp_ref
+} // namespace detail
 
 template <typename Key, typename Comparator>
 bp_tree_impl<Key, Comparator>::size_type
@@ -2336,13 +2380,19 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input const in
     // https://www.vldb.org/conf/2001/P461.pdf An Evaluation of Generic Bulk Loading Techniques
     // https://stackoverflow.com/questions/15996319/is-there-any-algorithm-for-bulk-loading-in-b-tree
 
+    if ( input.size == 0 )
+        return 0;
+
     auto const [begin_leaf, end_pos, total_size]{ input };
     ra_iterator const p_new_nodes_begin{ *this, { begin_leaf, 0 }, 0          };
     ra_iterator const p_new_nodes_end  { *this, end_pos          , total_size };
+    // Standard sort ABIs/impls pass the comparator around by-value: wrkrnd for
+    // big or non-trivial comparators.
+    using comp_by_val_helper = std::conditional_t<can_be_passed_in_reg<Comparator>, Comparator, detail::comp_ref<Comparator>>;
 #if 0 // slower
-    std::sort( p_new_nodes_begin, p_new_nodes_end, comp() );
+    std::sort( p_new_nodes_begin, p_new_nodes_end, comp_by_val_helper{ comp() } );
 #else
-    boost::movelib::pdqsort( p_new_nodes_begin, p_new_nodes_end, comp() );
+    boost::movelib::pdqsort( p_new_nodes_begin, p_new_nodes_end, comp_by_val_helper{ comp() } );
 #endif
 
     if ( empty() )
