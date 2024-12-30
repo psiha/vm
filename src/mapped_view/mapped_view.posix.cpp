@@ -104,8 +104,8 @@ map
     return mapped_span{ view_start, view_start ? desired_size : 0 };
 }
 
-BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS )
-void unmap( mapped_span const view ) noexcept
+[[ gnu::cold, gnu::nothrow, clang::nouwtable ]]
+void unmap( mapped_span const view )
 {
     [[ maybe_unused ]] auto munmap_result{ ::munmap( view.data(), view.size() ) };
 #ifndef __EMSCRIPTEN__
