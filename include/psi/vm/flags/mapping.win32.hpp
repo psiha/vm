@@ -3,7 +3,7 @@
 /// \file flags/mapping.win32.hpp
 /// -----------------------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2024.
+/// Copyright (c) Domagoj Saric 2010 - 2025.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -18,6 +18,8 @@
 
 #include <psi/vm/detail/impl_selection.hpp>
 #include <psi/vm/flags/flags.win32.hpp>
+
+#include <psi/build/disable_warnings.hpp>
 
 #include <boost/winapi/security.hpp>
 
@@ -35,6 +37,8 @@ namespace flags
 
 using flags_t = unsigned long; // DWORD
 
+PSI_WARNING_DISABLE_PUSH()
+PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
 
 struct [[ clang::trivial_abi ]] viewing
 {
@@ -69,6 +73,8 @@ struct [[ clang::trivial_abi ]] viewing
 
     flags_t page_protection;
 }; // struct viewing
+
+PSI_WARNING_DISABLE_POP()
 
 namespace detail
 {

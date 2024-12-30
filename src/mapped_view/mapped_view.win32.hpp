@@ -18,6 +18,8 @@
 #include <psi/vm/mapping/mapping.win32.hpp>
 #include <psi/vm/span.hpp>
 
+#include <psi/build/disable_warnings.hpp>
+
 #include <cstdint>
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -37,6 +39,9 @@ enum struct mapping_object_type : std::uint32_t
     file   = MEM_RESERVE
 };
 
+PSI_WARNING_DISABLE_PUSH()
+PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
+
 [[ gnu::nothrow, gnu::sysv_abi ]]
 mapped_span
 windows_mmap
@@ -48,6 +53,8 @@ windows_mmap
     flags  ::viewing  flags           ,
     mapping_object_type
 ) noexcept;
+
+PSI_WARNING_DISABLE_POP()
 
 //------------------------------------------------------------------------------
 } // psi::vm

@@ -19,6 +19,8 @@
 #include <psi/vm/mappable_objects/file/file.hpp>
 #include <psi/vm/mappable_objects/file/utility.hpp>
 
+#include <psi/build/disable_warnings.hpp>
+
 #include <boost/assert.hpp>
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -30,6 +32,9 @@ namespace detail
     template <typename T, bool> struct size           { T value; };
     template <typename T      > struct size<T, false> {};
 } // namespace detail
+
+PSI_WARNING_DISABLE_PUSH()
+PSI_WARNING_CLANGCL_DISABLE( -Wignored-attributes )
 
 class [[ clang::trivial_abi ]] contiguous_storage_base
 {
@@ -308,6 +313,8 @@ protected:
         return const_cast<contiguous_storage &>( *this ).stored_size();
     }
 }; // contiguous_storage
+
+PSI_WARNING_DISABLE_POP()
 
 template <typename T, typename sz_t, bool headerless>
 class [[ clang::trivial_abi ]] typed_contiguous_storage
