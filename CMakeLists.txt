@@ -55,6 +55,7 @@ PSI_add_compile_options( Release ${PSI_compiler_LTO} ${PSI_compiler_optimize_for
 if ( WIN32 )
   add_compile_definitions( WIN32_LEAN_AND_MEAN NOMINMAX NOCOMM )
 endif()
+add_compile_definitions( BOOST_ALL_NO_LIB )
 
 if ( ${CMAKE_SYSTEM_NAME} MATCHES "Linux" )
     PSI_add_link_options( Release -flto ) # lld does not seem to be enough

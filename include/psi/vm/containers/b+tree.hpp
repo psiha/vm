@@ -5,13 +5,18 @@
 #include <psi/vm/align.hpp>
 #include <psi/vm/allocation.hpp>
 #include <psi/vm/containers/abi.hpp>
+#include <psi/vm/containers/crt_vector.hpp>
 
 #include <psi/build/disable_warnings.hpp>
 
 #include <boost/assert.hpp>
 #include <boost/config_ex.hpp>
 #include <boost/integer.hpp>
+#if __has_include( <boost/sort/pdqsort/pdqsort.hpp> )
+#include <boost/sort/pdqsort/pdqsort.hpp>
+#else
 #include <boost/move/algo/detail/pdqsort.hpp>
+#endif
 #include <boost/stl_interfaces/iterator_interface.hpp>
 #if 0 // reexamining...
 #include <boost/stl_interfaces/sequence_container_interface.hpp>
@@ -46,8 +51,8 @@ concept InsertableType = ( transparent_comparator && std::is_convertible_v<K, St
 // user specializations are allowed and intended:
 
 template <typename T> constexpr bool is_simple_comparator{ false };
-template <typename T> constexpr bool is_simple_comparator<std::less   <T>>{ true };
-template <typename T> constexpr bool is_simple_comparator<std::greater<T>>{ true };
+template <typename T> constexpr bool is_simple_comparator<std::less   <T>>{ std::is_fundamental_v<T> };
+template <typename T> constexpr bool is_simple_comparator<std::greater<T>>{ std::is_fundamental_v<T> };
 
 template <typename T>                                  constexpr bool is_statically_sized   { true };
 template <typename T> requires requires{ T{}.size(); } constexpr bool is_statically_sized<T>{ T{}.size() != 0 };
@@ -385,6 +390,7 @@ class [[ clang::trivial_abi ]] bptree_base::base_iterator
 {
 public:
     constexpr base_iterator() noexcept = default;
+    constexpr base_iterator( base_iterator const & ) noexcept = default;
 
     base_iterator & operator++() noexcept { return ( *this = incremented<true>() ); }
     base_iterator & operator--() noexcept;
@@ -393,16 +399,31 @@ public:
 
     base_iterator & operator+=( difference_type n ) noexcept;
 
+    constexpr base_iterator & operator=( base_iterator const & other ) noexcept
+    {
+#   if defined( NDEBUG ) && __has_builtin( __builtin_constant_p )
+        // try to skip the redundant assignment of the nodes pointer yet at the
+        // same time support default constructed iterators - so it cannot be
+        // skipped unconditionally
+        if ( __builtin_constant_p( this->nodes_ ) && this->nodes_ )
+            { BOOST_ASSUME( this->nodes_ == other.nodes_ ); }
+        else
+#   endif
+        this->nodes_ = other.nodes_;
+        this->pos_   = other.pos_  ;
+        return *this;
+    }
+
 public: // extensions
     iter_pos const & pos() const noexcept { return pos_; }
 
 protected: friend class bptree_base;
     using nodes_t =
-#ifndef NDEBUG // for bounds checking
+#   ifndef NDEBUG // for bounds checking
         std::span<node_placeholder>;
-#else
+#   else
         node_placeholder * __restrict;
-#endif
+#   endif
 
     base_iterator( node_pool &, iter_pos ) noexcept;
 
@@ -430,6 +451,7 @@ private: template <typename T, typename Comparator> friend class bp_tree_impl;
     void update_pool_ptr( node_pool & ) const noexcept;
 }; // class base_iterator
 
+
 ////////////////////////////////////////////////////////////////////////////////
 // \class bptree_base::base_random_access_iterator
 ////////////////////////////////////////////////////////////////////////////////
@@ -449,9 +471,19 @@ public:
 #   endif
         return static_cast<difference_type>( this->index_ - other.index_ );
     }
-    [[ using gnu: sysv_abi, hot, pure ]]
-    base_random_access_iterator   operator+ ( difference_type n ) const noexcept;
-    base_random_access_iterator & operator+=( difference_type n )       noexcept { return (*this = *this + n); }
+    base_random_access_iterator & operator+=( difference_type const n )       noexcept { return (*this = *this + n); }
+    base_random_access_iterator   operator+ ( difference_type const n ) const noexcept
+    {
+#   if __has_builtin( __builtin_constant_p )
+        if ( __builtin_constant_p( n ) ) // has to be in the header (even w/ LTO)
+        {
+                 if ( n == +1 ) return ++auto(*this);
+            else if ( n == -1 ) return --auto(*this);
+            else if ( n ==  0 ) return       (*this);
+        }
+#   endif
+        return at_offset( n );
+    }
 
     // same reason for 'precise_end_handling=true' as in operator+
     base_random_access_iterator & operator++(   ) noexcept { static_cast<base_iterator &>( *this ) = base_iterator::incremented<true>(); ++index_; return *this; }
@@ -482,6 +514,9 @@ protected:
         : base_iterator{ base }, index_{ start_index } {}
 
     size_type index_;
+private:
+    [[ using gnu: sysv_abi, hot, pure ]]
+    base_random_access_iterator at_offset( difference_type n ) const noexcept;
 }; // class base_random_access_iterator
 
 
@@ -513,8 +548,8 @@ public:
     using key_rv_arg    = std::conditional_t<can_be_passed_in_reg<Key>, Key const, pass_rv_in_reg<Key>>;
     using key_const_arg = std::conditional_t<can_be_passed_in_reg<Key>, Key const, pass_in_reg   <Key>>;
 
-    class fwd_iterator;
-    class  ra_iterator;
+    class [[ clang::trivial_abi ]] fwd_iterator;
+    class [[ clang::trivial_abi ]]  ra_iterator;
 
     using       iterator = fwd_iterator;
     using const_iterator = std::basic_const_iterator<iterator>;
@@ -838,6 +873,10 @@ protected: // 'other'
         node_slot      inner;
     }; // struct key_locations
 
+    // internal deque-like simpler/faster random access iterator for/over full
+    // nodes (used for sorting input data in bulk insert operations)
+    class [[ clang::trivial_abi ]] ra_full_node_iterator;
+
     [[ gnu::pure, nodiscard ]] const_iterator make_iter( auto const &... args    ) const noexcept { return static_cast<iterator &&>( const_cast<bptree_base_wkey &>( *this ).bptree_base::make_iter( args... ) ); }
     [[ gnu::pure, nodiscard ]] const_iterator make_iter( key_locations const loc ) const noexcept { return make_iter( loc.leaf, loc.leaf_offset.pos ); }
 
@@ -1058,19 +1097,33 @@ protected: // 'other'
         node_slot begin;
         iter_pos  end;
         size_type size;
-    };
+        // save a linearized array of (full) nodes in order to be able to use
+        // "really random access iterators" (similar to std::deque iterators)
+        // for subsequent sorting
+        crt_vector<leaf_node *, std::uint32_t> nodes;
+    }; // struct bulk_copied_input
     template <typename I, typename S, std::ranges::subrange_kind kind>
     bulk_copied_input
     bulk_insert_prepare( std::ranges::subrange<I, S, kind> keys )
     {
-        if ( keys.empty() ) [[ unlikely ]]
-            return bulk_copied_input{};
-
         auto constexpr can_preallocate{ kind == std::ranges::subrange_kind::sized };
-        if constexpr ( can_preallocate )
-            reserve_additional( static_cast<size_type>( keys.size() ) );
-        else
+        size_type input_size;
+        crt_vector<leaf_node *, std::uint32_t> nodes;
+        typename crt_vector<leaf_node *, std::uint32_t>::iterator p_node;
+        if constexpr ( can_preallocate ) {
+            input_size = static_cast<size_type>( keys.size() );
+            if ( !input_size ) [[ unlikely ]] // minor optimization for 'complex' ranges (like complex/compound views which have size methods but which are non trivial) - reuse size info for empty check
+                return bulk_copied_input{};
+            auto const required_nodes{ node_count_required_for_values( input_size ) };
+            nodes.grow_to( required_nodes, default_init );
+            p_node = nodes.begin();
+            bptree_base::reserve_additional( required_nodes );
+        } else {
+            if ( keys.empty() ) [[ unlikely ]]
+                return bulk_copied_input{};
+            input_size = 0;
             reserve_additional( 42 );
+        }
         // w/o preallocation a saved hdr reference could get invalidated
         auto const begin    { can_preallocate ? hdr().free_list_ : slot_of( new_node<leaf_node>() ) };
         auto       leaf_slot{ begin };
@@ -1080,42 +1133,55 @@ protected: // 'other'
         {
             auto & leaf{ this->leaf( leaf_slot ) };
             BOOST_ASSUME( leaf.num_vals == 0 );
+            // fill this leaf
             if constexpr ( can_preallocate ) {
-                auto const size_to_copy{ static_cast<node_size_type>( std::min<std::size_t>( leaf.max_values, static_cast<std::size_t>( keys.end() - p_keys ) ) ) };
+                auto const size_to_copy{ static_cast<node_size_type>( std::min<size_type>( leaf.max_values, input_size - count ) ) };
                 BOOST_ASSUME( size_to_copy );
                 std::copy_n( p_keys, size_to_copy, leaf.keys );
                 leaf.num_vals  = size_to_copy;
                 count         += size_to_copy;
                 p_keys        += size_to_copy;
+                *p_node++      = &leaf;
             } else {
+                BOOST_ASSUME( !input_size );
                 while ( ( p_keys != keys.end() ) && ( leaf.num_vals < leaf.max_values ) ) {
                     leaf.keys[ leaf.num_vals++ ] = *p_keys++;
                 }
                 count += leaf.num_vals;
+                // ugh - cannot save pointer right away as they may get
+                // invalidated by calls to new_node
+                nodes.push_back( reinterpret_cast<leaf_node * const &>( leaf_slot ) );
             }
+
             BOOST_ASSUME( leaf.num_vals > 0 );
             --this->hdr().free_node_count_;
-            if ( p_keys != keys.end() )
-            {
-                if constexpr ( can_preallocate ) {
+
+            // move to the next one or cleanup if we are at the end and return
+            if constexpr ( can_preallocate ) {
+                if ( count != input_size ) {
                     leaf_slot = leaf.right;
+                    continue;
                 } else {
+                    this->hdr().free_list_ = leaf.right;
+                    unlink_right( leaf );
+                    BOOST_ASSERT( p_keys == keys.end() );
+                    BOOST_ASSUME( count == input_size );
+                    count = input_size; // help the compiler eliminate the accumulation code above
+                }
+            } else {
+                BOOST_ASSUME( !input_size );
+                if ( p_keys != keys.end() ) {
                     auto & new_leaf{ new_node<leaf_node>() };
                     link( leaf, new_leaf );
                     leaf_slot = slot_of( new_leaf );
+                    continue;
                 }
-                BOOST_ASSUME( !!leaf_slot );
-            }
-            else
-            {
-                if constexpr ( can_preallocate ) {
-                    this->hdr().free_list_ = leaf.right;
-                    unlink_right( leaf );
-                    BOOST_ASSERT( count == static_cast<size_type>( keys.size() ) );
-                    count = static_cast<size_type>( keys.size() ); // help the compiler eliminate the accumulation code above
+                #pragma clang loop unroll( disable )
+                for ( auto & leaf_ptr : nodes ) {
+                    leaf_ptr = &this->leaf( reinterpret_cast<node_slot const &>( leaf_ptr ) );
                 }
-                return bulk_copied_input{ begin, { leaf_slot, leaf.num_vals }, count };
             }
+            return bulk_copied_input{ begin, { leaf_slot, leaf.num_vals }, count, std::move( nodes ) };
         }
         std::unreachable();
     }
@@ -1464,7 +1530,7 @@ private:
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename Key>
-class bptree_base_wkey<Key>::fwd_iterator
+class [[ clang::trivial_abi ]] bptree_base_wkey<Key>::fwd_iterator
     :
     public base_iterator,
     public iter_impl<fwd_iterator, std::bidirectional_iterator_tag>
@@ -1508,7 +1574,7 @@ public:
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename Key>
-class bptree_base_wkey<Key>::ra_iterator
+class [[ clang::trivial_abi ]] bptree_base_wkey<Key>::ra_iterator
     :
     public base_random_access_iterator,
     public iter_impl<ra_iterator, std::random_access_iterator_tag>
@@ -1552,6 +1618,61 @@ public:
 
     operator fwd_iterator() const noexcept { return static_cast<fwd_iterator const &>( static_cast<base_iterator const &>( *this ) ); }
 }; // class ra_iterator
+
+
+template <typename Key>
+class [[ clang::trivial_abi ]] bptree_base_wkey<Key>::ra_full_node_iterator
+    :
+    public iter_impl<ra_full_node_iterator, std::random_access_iterator_tag>
+{
+public:
+    // Have to provide default construction in order to model
+    // std::random_access_iterator (yet at the same time do not want to in order
+    // to be able to omit the check in the assignment operator as is required
+    // for base_iterator.
+    constexpr ra_full_node_iterator() noexcept { std::unreachable(); }
+    constexpr ra_full_node_iterator( leaf_node * leaves[], size_type const value_index ) noexcept : pp_leaf_{ leaves }, value_index_{ value_index } {};
+    ra_full_node_iterator( ra_full_node_iterator const & ) = default;
+
+    Key & operator*() const noexcept
+    {
+        auto const node_index { static_cast<std::uint32_t >( value_index_ / leaf_node::max_values ) };
+        auto const node_offset{ static_cast<node_size_type>( value_index_ % leaf_node::max_values ) };
+        auto & leaf{ *pp_leaf_[ node_index ] };
+        BOOST_ASSUME( node_offset < leaf.num_vals );
+        return leaf.keys[ node_offset ];
+    }
+
+    PSI_WARNING_DISABLE_PUSH()
+    PSI_WARNING_GCC_OR_CLANG_DISABLE( -Wsign-conversion )
+    ra_full_node_iterator   operator+ ( difference_type const n ) const noexcept { return { pp_leaf_, value_index_ + n }; }
+    ra_full_node_iterator & operator+=( difference_type const n )       noexcept { value_index_ += n; return *this; }
+    ra_full_node_iterator   operator- ( difference_type const n ) const noexcept { return { pp_leaf_, value_index_ - n }; }
+    ra_full_node_iterator & operator-=( difference_type const n )       noexcept { value_index_ -= n; return *this; }
+    PSI_WARNING_DISABLE_POP()
+
+    [[ gnu::pure ]]
+    friend constexpr auto operator<=>( ra_full_node_iterator const & left, ra_full_node_iterator const & right ) noexcept
+    {
+        BOOST_ASSUME( left.pp_leaf_ == right.pp_leaf_ );
+        return left.value_index_ <=> right.value_index_;
+    }
+    difference_type operator-( ra_full_node_iterator const & other ) const noexcept
+    {
+        BOOST_ASSUME( this->pp_leaf_ == other.pp_leaf_ );
+        return static_cast<difference_type>( this->value_index_ - other.value_index_ );
+    }
+    ra_full_node_iterator & operator=( ra_full_node_iterator const & other ) noexcept
+    {
+        BOOST_ASSUME( this->pp_leaf_ == other.pp_leaf_ );
+        this->value_index_ = other.value_index_;
+        return *this;
+    }
+
+private:
+    leaf_node * * pp_leaf_{};
+    size_type value_index_{};
+}; // class ra_full_node_iterator
 
 template <typename Key>
 typename
@@ -2374,7 +2495,7 @@ namespace detail
 
 template <typename Key, typename Comparator>
 bp_tree_impl<Key, Comparator>::size_type
-bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input const input, bool const unique )
+bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, bool const unique )
 {
     // https://www.sciencedirect.com/science/article/abs/pii/S0020025502002025 On batch-constructing B+-trees: algorithm and its performance
     // https://www.vldb.org/conf/2001/P461.pdf An Evaluation of Generic Bulk Loading Techniques
@@ -2383,18 +2504,33 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input const in
     if ( input.size == 0 )
         return 0;
 
-    auto const [begin_leaf, end_pos, total_size]{ input };
+    auto const begin_leaf{ input.begin };
+    auto const end_pos   { input.end   };
+    auto const total_size{ input.size  };
+    {
+        // use specialized/optimized iterators (that can assume all nodes are
+        // full)
+        typename base::ra_full_node_iterator const sort_begin{ input.nodes.data(), 0          };
+        typename base::ra_full_node_iterator const sort_end  { input.nodes.data(), total_size };
+        // Standard sort ABIs/impls pass the comparator around by-value: wrkrnd for
+        // big or non-trivial comparators.
+        using comp_by_val_helper = std::conditional_t<can_be_passed_in_reg<Comparator>, Comparator, detail::comp_ref<Comparator>>;
+        if constexpr ( requires{ comp().sort( sort_begin, sort_end ); } ) // does the comparator offer a specialized sort function?
+            comp().sort( sort_begin, sort_end );
+        else
+#   if __has_include( <boost/sort/pdqsort/pdqsort.hpp> )
+        if constexpr ( requires{ Comparator::is_branchless; requires( Comparator::is_branchless ); } ) // is it branchless
+            boost::sort::pdqsort_branchless( sort_begin, sort_end, comp_by_val_helper{ comp() } );
+        else
+            boost::sort::pdqsort( sort_begin, sort_end, comp_by_val_helper{ comp() } );
+#   else
+            boost::movelib::pdqsort( sort_begin, sort_end, comp_by_val_helper{ comp() } );
+#   endif
+        input.nodes.clear();
+    }
+
     ra_iterator const p_new_nodes_begin{ *this, { begin_leaf, 0 }, 0          };
     ra_iterator const p_new_nodes_end  { *this, end_pos          , total_size };
-    // Standard sort ABIs/impls pass the comparator around by-value: wrkrnd for
-    // big or non-trivial comparators.
-    using comp_by_val_helper = std::conditional_t<can_be_passed_in_reg<Comparator>, Comparator, detail::comp_ref<Comparator>>;
-#if 0 // slower
-    std::sort( p_new_nodes_begin, p_new_nodes_end, comp_by_val_helper{ comp() } );
-#else
-    boost::movelib::pdqsort( p_new_nodes_begin, p_new_nodes_end, comp_by_val_helper{ comp() } );
-#endif
-
     if ( empty() )
     {
         base::bulk_insert_into_empty( begin_leaf, end_pos, total_size );

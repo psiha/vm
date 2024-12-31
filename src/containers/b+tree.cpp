@@ -69,7 +69,7 @@ bptree_base::map_memory( std::uint32_t const initial_capacity_as_number_of_nodes
     }
     return success;
 }
-
+[[ gnu::cold ]]
 void bptree_base::reserve_additional( node_slot::value_type additional_nodes )
 {
     auto const preallocated_count{ hdr().free_node_count_ };
@@ -82,7 +82,7 @@ void bptree_base::reserve_additional( node_slot::value_type additional_nodes )
 #endif
     assign_nodes_to_free_pool( current_size );
 }
-
+[[ gnu::cold ]]
 void bptree_base::reserve( node_slot::value_type new_capacity_in_number_of_nodes )
 {
     if ( new_capacity_in_number_of_nodes <= nodes_.capacity() )
@@ -345,8 +345,9 @@ bptree_base::base_iterator::at_positive_offset( nodes_t const nodes, iter_pos co
     }
     return iter.pos_;
 }
-template bptree_base::iter_pos bptree_base::base_iterator::at_positive_offset<true >( nodes_t const nodes, iter_pos const pos, size_type n ) noexcept;
-template bptree_base::iter_pos bptree_base::base_iterator::at_positive_offset<false>( nodes_t const nodes, iter_pos const pos, size_type n ) noexcept;
+template bptree_base::iter_pos bptree_base::base_iterator::at_positive_offset<true >( nodes_t, iter_pos, size_type ) noexcept;
+template bptree_base::iter_pos bptree_base::base_iterator::at_positive_offset<false>( nodes_t, iter_pos, size_type ) noexcept;
+
 [[ using gnu: noinline, hot, leaf, const ]][[ clang::preserve_most ]]
 bptree_base::iter_pos
 bptree_base::base_iterator::at_negative_offset( nodes_t const nodes, iter_pos const pos, size_type n ) noexcept
@@ -375,35 +376,14 @@ bool bptree_base::base_iterator::operator==( base_iterator const & other ) const
     BOOST_ASSERT_MSG( &this->nodes_[ 0 ] == &other.nodes_[ 0 ], "Comparing iterators from different containers" );
 #ifdef NDEBUG
     BOOST_ASSUME( this->nodes_ == other.nodes_ );
-#else
-    BOOST_ASSERT( this->nodes_.data() == other.nodes_.data() );
 #endif
     return ( this->pos_.node == other.pos_.node ) && ( this->pos_.value_offset == other.pos_.value_offset );
 }
 
-void bptree_base::swap( bptree_base & other ) noexcept
-{
-    using std::swap;
-    swap( this->nodes_, other.nodes_ );
-#ifndef NDEBUG
-    swap( this->p_hdr_  , other.p_hdr_   );
-    swap( this->p_nodes_, other.p_nodes_ );
-#endif
-}
-
 [[ using gnu: sysv_abi, hot, pure ]]
 bptree_base::base_random_access_iterator
-bptree_base::base_random_access_iterator::operator+( difference_type const n ) const noexcept
+bptree_base::base_random_access_iterator::at_offset( difference_type const n ) const noexcept
 {
-#if __has_builtin( __builtin_constant_p )
-    if ( __builtin_constant_p( n ) )
-    {
-             if ( n == +1 ) return ++auto(*this);
-        else if ( n == -1 ) return --auto(*this);
-        else if ( n ==  0 ) return       (*this);
-    }
-#endif
-
     iter_pos new_pos;
     if ( n >= 0 )
     {
@@ -423,6 +403,16 @@ bptree_base::base_random_access_iterator::operator+( difference_type const n ) c
     }
 
     return { base_iterator{ nodes_, new_pos }, static_cast<size_type>( static_cast<difference_type>( index_ ) + n ) };
+}
+
+void bptree_base::swap( bptree_base & other ) noexcept
+{
+    using std::swap;
+    swap( this->nodes_, other.nodes_ );
+#ifndef NDEBUG
+    swap( this->p_hdr_  , other.p_hdr_   );
+    swap( this->p_nodes_, other.p_nodes_ );
+#endif
 }
 
 
