@@ -31,7 +31,7 @@ namespace align_detail
 [[ using gnu: const, always_inline ]] constexpr auto align_down( auto const value, auto const alignment ) noexcept
 {
     using T = decltype( value );
-#ifdef __clang__
+#if __has_builtin( __builtin_constant_p )
     if ( __builtin_constant_p( alignment ) && /*is power of 2*/std::has_single_bit( unsigned( alignment ) ) )
         return __builtin_align_down( value, alignment );
     else
@@ -44,7 +44,7 @@ namespace align_detail
 [[ using gnu: const, always_inline ]] constexpr auto align_up( auto const value, auto const alignment ) noexcept
 {
     using T = decltype( value );
-#ifdef __clang__
+#if __has_builtin( __builtin_constant_p )
     if ( __builtin_constant_p( alignment ) && /*is power of 2*/std::has_single_bit( unsigned( alignment ) ) )
         return __builtin_align_up( value, alignment );
     else
@@ -61,7 +61,7 @@ template <unsigned alignment> [[ using gnu: const, always_inline ]] constexpr au
 [[ using gnu: const, always_inline ]]
 constexpr auto divide_up( auto const numerator, auto const denominator ) noexcept
 {
-#ifdef __GNUC__
+#if __has_builtin( __builtin_constant_p )
     if ( __builtin_constant_p( denominator ) && /*is power of 2*/std::has_single_bit( unsigned( denominator ) ) )
         return static_cast<decltype( numerator )>( align_up( numerator, denominator ) / denominator );
     else

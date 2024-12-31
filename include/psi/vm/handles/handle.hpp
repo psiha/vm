@@ -3,7 +3,7 @@
 /// \file handle.hpp
 /// ----------------
 ///
-/// Copyright (c) Domagoj Saric 2011 - 2024.
+/// Copyright (c) Domagoj Saric 2011 - 2025.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -19,18 +19,16 @@
 #include "handle_ref.hpp"
 
 #include <psi/vm/detail/impl_selection.hpp>
+
+#include <psi/build/disable_warnings.hpp>
 //------------------------------------------------------------------------------
-namespace psi
-{
-//------------------------------------------------------------------------------
-namespace vm
+namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
-#ifdef _MSC_VER
-#   pragma warning( push )
-#   pragma warning( disable : 5030 ) // Unrecognized attribute
-#endif // _MSC_VER
+PSI_WARNING_DISABLE_PUSH()
+PSI_WARNING_MSVC_DISABLE( 4067 ) // unexpected tokens following preprocessor directive (__has_builtin)
+PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
 
 ////////////////////////////////////////////////////////////////////////////////
 ///
@@ -71,18 +69,21 @@ public:
     {
         auto const old_handle{ handle_ };
         handle_ = new_handle;
-        if constexpr ( requires{ __builtin_constant_p( handle_ ); } ) //...mrmlj...TODO deduplicate
-            if ( __builtin_constant_p( handle_ ) && handle_ == invalid_value )
-                return;
+#   if __has_builtin( __builtin_constant_p ) //...mrmlj...TODO deduplicate
+        if ( __builtin_constant_p( old_handle ) && ( old_handle == invalid_value ) )
+            return;
+#   endif
         traits::close( old_handle );
     }
 
     void close() noexcept
     {
-        if constexpr ( requires{ __builtin_constant_p( handle_ ); } )
-            if ( __builtin_constant_p( handle_ ) && handle_ == invalid_value )
-                return;
-        traits::close( release() );
+        auto const handle{ release() };
+#   if __has_builtin( __builtin_constant_p )
+        if ( __builtin_constant_p( handle ) && ( handle == invalid_value ) )
+            return;
+#   endif
+        traits::close( handle );
     }
 
     native_handle_t release() noexcept
@@ -100,13 +101,9 @@ private:
     native_handle_t handle_;
 }; // class handle_impl
 
-#ifdef _MSC_VER
-#   pragma warning( pop )
-#endif // _MSC_VER
+PSI_WARNING_DISABLE_POP()
 
 //------------------------------------------------------------------------------
-} // namespace vm
-//------------------------------------------------------------------------------
-} // namespace psi
+} // namespace psi::vm
 //------------------------------------------------------------------------------
 #include PSI_VM_IMPL_INCLUDE( handle )

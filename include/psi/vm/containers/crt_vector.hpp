@@ -135,7 +135,7 @@ namespace detail
     inline
     void crt_aligned_free( void * const allocation ) noexcept
     {
-#   ifdef __clang__
+#   if __has_builtin( __builtin_constant_p )
         if ( __builtin_constant_p( allocation ) && !allocation )
             return;
 #   endif
@@ -211,7 +211,7 @@ struct crt_aligned_allocator
     //!Never throws
     static void deallocate( pointer const ptr, [[ maybe_unused ]] size_type const size ) noexcept
     {
-#   ifdef __clang__
+#   if __has_builtin( __builtin_constant_p )
         if ( __builtin_constant_p( ptr ) && !ptr )
             return;
 #   endif

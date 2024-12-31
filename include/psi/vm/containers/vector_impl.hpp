@@ -48,6 +48,9 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
+PSI_WARNING_DISABLE_PUSH()
+PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
+
 namespace detail
 {
     [[ noreturn, gnu::cold ]] void throw_out_of_range();
@@ -891,6 +894,8 @@ private:
 //! <b>Complexity</b>: Linear to the number of elements in the container.
 [[ nodiscard ]] constexpr auto operator<=>( std::ranges::range auto const & left, std::ranges::range auto const & right ) noexcept { return std::lexicographical_compare_three_way( left.begin(), left.end(), right.begin(), right.end() ); }
 [[ nodiscard ]] constexpr auto operator== ( std::ranges::range auto const & left, std::ranges::range auto const & right ) noexcept { return std::equal                            ( left.begin(), left.end(), right.begin(), right.end() ); }
+
+PSI_WARNING_DISABLE_POP()
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm
