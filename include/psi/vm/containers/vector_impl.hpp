@@ -6,8 +6,10 @@
 /// pass-by-value pass-in-reg ABI for supported trivial types...
 /// w/ special emphasis on code reuse and bloat reduction.
 /// (requires deducing this support)
-/// TODO extract the entire container subdirectory into a separate library
-/// e.g. https://github.com/AmadeusITGroup/amc
+/// TODO extract the entire container subdirectory into a separate library or
+/// merge with prior art
+///  https://github.com/arturbac/small_vectors
+///  https://github.com/AmadeusITGroup/amc
 ////////////////////////////////////////////////////////////////////////////////
 ///
 /// Copyright (c) Domagoj Saric.
@@ -97,7 +99,7 @@ struct value_init_t   : detail::init_policy_tag{}; inline constexpr value_init_t
 template <typename T>
 concept init_policy = std::is_base_of_v<detail::init_policy_tag, T>;
 
-// see the note for up() on why the Impl parameter is used/required
+// see the note for up() on why the Impl parameter is used/required (even with deducing this support)
 template <typename Impl, typename T, typename sz_t>
 class [[ nodiscard, clang::trivial_abi ]] vector_impl
 {
@@ -127,26 +129,42 @@ public:
 private:
     // Workaround for a deducing this defect WRT to private inheritance: the
     // problem&solution described in the paper do not cover this case - where
-    //  * the base class is empty and
+    //  * the base class is empty
     //  * the implementation details are in an immediately derived class D0
-    //  * there is class Dx which then privately inherits from D0 and calls
+    //  * there is a class Dx which then privately inherits from D0 and calls
     //    vector_impl methods
     // - then the type of the self argument gets deduced as Dx (const &) -
     // through which members of D0 cannot be accessed due to private
-    // inheritance. Moreover in that case we do not know of the D0 type and
-    // cannot cast self to it - therefore in order to support this use case we
-    // have to require that 'actual implementation' derived type to be
-    // explicitly specified as template parameter.
+    // inheritance. Moreover in that case we (the base class) do not know of the
+    // D0 (implementation) type and cannot cast self to it - therefore in order
+    // to support this use case we have to require that the 'actual
+    // implementation' derived type be explicitly specified as template
+    // parameter (just like in the classic CRTP).
     // (Explicitly using the Impl type for self then has the added benefit of
     // eliminating the extra compile-time and binary size hit of instantiating
-    // base/vector_impl methods for with all the possible derived types).
+    // base/vector_impl methods for/with all the possible derived types).
     // https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2021/p0847r7.html#the-shadowing-mitigation-private-inheritance-problem
     // https://stackoverflow.com/questions/844816/c-style-upcast-and-downcast-involving-private-inheritance (tunneling magic of C-style casts)
     template <typename U> [[ gnu::const ]] static constexpr Impl       & up( U       & self ) noexcept { static_assert( std::is_base_of_v<Impl, U> ); return (Impl &)self; }
     template <typename U> [[ gnu::const ]] static constexpr Impl const & up( U const & self ) noexcept { return up( const_cast<U &>( self ) ); }
 
 private:
-    static constexpr bool moved_out_value_is_trivially_destructible{ true };
+    // Try to avoid calls to destructors of empty objects (knowing that even
+    // latest compilers fail to elide all calls to free/delete even w/ inlined
+    // destructors and move constructors in contexts where it is 'obvious' the
+    // obj is moved-out of prior to destruction) - 'absolutely strictly' this
+    // would require a new, separate type trait. Absent that, the closest thing
+    // would be to detect the existence of an actual move constructor/assignment
+    // and assume these leave the object in an 'empty'/'free'/'destructed' state
+    // (cannot think of a, non-contrived, type/design/semantics where this would
+    // not be the case). There is no standardized way to detect even this so for
+    // starters settle for nothrow-move-assignability (assuming it implies a
+    // nothrow, therefore no allocation, copy if there is no actual/separate
+    // move constructor/assignment), adding trivial destructibility to encompass
+    // the stray contrived type that might not be included otherwise.
+    // (crossing ways with https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/p2839r0.html)
+    // TODO impl https://stackoverflow.com/questions/51901837/how-to-get-if-a-type-is-truly-move-constructible/51912859#51912859
+    static constexpr bool moved_out_value_is_trivially_destructible{ std::is_nothrow_move_assignable_v<T> || std::is_trivially_destructible_v<T> };
 
     constexpr auto begin_ptr( this auto & self ) noexcept { return self.data(); }
     constexpr auto   end_ptr( this auto & self ) noexcept { return self.data() + self.size(); }
