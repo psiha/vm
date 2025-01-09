@@ -1,6 +1,8 @@
 //------------------------------------------------------------------------------
 #pragma once
 
+#include <psi/build/has_builtin.hpp>
+
 #include <cstdint>
 #include <std_fix/bit>
 #include <type_traits>

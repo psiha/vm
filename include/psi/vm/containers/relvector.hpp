@@ -1,7 +1,8 @@
 ////////////////////////////////////////////////////////////////////////////////
-/// Zero bloat implementation of a classic std::vector around the CRT and/or OS
-/// allocation APIs designed for trivially moveable types (eliminating the copy-
-/// on-resize overhead of std::vector) + vector_impl extensions.
+/// Rel(ocatable)vector - a thin std::vector replacement built around the CRT
+/// and/or low level OS allocation APIs designed for trivially moveable/
+/// 'relocatable' types (eliminating the double allocation and copy-on-resize
+/// overhead of std::vector) + vector_impl extensions.
 ////////////////////////////////////////////////////////////////////////////////
 ///
 /// Copyright (c) Domagoj Saric.
@@ -365,19 +366,19 @@ private:
 }; // class crt_aligned_allocator
 
 
-struct crt_vector_options
+struct relvector_options
 {
     std::uint8_t alignment                { 0    }; // 0 -> default
-    bool         cache_capacity           { true }; // if your crt_alloc_size is slow
-    bool         explicit_geometric_growth{ true }; // if your realloc impl is slow (yes MSVC we are again looking at you)
-}; // struct crt_vector_options
+    bool         cache_capacity           { true }; // if your crt_alloc_size is slow (MSVC)
+    bool         explicit_geometric_growth{ true }; // if your realloc impl is slow (yes MSVC we are looking at you again)
+}; // struct relvector_options
 
 
-template <typename T, typename sz_t = std::size_t, crt_vector_options options = {}>
+template <typename T, typename sz_t = std::size_t, relvector_options options = {}>
 requires( is_trivially_moveable<T> )
-class [[ nodiscard, clang::trivial_abi ]] crt_vector
+class [[ nodiscard, clang::trivial_abi ]] relvector
     :
-    public vector_impl<crt_vector<T, sz_t, options>, T, sz_t>
+    public vector_impl<relvector<T, sz_t, options>, T, sz_t>
 {
 public:
     static std::uint8_t constexpr alignment{ options.alignment ? options.alignment : std::uint8_t{ alignof( T ) } };
@@ -388,21 +389,21 @@ public:
 
 private:
     using al   = allocator_type;
-    using base = vector_impl<crt_vector<T, sz_t, options>, T, sz_t>;
+    using base = vector_impl<relvector<T, sz_t, options>, T, sz_t>;
 
 public:
     using base::base;
-    constexpr crt_vector() noexcept : p_array_{ nullptr }, size_{ 0 }, capacity_{ 0 } {}
-    constexpr explicit crt_vector( crt_vector const & other )
+    constexpr relvector() noexcept : p_array_{ nullptr }, size_{ 0 }, capacity_{ 0 } {}
+    constexpr explicit relvector( relvector const & other )
     {
         auto const data{ storage_init( other.size() ) };
         try { std::uninitialized_copy_n( other.data(), other.size(), data ); }
         catch(...) { al::deallocate( data, capacity() ); throw; }
     }
-    constexpr crt_vector( crt_vector && other ) noexcept : p_array_{ other.p_array_ }, size_{ other.size_ }, capacity_{ other.capacity_ } { other.mark_freed(); }
+    constexpr relvector( relvector && other ) noexcept : p_array_{ other.p_array_ }, size_{ other.size_ }, capacity_{ other.capacity_ } { other.mark_freed(); }
 
-    constexpr crt_vector & operator=( crt_vector const & other ) { *this = crt_vector( other ); }
-    constexpr crt_vector & operator=( crt_vector && other ) noexcept( std::is_nothrow_move_constructible_v<T> )
+    constexpr relvector & operator=( relvector const & other ) { *this = relvector( other ); }
+    constexpr relvector & operator=( relvector && other ) noexcept
     {
         std::swap( this->p_array_ , other.p_array_  );
         std::swap( this->size_    , other.size_     );
@@ -410,7 +411,7 @@ public:
         other.clear();
         return *this;
     }
-    constexpr ~crt_vector() noexcept { base::clear(); }
+    constexpr ~relvector() noexcept { base::clear(); }
 
     [[ nodiscard, gnu::pure ]] size_type size    () const noexcept { return size_; }
     [[ nodiscard, gnu::pure ]] size_type capacity() const noexcept
@@ -531,7 +532,7 @@ private:
     [[ no_unique_address ]]
 #endif
     detail::capacity<sz_t, options.cache_capacity> capacity_;
-}; // struct crt_vector
+}; // struct relvector
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm

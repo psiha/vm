@@ -1,5 +1,5 @@
 // TODO create template tests to test all (three) implementations
-#include <psi/vm/containers/crt_vector.hpp>
+#include <psi/vm/containers/relvector.hpp>
 #include <psi/vm/containers/static_vector.hpp>
 
 #include <gtest/gtest.h>
@@ -11,24 +11,24 @@ namespace psi::vm
 //------------------------------------------------------------------------------
 
 TEST(vector_test, construction) {
-    crt_vector<int> vec1;  // Default constructor
+    relvector<int> vec1;  // Default constructor
     EXPECT_TRUE(vec1.empty());
 
-    crt_vector<int> vec2(5, 42);  // Constructor with size and value
+    relvector<int> vec2(5, 42);  // Constructor with size and value
     EXPECT_EQ(vec2.size(), 5);
     EXPECT_EQ(vec2[0], 42);
 
-    crt_vector<int> vec3{1, 2, 3, 4, 5};  // Initializer list constructor
+    relvector<int> vec3{1, 2, 3, 4, 5};  // Initializer list constructor
     EXPECT_EQ(vec3.size(), 5);
     EXPECT_EQ(vec3[4], 5);
 
-    crt_vector<int> vec4(vec3.begin(), vec3.end());  // Range constructor
+    relvector<int> vec4(vec3.begin(), vec3.end());  // Range constructor
     EXPECT_EQ(vec4, vec3);
 }
 
 
 TEST(vector_test, element_access) {
-    crt_vector<int> vec{10, 20, 30, 40};
+    relvector<int> vec{10, 20, 30, 40};
 
     EXPECT_EQ(vec[2], 30);           // operator[]
     EXPECT_EQ(vec.at(3), 40);        // .at()
@@ -45,7 +45,7 @@ TEST(vector_test, element_access) {
 
 TEST(vector_test, modifiers) {
     using test_str_t = std::conditional_t<is_trivially_moveable<std::string>, std::string, std::string_view>;
-    crt_vector<test_str_t> vec;
+    relvector<test_str_t> vec;
 
     // Test push_back
     vec.emplace_back("1");
@@ -87,7 +87,7 @@ TEST(vector_test, modifiers) {
 
 
 TEST(vector_test, capacity) {
-    crt_vector<int> vec;
+    relvector<int> vec;
     EXPECT_TRUE(vec.empty());
 
     vec.resize(10, 42);  // Resize to larger size
@@ -104,7 +104,7 @@ TEST(vector_test, capacity) {
 
 TEST(vector_test, range_support) {
     auto range = std::views::iota(1, 6);  // Range [1, 2, 3, 4, 5]
-    crt_vector<int> vec(range.begin(), range.end());
+    relvector<int> vec(range.begin(), range.end());
     EXPECT_EQ(vec.size(), 5);
     EXPECT_EQ(vec[0], 1);
     EXPECT_EQ(vec[4], 5);
@@ -114,14 +114,14 @@ TEST(vector_test, range_support) {
 
 
 TEST(vector_test, move_semantics) {
-    crt_vector<int> vec1{1, 2, 3, 4, 5};
-    crt_vector<int> vec2(std::move(vec1));  // Move constructor
+    relvector<int> vec1{1, 2, 3, 4, 5};
+    relvector<int> vec2(std::move(vec1));  // Move constructor
 
     EXPECT_TRUE(vec1.empty());
     EXPECT_EQ(vec2.size(), 5);
     EXPECT_EQ(vec2[0], 1);
 
-    crt_vector<int> vec3;
+    relvector<int> vec3;
     vec3 = std::move(vec2);  // Move assignment
     EXPECT_TRUE(vec2.empty());
     EXPECT_EQ(vec3.size(), 5);
@@ -130,7 +130,7 @@ TEST(vector_test, move_semantics) {
 
 
 TEST(vector_test, iterators) {
-    crt_vector<int> vec{10, 20, 30, 40};
+    relvector<int> vec{10, 20, 30, 40};
 
     // Validate iterator traversal
     int sum = 0;
@@ -140,23 +140,23 @@ TEST(vector_test, iterators) {
     EXPECT_EQ(sum, 100);
 
     // Test reverse iterators
-    crt_vector<int> reversed(vec.rbegin(), vec.rend());
+    relvector<int> reversed(vec.rbegin(), vec.rend());
     EXPECT_EQ(reversed[0], 40);
     EXPECT_EQ(reversed[3], 10);
 
     // Const iterators
-    crt_vector<int> const const_vec{ 1, 2, 3 };
+    relvector<int> const const_vec{ 1, 2, 3 };
     EXPECT_EQ(*const_vec.cbegin(), 1);
 }
 
 
 TEST(vector_test, edge_cases) {
-    crt_vector<int> vec1;
+    relvector<int> vec1;
 
     // Large vector test (memory constraints permitting)
 #if 0 // TODO optional size_type overflow handling
     try {
-        crt_vector<int> vec2(std::numeric_limits<size_t>::max() / 2);
+        relvector<int> vec2(std::numeric_limits<size_t>::max() / 2);
         ADD_FAILURE() << "Expected bad_alloc exception for large vector";
     } catch ( std::bad_alloc const & ) {
         SUCCEED();
@@ -179,9 +179,9 @@ TEST(vector_test, edge_cases) {
 
 
 TEST(vector_test, comparison) {
-    crt_vector<int> vec1{1, 2, 3};
-    crt_vector<int> vec2{1, 2, 3};
-    crt_vector<int> vec3{1, 2, 4};
+    relvector<int> vec1{1, 2, 3};
+    relvector<int> vec2{1, 2, 3};
+    relvector<int> vec3{1, 2, 4};
 
     EXPECT_TRUE (vec1 == vec2);
     EXPECT_TRUE (vec1 != vec3);
