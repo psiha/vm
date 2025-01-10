@@ -46,6 +46,10 @@
 #include <type_traits>
 #include <std_fix/const_iterator.hpp>
 //------------------------------------------------------------------------------
+#ifdef _MSC_VER
+namespace std { template <class T, class A> class list; }
+#endif
+//------------------------------------------------------------------------------
 namespace psi::vm
 {
 //------------------------------------------------------------------------------
@@ -99,6 +103,34 @@ struct value_init_t   : detail::init_policy_tag{}; inline constexpr value_init_t
 template <typename T>
 concept init_policy = std::is_base_of_v<detail::init_policy_tag, T>;
 
+
+// Try to avoid calls to destructors of empty objects (knowing that even latest
+// compilers fail to elide all calls to free/delete even w/ inlined destructors
+// and move constructors in contexts where it is 'obvious' the obj is moved out
+// of prior to destruction) - 'absolutely strictly' this would require a new,
+// separate type trait. Absent that, the closest thing would be to detect the
+// existence of an actual move constructor/assignment and assume these leave the
+// object in an 'empty'/'free'/'destructed' state (this may be true for the
+// majority of types but does not hold in general - e.g. for node based
+// containers that allocate the sentinel node on the heap - as in other similar
+// cases in the, fast-moving/WiP, containers part of the library we opt for an
+// 'unsafe heuristic compromise' at this stage of development - catch
+// performance early and rely on sanitizers, tests and asserts to catch bugs/
+// types that need special care). There is no standardized way to detect even
+// this so for starters settle for nothrow-move-assignability (assuming it
+// implies a nothrow, therefore no allocation, copy if there is no
+// actual/separate move constructor/assignment), adding trivial destructibility
+// to encompass the stray contrived type that might not be included otherwise.
+// https://github.com/psiha/vm/pull/34#discussion_r1909052203
+// (crossing ways with https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/p2839r0.html)
+// TODO impl https://stackoverflow.com/questions/51901837/how-to-get-if-a-type-is-truly-move-constructible/51912859#51912859
+template <typename T>
+constexpr bool trivially_destructible_after_move{ std::is_nothrow_move_assignable_v<T> || std::is_trivially_destructible_v<T> };
+#ifdef _MSC_VER
+template <typename T>
+constexpr bool trivially_destructible_after_move<std::list<T>>{ false };
+#endif
+
 // see the note for up() on why the Impl parameter is used/required (even with deducing this support)
 template <typename Impl, typename T, typename sz_t>
 class [[ nodiscard, clang::trivial_abi ]] vector_impl
@@ -149,23 +181,6 @@ private:
     template <typename U> [[ gnu::const ]] static constexpr Impl const & up( U const & self ) noexcept { return up( const_cast<U &>( self ) ); }
 
 private:
-    // Try to avoid calls to destructors of empty objects (knowing that even
-    // latest compilers fail to elide all calls to free/delete even w/ inlined
-    // destructors and move constructors in contexts where it is 'obvious' the
-    // obj is moved-out of prior to destruction) - 'absolutely strictly' this
-    // would require a new, separate type trait. Absent that, the closest thing
-    // would be to detect the existence of an actual move constructor/assignment
-    // and assume these leave the object in an 'empty'/'free'/'destructed' state
-    // (cannot think of a, non-contrived, type/design/semantics where this would
-    // not be the case). There is no standardized way to detect even this so for
-    // starters settle for nothrow-move-assignability (assuming it implies a
-    // nothrow, therefore no allocation, copy if there is no actual/separate
-    // move constructor/assignment), adding trivial destructibility to encompass
-    // the stray contrived type that might not be included otherwise.
-    // (crossing ways with https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/p2839r0.html)
-    // TODO impl https://stackoverflow.com/questions/51901837/how-to-get-if-a-type-is-truly-move-constructible/51912859#51912859
-    static constexpr bool moved_out_value_is_trivially_destructible{ std::is_nothrow_move_assignable_v<T> || std::is_trivially_destructible_v<T> };
-
     constexpr auto begin_ptr( this auto & self ) noexcept { return self.data(); }
     constexpr auto   end_ptr( this auto & self ) noexcept { return self.data() + self.size(); }
     constexpr iterator make_iterator( [[ maybe_unused ]] this Impl & self, value_type * const ptr ) noexcept
@@ -589,7 +604,7 @@ public:
     iterator emplace( this Impl & self, const_iterator const position, Args &&... args )
     {
         auto const iter{ self.make_space_for_insert( position, 1 ) };
-        if constexpr ( moved_out_value_is_trivially_destructible )
+        if constexpr ( trivially_destructible_after_move<T> )
             construct_at( *iter, std::forward<Args>( args )... );
         else
             *iter = { std::forward<Args>( args )... };
@@ -652,7 +667,7 @@ public:
     iterator insert( this Impl & self, const_iterator const position, size_type const n, param_const_ref x )
     {
         auto const iter{ self.make_space_for_insert( position, n ) };
-        if constexpr ( moved_out_value_is_trivially_destructible )
+        if constexpr ( trivially_destructible_after_move<T> )
             std::uninitialized_fill_n( iter, n, x );
         else
             std::fill_n( iter, n, x );
@@ -674,7 +689,7 @@ public:
     {
         auto const n{ static_cast<size_type>( std::distance( first, last ) ) };
         auto const iter{ self.make_space_for_insert( position, n ) };
-        if constexpr ( moved_out_value_is_trivially_destructible )
+        if constexpr ( trivially_destructible_after_move<T> )
             std::uninitialized_copy_n( first, n, iter );
         else
             std::copy_n( first, n, iter );
@@ -741,7 +756,7 @@ public:
         auto const pos_index{ self.index_of( position ) };
         auto const mutable_pos{ self.nth( pos_index ) };
         std::shift_left( mutable_pos, self.end(), 1 );
-        if constexpr ( moved_out_value_is_trivially_destructible )
+        if constexpr ( trivially_destructible_after_move<T> )
             self.storage_dec_size();
         else
             self.pop_back();
@@ -764,7 +779,7 @@ public:
         auto const mutable_end  { detail::mutable_iter( last  ) };
         auto const new_end      { std::move( mutable_end, self.end(), mutable_start ) };
         auto const new_size     { static_cast<size_type>( new_end - self.begin() ) };
-        if constexpr ( moved_out_value_is_trivially_destructible )
+        if constexpr ( trivially_destructible_after_move<T> )
             self.storage_shrink_size_to( new_size );
         else
             self.shrink_to( new_size );

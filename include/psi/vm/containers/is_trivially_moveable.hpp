@@ -35,17 +35,17 @@ namespace psi::vm
 
 // Containers like relvector (relying on realloc) and vm_vector (relying on
 // mremap) need a trait to detect/constraint on types actually supporting this.
-// There are actually several existing proposals related to this (most notably
-// P1144 and P2786). This library/the author leans toward 'trivially
-// relocatable' to mean that an object can be simply 'paused' (i.e. not a thread
-// safe operation), 'picked up' from its current location, 'droped' at a
-// different location and simply 'resumed' like nothing happened (in the sense
-// of program correctness), IOW an obj can have the value of its this pointer
-// changed w/o violating any of its invariants or preconditions. The semantics
-// of P2786 sound closest to that - i.e. the desired behaviour for the typical
-// example of tuple<T&> is that no T assignment happens - rather the tuple/obj
-// w/ references gets replanted/reseated at a different location ('simply
-// resumes its life unchanged on a different location').
+// There already exist several proposals related to this (most notably P1144 and
+// P2786). This library/the author leans toward 'trivially relocatable' to mean
+// that an object can be simply 'paused' (i.e. not a thread safe operation),
+// 'picked up' from its current location, 'droped' at a different location and
+// simply 'resumed' like nothing happened (in the sense of program correctness),
+// IOW an obj can have the value of its this pointer changed w/o violating any
+// of its invariants or preconditions. The semantics of P2786 sound closest to
+// that - i.e. the desired behaviour for the typical example of tuple<T&> is
+// that no T assignment happens - rather the tuple/obj w/ references gets
+// replanted/reseated at a different location ('simply resumes its life
+// unchanged at a different location').
 // With this library already trying to 'push the envelope' on several fronts it
 // does not, in this context, prioritize compatibility or safety - rather the
 // goal is to provide trivial relocatability support for the widest scope of
@@ -57,7 +57,7 @@ namespace psi::vm
 // @ https://github.com/psiha/vm/issues/31
 //
 // In addition, this library needs a trait like
-// 'moved_out_value_is_trivially_destructible' (see vector_impl.hpp) and a trait
+// 'trivially_destructible_after_move' (see vector_impl.hpp) and a trait
 // that would signal a type that contains no absolute pointers or references
 // (so that it can be trivially persisted to disk or used for IPC) - this one is
 // as of yet fully MIA and is required by vm_vector when using file backed
