@@ -1629,7 +1629,7 @@ public:
     // Have to provide default construction in order to model
     // std::random_access_iterator (yet at the same time do not want to in order
     // to be able to omit the check in the assignment operator as is required
-    // for base_iterator.
+    // for base_iterator).
     constexpr ra_full_node_iterator() noexcept { std::unreachable(); }
     constexpr ra_full_node_iterator( leaf_node * leaves[], size_type const value_index ) noexcept : pp_leaf_{ leaves }, value_index_{ value_index } {};
     ra_full_node_iterator( ra_full_node_iterator const & ) = default;
@@ -1651,17 +1651,10 @@ public:
     ra_full_node_iterator & operator-=( difference_type const n )       noexcept { value_index_ -= n; return *this; }
     PSI_WARNING_DISABLE_POP()
 
-    [[ gnu::pure ]]
-    friend constexpr auto operator<=>( ra_full_node_iterator const & left, ra_full_node_iterator const & right ) noexcept
-    {
-        BOOST_ASSUME( left.pp_leaf_ == right.pp_leaf_ );
-        return left.value_index_ <=> right.value_index_;
-    }
-    difference_type operator-( ra_full_node_iterator const & other ) const noexcept
-    {
-        BOOST_ASSUME( this->pp_leaf_ == other.pp_leaf_ );
-        return static_cast<difference_type>( this->value_index_ - other.value_index_ );
-    }
+    [[ gnu::pure ]] constexpr auto            operator<=>( ra_full_node_iterator const & other ) const noexcept { BOOST_ASSUME( this->pp_leaf_ == other.pp_leaf_ ); return this->value_index_ <=> other.value_index_; }
+    [[ gnu::pure ]] constexpr bool            operator== ( ra_full_node_iterator const & other ) const noexcept { BOOST_ASSUME( this->pp_leaf_ == other.pp_leaf_ ); return this->value_index_ ==  other.value_index_; }
+    [[ gnu::pure ]] constexpr difference_type operator-  ( ra_full_node_iterator const & other ) const noexcept { BOOST_ASSUME( this->pp_leaf_ == other.pp_leaf_ ); return static_cast<difference_type>( this->value_index_ - other.value_index_ ); }
+
     ra_full_node_iterator & operator=( ra_full_node_iterator const & other ) noexcept
     {
         BOOST_ASSUME( this->pp_leaf_ == other.pp_leaf_ );
