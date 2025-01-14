@@ -33,7 +33,7 @@ namespace psi::vm
 //------------------------------------------------------------------------------
 
 template <typename T, std::uint32_t size>
-union [[ clang::trivial_abi ]] noninitialized_array
+union [[ clang::trivial_abi ]] noninitialized_array // utility for easier debugging: no need for special 'visualizers' over type-erased byte arrays
 {
     constexpr  noninitialized_array() noexcept {}
     constexpr ~noninitialized_array() noexcept {}
@@ -77,8 +77,9 @@ private:
         128
 #   endif
     };
-    struct this_pod { size_type _0; noninitialized_array<T, maximum_size> _1; };
+    struct this_pod { size_type _0; noninitialized_array<T, maximum_size> _1; }; // verified in storage_grow_to()
     static bool constexpr fixed_sized_copy{ std::is_trivially_copy_constructible_v<T> && ( sizeof( this_pod ) <= unconditional_fixed_memcopy_size_limit ) };
+    static bool constexpr fixed_sized_move{      is_trivially_moveable            <T> && ( sizeof( this_pod ) <= unconditional_fixed_memcopy_size_limit ) };
 
 public:
     using base::base;
@@ -94,7 +95,7 @@ public:
     }
     constexpr static_vector( static_vector && other ) noexcept( std::is_nothrow_move_constructible_v<T> )
     {
-        if constexpr ( fixed_sized_copy ) {
+        if constexpr ( fixed_sized_move ) {
             fixed_copy( other );
         } else {
             std::uninitialized_move_n( other.data(), other.size(), this->data() );
@@ -105,17 +106,18 @@ public:
     constexpr static_vector & operator=( static_vector const & other ) noexcept( std::is_nothrow_copy_constructible_v<T> )
     {
         if constexpr ( fixed_sized_copy ) {
+            std::destroy_n( data(), size() );
             fixed_copy( other );
             return *this;
         } else {
             return static_cast<static_vector &>( base::operator=( other ) );
         }
     }
-    constexpr static_vector & operator=( static_vector && other ) noexcept( std::is_nothrow_move_constructible_v<T> )
+    constexpr static_vector & operator=( static_vector && other ) noexcept( std::is_nothrow_move_assignable_v<T> )
     {
-        if constexpr ( fixed_sized_copy ) {
-            fixed_copy( other );
-            return *this;
+        if constexpr ( fixed_sized_move ) {
+            std::destroy_n( data(), size() );
+            return *(new (this) static_vector( std::move( other ) ));
         } else {
             return static_cast<static_vector &>( base::operator=( std::move( other ) ) );
         }
@@ -127,11 +129,11 @@ public:
     [[ nodiscard, gnu::const  ]] constexpr value_type       * data()       noexcept { return array_.data; }
     [[ nodiscard, gnu::const  ]] constexpr value_type const * data() const noexcept { return array_.data; }
 
-    void reserve( size_type const new_capacity ) noexcept { BOOST_ASSUME( new_capacity <= maximum_size ); }
+    void reserve( size_type const new_capacity ) const noexcept { BOOST_ASSUME( new_capacity <= maximum_size ); }
 
-private: friend base;
-    constexpr value_type * storage_init( size_type const initial_size ) noexcept( noexcept( overflow_handler() ) ) { return storage_grow_to( initial_size ); }
-    constexpr value_type * storage_grow_to( size_type const target_size ) noexcept( noexcept( overflow_handler() ) )
+private: friend base; // contiguous storage implementation
+    constexpr value_type * storage_init   ( size_type const initial_size ) noexcept( noexcept( overflow_handler() ) ) { return storage_grow_to( initial_size ); }
+    constexpr value_type * storage_grow_to( size_type const  target_size ) noexcept( noexcept( overflow_handler() ) )
     {
         static_assert( sizeof( *this ) == sizeof( this_pod ) );
         if ( target_size > maximum_size ) [[ unlikely ]] {
@@ -168,6 +170,9 @@ private:
     size_type                             size_;
     noninitialized_array<T, maximum_size> array_;
 }; // struct static_vector
+
+template <typename T, std::uint32_t maximum_size, auto overflow_handler>
+bool constexpr is_trivially_moveable<static_vector<T, maximum_size, overflow_handler>>{ is_trivially_moveable<T> };
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm
