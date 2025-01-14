@@ -132,8 +132,8 @@ concept init_policy = std::is_base_of_v<detail::init_policy_tag, T>;
 template <typename T>
 constexpr bool trivially_destructible_after_move_assignment{ std::is_nothrow_move_assignable_v<T> || std::is_trivially_destructible_v<T> };
 #ifdef _MSC_VER // assuming this implies MS STL
-template <typename T>
-constexpr bool trivially_destructible_after_move_assignment<std::list<T>>{ false }; // retains a heap allocated sentinel node
+template <typename T, typename A>
+constexpr bool trivially_destructible_after_move_assignment<std::list<T, A>>{ false }; // retains a heap allocated sentinel node
 #endif
 #ifdef __GLIBCXX__
 // libstdc++'s string ('gets' and) retains the allocator and storage from the moved-to string
