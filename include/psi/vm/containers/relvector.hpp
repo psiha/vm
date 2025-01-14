@@ -3,6 +3,8 @@
 /// and/or low level OS allocation APIs designed for trivially moveable/
 /// 'relocatable' types (eliminating the double allocation and copy-on-resize
 /// overhead of std::vector) + vector_impl extensions.
+/// TODO: expand/finish support for non trivially_moveable types and rename to
+/// simply vector
 ////////////////////////////////////////////////////////////////////////////////
 ///
 /// Copyright (c) Domagoj Saric.
