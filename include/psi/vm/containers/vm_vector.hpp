@@ -473,7 +473,7 @@ template <typename Header>
 // is true IFF a type neither is nor contains a pointer or a reference. For the
 // rest - specialization-awaiting-standardization...
 template <typename T>
-bool constexpr does_not_hold_absolute_addresses{ std::is_fundamental_v<T> };
+bool constexpr does_not_hold_absolute_addresses{ std::is_fundamental_v<T> || std::is_enum_v<T> };
 
 
 // Optionally persistent container class template which uses VM/a mapped object
