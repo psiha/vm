@@ -375,13 +375,13 @@ bptree_base::storage_result
 bptree_base::map_file( auto const file, flags::named_object_construction_policy const policy ) noexcept
 {
     auto success{ nodes_.map_file( file, policy )() };
-#   ifndef NDEBUG
+#ifndef NDEBUG
     if ( success )
     {
         p_hdr_   = &hdr();
         p_nodes_ = nodes_.data();
     }
-#   endif
+#endif
     if ( success && nodes_.empty() )
         hdr() = {};
     return success;
