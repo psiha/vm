@@ -89,20 +89,7 @@ public:
 
     bool has_attached_storage() const noexcept { return nodes_.has_attached_storage(); }
 
-    storage_result map_file( auto const file, flags::named_object_construction_policy const policy ) noexcept
-    {
-        auto success{ nodes_.map_file( file, policy )() };
-#   ifndef NDEBUG
-        if ( success )
-        {
-            p_hdr_   = &hdr();
-            p_nodes_ = nodes_.data();
-        }
-#   endif
-        if ( success && nodes_.empty() )
-            hdr() = {};
-        return success;
-    }
+    storage_result map_file  ( auto file, flags::named_object_construction_policy ) noexcept;
     storage_result map_memory( std::uint32_t initial_capacity_as_number_of_nodes = 0 ) noexcept;
 
 protected:
@@ -381,6 +368,24 @@ protected:
 
 inline constexpr bptree_base::node_slot const bptree_base::node_slot::null{ static_cast<value_type>( -1 ) };
 
+template <> // tell vm_vector it is safe to persist nodes
+inline bool constexpr does_not_hold_absolute_addresses<bptree_base::node_placeholder>{ true };
+
+bptree_base::storage_result
+bptree_base::map_file( auto const file, flags::named_object_construction_policy const policy ) noexcept
+{
+    auto success{ nodes_.map_file( file, policy )() };
+#   ifndef NDEBUG
+    if ( success )
+    {
+        p_hdr_   = &hdr();
+        p_nodes_ = nodes_.data();
+    }
+#   endif
+    if ( success && nodes_.empty() )
+        hdr() = {};
+    return success;
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // \class bptree_base::base_iterator
@@ -443,6 +448,8 @@ private:
     [[ using gnu: hot, leaf, const ]][[ clang::preserve_most ]] static iter_pos at_negative_offset( nodes_t, iter_pos, size_type n ) noexcept;
 
 protected:
+    // Closest to type D or 'fat pointer' according to this taxonomy
+    // https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2017/p0773r0.html
     mutable nodes_t  nodes_{};
             iter_pos pos_  {};
 
@@ -1732,12 +1739,11 @@ bptree_base_wkey<Key>::erase( const_iterator const first, const_iterator const l
         this->unlink_and_free_node( node, this->left( node ) );
     }
 
-    // handling of possible underflow of the starting node is delayed to
-    // avoid constant moving/refilling of values from succeeding right
-    // leaves - rather this case is handled faster by removing entire
-    // same-valued nodes (in case there are any) and then the starting and
-    // ending, potentially partially erased, leaves are handled for possible
-    // underflow
+    // handling of possible underflow of the starting node is delayed to avoid
+    // constant moving/refilling of values from succeeding right leaves - rather
+    // this case is handled faster by removing entire same-valued nodes (in case
+    // there are any) and then the starting and ending, potentially partially
+    // erased, leaves are handled for possible underflow
     this->check_and_handle_bulk_erase_underflow( leaf( first.base().pos().node ) );
     // pos cannot point to the starting node here as that case is handled at the
     // beginning of the function so no need to check/use the return of the above

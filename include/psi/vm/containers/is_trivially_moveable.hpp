@@ -33,8 +33,12 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
+// template <typename T>
+// bool is_trivially_moveable;
+//
 // Containers like relvector (relying on realloc) and vm_vector (relying on
-// mremap) need a trait to detect/constraint on types actually supporting this.
+// mremap) need a trait to detect/constraint on types actually supporting
+// 'bitwise moves'.
 // There already exist several proposals related to this (most notably P1144 and
 // P2786). This library/the author leans toward 'trivially relocatable' to mean
 // that an object can be simply 'paused' (i.e. not a thread safe operation),
@@ -59,10 +63,8 @@ namespace psi::vm
 // In addition, this library needs a trait like
 // 'trivially_destructible_after_move' (see vector_impl.hpp) and a trait
 // that would signal a type that contains no absolute pointers or references
-// (so that it can be trivially persisted to disk or used for IPC) - this one is
-// as of yet fully MIA and is required by vm_vector when using file backed
-// storage (until such a thingy is devised the inadequate is_trivially_moveable
-// is used).
+// (so that it can be trivially persisted to disk or used for IPC, see
+// 'does_not_hold_absolute_addresses' in vm_vector.hpp).
 
 // https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2024/p1144r12.html std::is_trivially_relocatable
 // https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2024/p2786r11.html Trivial Relocatability
@@ -87,10 +89,9 @@ bool constexpr is_trivially_moveable
 #if defined( __cpp_lib_trivially_relocatable /*P1144*/ ) || defined( __cpp_trivial_relocatability /*P2786*/ )
     std::is_trivially_relocatable<T> ||
 #endif
+    std::is_trivially_copyable_v<T> || // implies trivial destructibility https://eel.is/c++draft/class.prop#1
     std::is_trivially_move_assignable_v<T> ||
-    // contrived types support below this line
-    std::is_trivially_move_constructible_v<T> ||
-    ( std::is_trivially_copyable_v<T> && std::is_trivially_destructible_v<T> )
+    std::is_trivially_move_constructible_v<T> // beyond P2786 optimistic heuristic https://github.com/psiha/vm/pull/34#discussion_r1914536293
 }; // is_trivially_moveable
 
 template <typename T1, typename T2>
