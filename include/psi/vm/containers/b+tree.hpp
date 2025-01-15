@@ -369,7 +369,7 @@ protected:
 inline constexpr bptree_base::node_slot const bptree_base::node_slot::null{ static_cast<value_type>( -1 ) };
 
 template <> // tell vm_vector it is safe to persist nodes
-inline bool constexpr does_not_hold_absolute_addresses<bptree_base::node_placeholder>{ true };
+inline bool constexpr does_not_hold_addresses<bptree_base::node_placeholder>{ true };
 
 bptree_base::storage_result
 bptree_base::map_file( auto const file, flags::named_object_construction_policy const policy ) noexcept

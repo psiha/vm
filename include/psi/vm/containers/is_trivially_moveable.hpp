@@ -64,13 +64,19 @@ namespace psi::vm
 // 'trivially_destructible_after_move' (see vector_impl.hpp) and a trait
 // that would signal a type that contains no absolute pointers or references
 // (so that it can be trivially persisted to disk or used for IPC, see
-// 'does_not_hold_absolute_addresses' in vm_vector.hpp).
+// 'does_not_hold_addresses' in vm_vector.hpp).
 
 // https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2024/p1144r12.html std::is_trivially_relocatable
 // https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2024/p2786r11.html Trivial Relocatability
-// https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/p2959r0.html Relocation Within Containers
-// https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2024/p3055r1.html Relax wording to permit relocation optimizations in the STL
+// https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/p2959r0.html  Relocation Within Containers
+// https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2024/p3055r1.html  Relax wording to permit relocation optimizations in the STL
+// https://www.open-std.org/JTC1/SC22/WG21/docs/papers/2014/n4158.pdf     Destructive Move
+// https://www.open-std.org/JTC1/SC22/WG21/docs/papers/2016/p0023r0.pdf   Relocator: Efficiently moving objects
+// https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/p2785r3.html  Relocating prvalues
+// https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p1029r0.pdf   [[move_relocates]]
+// https://gcc.gnu.org/onlinedocs/gcc-11.4.0/libstdc++/api/a06570.html __is_location_invariant
 // https://quuxplusone.github.io/blog/2019/02/20/p1144-what-types-are-relocatable
+// https://quuxplusone.github.io/blog/2018/09/28/trivially-relocatable-vs-destructive-movable
 // https://github.com/Quuxplusone/libcxx/blob/trivially-relocatable/test/libcxx/type_traits/is_trivially_relocatable.pass.cpp
 // https://brevzin.github.io/c++/2024/10/21/trivial-relocation
 // https://github.com/abseil/abseil-cpp/pull/1625
