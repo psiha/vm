@@ -5,9 +5,12 @@
 /// stable/try-expansion (TODO), checked iterators, configurable size_type,
 /// pass-by-value pass-in-reg ABI for supported trivial types...
 /// w/ special emphasis on code reuse and bloat reduction.
-/// (requires deducing this support)
-/// TODO extract the entire container subdirectory into a separate library
-/// e.g. https://github.com/AmadeusITGroup/amc
+/// (requires deducing this, P0847 support)
+/// TODO extract the entire container subdirectory into a separate library or
+/// merge with prior art
+///  https://github.com/arturbac/small_vectors
+///  https://github.com/AmadeusITGroup/amc
+///  https://github.com/Quuxplusone/SG14/?tab=readme-ov-file#allocator-aware-in-place-vector-future--c20
 ////////////////////////////////////////////////////////////////////////////////
 ///
 /// Copyright (c) Domagoj Saric.
@@ -43,6 +46,10 @@
 #include <span>
 #include <type_traits>
 #include <std_fix/const_iterator.hpp>
+//------------------------------------------------------------------------------
+#ifdef _MSC_VER
+namespace std { template <class T, class A> class list; }
+#endif
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -97,7 +104,45 @@ struct value_init_t   : detail::init_policy_tag{}; inline constexpr value_init_t
 template <typename T>
 concept init_policy = std::is_base_of_v<detail::init_policy_tag, T>;
 
-// see the note for up() on why the Impl parameter is used/required
+
+// Try to avoid calls to destructors of empty objects (knowing that even latest
+// compilers sometimes fail to elide all calls to free/delete even w/ inlined
+// destructors and move constructors in contexts where it is 'obvious' the obj
+// is moved out of prior to destruction) - 'absolutely strictly' this would
+// require a new, separate type trait. Absent that, the closest thing would be
+// to detect the existence of an actual move constructor/assignment and assume
+// these leave the object in an 'empty'/'free'/'destructed' state (this may be
+// true for the majority of types but does not hold in general - e.g. for node
+// based containers that allocate the sentinel node on the heap - as in other
+// similar cases in the, fast-moving/WiP, containers part of the library we
+// opt for an 'unsafe heuristic compromise' at this stage of development -
+// catch performance early and rely on sanitizers, tests and asserts to catch
+// bugs/types that need special care). There is no standardized way to detect
+// even this so for starters settle for nothrow-move-assignability (assuming
+// it implies a nothrow, therefore no allocation, copy if there is no
+// actual/separate move constructor/assignment), adding trivial destructibility
+// to encompass the stray contrived type that might not be included otherwise.
+// https://github.com/psiha/vm/pull/34#discussion_r1909052203
+// https://quuxplusone.github.io/blog/2025/01/10/trivially-destructible-after-move
+// (crossing ways with
+//   https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/p2839r0.html Nontrivial Relocation via a New owning reference Type
+//   https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2020/p1029r3.pdf  move = bitcopies
+// )
+// TODO impl https://stackoverflow.com/questions/51901837/how-to-get-if-a-type-is-truly-move-constructible/51912859#51912859
+template <typename T>
+constexpr bool trivially_destructible_after_move_assignment{ std::is_nothrow_move_assignable_v<T> || std::is_trivially_destructible_v<T> };
+#ifdef _MSC_VER // assuming this implies MS STL
+template <typename T, typename A>
+constexpr bool trivially_destructible_after_move_assignment<std::list<T, A>>{ false }; // retains a heap allocated sentinel node
+#endif
+#ifdef __GLIBCXX__
+// libstdc++'s string ('gets' and) retains the allocator and storage from the moved-to string
+// https://gcc.gnu.org/git/?p=gcc.git;a=blobdiff;f=libstdc%2B%2B-v3/include/bits/basic_string.h;h=c81dc0d425a0ae648c46f520b603971978413281;hp=aa018262c98b6633bc347bfa75492fce38f6c631;hb=540a22d243966d1b882db26b17fe674467e2a169;hpb=49e52115b09b477382fef6f04fd7b4d1641f902c
+template <typename E, typename T, typename A>
+bool constexpr trivially_destructible_after_move_assignment<std::basic_string<E, T, A>>{ false };
+#endif
+
+// see the note for up() on why the Impl parameter is used/required (even with deducing this support)
 template <typename Impl, typename T, typename sz_t>
 class [[ nodiscard, clang::trivial_abi ]] vector_impl
 {
@@ -127,27 +172,26 @@ public:
 private:
     // Workaround for a deducing this defect WRT to private inheritance: the
     // problem&solution described in the paper do not cover this case - where
-    //  * the base class is empty and
+    //  * the base class is empty
     //  * the implementation details are in an immediately derived class D0
-    //  * there is class Dx which then privately inherits from D0 and calls
+    //  * there is a class Dx which then privately inherits from D0 and calls
     //    vector_impl methods
     // - then the type of the self argument gets deduced as Dx (const &) -
     // through which members of D0 cannot be accessed due to private
-    // inheritance. Moreover in that case we do not know of the D0 type and
-    // cannot cast self to it - therefore in order to support this use case we
-    // have to require that 'actual implementation' derived type to be
-    // explicitly specified as template parameter.
+    // inheritance. Moreover in that case we (the base class) do not know of the
+    // D0 (implementation) type and cannot cast self to it - therefore in order
+    // to support this use case we have to require that the 'actual
+    // implementation' derived type be explicitly specified as template
+    // parameter (just like in the classic CRTP).
     // (Explicitly using the Impl type for self then has the added benefit of
     // eliminating the extra compile-time and binary size hit of instantiating
-    // base/vector_impl methods for with all the possible derived types).
+    // base/vector_impl methods for/with all the possible derived types).
     // https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2021/p0847r7.html#the-shadowing-mitigation-private-inheritance-problem
     // https://stackoverflow.com/questions/844816/c-style-upcast-and-downcast-involving-private-inheritance (tunneling magic of C-style casts)
     template <typename U> [[ gnu::const ]] static constexpr Impl       & up( U       & self ) noexcept { static_assert( std::is_base_of_v<Impl, U> ); return (Impl &)self; }
     template <typename U> [[ gnu::const ]] static constexpr Impl const & up( U const & self ) noexcept { return up( const_cast<U &>( self ) ); }
 
 private:
-    static constexpr bool moved_out_value_is_trivially_destructible{ true };
-
     constexpr auto begin_ptr( this auto & self ) noexcept { return self.data(); }
     constexpr auto   end_ptr( this auto & self ) noexcept { return self.data() + self.size(); }
     constexpr iterator make_iterator( [[ maybe_unused ]] this Impl & self, value_type * const ptr ) noexcept
@@ -170,8 +214,10 @@ private:
     {
         return { const_cast<Impl &>( self ).make_iterator( offset ) };
     }
-    // constructor helper - for initializing the derived Impl class - only to be
-    // used in constructors!
+
+    // constructor helpers - for initializing the derived Impl class
+    // (simplifying or minimizing the need to write specialized Impl
+    // constructors) - to be used only in vector_impl constructors!
     constexpr Impl & initialized_impl( size_type const initial_size, no_init_t ) noexcept
     {
         auto & impl{ static_cast<Impl &>( *this ) };
@@ -571,7 +617,7 @@ public:
     iterator emplace( this Impl & self, const_iterator const position, Args &&... args )
     {
         auto const iter{ self.make_space_for_insert( position, 1 ) };
-        if constexpr ( moved_out_value_is_trivially_destructible )
+        if constexpr ( trivially_destructible_after_move_assignment<T> )
             construct_at( *iter, std::forward<Args>( args )... );
         else
             *iter = { std::forward<Args>( args )... };
@@ -634,7 +680,7 @@ public:
     iterator insert( this Impl & self, const_iterator const position, size_type const n, param_const_ref x )
     {
         auto const iter{ self.make_space_for_insert( position, n ) };
-        if constexpr ( moved_out_value_is_trivially_destructible )
+        if constexpr ( trivially_destructible_after_move_assignment<T> )
             std::uninitialized_fill_n( iter, n, x );
         else
             std::fill_n( iter, n, x );
@@ -656,7 +702,7 @@ public:
     {
         auto const n{ static_cast<size_type>( std::distance( first, last ) ) };
         auto const iter{ self.make_space_for_insert( position, n ) };
-        if constexpr ( moved_out_value_is_trivially_destructible )
+        if constexpr ( trivially_destructible_after_move_assignment<T> )
             std::uninitialized_copy_n( first, n, iter );
         else
             std::copy_n( first, n, iter );
@@ -723,7 +769,7 @@ public:
         auto const pos_index{ self.index_of( position ) };
         auto const mutable_pos{ self.nth( pos_index ) };
         std::shift_left( mutable_pos, self.end(), 1 );
-        if constexpr ( moved_out_value_is_trivially_destructible )
+        if constexpr ( trivially_destructible_after_move_assignment<T> )
             self.storage_dec_size();
         else
             self.pop_back();
@@ -746,7 +792,7 @@ public:
         auto const mutable_end  { detail::mutable_iter( last  ) };
         auto const new_end      { std::move( mutable_end, self.end(), mutable_start ) };
         auto const new_size     { static_cast<size_type>( new_end - self.begin() ) };
-        if constexpr ( moved_out_value_is_trivially_destructible )
+        if constexpr ( trivially_destructible_after_move_assignment<T> )
             self.storage_shrink_size_to( new_size );
         else
             self.shrink_to( new_size );

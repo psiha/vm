@@ -89,20 +89,7 @@ public:
 
     bool has_attached_storage() const noexcept { return nodes_.has_attached_storage(); }
 
-    storage_result map_file( auto const file, flags::named_object_construction_policy const policy ) noexcept
-    {
-        auto success{ nodes_.map_file( file, policy )() };
-#   ifndef NDEBUG
-        if ( success )
-        {
-            p_hdr_   = &hdr();
-            p_nodes_ = nodes_.data();
-        }
-#   endif
-        if ( success && nodes_.empty() )
-            hdr() = {};
-        return success;
-    }
+    storage_result map_file  ( auto file, flags::named_object_construction_policy ) noexcept;
     storage_result map_memory( std::uint32_t initial_capacity_as_number_of_nodes = 0 ) noexcept;
 
 protected:
@@ -381,6 +368,24 @@ protected:
 
 inline constexpr bptree_base::node_slot const bptree_base::node_slot::null{ static_cast<value_type>( -1 ) };
 
+template <> // tell vm_vector it is safe to persist nodes
+inline bool constexpr does_not_hold_addresses<bptree_base::node_placeholder>{ true };
+
+bptree_base::storage_result
+bptree_base::map_file( auto const file, flags::named_object_construction_policy const policy ) noexcept
+{
+    auto success{ nodes_.map_file( file, policy )() };
+#ifndef NDEBUG
+    if ( success )
+    {
+        p_hdr_   = &hdr();
+        p_nodes_ = nodes_.data();
+    }
+#endif
+    if ( success && nodes_.empty() )
+        hdr() = {};
+    return success;
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // \class bptree_base::base_iterator
@@ -443,6 +448,8 @@ private:
     [[ using gnu: hot, leaf, const ]][[ clang::preserve_most ]] static iter_pos at_negative_offset( nodes_t, iter_pos, size_type n ) noexcept;
 
 protected:
+    // Closest to type D or 'fat pointer' according to this taxonomy
+    // https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2017/p0773r0.html
     mutable nodes_t  nodes_{};
             iter_pos pos_  {};
 
@@ -464,11 +471,7 @@ public:
     [[ clang::no_sanitize( "unsigned-integer-overflow" ) ]]
     difference_type operator-( base_random_access_iterator const & other ) const noexcept
     {
-#   ifdef NDEBUG
-        BOOST_ASSUME( this->nodes_ == other.nodes_ );
-#   else
-        BOOST_ASSERT( this->nodes_.data() == other.nodes_.data() );
-#   endif
+        BOOST_ASSUME( verify_comparable( *this, other ) );
         return static_cast<difference_type>( this->index_ - other.index_ );
     }
     base_random_access_iterator & operator+=( difference_type const n )       noexcept { return (*this = *this + n); }
@@ -493,14 +496,14 @@ public:
 
     // should implicitly handle end iterator comparison also (this requires the
     // start_index constructor argument for the construction of end iterators)
-    [[ gnu::pure ]]
-    friend constexpr auto operator<=>( base_random_access_iterator const & left, base_random_access_iterator const & right ) noexcept
+    [[ gnu::pure ]] friend auto operator<=>( base_random_access_iterator const & left, base_random_access_iterator const & right ) noexcept
     {
-#   ifdef NDEBUG
-        BOOST_ASSUME( left.nodes_ == right.nodes_ );
-#   else
-        BOOST_ASSERT( left.nodes_.data() == right.nodes_.data() );
-#   endif
+        BOOST_ASSUME( verify_comparable( left, right ) );
+        return left.index_ <=> right.index_;
+    }
+    [[ gnu::pure ]] friend auto operator==( base_random_access_iterator const & left, base_random_access_iterator const & right ) noexcept
+    {
+        BOOST_ASSUME( verify_comparable( left, right ) );
         return left.index_ == right.index_;
     }
 
@@ -517,6 +520,17 @@ protected:
 private:
     [[ using gnu: sysv_abi, hot, pure ]]
     base_random_access_iterator at_offset( difference_type n ) const noexcept;
+
+    [[ gnu::pure ]] static bool verify_comparable( base_random_access_iterator const & left, base_random_access_iterator const & right ) noexcept
+    {
+#   ifdef NDEBUG
+        auto const same_source{ left.nodes_ == right.nodes_ };
+#   else
+        auto const same_source{ left.nodes_.data() == right.nodes_.data() };
+#   endif
+        BOOST_ASSUME( same_source );
+        return same_source;
+    }
 }; // class base_random_access_iterator
 
 
@@ -1148,7 +1162,7 @@ protected: // 'other'
                     leaf.keys[ leaf.num_vals++ ] = *p_keys++;
                 }
                 count += leaf.num_vals;
-                // ugh - cannot save pointer right away as they may get
+                // ugh - cannot save pointers right away as they may get
                 // invalidated by calls to new_node
                 nodes.push_back( reinterpret_cast<leaf_node * const &>( leaf_slot ) );
             }
@@ -1580,9 +1594,10 @@ class [[ clang::trivial_abi ]] bptree_base_wkey<Key>::ra_iterator
     public iter_impl<ra_iterator, std::random_access_iterator_tag>
 {
 private: friend class bptree_base_wkey<Key>;
-    using base_random_access_iterator::base_random_access_iterator;
+    using base = base_random_access_iterator;
+    using base::base;
 
-    leaf_node & node() const noexcept { return static_cast<leaf_node &>( base_random_access_iterator::node() ); }
+    leaf_node & node() const noexcept { return static_cast<leaf_node &>( base::node() ); }
 
 public:
     constexpr ra_iterator() noexcept = default;
@@ -1606,15 +1621,18 @@ public:
         return span;
     }
 
-    ra_iterator   operator+ ( difference_type const n ) const noexcept { return static_cast<ra_iterator &&>( base_random_access_iterator::operator+ (  n ) ); }
-    ra_iterator & operator+=( difference_type const n )       noexcept { return static_cast<ra_iterator & >( base_random_access_iterator::operator+=(  n ) ); }
-    ra_iterator   operator- ( difference_type const n ) const noexcept { return static_cast<ra_iterator &&>( base_random_access_iterator::operator+ ( -n ) ); }
-    using base_random_access_iterator::operator-;
+    ra_iterator   operator+ ( difference_type const n ) const noexcept { return static_cast<ra_iterator &&>( base::operator+ (  n ) ); }
+    ra_iterator & operator+=( difference_type const n )       noexcept { return static_cast<ra_iterator & >( base::operator+=(  n ) ); }
+    ra_iterator   operator- ( difference_type const n ) const noexcept { return static_cast<ra_iterator &&>( base::operator+ ( -n ) ); }
+    using base::operator-;
 
-    ra_iterator & operator++(   ) noexcept { return static_cast<ra_iterator & >( base_random_access_iterator::operator++( ) ); }
-    ra_iterator   operator++(int) noexcept { return static_cast<ra_iterator &&>( base_random_access_iterator::operator++(0) ); }
-    ra_iterator & operator--(   ) noexcept { return static_cast<ra_iterator & >( base_random_access_iterator::operator--( ) ); }
-    ra_iterator   operator--(int) noexcept { return static_cast<ra_iterator &&>( base_random_access_iterator::operator--(0) ); }
+    ra_iterator & operator++(   ) noexcept { return static_cast<ra_iterator & >( base::operator++( ) ); }
+    ra_iterator   operator++(int) noexcept { return static_cast<ra_iterator &&>( base::operator++(0) ); }
+    ra_iterator & operator--(   ) noexcept { return static_cast<ra_iterator & >( base::operator--( ) ); }
+    ra_iterator   operator--(int) noexcept { return static_cast<ra_iterator &&>( base::operator--(0) ); }
+
+    friend constexpr auto operator<=>( ra_iterator const & left, ra_iterator const & right ) noexcept { return static_cast<base const &>( left ) <=> static_cast<base const &>( right ); }
+    friend constexpr auto operator== ( ra_iterator const & left, ra_iterator const & right ) noexcept { return static_cast<base const &>( left ) ==  static_cast<base const &>( right ); }
 
     operator fwd_iterator() const noexcept { return static_cast<fwd_iterator const &>( static_cast<base_iterator const &>( *this ) ); }
 }; // class ra_iterator
@@ -1622,57 +1640,65 @@ public:
 
 template <typename Key>
 class [[ clang::trivial_abi ]] bptree_base_wkey<Key>::ra_full_node_iterator
-    :
-    public iter_impl<ra_full_node_iterator, std::random_access_iterator_tag>
+    // Not using stl_interfaces because Clang 19.1.6 under OSX keeps using the
+    // stl_interfaces implementations/wrappers for equality operators (even
+    // though proper class specific ones are provided - as members, friends,
+    // plain globals, nothing helps) which in turn produce UBSan noise.
+    //:public iter_impl<ra_full_node_iterator, std::random_access_iterator_tag>
 {
 public:
+    using iterator_category = std::random_access_iterator_tag;
+    using iterator_concept  = std::random_access_iterator_tag;
+    using value_type        = Key;
+    using reference         = Key       &;
+    using pointer           = Key const *;
+
     // Have to provide default construction in order to model
     // std::random_access_iterator (yet at the same time do not want to in order
     // to be able to omit the check in the assignment operator as is required
-    // for base_iterator.
+    // for base_iterator).
     constexpr ra_full_node_iterator() noexcept { std::unreachable(); }
-    constexpr ra_full_node_iterator( leaf_node * leaves[], size_type const value_index ) noexcept : pp_leaf_{ leaves }, value_index_{ value_index } {};
+    constexpr ra_full_node_iterator( leaf_node * const leaves[], size_type const value_index ) noexcept : leaves_{ leaves }, value_index_{ value_index } {};
     ra_full_node_iterator( ra_full_node_iterator const & ) = default;
 
-    Key & operator*() const noexcept
+    reference operator*() const noexcept
     {
         auto const node_index { static_cast<std::uint32_t >( value_index_ / leaf_node::max_values ) };
         auto const node_offset{ static_cast<node_size_type>( value_index_ % leaf_node::max_values ) };
-        auto & leaf{ *pp_leaf_[ node_index ] };
+        auto & leaf{ *leaves_[ node_index ] };
         BOOST_ASSUME( node_offset < leaf.num_vals );
         return leaf.keys[ node_offset ];
     }
 
     PSI_WARNING_DISABLE_PUSH()
     PSI_WARNING_GCC_OR_CLANG_DISABLE( -Wsign-conversion )
-    ra_full_node_iterator   operator+ ( difference_type const n ) const noexcept { return { pp_leaf_, value_index_ + n }; }
+    ra_full_node_iterator   operator+ ( difference_type const n ) const noexcept { return { leaves_, value_index_ + n }; }
     ra_full_node_iterator & operator+=( difference_type const n )       noexcept { value_index_ += n; return *this; }
-    ra_full_node_iterator   operator- ( difference_type const n ) const noexcept { return { pp_leaf_, value_index_ - n }; }
+    ra_full_node_iterator   operator- ( difference_type const n ) const noexcept { return { leaves_, value_index_ - n }; }
     ra_full_node_iterator & operator-=( difference_type const n )       noexcept { value_index_ -= n; return *this; }
     PSI_WARNING_DISABLE_POP()
 
-    [[ gnu::pure ]]
-    friend constexpr auto operator<=>( ra_full_node_iterator const & left, ra_full_node_iterator const & right ) noexcept
-    {
-        BOOST_ASSUME( left.pp_leaf_ == right.pp_leaf_ );
-        return left.value_index_ <=> right.value_index_;
-    }
-    difference_type operator-( ra_full_node_iterator const & other ) const noexcept
-    {
-        BOOST_ASSUME( this->pp_leaf_ == other.pp_leaf_ );
-        return static_cast<difference_type>( this->value_index_ - other.value_index_ );
-    }
+    ra_full_node_iterator & operator++(   ) noexcept { return *this += 1; }
+    ra_full_node_iterator   operator++(int) noexcept { return { leaves_, value_index_++ }; }
+    ra_full_node_iterator & operator--(   ) noexcept { return *this -= 1; }
+    ra_full_node_iterator   operator--(int) noexcept { return { leaves_, value_index_-- }; }
+
+    [[ gnu::const ]] constexpr auto            operator<=>( this ra_full_node_iterator const self, ra_full_node_iterator const other ) noexcept { BOOST_ASSUME( self.leaves_ == other.leaves_ ); return self.value_index_ <=> other.value_index_; }
+    [[ gnu::const ]] constexpr bool            operator== ( this ra_full_node_iterator const self, ra_full_node_iterator const other ) noexcept { BOOST_ASSUME( self.leaves_ == other.leaves_ ); return self.value_index_ ==  other.value_index_; }
+    [[ gnu::const ]] constexpr difference_type operator-  ( this ra_full_node_iterator const self, ra_full_node_iterator const other ) noexcept { BOOST_ASSUME( self.leaves_ == other.leaves_ ); return static_cast<difference_type>( self.value_index_ - other.value_index_ ); }
+
     ra_full_node_iterator & operator=( ra_full_node_iterator const & other ) noexcept
     {
-        BOOST_ASSUME( this->pp_leaf_ == other.pp_leaf_ );
+        BOOST_ASSUME( this->leaves_ == other.leaves_ );
         this->value_index_ = other.value_index_;
         return *this;
     }
 
 private:
-    leaf_node * * pp_leaf_{};
-    size_type value_index_{};
+    leaf_node * const * const leaves_     {};
+    size_type                 value_index_{};
 }; // class ra_full_node_iterator
+
 
 template <typename Key>
 typename
@@ -1739,12 +1765,11 @@ bptree_base_wkey<Key>::erase( const_iterator const first, const_iterator const l
         this->unlink_and_free_node( node, this->left( node ) );
     }
 
-    // handling of possible underflow of the starting node is delayed to
-    // avoid constant moving/refilling of values from succeeding right
-    // leaves - rather this case is handled faster by removing entire
-    // same-valued nodes (in case there are any) and then the starting and
-    // ending, potentially partially erased, leaves are handled for possible
-    // underflow
+    // handling of possible underflow of the starting node is delayed to avoid
+    // constant moving/refilling of values from succeeding right leaves - rather
+    // this case is handled faster by removing entire same-valued nodes (in case
+    // there are any) and then the starting and ending, potentially partially
+    // erased, leaves are handled for possible underflow
     this->check_and_handle_bulk_erase_underflow( leaf( first.base().pos().node ) );
     // pos cannot point to the starting node here as that case is handled at the
     // beginning of the function so no need to check/use the return of the above

@@ -465,12 +465,31 @@ template <typename Header>
             std::span{ align_up<in_alignment>( aligned_data + sizeof( Header ) ), aligned_space - sizeof( Header ) }
         };
     }
-}
+} // header_data()
 
-// Standard-vector-like/compatible _presistent_ container class template
-// which uses VM/a mapped object for its backing storage. Currently limited
-// to trivial_abi types.
-// Used the Boost.Container vector as a starting skeleton.
+
+// None of the existing or so far introduced traits give information on whether
+// a type can reliably be persisted - of the existing ones, only is_fundamental
+// is true IFF a type neither is nor contains a pointer or a reference. For the
+// rest - specialization-awaiting-standardization...
+// Even relative addresses, (fancy) pointers or references, like
+// boost::interprocess::offset_ptr, i.e. those that are based on/diffed from an
+// absolute address in physical/temporal memory, also cannot be simply
+// (trivially) persisted - in effect bitcopied into a different memory space
+// where the delta (the relative part of the address) to the target object is
+// different (which will generally be the case if the target object is
+// dynamically allocated on a private heap or stack). Generic identifiers (IDs
+// or names) would be the only type of persistable reference (and by extension
+// the only mechanism for creating peristable non-trivial objects, that
+// reference other objects or 'resources' in general).
+// https://www.youtube.com/watch?v=SGdfPextuAU&t=3829s C++Now 2019: Arthur O'Dwyer “Trivially Relocatable” (persistability thoughts)
+template <typename T>
+bool constexpr does_not_hold_addresses{ std::is_fundamental_v<T> || std::is_enum_v<T> };
+
+
+// Optionally persistent container class template which uses VM/a mapped object
+// for its backing storage. Currently limited to trivially_moveable types (even
+// when backed by RAM/temporal storage).
 
 template <typename T, typename sz_t = std::size_t, bool headerless_param = true>
 requires is_trivially_moveable<T>
@@ -519,25 +538,26 @@ public:
     vm_vector & operator=( vm_vector &&      ) = default;
     vm_vector & operator=( vm_vector const & ) = default;
 
-    auto map_file  ( auto const file, flags::named_object_construction_policy const policy ) noexcept { BOOST_ASSUME( !storage_t::has_attached_storage() ); return storage_t::map_file( file, policy ); }
+    auto map_file( auto const file, flags::named_object_construction_policy const policy ) noexcept
+    requires( does_not_hold_addresses<T> ) // is T safe to persist (or share in IPC)
+    {
+        BOOST_ASSUME( !storage_t::has_attached_storage() );
+        return storage_t::map_file( file, policy );
+    }
+
     template <typename InitPolicy = value_init_t>
-    auto map_memory( sz_t const initial_size = 0, InitPolicy init_policy = {} ) noexcept
+    auto map_memory( sz_t const initial_size = 0, InitPolicy = {} ) noexcept
     {
         BOOST_ASSUME( !storage_t::has_attached_storage() );
         auto result{ storage_t::map_memory( storage_t::to_byte_sz( initial_size ) )() };
-        if ( std::is_same_v<decltype( init_policy ), value_init_t> && initial_size && result ) {
+        if ( std::is_same_v<InitPolicy, value_init_t> && initial_size && result ) {
             std::uninitialized_default_construct( impl::begin(), impl::end() );
         }
         return result.as_fallible_result();
     }
 
-    //! <b>Effects</b>: Returns a copy of the internal allocator.
-    //!
-    //! <b>Throws</b>: If allocator's copy constructor throws.
-    //!
-    //! <b>Complexity</b>: Constant.
     storage_t const & get_stored_allocator() const noexcept { return *this; }
-}; // class vector
+}; // class vm_vector
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm
