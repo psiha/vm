@@ -1,13 +1,14 @@
 #pragma once
 
+#include <version>
 
 #include <psi/build/disable_warnings.hpp>
-#if _LIBCPP_VERSION && ( _LIBCPP_VERSION != 190106 ) // weird compilation errors mentioning va_list
+#if !defined( _LIBCPP_VERSION ) || ( _LIBCPP_VERSION < 190000 ) // weird compilation errors mentioning va_list (tested w/ 19.1.6 and 19.1.7)
 #include <psi/err/fallible_result.hpp>
 #endif
 
 #include <boost/assert.hpp>
-#if _LIBCPP_VERSION && ( _LIBCPP_VERSION != 190106 )
+#if !defined( _LIBCPP_VERSION ) || ( _LIBCPP_VERSION < 190000 )
 #include <boost/config_ex.hpp>
 
 #include <boost/stl_interfaces/iterator_interface.hpp>
@@ -21,7 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#if _LIBCPP_VERSION && ( _LIBCPP_VERSION != 190106 )
+#if !defined( _LIBCPP_VERSION ) || ( _LIBCPP_VERSION < 190000 )
 #include <functional>
 #endif
 #include <iterator>
