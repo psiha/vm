@@ -19,6 +19,7 @@
 #include <psi/vm/mappable_objects/file/file.hpp>
 #include <psi/vm/mappable_objects/file/utility.hpp>
 
+#include <psi/build/datasizeof.hpp>
 #include <psi/build/disable_warnings.hpp>
 
 #include <boost/assert.hpp>
@@ -403,10 +404,12 @@ struct header_info
 
     constexpr header_info() = default;
     constexpr header_info( std::uint32_t const size, align_t const alignment ) noexcept : header_size{ size }, data_extra_alignment{ std::max( alignment, minimal_subheader_alignment ) } {}
+    // note: any potential benefit of __datasizeof (vs sizeof) is nullified with
+    // the use of alignof( T ) - TODO revise/expand on this as needed
     template <typename T>
-    constexpr header_info( std::in_place_type_t<T>, align_t const extra_alignment = alignof( T ) ) noexcept : header_info{ sizeof( T ), extra_alignment } {}
+    constexpr header_info( std::in_place_type_t<T>, align_t const extra_alignment = alignof( T ) ) noexcept : header_info{ __datasizeof( T ), extra_alignment } {}
     template <typename T>
-    static constexpr header_info make( align_t const extra_alignment = alignof( T ) ) noexcept { return { sizeof( T ), extra_alignment }; }
+    static constexpr header_info make( align_t const extra_alignment = alignof( T ) ) noexcept { return { __datasizeof( T ), extra_alignment }; }
 
     template <typename AdditionalHeader>
     constexpr header_info add_header() const noexcept // support chained headers (class hierarchies)
@@ -415,7 +418,7 @@ struct header_info
         auto const padded_size{ align_up( this->header_size, alignment ) };
         return
         {
-            static_cast<std::uint32_t>( padded_size + sizeof( AdditionalHeader ) ),
+            static_cast<std::uint32_t>( padded_size + __datasizeof( AdditionalHeader ) ),
             std::max( final_alignment(), alignment )
         };
     }
@@ -450,7 +453,7 @@ template <typename Header>
         return std::pair
         {
             reinterpret_cast<Header *>( hdr_storage.data() ),
-            hdr_storage.subspan( align_up<in_alignment>( sizeof( Header ) ) )
+            hdr_storage.subspan( align_up<in_alignment>( __datasizeof( Header ) ) )
         };
     }
     else
@@ -458,11 +461,11 @@ template <typename Header>
         auto const     raw_data { std::assume_aligned<in_alignment>( hdr_storage.data() ) };
         auto const aligned_data { align_up<alignof( Header )>( raw_data ) };
         auto const aligned_space{ static_cast<std::uint32_t>( hdr_storage.size() ) - unsigned( aligned_data - raw_data ) };
-        BOOST_ASSUME( aligned_space >= sizeof( Header ) );
+        BOOST_ASSUME( aligned_space >= __datasizeof( Header ) );
         return std::pair
         {
             reinterpret_cast<Header *>( aligned_data ),
-            std::span{ align_up<in_alignment>( aligned_data + sizeof( Header ) ), aligned_space - sizeof( Header ) }
+            std::span{ align_up<in_alignment>( aligned_data + __datasizeof( Header ) ), aligned_space - __datasizeof( Header ) }
         };
     }
 } // header_data()

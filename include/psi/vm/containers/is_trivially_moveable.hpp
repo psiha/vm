@@ -36,7 +36,7 @@ namespace psi::vm
 // template <typename T>
 // bool is_trivially_moveable;
 //
-// Containers like relvector (relying on realloc) and vm_vector (relying on
+// Containers like tr_vector (relying on realloc) and vm_vector (relying on
 // mremap) need a trait to detect/constraint on types actually supporting
 // 'bitwise moves'.
 // There already exist several proposals related to this (most notably P1144 and
