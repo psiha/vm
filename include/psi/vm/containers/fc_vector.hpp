@@ -1,11 +1,20 @@
 ////////////////////////////////////////////////////////////////////////////////
+/// Fixed capacity vector
+///
 /// Yet another take on prior art a la boost::container::static_vector and
-/// std::inplace_vector with emphasis on improved debuggability w/o custom type
-/// visualizers (i.e. seeing the contained values rather than random bytes),
-/// maximum efficiency (avoiding conditionals and dynamic memcpy calls for small
-/// vectors - utilizing large SIMD registers for inlined copies with a handful
-/// of instructions) and configurability (e.g. overflow handler), in addition
-/// to extentions provided by vector_impl.
+/// std::inplace_vector with emphasis on:
+///  - maximum efficiency:
+///    - avoiding dynamic memcpy calls for small vectors - utilizing large
+///      registers and/or complex instructions simultaneously operating on
+///      multiple registers for inlined copies with a handful of instructions
+///    - avoiding conditionals by offering as much information to the optimizer
+///      and by being friendly to user assume statements (e.g.
+///      assume( !vec.empty() ); prior to a loop to skip the initial loop
+///      condition check).
+///  - improved debuggability w/o custom type visualizers (i.e. seeing the
+///    contained values rather than random bytes)
+///  - configurability (e.g. overflow handler)
+///  - in addition to extentions provided by vector_impl.
 ////////////////////////////////////////////////////////////////////////////////
 ///
 /// Copyright (c) Domagoj Saric.
@@ -51,10 +60,15 @@ struct throw_on_overflow {
     [[ noreturn ]] void operator()() const { detail::throw_out_of_range(); }
 }; // throw_on_overflow
 
+
+////////////////////////////////////////////////////////////////////////////////
+/// Fixed capacity vector
+////////////////////////////////////////////////////////////////////////////////
+
 template <typename T, std::uint32_t maximum_size, auto overflow_handler = assert_on_overflow{}>
-class [[ clang::trivial_abi ]] static_vector
+class [[ clang::trivial_abi ]] fc_vector
     :
-    public vector_impl<static_vector<T, maximum_size, overflow_handler>, T, typename boost::uint_value_t<maximum_size>::least>
+    public vector_impl<fc_vector<T, maximum_size, overflow_handler>, T, typename boost::uint_value_t<maximum_size>::least>
 {
 public:
     using size_type  = typename boost::uint_value_t<maximum_size>::least;
@@ -63,7 +77,7 @@ public:
     static size_type constexpr static_capacity{ maximum_size };
 
 private:
-    using base = vector_impl<static_vector<T, maximum_size, overflow_handler>, T, typename boost::uint_value_t<maximum_size>::least>;
+    using base = vector_impl<fc_vector<T, maximum_size, overflow_handler>, T, typename boost::uint_value_t<maximum_size>::least>;
 
     // https://github.com/llvm/llvm-project/issues/54535
     // https://github.com/llvm/llvm-project/issues/42585
@@ -83,8 +97,8 @@ private:
 
 public:
     using base::base;
-    constexpr static_vector() noexcept : size_{ 0 } {}
-    constexpr explicit static_vector( static_vector const & other ) noexcept( std::is_nothrow_copy_constructible_v<T> )
+    constexpr fc_vector() noexcept : size_{ 0 } {}
+    constexpr explicit fc_vector( fc_vector const & other ) noexcept( std::is_nothrow_copy_constructible_v<T> )
     {
         if constexpr ( fixed_sized_copy ) {
             fixed_copy( other );
@@ -93,7 +107,7 @@ public:
             this->size_ = other.size();
         }
     }
-    constexpr static_vector( static_vector && other ) noexcept( std::is_nothrow_move_constructible_v<T> )
+    constexpr fc_vector( fc_vector && other ) noexcept( std::is_nothrow_move_constructible_v<T> )
     {
         if constexpr ( fixed_sized_move ) {
             fixed_copy( other );
@@ -103,23 +117,23 @@ public:
         }
         other.size_ = 0;
     }
-    constexpr static_vector & operator=( static_vector const & other ) noexcept( std::is_nothrow_copy_constructible_v<T> )
+    constexpr fc_vector & operator=( fc_vector const & other ) noexcept( std::is_nothrow_copy_constructible_v<T> )
     {
         if constexpr ( fixed_sized_copy ) {
             std::destroy_n( data(), size() );
             fixed_copy( other );
             return *this;
         } else {
-            return static_cast<static_vector &>( base::operator=( other ) );
+            return static_cast<fc_vector &>( base::operator=( other ) );
         }
     }
-    constexpr static_vector & operator=( static_vector && other ) noexcept( std::is_nothrow_move_assignable_v<T> )
+    constexpr fc_vector & operator=( fc_vector && other ) noexcept( std::is_nothrow_move_assignable_v<T> )
     {
         if constexpr ( fixed_sized_move ) {
             std::destroy_n( data(), size() );
-            return *(new (this) static_vector( std::move( other ) ));
+            return *(new (this) fc_vector( std::move( other ) ));
         } else {
-            return static_cast<static_vector &>( base::operator=( std::move( other ) ) );
+            return static_cast<fc_vector &>( base::operator=( std::move( other ) ) );
         }
     }
 
@@ -159,7 +173,7 @@ private: friend base; // contiguous storage implementation
     constexpr void storage_free() noexcept { size_ = 0; }
 
 private:
-    void fixed_copy( static_vector const & __restrict source ) noexcept
+    void fixed_copy( fc_vector const & __restrict source ) noexcept
     requires( fixed_sized_copy )
     {
         std::memcpy( this, &source, sizeof( *this ) );
@@ -172,7 +186,7 @@ private:
 }; // struct static_vector
 
 template <typename T, std::uint32_t maximum_size, auto overflow_handler>
-bool constexpr is_trivially_moveable<static_vector<T, maximum_size, overflow_handler>>{ is_trivially_moveable<T> };
+bool constexpr is_trivially_moveable<fc_vector<T, maximum_size, overflow_handler>>{ is_trivially_moveable<T> };
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm

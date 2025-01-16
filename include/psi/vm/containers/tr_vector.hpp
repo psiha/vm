@@ -1,8 +1,11 @@
 ////////////////////////////////////////////////////////////////////////////////
-/// Rel(ocatable)vector - a thin std::vector replacement built around the CRT
-/// and/or low level OS allocation APIs designed for trivially moveable/
-/// 'relocatable' types (eliminating the double allocation and copy-on-resize
-/// overhead of std::vector) + vector_impl extensions.
+/// Trivially relocatable vector
+/// 
+/// I.e a vector for trivially relocatable types - a thin std::vector
+/// replacement, built around the CRT and/or low level OS allocation APIs,
+/// designed for trivially moveable/'relocatable' types (eliminating the double
+/// allocation and copy-on-resize overhead of std::vector) with emphasis on
+/// minimizing bloat + vector_impl extensions.
 /// TODO: expand/finish support for non trivially_moveable types and rename to
 /// simply vector
 ////////////////////////////////////////////////////////////////////////////////
@@ -368,19 +371,19 @@ private:
 }; // class crt_aligned_allocator
 
 
-struct relvector_options
+struct tr_vector_options
 {
     std::uint8_t alignment                { 0    }; // 0 -> default
     bool         cache_capacity           { true }; // if your crt_alloc_size is slow (MSVC)
     bool         explicit_geometric_growth{ true }; // if your realloc impl is slow (yes MSVC we are looking at you again)
-}; // struct relvector_options
+}; // struct tr_vector_options
 
 
-template <typename T, typename sz_t = std::size_t, relvector_options options = {}>
+template <typename T, typename sz_t = std::size_t, tr_vector_options options = {}>
 requires( is_trivially_moveable<T> )
-class [[ nodiscard, clang::trivial_abi ]] relvector
+class [[ nodiscard, clang::trivial_abi ]] tr_vector
     :
-    public vector_impl<relvector<T, sz_t, options>, T, sz_t>
+    public vector_impl<tr_vector<T, sz_t, options>, T, sz_t>
 {
 public:
     static std::uint8_t constexpr alignment{ options.alignment ? options.alignment : std::uint8_t{ alignof( T ) } };
@@ -391,21 +394,21 @@ public:
 
 private:
     using al   = allocator_type;
-    using base = vector_impl<relvector<T, sz_t, options>, T, sz_t>;
+    using base = vector_impl<tr_vector<T, sz_t, options>, T, sz_t>;
 
 public:
     using base::base;
-    constexpr relvector() noexcept : p_array_{ nullptr }, size_{ 0 }, capacity_{ 0 } {}
-    constexpr explicit relvector( relvector const & other )
+    constexpr tr_vector() noexcept : p_array_{ nullptr }, size_{ 0 }, capacity_{ 0 } {}
+    constexpr explicit tr_vector( tr_vector const & other )
     {
         auto const data{ storage_init( other.size() ) };
         try { std::uninitialized_copy_n( other.data(), other.size(), data ); }
         catch(...) { al::deallocate( data, capacity() ); throw; }
     }
-    constexpr relvector( relvector && other ) noexcept : p_array_{ other.p_array_ }, size_{ other.size_ }, capacity_{ other.capacity_ } { other.mark_freed(); }
+    constexpr tr_vector( tr_vector && other ) noexcept : p_array_{ other.p_array_ }, size_{ other.size_ }, capacity_{ other.capacity_ } { other.mark_freed(); }
 
-    constexpr relvector & operator=( relvector const & other ) { *this = relvector( other ); }
-    constexpr relvector & operator=( relvector && other ) noexcept
+    constexpr tr_vector & operator=( tr_vector const & other ) { *this = tr_vector( other ); }
+    constexpr tr_vector & operator=( tr_vector && other ) noexcept
     {
         std::swap( this->p_array_ , other.p_array_  );
         std::swap( this->size_    , other.size_     );
@@ -413,7 +416,7 @@ public:
         other.clear();
         return *this;
     }
-    constexpr ~relvector() noexcept { base::clear(); }
+    constexpr ~tr_vector() noexcept { base::clear(); }
 
     [[ nodiscard, gnu::pure ]] size_type size    () const noexcept { return size_; }
     [[ nodiscard, gnu::pure ]] size_type capacity() const noexcept
@@ -534,7 +537,7 @@ private:
     [[ no_unique_address ]]
 #endif
     detail::capacity<sz_t, options.cache_capacity> capacity_;
-}; // struct relvector
+}; // struct tr_vector
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm

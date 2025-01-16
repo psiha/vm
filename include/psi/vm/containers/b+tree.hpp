@@ -5,7 +5,7 @@
 #include <psi/vm/align.hpp>
 #include <psi/vm/allocation.hpp>
 #include <psi/vm/containers/abi.hpp>
-#include <psi/vm/containers/relvector.hpp>
+#include <psi/vm/containers/tr_vector.hpp>
 
 #include <psi/build/disable_warnings.hpp>
 
@@ -1114,7 +1114,7 @@ protected: // 'other'
         // save a linearized array of (full) nodes in order to be able to use
         // "really random access iterators" (similar to std::deque iterators)
         // for subsequent sorting
-        relvector<leaf_node *, std::uint32_t> nodes;
+        tr_vector<leaf_node *, std::uint32_t> nodes;
     }; // struct bulk_copied_input
     template <typename I, typename S, std::ranges::subrange_kind kind>
     bulk_copied_input
@@ -1122,8 +1122,8 @@ protected: // 'other'
     {
         auto constexpr can_preallocate{ kind == std::ranges::subrange_kind::sized };
         size_type input_size;
-        relvector<leaf_node *, std::uint32_t> nodes;
-        typename relvector<leaf_node *, std::uint32_t>::iterator p_node;
+        tr_vector<leaf_node *, std::uint32_t> nodes;
+        typename tr_vector<leaf_node *, std::uint32_t>::iterator p_node;
         if constexpr ( can_preallocate ) {
             input_size = static_cast<size_type>( keys.size() );
             if ( !input_size ) [[ unlikely ]] // minor optimization for 'complex' ranges (like complex/compound views which have size methods but which are non trivial) - reuse size info for empty check

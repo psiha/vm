@@ -1,6 +1,6 @@
 // TODO create template tests to test all (three) implementations
-#include <psi/vm/containers/relvector.hpp>
-#include <psi/vm/containers/static_vector.hpp>
+#include <psi/vm/containers/fc_vector.hpp>
+#include <psi/vm/containers/tr_vector.hpp>
 
 #include <gtest/gtest.h>
 
@@ -11,24 +11,24 @@ namespace psi::vm
 //------------------------------------------------------------------------------
 
 TEST(vector_test, construction) {
-    relvector<int> vec1;  // Default constructor
+    tr_vector<int> vec1;  // Default constructor
     EXPECT_TRUE(vec1.empty());
 
-    relvector<int> vec2(5, 42);  // Constructor with size and value
+    tr_vector<int> vec2(5, 42);  // Constructor with size and value
     EXPECT_EQ(vec2.size(), 5);
     EXPECT_EQ(vec2[0], 42);
 
-    relvector<int> vec3{1, 2, 3, 4, 5};  // Initializer list constructor
+    tr_vector<int> vec3{1, 2, 3, 4, 5};  // Initializer list constructor
     EXPECT_EQ(vec3.size(), 5);
     EXPECT_EQ(vec3[4], 5);
 
-    relvector<int> vec4(vec3.begin(), vec3.end());  // Range constructor
+    tr_vector<int> vec4(vec3.begin(), vec3.end());  // Range constructor
     EXPECT_EQ(vec4, vec3);
 }
 
 
 TEST(vector_test, element_access) {
-    relvector<int> vec{10, 20, 30, 40};
+    tr_vector<int> vec{10, 20, 30, 40};
 
     EXPECT_EQ(vec[2], 30);           // operator[]
     EXPECT_EQ(vec.at(3), 40);        // .at()
@@ -45,7 +45,7 @@ TEST(vector_test, element_access) {
 
 TEST(vector_test, modifiers) {
     using test_str_t = std::conditional_t<is_trivially_moveable<std::string>, std::string, std::string_view>;
-    relvector<test_str_t> vec;
+    tr_vector<test_str_t> vec;
 
     // Test push_back
     vec.emplace_back("1");
@@ -87,7 +87,7 @@ TEST(vector_test, modifiers) {
 
 
 TEST(vector_test, capacity) {
-    relvector<int> vec;
+    tr_vector<int> vec;
     EXPECT_TRUE(vec.empty());
 
     vec.resize(10, 42);  // Resize to larger size
@@ -104,7 +104,7 @@ TEST(vector_test, capacity) {
 
 TEST(vector_test, range_support) {
     auto range = std::views::iota(1, 6);  // Range [1, 2, 3, 4, 5]
-    relvector<int> vec(range.begin(), range.end());
+    tr_vector<int> vec(range.begin(), range.end());
     EXPECT_EQ(vec.size(), 5);
     EXPECT_EQ(vec[0], 1);
     EXPECT_EQ(vec[4], 5);
@@ -114,14 +114,14 @@ TEST(vector_test, range_support) {
 
 
 TEST(vector_test, move_semantics) {
-    relvector<int> vec1{1, 2, 3, 4, 5};
-    relvector<int> vec2(std::move(vec1));  // Move constructor
+    tr_vector<int> vec1{1, 2, 3, 4, 5};
+    tr_vector<int> vec2(std::move(vec1));  // Move constructor
 
     EXPECT_TRUE(vec1.empty());
     EXPECT_EQ(vec2.size(), 5);
     EXPECT_EQ(vec2[0], 1);
 
-    relvector<int> vec3;
+    tr_vector<int> vec3;
     vec3 = std::move(vec2);  // Move assignment
     EXPECT_TRUE(vec2.empty());
     EXPECT_EQ(vec3.size(), 5);
@@ -130,7 +130,7 @@ TEST(vector_test, move_semantics) {
 
 
 TEST(vector_test, iterators) {
-    relvector<int> vec{10, 20, 30, 40};
+    tr_vector<int> vec{10, 20, 30, 40};
 
     // Validate iterator traversal
     int sum = 0;
@@ -140,23 +140,23 @@ TEST(vector_test, iterators) {
     EXPECT_EQ(sum, 100);
 
     // Test reverse iterators
-    relvector<int> reversed(vec.rbegin(), vec.rend());
+    tr_vector<int> reversed(vec.rbegin(), vec.rend());
     EXPECT_EQ(reversed[0], 40);
     EXPECT_EQ(reversed[3], 10);
 
     // Const iterators
-    relvector<int> const const_vec{ 1, 2, 3 };
+    tr_vector<int> const const_vec{ 1, 2, 3 };
     EXPECT_EQ(*const_vec.cbegin(), 1);
 }
 
 
 TEST(vector_test, edge_cases) {
-    relvector<int> vec1;
+    tr_vector<int> vec1;
 
     // Large vector test (memory constraints permitting)
 #if 0 // TODO optional size_type overflow handling
     try {
-        relvector<int> vec2(std::numeric_limits<size_t>::max() / 2);
+        tr_vector<int> vec2(std::numeric_limits<size_t>::max() / 2);
         ADD_FAILURE() << "Expected bad_alloc exception for large vector";
     } catch ( std::bad_alloc const & ) {
         SUCCEED();
@@ -172,16 +172,16 @@ TEST(vector_test, edge_cases) {
         ~non_trivial() { value = -1; }
     };
 
-    static_vector<non_trivial, 2> vec3;
+    fc_vector<non_trivial, 2> vec3;
     vec3.emplace_back(42);
     EXPECT_EQ(vec3[0].value, 42);
 }
 
 
 TEST(vector_test, comparison) {
-    relvector<int> vec1{1, 2, 3};
-    relvector<int> vec2{1, 2, 3};
-    relvector<int> vec3{1, 2, 4};
+    tr_vector<int> vec1{1, 2, 3};
+    tr_vector<int> vec2{1, 2, 3};
+    tr_vector<int> vec3{1, 2, 4};
 
     EXPECT_TRUE (vec1 == vec2);
     EXPECT_TRUE (vec1 != vec3);
