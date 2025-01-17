@@ -87,8 +87,10 @@ private:
     {
 #   ifdef __AVX512F__
         256
-#   else
+#   elif defined( __AVX__ ) || defined( __aarch64__ /*LDP&STP*/ )
         128
+#   else
+         64
 #   endif
     };
     struct this_pod { size_type _0; noninitialized_array<T, maximum_size> _1; }; // verified in storage_grow_to()

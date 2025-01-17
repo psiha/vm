@@ -196,7 +196,7 @@ TEST( bp_tree, playground )
 
     {
         bptree_set<int> bpt;
-        bpt.map_file( test_file, flags::named_object_construction_policy::create_new_or_truncate_existing );    
+        bpt.map_file( test_file, flags::named_object_construction_policy::create_new_or_truncate_existing );
 
         for ( auto const & n : numbers )
             EXPECT_TRUE( bpt.insert( n ).second );
@@ -210,7 +210,7 @@ TEST( bp_tree, playground )
     }
     {
         bptree_set<int> bpt;
-        bpt.map_file( test_file, flags::named_object_construction_policy::open_existing );    
+        bpt.map_file( test_file, flags::named_object_construction_policy::open_existing );
 
         EXPECT_EQ  ( bpt.size(), sorted_numbers.size() - 1 );
         EXPECT_TRUE( bpt.insert( +42 ).second );

@@ -24,10 +24,10 @@ endif()
 
 set_target_properties(
     vm_unit_tests
-    PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/test"
-    COMMAND vm_unit_tests
+    PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/test"
 )
+
+PSI_target_fix_debug_symbols_for_osx_lto( vm_unit_tests )
 
 gtest_discover_tests(
     vm_unit_tests
