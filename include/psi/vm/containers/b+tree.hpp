@@ -163,6 +163,8 @@ protected:
     {
         node_slot      node        {};
         node_size_type value_offset{};
+
+        bool operator==( this iter_pos const self, iter_pos const other ) noexcept { return ( self.node == other.node ) && ( self.value_offset == other.value_offset ); }
     };
 
     class [[ clang::trivial_abi ]] base_iterator;
@@ -506,6 +508,10 @@ public:
         BOOST_ASSUME( verify_comparable( left, right ) );
         return left.index_ == right.index_;
     }
+
+    // the position of the iterator as an index into/offset from the beginning
+    // of the container
+    [[ gnu::pure ]] size_type absolute_offset() const noexcept { return index_; }
 
 protected:
                                                friend class bptree_base;
@@ -2557,8 +2563,6 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
         input.nodes.clear();
     }
 
-    ra_iterator const p_new_nodes_begin{ *this, { begin_leaf, 0 }, 0          };
-    ra_iterator const p_new_nodes_end  { *this, end_pos          , total_size };
     if ( empty() )
     {
         base::bulk_insert_into_empty( begin_leaf, end_pos, total_size );
@@ -2566,7 +2570,8 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
         return total_size;
     }
 
-    auto p_new_keys{ p_new_nodes_begin };
+    ra_iterator p_new_keys{ *this, { begin_leaf, 0 }, 0 };
+    BOOST_ASSERT( p_new_keys.absolute_offset() == 0 );
     auto [source_slot, source_slot_offset]{ p_new_keys.pos() };
     auto src_leaf{ &leaf( source_slot ) };
 
@@ -2588,7 +2593,7 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
         // a bulk_append
         if ( ( tgt_leaf_next_pos.pos == tgt_leaf->num_vals ) && !tgt_leaf->right )
         {
-            auto const so_far_consumed{ static_cast<size_type>( p_new_keys - p_new_nodes_begin ) };
+            auto const so_far_consumed{ p_new_keys.absolute_offset() };
             BOOST_ASSUME( so_far_consumed < total_size );
             // before proceeding with the bulk_append we have to:
             // - prepare the current src_leaf (so that it does not have a hole
@@ -2629,8 +2634,7 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
 
         // merge might have caused a relocation (by calling split_to_insert)
         // TODO use iter_pos directly
-        p_new_keys     .update_pool_ptr( this->nodes_ );
-        p_new_nodes_end.update_pool_ptr( this->nodes_ );
+        p_new_keys.update_pool_ptr( this->nodes_ );
         src_leaf = &leaf( source_slot );
 
         p_new_keys += consumed_source;
@@ -2655,7 +2659,7 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
         // time from scratch (using find_insertion_point)
         std::tie( tgt_leaf, tgt_leaf_next_pos ) =
             find_next_insertion_point( *tgt_leaf, tgt_next_offset, key_const_arg{ src_leaf->keys[ source_slot_offset ] }, unique );
-    } while ( p_new_keys != p_new_nodes_end );
+    } while ( p_new_keys.pos() != end_pos );
 
     BOOST_ASSUME( inserted <= total_size );
     this->hdr().size_ += inserted;
@@ -2671,9 +2675,12 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
     //  - no need to copy and sort the input
     //  - the bulk_append phase has to first copy the remainder of the source
     //    nodes (they are not somehow 'extractable' from the source tree)
-    //  - care has to be taken around the fact that source leaves are coming
-    //    from a different tree instance (i.e. from a different container) e.g.
-    //    when resolving slots to node references.
+    //  - the source leaves are coming from a different tree instance (i.e. from
+    //    a different container):
+    //    - care has to be taken e.g. when resolving slots to node references
+    //    - at the same time this means we do not have to care about calling
+    //      update_pool_ptr on input iterators as the input container is not
+    //      being modified.
     // TODO further deduplicate with insert
     if ( empty() ) {
         swap( other );

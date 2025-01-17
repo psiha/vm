@@ -377,7 +377,7 @@ bool bptree_base::base_iterator::operator==( base_iterator const & other ) const
 #ifdef NDEBUG
     BOOST_ASSUME( this->nodes_ == other.nodes_ );
 #endif
-    return ( this->pos_.node == other.pos_.node ) && ( this->pos_.value_offset == other.pos_.value_offset );
+    return this->pos_ == other.pos_;
 }
 
 [[ using gnu: sysv_abi, hot, pure ]]
