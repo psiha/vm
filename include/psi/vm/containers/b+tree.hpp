@@ -1650,8 +1650,8 @@ public:
     using iterator_category = std::random_access_iterator_tag;
     using iterator_concept  = std::random_access_iterator_tag;
     using value_type        = Key;
-    using reference         = Key       &;
-    using pointer           = Key const *;
+    using reference         = Key &;
+    using pointer           = Key *;
 
     // Have to provide default construction in order to model
     // std::random_access_iterator (yet at the same time do not want to in order
@@ -1663,12 +1663,14 @@ public:
 
     reference operator*() const noexcept
     {
+        static_assert( std::random_access_iterator<ra_full_node_iterator> );
         auto const node_index { static_cast<std::uint32_t >( value_index_ / leaf_node::max_values ) };
         auto const node_offset{ static_cast<node_size_type>( value_index_ % leaf_node::max_values ) };
         auto & leaf{ *leaves_[ node_index ] };
         BOOST_ASSUME( node_offset < leaf.num_vals );
         return leaf.keys[ node_offset ];
     }
+    reference operator[]( difference_type const n ) const noexcept { return *(*(this) + n); }
 
     PSI_WARNING_DISABLE_PUSH()
     PSI_WARNING_GCC_OR_CLANG_DISABLE( -Wsign-conversion )
@@ -1677,6 +1679,7 @@ public:
     ra_full_node_iterator   operator- ( difference_type const n ) const noexcept { return { leaves_, value_index_ - n }; }
     ra_full_node_iterator & operator-=( difference_type const n )       noexcept { value_index_ -= n; return *this; }
     PSI_WARNING_DISABLE_POP()
+    friend ra_full_node_iterator operator+( difference_type const n, ra_full_node_iterator const iter ) noexcept { return iter + n; }
 
     ra_full_node_iterator & operator++(   ) noexcept { return *this += 1; }
     ra_full_node_iterator   operator++(int) noexcept { return { leaves_, value_index_++ }; }
