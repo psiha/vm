@@ -3,7 +3,7 @@
 /// \file handle.hpp
 /// ----------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2024.
+/// Copyright (c) Domagoj Saric 2010 - 2025.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -66,9 +66,10 @@ struct handle_traits
         if ( __builtin_constant_p( native_handle ) && ( native_handle == invalid_value ) )
             return;
 #   endif
-        BOOST_VERIFY
+        [[ maybe_unused ]] auto const close_result{ ::close( native_handle ) };
+        BOOST_ASSERT
         (
-            ( ::close( native_handle ) == 0 ) ||
+            ( close_result == 0 ) ||
             (
                 ( native_handle == invalid_value ) &&
                 ( errno         == EBADF         )

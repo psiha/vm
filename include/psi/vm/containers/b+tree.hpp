@@ -392,7 +392,11 @@ bptree_base::map_file( auto const file, flags::named_object_construction_policy 
 ////////////////////////////////////////////////////////////////////////////////
 // \class bptree_base::base_iterator
 ////////////////////////////////////////////////////////////////////////////////
-
+// TODO decorate pointers with lifetime related attributes
+// gsl:: Owner, Pointer https://clang.llvm.org/docs/AttributeReference.html#owner
+// clang:: lifetimebound, lifetime_capture_by https://clang.llvm.org/docs/AttributeReference.html#lifetime-capture-by
+// msvc:: lifetimebound
+////////////////////////////////////////////////////////////////////////////////
 class [[ clang::trivial_abi ]] bptree_base::base_iterator
 {
 public:
