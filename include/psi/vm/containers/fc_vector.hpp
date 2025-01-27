@@ -14,7 +14,7 @@
 ///  - improved debuggability w/o custom type visualizers (i.e. seeing the
 ///    contained values rather than random bytes)
 ///  - configurability (e.g. overflow handler)
-///  - in addition to extentions provided by vector_impl.
+///  - in addition to extensions provided by vector_impl.
 ////////////////////////////////////////////////////////////////////////////////
 ///
 /// Copyright (c) Domagoj Saric.
@@ -65,19 +65,19 @@ struct throw_on_overflow {
 /// Fixed capacity vector
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename T, std::uint32_t maximum_size, auto overflow_handler = assert_on_overflow{}>
+template <typename T, std::uint32_t capacity_param, auto overflow_handler = assert_on_overflow{}>
 class [[ clang::trivial_abi ]] fc_vector
     :
-    public vector_impl<fc_vector<T, maximum_size, overflow_handler>, T, typename boost::uint_value_t<maximum_size>::least>
+    public vector_impl<fc_vector<T, capacity_param, overflow_handler>, T, typename boost::uint_value_t<capacity_param>::least>
 {
 public:
-    using size_type  = typename boost::uint_value_t<maximum_size>::least;
+    using size_type  = typename boost::uint_value_t<capacity_param>::least;
     using value_type = T;
 
-    static size_type constexpr static_capacity{ maximum_size };
+    static size_type constexpr static_capacity{ capacity_param };
 
 private:
-    using base = vector_impl<fc_vector<T, maximum_size, overflow_handler>, T, typename boost::uint_value_t<maximum_size>::least>;
+    using base = vector_impl<fc_vector<T, static_capacity, overflow_handler>, T, typename boost::uint_value_t<static_capacity>::least>;
 
     // https://github.com/llvm/llvm-project/issues/54535
     // https://github.com/llvm/llvm-project/issues/42585
@@ -93,7 +93,7 @@ private:
          64
 #   endif
     };
-    struct this_pod { size_type _0; noninitialized_array<T, maximum_size> _1; }; // verified in storage_grow_to()
+    struct this_pod { size_type _0; noninitialized_array<T, static_capacity> _1; }; // verified in storage_grow_to()
     static bool constexpr fixed_sized_copy{ std::is_trivially_copy_constructible_v<T> && ( sizeof( this_pod ) <= unconditional_fixed_memcopy_size_limit ) };
     static bool constexpr fixed_sized_move{      is_trivially_moveable            <T> && ( sizeof( this_pod ) <= unconditional_fixed_memcopy_size_limit ) };
 
@@ -139,20 +139,20 @@ public:
         }
     }
 
-    [[ nodiscard, gnu::pure  ]]        constexpr size_type size    () const noexcept { BOOST_ASSUME( size_ <= maximum_size ); return size_; }
-    [[ nodiscard, gnu::const ]] static constexpr size_type capacity()       noexcept { return maximum_size; }
+    [[ nodiscard, gnu::pure  ]]        constexpr size_type size    () const noexcept { BOOST_ASSUME( size_ <= static_capacity ); return size_; }
+    [[ nodiscard, gnu::const ]] static constexpr size_type capacity()       noexcept { return static_capacity; }
 
     [[ nodiscard, gnu::const  ]] constexpr value_type       * data()       noexcept { return array_.data; }
     [[ nodiscard, gnu::const  ]] constexpr value_type const * data() const noexcept { return array_.data; }
 
-    void reserve( size_type const new_capacity ) const noexcept { BOOST_ASSUME( new_capacity <= maximum_size ); }
+    void reserve( size_type const new_capacity ) const noexcept { BOOST_ASSUME( new_capacity <= static_capacity ); }
 
 private: friend base; // contiguous storage implementation
     constexpr value_type * storage_init   ( size_type const initial_size ) noexcept( noexcept( overflow_handler() ) ) { return storage_grow_to( initial_size ); }
     constexpr value_type * storage_grow_to( size_type const  target_size ) noexcept( noexcept( overflow_handler() ) )
     {
         static_assert( sizeof( *this ) == sizeof( this_pod ) );
-        if ( target_size > maximum_size ) [[ unlikely ]] {
+        if ( target_size > static_capacity ) [[ unlikely ]] {
             overflow_handler();
         }
         size_ = target_size;
@@ -183,12 +183,12 @@ private:
     }
 
 private:
-    size_type                             size_;
-    noninitialized_array<T, maximum_size> array_;
+    size_type                                size_;
+    noninitialized_array<T, static_capacity> array_;
 }; // struct static_vector
 
-template <typename T, std::uint32_t maximum_size, auto overflow_handler>
-bool constexpr is_trivially_moveable<fc_vector<T, maximum_size, overflow_handler>>{ is_trivially_moveable<T> };
+template <typename T, std::uint32_t capacity, auto overflow_handler>
+bool constexpr is_trivially_moveable<fc_vector<T, capacity, overflow_handler>>{ is_trivially_moveable<T> };
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm
