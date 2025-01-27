@@ -13,7 +13,6 @@ namespace psi::vm
 // https://www.geeksforgeeks.org/b-trees-implementation-in-c
 // https://flatcap.github.io/linux-ntfs/ntfs/concepts/tree/index.html
 // https://benjamincongdon.me/blog/2021/08/17/B-Trees-More-Than-I-Thought-Id-Want-to-Know
-// https://stackoverflow.com/questions/59362113/b-tree-minimum-internal-children-count-explanation
 // https://web.archive.org/web/20190126073810/http://supertech.csail.mit.edu/cacheObliviousBTree.html
 // https://www.researchgate.net/publication/220225482_Cache-Oblivious_Databases_Limitations_and_Opportunities
 // https://www.postgresql.org/docs/current/btree.html
@@ -31,6 +30,7 @@ namespace psi::vm
 // https://github.com/jeffplaisance/BppTree
 // https://github.com/postgres/postgres/blob/master/src/backend/access/nbtree/README
 // https://github.com/scylladb/scylladb/blob/master/utils/intrusive_btree.hh
+// https://github.com/malbrain/Btree-source-code
 
 // https://en.wikipedia.org/wiki/Judy_array
 

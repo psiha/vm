@@ -79,18 +79,18 @@ public:
     using difference_type = std::make_signed_t<size_type>;
     using storage_result  = err::fallible_result<void, error>;
 
+    bptree_base( header_info hdr_info = {} ) noexcept;
+
     [[ gnu::pure ]] bool empty() const noexcept { return BOOST_UNLIKELY( size() == 0 ); }
 
     void clear() noexcept;
 
-    bptree_base( header_info hdr_info = {} ) noexcept;
+    storage_result map_file  ( auto file, flags::named_object_construction_policy ) noexcept;
+    storage_result map_memory( std::uint32_t initial_capacity_as_number_of_nodes = 0 ) noexcept;
 
     std::span<std::byte> user_header_data() noexcept;
 
     bool has_attached_storage() const noexcept { return nodes_.has_attached_storage(); }
-
-    storage_result map_file  ( auto file, flags::named_object_construction_policy ) noexcept;
-    storage_result map_memory( std::uint32_t initial_capacity_as_number_of_nodes = 0 ) noexcept;
 
 protected:
 #if 0 // favoring CPU cache & branch prediction (linear scans) _vs_ TLB and disk access related issues, TODO make this configurable
@@ -633,6 +633,7 @@ protected: // node types
     {
         static auto constexpr storage_space{ node_size - align_up( sizeof( node_header ), alignof( Key ) ) };
 
+        // https://stackoverflow.com/questions/59362113/b-tree-minimum-internal-children-count-explanation
         // storage_space       = ( order - 1 ) * sizeof( key ) + order * sizeof( child_ptr )
         // storage_space       = order * szK - szK + order * szC
         // storage_space + szK = order * ( szK + szC )
@@ -646,7 +647,7 @@ protected: // node types
 
         using value_type = Key;
 
-        static node_size_type constexpr max_children{ order };
+        static node_size_type constexpr max_children{ order }; // 'cardinality'
         static node_size_type constexpr max_values  { max_children - 1 };
 
         Key       keys    [ max_values   ];
@@ -658,6 +659,10 @@ protected: // node types
         static node_size_type constexpr min_children{ ihalf_ceil<parent_node::max_children> };
         static node_size_type constexpr min_values  { min_children - 1 };
 
+        // Allowing for min two children would theoretically be possible but it
+        // would complicate underflow handling (as it would lead to a bogus
+        // intermediate state where the two children would get merged) and isn't
+        // worth supporting (bordering on a plain BST).
         static_assert( min_children >= 3 );
     }; // struct inner_node
 
@@ -687,7 +692,7 @@ protected: // split_to_insert and its helpers
     {
         auto & new_root_node{ as<root_node>( bptree_base::new_root( left_child, right_child ) ) };
         new_root_node.keys    [ 0 ] = std::move( separator_key );
-        new_root_node.children[ 0 ] = left_child;
+        new_root_node.children[ 0 ] =  left_child;
         new_root_node.children[ 1 ] = right_child;
         return new_root_node;
     }
@@ -710,7 +715,7 @@ protected: // split_to_insert and its helpers
         BOOST_ASSUME(     node.num_vals == max );
         BOOST_ASSUME( new_node.num_vals == 0   );
 
-        // old node gets the minimum/median/mid -> the new gets the leftovers (i.e. mid or mid + 1)
+        // the old node gets the minimum/median/mid -> the new gets the leftovers (i.e. mid or mid + 1)
         new_node.num_vals = max - mid;
 
         value_type key_to_propagate;
@@ -960,7 +965,7 @@ protected: // 'other'
             {
                 BOOST_ASSUME( !leaf.is_root() );
                 BOOST_ASSUME( depth_ > 1 );
-                next_pos = handle_underflow( leaf );
+                next_pos               = handle_underflow( leaf );
                 next_pos.value_offset += leaf_key_offset;
                 p_leaf                 = &this->leaf( next_pos.node );
                 BOOST_ASSUME( next_pos.value_offset <= p_leaf->num_vals );
@@ -988,13 +993,14 @@ protected: // 'other'
         BOOST_ASSUME( location.leaf_offset.exact_find );
         leaf_node & leaf{ location.leaf };
         auto const  leaf_key_offset{ location.leaf_offset.pos };
-        if ( location.inner ) [[ unlikely ]] // "most keys are in the leaf nodes"
+        if ( location.inner ) [[ unlikely ]] // "most keys are (only) in the leaf nodes"
         {
             BOOST_ASSUME( leaf_key_offset == 0 );
 
             auto & inner        { this->inner( location.inner ) };
             auto & separator_key{ inner.keys[ location.inner_offset ] };
             BOOST_ASSUME( leaf_key_offset + 1 < leaf.num_vals );
+            static_assert( leaf_node::min_values > 1 ); // makes this simpler to handle: we can assume that leaf.keys[ 1 ] exists
             separator_key = leaf.keys[ leaf_key_offset + 1 ];
         }
 
@@ -1300,6 +1306,25 @@ protected: // 'other'
         BOOST_ASSUME( node.num_vals > 0 );
         BOOST_ASSUME( node.num_vals < node.min_values );
         node_size_type const missing_values( node.min_values - node.num_vals );
+
+        // It may happen that a leaf's separator key appears not in the
+        // immediate parent but further up - which would require more complex
+        // (recursive climb) logic to update it (like other functions which call
+        // update_separator) - however this is not in fact necessary since:
+        // - this may happen only for the leftmost children (leaves) of a given
+        //   immediate parent (lowest inner node)
+        // - handle_underflow does not delete values, it may only change them in
+        //   the sense of moving them around
+        // - the only way for a leftmost value to change (get moved) is for its
+        //   containing node to borrow from or to its left sibling
+        // - the 'problematic' nodes in question here are the leftmost nodes
+        //   i.e. ones which do _not have_ a left sibling
+        // - the second way would be through merging but we always do
+        //   right-to-left merging (which leaves the leftmost value of the left
+        //   node intact).
+        // Therefore this case can be ignored/can never happen in
+        // handle_overflow for leaves (IOW WRT this leaves do not require
+        // different handling compared to inner nodes).
         auto const parent_child_idx   { node.parent_child_idx };
         bool const parent_has_key_copy{ leaf_node_type && ( parent_child_idx > 0 ) };
         auto const parent_key_idx     { parent_child_idx - parent_has_key_copy };
@@ -1307,7 +1332,7 @@ protected: // 'other'
 
         BOOST_ASSUME( parent.children[ parent_child_idx ] == node_slot );
         // the left and right level dlink pointers can point 'across' parents
-        // (and so cannot be used to resolve existence of siblings)
+        // (and so cannot be used to resolve the existence of siblings)
         auto const has_right_sibling{ parent_child_idx < ( num_chldrn( parent ) - 1 ) };
         auto const has_left_sibling { parent_child_idx > 0 };
         auto const p_right_sibling  { has_right_sibling ? &right( node ) : nullptr };
@@ -1497,8 +1522,8 @@ protected: // 'other'
         BOOST_ASSUME( right.num_vals >= min - 1 ); BOOST_ASSUME( right.num_vals <= min );
         BOOST_ASSUME( left .num_vals >= min - 1 ); BOOST_ASSUME( left .num_vals <= min );
 
-        auto const parent_key_idx{ static_cast<node_size_type>( right.parent_child_idx - 1 ) };
         move_chldrn( right, 0, num_chldrn( right ), left, num_chldrn( left ) );
+        auto const parent_key_idx{ right.parent_child_idx - 1 };
         auto & separator_key{ parent.keys[ parent_key_idx ] };
         left.num_vals += 1;
         auto & last_left_key{ keys( left ).back() };
@@ -1720,8 +1745,10 @@ bptree_base_wkey<Key>::erase( const_iterator const iter ) noexcept
 {
     auto const [node, key_offset]{ iter.base().pos() };
     auto & lf{ leaf( node ) };
-    if ( key_offset == 0 ) [[ unlikely ]]
+    if ( key_offset == 0 ) [[ unlikely ]] {
+        static_assert( leaf_node::min_values > 1 ); // makes this simpler to handle: we can assume that lf.keys[ 1 ] exists, TODO reconsider the nonunique case
         update_separator( lf, lf.keys[ 1 ] );
+    }
     return make_iter( erase( lf, key_offset ) );
 }
 
@@ -2839,6 +2866,8 @@ public:
     // TODO complete std insert interface (w/ ranges, iterators, hints...)
     template <std::input_iterator InIter>
     size_type insert( InIter const begin, InIter const end ) { return impl_base::insert( this->bulk_insert_prepare( std::ranges::subrange( begin, end ) ), unique ); }
+    template <std::convertible_to<Key> T>
+    size_type insert( std::initializer_list<T> const  keys ) { return impl_base::insert( this->bulk_insert_prepare( std::ranges::subrange( keys       ) ), unique ); }
     size_type insert( std::ranges::range auto const & keys ) { return impl_base::insert( this->bulk_insert_prepare( std::ranges::subrange( keys       ) ), unique ); }
 
     size_type merge( bp_tree && other ) { return impl_base::merge( std::move( other ), unique ); }
@@ -2881,7 +2910,10 @@ public:
         // TODO measure if this is worth it.
         if
         (
-            ( ( ( leaf_key_offset + 1 ) < leaf.num_vals  ) && le( key, leaf.keys[ leaf_key_offset + 1 ] ) ) ||
+            (
+                ( ( leaf_key_offset + 1 ) < leaf.num_vals ) &&
+                le( key, leaf.keys[ leaf_key_offset + 1 ] )
+            ) ||
             ( !leaf.right ) ||
             le( key, this->right( leaf ).keys[ 0 ] )
         ) [[ likely ]]
@@ -2946,7 +2978,7 @@ private:
     [[ using gnu: pure, sysv_abi ]]
     auto equal_range_impl( Reg auto const key ) const noexcept
     {
-                auto const find_result{ this->find_internal( key, unique ) };
+        auto const find_result{ this->find_internal( key, unique ) };
         if ( find_result.first ) [[ likely ]] {
             auto const begin{ make_iter( *find_result.first, find_result.second ) };
             if constexpr ( unique ) {
