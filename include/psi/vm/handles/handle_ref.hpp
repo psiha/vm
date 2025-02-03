@@ -3,7 +3,7 @@
 /// \file handle_ref.hpp
 /// --------------------
 ///
-/// Copyright (c) Domagoj Saric 2011 - 2024.
+/// Copyright (c) Domagoj Saric 2011 - 2025.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -14,14 +14,9 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
-#ifndef handle_ref_hpp__19A59763_A268_458C_932F_4E42DEA27751
-#define handle_ref_hpp__19A59763_A268_458C_932F_4E42DEA27751
 #pragma once
 //------------------------------------------------------------------------------
-namespace psi
-{
-//------------------------------------------------------------------------------
-namespace vm
+namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
@@ -42,11 +37,13 @@ struct handle_ref
     constexpr handle_ref( Handle                &       handle ) noexcept                       : value{ handle.get() } {}
     constexpr handle_ref( Handle                &&      handle ) noexcept                       : value{ handle.get() } {}
 
-    template < bool other_read_only >
+    template <bool other_read_only>
     constexpr handle_ref( handle_ref<Handle, other_read_only> const mutable_ref ) noexcept requires( !other_read_only && read_only ) : value{ mutable_ref.value } {}
 
     constexpr          native_handle_t get() const noexcept requires( !read_only ) { return value; }
     constexpr operator native_handle_t    () const noexcept requires( !read_only ) { return value; }
+
+    [[ gnu::pure ]] explicit operator bool() const noexcept { return value != Handle::invalid_value; }
 
     [[ gnu::pure ]] constexpr bool operator==( native_handle_t const other ) const noexcept { return value == other; }
 
@@ -58,8 +55,5 @@ struct handle_ref
 #endif // _MSC_VER
 
 //------------------------------------------------------------------------------
-} // namespace vm
+} // namespace psi::vm
 //------------------------------------------------------------------------------
-} // namespace psi
-//------------------------------------------------------------------------------
-#endif // handle_ref_hpp

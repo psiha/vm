@@ -38,8 +38,8 @@ bool        delete_file( char    const * file_name                 ) noexcept;
 bool        delete_file( wchar_t const * file_name                 ) noexcept;
 
 
-err::fallible_result<void, error> set_size( file_handle::reference, std::uint64_t desired_size ) noexcept;
-std::uint64_t                     get_size( file_handle::reference                             ) noexcept;
+err::fallible_result<void, error> set_size( file_handle::      reference, std::uint64_t desired_size ) noexcept;
+std::uint64_t                     get_size( file_handle::const_reference                             ) noexcept;
 
 // https://msdn.microsoft.com/en-us/library/ms810613.aspx Managing Memory-Mapped Files
 

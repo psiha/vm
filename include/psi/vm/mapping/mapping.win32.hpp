@@ -64,8 +64,8 @@ struct [[ clang::trivial_abi ]] mapping
 
     bool is_file_based() const noexcept { return static_cast<bool>( file ); }
 
-    file_handle::      reference underlying_file()       noexcept { BOOST_ASSERT( is_file_based() ); return file; }
-    file_handle::const_reference underlying_file() const noexcept { BOOST_ASSERT( is_file_based() ); return file; }
+    file_handle::      reference underlying_file()       noexcept { return file; }
+    file_handle::const_reference underlying_file() const noexcept { return file; }
 
     void operator=( mapping && source ) noexcept
     {

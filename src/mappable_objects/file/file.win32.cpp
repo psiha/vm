@@ -94,10 +94,10 @@ err::fallible_result<void, error> set_size( file_handle::reference const file_ha
 }
 
 
-std::uint64_t get_size( file_handle::reference const file_handle ) noexcept
+std::uint64_t get_size( file_handle::const_reference const file_handle ) noexcept
 {
-    LARGE_INTEGER file_size;
-    BOOST_VERIFY( ::GetFileSizeEx( file_handle, &file_size ) || ( file_handle == handle_traits::invalid_value ) );
+    LARGE_INTEGER file_size{ .QuadPart = 0 }; // simplify user code: return zero for closed/default constructed handles
+    BOOST_VERIFY( ::GetFileSizeEx( file_handle.value, &file_size ) || ( file_handle == handle_traits::invalid_value ) );
     return file_size.QuadPart;
 }
 
