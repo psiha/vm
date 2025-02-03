@@ -62,8 +62,8 @@ struct [[ clang::trivial_abi ]] mapping
 
     bool is_anonymous() const noexcept { return view_mapping_flags.flags & MAP_ANONYMOUS; }
 
-    posix::handle::      reference underlying_file()       noexcept { BOOST_ASSERT( is_file_based() ); return *this; }
-    posix::handle::const_reference underlying_file() const noexcept { BOOST_ASSERT( is_file_based() ); return *this; }
+    posix::handle::      reference underlying_file()       noexcept { return *this; }
+    posix::handle::const_reference underlying_file() const noexcept { return *this; }
 
     constexpr mapping & operator=( mapping && source ) noexcept
     {

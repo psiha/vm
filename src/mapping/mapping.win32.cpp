@@ -28,13 +28,14 @@ namespace psi::vm
 inline namespace win32
 {
 //------------------------------------------------------------------------------
-
+[[ gnu::cold, gnu::noinline ]]
 std::uint64_t get_size( mapping::const_handle const mapping_handle ) noexcept
 {
     using namespace nt;
     SECTION_BASIC_INFORMATION info;
+    info.SectionSize.QuadPart = 0; // simplify user code: return zero for closed/default constructed handles
     auto const result{ NtQuerySection( mapping_handle.value, SECTION_INFORMATION_CLASS::SectionBasicInformation, &info, sizeof( info ), nullptr ) };
-    BOOST_ASSUME( result == STATUS_SUCCESS );
+    BOOST_ASSUME( result == STATUS_SUCCESS || !mapping_handle );
     return info.SectionSize.QuadPart;
 }
 

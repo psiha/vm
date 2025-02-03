@@ -80,6 +80,8 @@ public:
 
     [[ nodiscard, gnu::pure ]] bool has_attached_storage() const noexcept { return static_cast<bool>( mapping_ ); }
 
+    auto underlying_file() const noexcept { return mapping_.underlying_file(); }
+
     explicit operator bool() const noexcept { return has_attached_storage(); }
 
     void swap( contiguous_storage_base & other ) noexcept { std::swap( *this, other ); }
