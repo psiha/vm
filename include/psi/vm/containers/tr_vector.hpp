@@ -215,7 +215,7 @@ struct crt_aligned_allocator
 
     //!Deallocates previously allocated memory.
     //!Never throws
-    static void deallocate( pointer const ptr, [[ maybe_unused ]] size_type const size ) noexcept
+    static void deallocate( pointer const ptr, [[ maybe_unused ]] size_type const size = 0 ) noexcept
     {
 #   if __has_builtin( __builtin_constant_p )
         if ( __builtin_constant_p( ptr ) && !ptr )
@@ -446,6 +446,8 @@ public:
     }
 
     static constexpr al get_allocator() noexcept { return {}; }
+
+    auto release() noexcept { auto data{ p_array_ }; mark_freed(); return data; }
 
 private: friend base;
     [[ using gnu: cold, assume_aligned( alignment ), malloc, returns_nonnull, noinline ]]
