@@ -16,6 +16,8 @@
 //------------------------------------------------------------------------------
 #pragma once
 
+#include <psi/build/disable_warnings.hpp>
+
 #include <boost/config_ex.hpp>
 
 #ifndef _WIN32_WINNT
@@ -66,11 +68,14 @@ namespace detail
     BOOST_ATTRIBUTES( BOOST_COLD, BOOST_RESTRICTED_FUNCTION_L3, BOOST_RESTRICTED_FUNCTION_RETURN )
     ::PROC get_nt_proc( char const * proc_name ) noexcept;
 
+    PSI_WARNING_DISABLE_PUSH()
+    PSI_WARNING_CLANG_DISABLE( -Wcast-function-type-mismatch )
     template <typename ProcPtr>
     ProcPtr get_nt_proc( char const * const proc_name )
     {
         return reinterpret_cast<ProcPtr>( detail::get_nt_proc( proc_name ) );
     }
+    PSI_WARNING_DISABLE_POP()
 } // namespace detail
 
 using BaseGetNamedObjectDirectory_t = NTSTATUS (WINAPI*)( HANDLE * phDir );

@@ -74,13 +74,19 @@ namespace
 {
     void do_shrink( mapped_span const view, std::size_t const target_size ) noexcept
     {
-        unmap_partial
-        ({
-            align_up  ( view.data() + target_size, commit_granularity ),
-            align_down( view.size() - target_size, commit_granularity )
-        });
+        // avoid syscalls
+        // TODO:
+        //  - check&document userland wrapper (munmap, UnmapViewOfFile...) behaviours WRT this on all targets
+        //  - reconsider where to put this check
+        if ( view.size() != target_size ) {
+            unmap_partial
+            ({
+                align_up  ( view.data() + target_size, commit_granularity ),
+                align_down( view.size() - target_size, commit_granularity )
+            });
+        }
     }
-} // anonymous namepsace
+} // anonymous namespace
 
 template <bool read_only>
 void basic_mapped_view<read_only>::shrink( std::size_t const target_size ) noexcept

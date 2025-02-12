@@ -33,8 +33,8 @@ namespace detail
 
 void contiguous_storage_base::close() noexcept
 {
-    mapping_.close();
     unmap();
+    mapping_.close();
 }
 
 void contiguous_storage_base::flush_async   ( std::size_t const beginning, std::size_t const size ) const noexcept { vm::flush_async   ( mapped_span({ view_.subspan( beginning, size ) }) ); }
@@ -71,9 +71,12 @@ void * contiguous_storage_base::shrink_to( std::size_t const target_size ) noexc
     }
     else
     {
-        view_.unmap();
+        auto const do_unmap{ view_.size() != target_size };
+        if ( do_unmap )
+            view_.unmap();
         set_size( mapping_, target_size )().assume_succeeded();
-        view_ = mapped_view::map( mapping_, 0, target_size );
+        if ( do_unmap )
+            view_ = mapped_view::map( mapping_, 0, target_size );
     }
     return data();
 }

@@ -64,6 +64,8 @@ struct [[ clang::trivial_abi ]] mapping
 
     bool is_file_based() const noexcept { return static_cast<bool>( file ); }
 
+    void close() noexcept { win32::handle::close(); file.close(); }
+
     file_handle::      reference underlying_file()       noexcept { return file; }
     file_handle::const_reference underlying_file() const noexcept { return file; }
 

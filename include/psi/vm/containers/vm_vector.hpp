@@ -226,7 +226,11 @@ protected:
     {
         auto const data_ptr{ contiguous_storage_base::shrink_to( target_size + header_size() ) };
         if constexpr ( !headerless )
-            stored_size() = target_size;
+        {
+            // minimize every bit of unnecessary page touching/dirtying
+            if ( auto & sz{ stored_size() }; sz != target_size )
+                sz = target_size;
+        }
         return data_ptr;
     }
 

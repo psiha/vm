@@ -138,27 +138,39 @@ namespace {
         // https://stackoverflow.com/questions/68832263/does-msync-performance-depend-on-the-size-of-the-provided-range
         // EINVAL on OSX for empty range
         // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/msync.2.html
+        // According to https://linux.die.net/man/3/msync ensures
+        // "synchronized I/O data integrity completion" which is defined to
+        // include all data (i.e. including metadata) required for subsequent
+        // reads of the data (https://stackoverflow.com/questions/37288453/calling-fsync2-after-close2/50167655#50167655)
+        // This commit https://github.com/torvalds/linux/commit/7fc34a62ca4434a79c68e23e70ed26111b7a4cf8
+        // also says as much.
+        // https://wiki.postgresql.org/wiki/Fsync_Errors 'fsyncgate 2018'
+        // https://stackoverflow.com/questions/42434872/writing-programs-to-cope-with-i-o-errors-causing-lost-writes-on-linux
+        // https://lwn.net/Articles/684828 DAX, mmap(), and a "go faster" flag
         BOOST_VERIFY( ::msync( range.data(), range.size(), flags ) == 0 || range.empty() );
     }
 }
 
-// https://stackoverflow.com/questions/60547532/whats-the-exact-meaning-of-the-flag-ms-invalidate-in-msync
-// https://linux-fsdevel.vger.kernel.narkive.com/ytPKRHNt/munmap-msync-synchronization
 // https://lwn.net/Articles/712467 The future of the page cache
 void flush_async( mapped_span const range ) noexcept
 {
-#ifdef __linux__
-    // MS_ASYNC is a no-op on Linux https://www.man7.org/linux/man-pages/man2/msync.2.html
-    (void)range;
-#else
+    // According to https://www.man7.org/linux/man-pages/man2/msync.2.html
+    // MS_ASYNC is a no-op on Linux yet it states that for portability it should
+    // be specified. Also this article https://lwn.net/Articles/502612 points to
+    // patches adding this functionality to Linux 'at some point'.
     call_msync( range, MS_ASYNC );
-#endif
 }
 
 void flush_blocking( mapped_span const range ) noexcept
 {
+    // MS_INVALIDATE should not be necessary on OSes with coherent/unified
+    // caches? Even if it is necessary it is not clear that the user would want
+    // it in all use cases (certainly not for mappings to which only a single
+    // view ever exists)...
+    // https://stackoverflow.com/questions/60547532/whats-the-exact-meaning-of-the-flag-ms-invalidate-in-msync
+    // https://linux-fsdevel.vger.kernel.narkive.com/ytPKRHNt/munmap-msync-synchronization
+    call_msync( range, MS_SYNC /*| MS_INVALIDATE*/ );
     // sync_file_range, fdatasync...
-    call_msync( range, MS_SYNC | MS_INVALIDATE );
 }
 void flush_blocking( mapped_span const range, file_handle::const_reference ) noexcept { flush_blocking( range ); }
 
