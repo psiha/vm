@@ -75,7 +75,8 @@ map
     flags ::viewing   const flags         ,
     std   ::uint64_t  const offset        ,
     std   ::size_t    const desired_size  ,
-    [[ maybe_unused ]] bool const file_backed // required for the WinNT backend
+    [[ maybe_unused ]]
+    bool              const file_backed // required for the WinNT backend
 ) noexcept
 {
     /// \note mmap() explicitly rejects a zero length/desired_size, IOW
