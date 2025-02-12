@@ -3,7 +3,7 @@
 /// \file mapped_view.win32.cpp
 /// ---------------------------
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2024.
+/// Copyright (c) Domagoj Saric 2010 - 2025.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -185,12 +185,14 @@ void discard( mapped_span const range ) noexcept
 
 void flush_async( mapped_span const range ) noexcept
 {
+    // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwflushvirtualmemory
     BOOST_VERIFY( ::FlushViewOfFile( range.data(), range.size() ) );
 }
 
 void flush_blocking( mapped_span const range, file_handle::const_reference const source_file ) noexcept
 {
     flush_async( range );
+    // https://devblogs.microsoft.com/oldnewthing/20100909-00/?p=12913 Flushing your performance down the drain, that is
     BOOST_VERIFY( ::FlushFileBuffers( source_file.value ) );
 }
 
