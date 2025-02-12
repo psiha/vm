@@ -206,12 +206,13 @@ struct crt_aligned_allocator
             detail::throw_bad_alloc();
         return std::assume_aligned<alignment>( static_cast<pointer>( new_allocation ) );
     }
-
+#if __cpp_lib_allocate_at_least >= 202306L
     static auto allocate_at_least( size_type const count )
     {
         auto const ptr{ allocate( count ) };
         return std::allocation_result{ ptr, size( ptr ) };
     }
+#endif
 
     //!Deallocates previously allocated memory.
     //!Never throws

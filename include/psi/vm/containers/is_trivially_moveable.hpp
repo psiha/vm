@@ -16,16 +16,21 @@
 //------------------------------------------------------------------------------
 namespace std
 {
-#ifdef _LIBCPP_VERSION
+#if defined( _LIBCPP_VERSION )
 inline namespace __1 {
 #endif
     template <typename T, typename A> class vector;
+#if !defined( __GLIBCXX__ )
     template <class E, class T, class A> class basic_string;
+#endif
     template <class T, class D> class unique_ptr;
     template <typename S> class function;
     template <class T1, class T2> struct pair;
-#ifdef _LIBCPP_VERSION
+#if defined( _LIBCPP_VERSION )
 } // namespace __1
+#endif
+#if defined( __GLIBCXX__ )
+inline namespace __cxx11 { template <class E, class T, class A> class basic_string; }
 #endif
 } // namespace std
 //------------------------------------------------------------------------------
