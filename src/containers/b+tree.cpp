@@ -373,7 +373,7 @@ bptree_base::base_iterator::at_negative_offset( nodes_t const nodes, iter_pos co
 
 bool bptree_base::base_iterator::operator==( base_iterator const & other ) const noexcept
 {
-    BOOST_ASSERT_MSG( &this->nodes_[ 0 ] == &other.nodes_[ 0 ], "Comparing iterators from different containers" );
+    BOOST_ASSERT_MSG( ( this->nodes_.empty() && other.nodes_.empty() ) || ( &this->nodes_[ 0 ] == &other.nodes_[ 0 ] ), "Comparing iterators from different containers" );
 #ifdef NDEBUG
     BOOST_ASSUME( this->nodes_ == other.nodes_ );
 #endif
