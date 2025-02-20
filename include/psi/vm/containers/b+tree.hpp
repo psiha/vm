@@ -1992,10 +1992,10 @@ public:
 
     void swap( bp_tree_impl & other ) noexcept { base::swap( other ); }
 
-    [[ nodiscard ]] Comparator const & comp() const noexcept { return *this; }
+    [[ nodiscard, gnu::pure ]] Comparator const & comp() const noexcept { return *this; }
 
     // UB if the comparator is changed in such a way as to invalidate the order of elements already in the container
-    [[ nodiscard ]] Comparator & mutable_comp() noexcept { return *this; }
+    [[ nodiscard, gnu::pure ]] Comparator & mutable_comp() noexcept { return *this; }
 
 protected: // pass-in-reg public function overloads/impls
     bp_tree_impl & mutable_this() const noexcept { return const_cast<bp_tree_impl &>( *this ); }
@@ -2438,7 +2438,7 @@ auto bp_tree_impl<Key, Comparator>::merge
     if ( target_offset == 0 ) [[ unlikely ]]
     {
         auto const & new_separator{ src_keys[ 0 ] };
-        BOOST_ASSUME( new_separator < tgt_keys[ 0 ] );
+        BOOST_ASSERT( comp()( new_separator, tgt_keys[ 0 ] ) );
         base::update_separator( target, new_separator );
         // TODO rather simply insert the source leaf into the parent (if all of
         // its keys come before the first key in target)
