@@ -803,6 +803,7 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Linear to the number of elements in the container.
+    [[ gnu::cold ]]
     void clear( this Impl & self ) noexcept
     {
         std::destroy( self.begin(), self.end() );
