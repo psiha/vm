@@ -313,7 +313,6 @@ public:
     //! <b>Complexity</b>: Linear to n.
     template <std::input_iterator It>
     void assign( this Impl & self, It first, It const last )
-    requires( !std::is_trivially_destructible_v<value_type> )
     {
         // Overwrite all elements we can from [first, last)
         auto       cur   { self.begin() };
@@ -331,7 +330,7 @@ public:
             // There are no more elements in the sequence, erase remaining
             auto const target_size{ static_cast<size_type>( cur - self.begin() ) };
             std::destroy( cur, end_it );
-            self.shrink_storage_to( target_size );
+            self.storage_shrink_to( target_size );
         }
         else
         {
@@ -730,21 +729,39 @@ public:
     template <std::ranges::range Rng>
     void append_range( this Impl & self, Rng && __restrict rng )
     {
-        auto const    current_size{ self.size() };
-        auto const additional_size{ verified_cast<size_type>( std:: size( rng ) ) };
-        auto const input_begin    {                           std::begin( rng )   };
-        auto const target_position{ self.grow_by( additional_size, no_init ) + current_size };
-        try
+        auto const current_size{ self.size() };
+        if constexpr ( requires{ std::size( rng ); } )
         {
-            if constexpr ( std::is_rvalue_reference_v<Rng> )
-                std::uninitialized_move_n( input_begin, additional_size, target_position );
-            else
-                std::uninitialized_copy_n( input_begin, additional_size, target_position );
+            auto const additional_size{ verified_cast<size_type>( std:: size( rng ) ) };
+            auto const input_begin    {                           std::begin( rng )   };
+            auto const target_position{ self.grow_by( additional_size, no_init ) + current_size };
+            try
+            {
+                if constexpr ( std::is_rvalue_reference_v<Rng> )
+                    std::uninitialized_move_n( input_begin, additional_size, target_position );
+                else
+                    std::uninitialized_copy_n( input_begin, additional_size, target_position );
+            }
+            catch (...)
+            {
+                self.storage_shrink_size_to( current_size );
+                throw;
+            }
         }
-        catch (...)
+        else
         {
-            self.storage_shrink_size_to( current_size );
-            throw;
+            try
+            {
+                if constexpr ( std::is_rvalue_reference_v<Rng> )
+                    std::move( std::begin( rng ), std::end( rng ), std::back_inserter( self ) );
+                else
+                    std::copy( std::begin( rng ), std::end( rng ), std::back_inserter( self ) );
+            }
+            catch (...)
+            {
+                self.storage_shrink_size_to( current_size );
+                throw;
+            }
         }
     }
 #ifndef __cpp_lib_span_initializer_list
