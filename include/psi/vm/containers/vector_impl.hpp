@@ -50,6 +50,7 @@
 #ifdef _MSC_VER
 namespace std { template <class T, class A> class list; }
 #endif
+namespace boost::container { struct try_emplace_t; }
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -565,6 +566,11 @@ public:
     static reference construct_at( value_type & placeholder, Args &&...args ) noexcept( std::is_nothrow_constructible_v<value_type, Args...> )
     {
         return *std::construct_at( &placeholder, std::forward<Args>( args )... );
+    }
+    template <class ...Args> // support for boost::container::flat_tree implementation(s)
+    static reference construct_at( value_type & placeholder, boost::container::try_emplace_t &&, Args &&...args ) noexcept( std::is_nothrow_constructible_v<value_type, Args...> )
+    {
+        return construct_at( placeholder, std::forward<Args>( args )... );
     }
     static reference construct_at( value_type & placeholder ) noexcept( std::is_nothrow_default_constructible_v<value_type> )
     {
