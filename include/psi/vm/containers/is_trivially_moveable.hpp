@@ -19,6 +19,7 @@ namespace std
 #if defined( _LIBCPP_VERSION )
 inline namespace __1 {
 #endif
+    template <typename T, size_t size> class array;
     template <typename T, typename A> class vector;
 #if !defined( __GLIBCXX__ )
     template <class E, class T, class A> class basic_string;
@@ -47,7 +48,7 @@ namespace psi::vm
 // There already exist several proposals related to this (most notably P1144 and
 // P2786). This library/the author leans toward 'trivially relocatable' to mean
 // that an object can be simply 'paused' (i.e. not a thread safe operation),
-// 'picked up' from its current location, 'droped' at a different location and
+// 'picked up' from its current location, 'dropped' at a different location and
 // simply 'resumed' like nothing happened (in the sense of program correctness),
 // IOW an obj can have the value of its this pointer changed w/o violating any
 // of its invariants or preconditions. The semantics of P2786 sound closest to
@@ -105,8 +106,14 @@ bool constexpr is_trivially_moveable
     std::is_trivially_move_constructible_v<T> // beyond P2786 optimistic heuristic https://github.com/psiha/vm/pull/34#discussion_r1914536293
 }; // is_trivially_moveable
 
+template <typename T>
+requires requires{ T::is_trivially_moveable; }
+bool constexpr is_trivially_moveable<T>{ T::is_trivially_moveable };
+
 template <typename T1, typename T2>
 bool constexpr is_trivially_moveable<std::pair<T1, T2>>{ is_trivially_moveable<T1> && is_trivially_moveable<T2> };
+template <typename T, std::size_t size>
+bool constexpr is_trivially_moveable<std::array<T, size>>{ is_trivially_moveable<T> };
 #if !defined( _LIBCPP_DEBUG )
 template <typename T            , typename A> bool constexpr is_trivially_moveable<std::vector      <T, A   >>{ is_trivially_moveable<A> };
 template <typename T            , typename D> bool constexpr is_trivially_moveable<std::unique_ptr  <T, D   >>{ is_trivially_moveable<D> };
