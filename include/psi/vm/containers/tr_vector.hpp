@@ -408,7 +408,7 @@ public:
     }
     constexpr tr_vector( tr_vector && other ) noexcept : p_array_{ other.p_array_ }, size_{ other.size_ }, capacity_{ other.capacity_ } { other.mark_freed(); }
 
-    constexpr tr_vector & operator=( tr_vector const & other ) { *this = tr_vector( other ); }
+    constexpr tr_vector & operator=( tr_vector const & other ) { return ( *this = tr_vector( other ) ); }
     constexpr tr_vector & operator=( tr_vector && other ) noexcept
     {
         std::swap( this->p_array_ , other.p_array_  );
