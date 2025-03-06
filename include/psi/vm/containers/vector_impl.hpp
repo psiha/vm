@@ -350,7 +350,10 @@ public:
     template <std::ranges::range Rng>
     void assign( this Impl & self, Rng && data )
     {
-        static_assert( std::ranges::range<std::initializer_list<value_type>> );
+        if constexpr ( requires{ std::size( data ); } )
+        {
+            // TODO specialized path for non-random-access ranges with 'cached' size information
+        }
         if constexpr ( std::is_rvalue_reference_v<Rng> )
             self.assign( std::make_move_iterator( data.begin() ), std::make_move_iterator( data.end() ) );
         else
