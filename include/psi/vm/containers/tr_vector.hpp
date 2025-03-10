@@ -467,7 +467,7 @@ private: friend base;
     {
         auto const current_capacity{ capacity() };
         BOOST_ASSUME( current_capacity >= size_ );
-        BOOST_ASSUME( target_size      >  size_ );
+        BOOST_ASSUME( target_size      >= size_ ); // allow no/zero change
         if ( target_size > current_capacity ) [[ unlikely ]] {
             do_grow( target_size, current_capacity );
         }
