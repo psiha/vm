@@ -77,7 +77,7 @@ namespace detail
     inline void * crt_realloc( void * const existing_allocation_address, std::size_t const new_size )
     {
         auto const new_allocation{ std::realloc( existing_allocation_address, new_size ) };
-        if ( !new_allocation ) [[ unlikely ]]
+        if ( ( new_allocation == nullptr ) && ( new_size != 0 ) ) [[ unlikely ]]
             throw_bad_alloc();
         return new_allocation;
     }
@@ -480,7 +480,7 @@ private: friend base;
     {
         BOOST_ASSUME( target_size <= size_ );
         p_array_ = al::shrink_to( p_array_, size_, target_size );
-        BOOST_ASSUME( p_array_ ); // assuming downsizing never fails
+        BOOST_ASSUME( p_array_ || !target_size ); // assuming downsizing never fails
         BOOST_ASSUME( is_aligned( p_array_, alignment ) ); // assuming no implementation will actually move a block upon downsizing
         storage_shrink_size_to( target_size );
         update_capacity( target_size );
@@ -517,10 +517,10 @@ private:
 
     void update_capacity( [[ maybe_unused ]] size_type const requested_capacity ) noexcept
     {
-        BOOST_ASSUME( p_array_ );
+        BOOST_ASSUME( p_array_ || !requested_capacity );
         if constexpr ( options.cache_capacity ) {
 #       if defined( _MSC_VER )
-            BOOST_ASSERT( al::size( p_array_ ) == requested_capacity ); // see note in crt_alloc_size
+            BOOST_ASSERT( !requested_capacity || ( al::size( p_array_ ) == requested_capacity ) ); // see note in crt_alloc_size
             capacity_.value = requested_capacity;
 #       else
             capacity_.value = al::size( p_array_ );
