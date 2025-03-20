@@ -2713,7 +2713,11 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
     //      update_pool_ptr on input iterators as the input container is not
     //      being modified.
     // TODO further deduplicate with insert
-    if ( empty() ) {
+
+    if ( other.empty() )
+        return 0;
+
+    if ( this->empty() ) {
         swap( other );
         return size();
     }
