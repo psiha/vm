@@ -29,7 +29,7 @@ inline namespace win32
 //------------------------------------------------------------------------------
 
 // http://en.wikipedia.org/wiki/File_locking#In_UNIX
-DWORD const default_unix_shared_semantics{ FILE_SHARE_READ | FILE_SHARE_WRITE };
+DWORD const default_unix_shared_semantics{ FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE };
 
 namespace detail
 {
