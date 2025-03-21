@@ -1,6 +1,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2024.
+/// Copyright (c) Domagoj Saric 2010 - 2025.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -13,6 +13,8 @@
 //------------------------------------------------------------------------------
 #include <psi/vm/mappable_objects/file/file.hpp>
 
+#include <psi/vm/align.hpp>
+#include <psi/vm/allocation.hpp> // for reserve_granularity
 #include <psi/vm/flags/opening.win32.hpp>
 #include <psi/vm/detail/nt.hpp>
 #include <psi/vm/detail/win32.hpp>
@@ -119,7 +121,7 @@ namespace detail
         // so we emulate those by creating a 2GB one and counting on:
         // - the NT kernel to be lazy and
         // - that amount to be 'enough for everyone'.
-        extern std::size_t const max_anonymous_pf_mapping_size{ std::numeric_limits<std::int32_t>::max() };
+        extern std::size_t const max_anonymous_pf_mapping_size{ align_up<std::size_t>( std::numeric_limits<std::int32_t>::max(), reserve_granularity ) };
 
         using desired_access_t = flags::mapping::access_rights::object;
 
