@@ -2620,6 +2620,8 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
         {
             BOOST_ASSUME( unique );
             ++p_new_keys;
+            if ( p_new_keys.pos() == end_pos ) [[ unlikely ]]
+                break;
             continue;
         }
 
@@ -2752,6 +2754,8 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
         {
             BOOST_ASSUME( unique );
             ++p_new_keys;
+            if ( p_new_keys == p_new_nodes_end ) [[ unlikely ]]
+                break;
             continue;
         }
 
@@ -2759,10 +2763,10 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
         // simple bulk_append at the end of the rightmost leaf
         if ( ( tgt_leaf_next_pos.pos == tgt_leaf->num_vals ) && !tgt_leaf->right )
         {
-            if ( auto const remaining_tgt_node_space{ tgt_leaf->max_values - tgt_leaf->num_vals } )
+            if ( auto const remaining_tgt_node_space{ node_size_type( tgt_leaf->max_values - tgt_leaf->num_vals ) } )
             {
-                auto const remaining_src_node_data{ src_leaf->num_vals - source_slot_offset };
-                auto const copy_size{ std::min( remaining_tgt_node_space, remaining_src_node_data ) };
+                node_size_type const remaining_src_node_data( src_leaf->num_vals - source_slot_offset );
+                node_size_type const copy_size{ std::min( remaining_tgt_node_space, remaining_src_node_data ) };
                 BOOST_ASSUME( copy_size );
                 this->move_keys( *src_leaf, source_slot_offset, copy_size, *tgt_leaf, tgt_leaf->num_vals );
                 tgt_leaf->num_vals += copy_size;

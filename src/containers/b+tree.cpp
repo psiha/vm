@@ -341,7 +341,7 @@ bptree_base::base_iterator::at_positive_offset( nodes_t const nodes, iter_pos co
             BOOST_ASSERT_MSG( iter.pos_.node, "Incrementing out of bounds" );
         } else {
             BOOST_ASSUME( n == ( available_offset + 1 ) ); // i.e. n is exactly one past available_offset, otherwise incrementing out of bounds/past end
-            iter.pos_.value_offset = available_offset + 1;
+            iter.pos_.value_offset = static_cast<node_size_type>( available_offset + 1 );
             BOOST_ASSUME( iter.pos_.value_offset == node.num_vals );
             break;
         }
