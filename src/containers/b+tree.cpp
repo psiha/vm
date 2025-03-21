@@ -326,23 +326,23 @@ bptree_base::base_iterator::at_positive_offset( nodes_t const nodes, iter_pos co
     for ( ;; )
     {
         auto & node{ iter.node() };
-        auto const available_offset{ static_cast<size_type>( node.num_vals - 1 - iter.pos_.value_offset ) };
-        if ( available_offset >= n ) {
+        auto const available_offset{ static_cast<node_size_type>( node.num_vals/* - 1*/ - iter.pos_.value_offset ) }; // +1 (i.e. including end position)
+        if ( n < available_offset ) {
             iter.pos_.value_offset += static_cast<node_size_type>( n );
             BOOST_ASSUME( iter.pos_.value_offset < node.num_vals );
             break;
-        } else
+        }
         if ( !precise_end_handling || node.right ) [[ likely ]] {
             iter.pos_.node         = node.right;
             iter.pos_.value_offset = 0;
-            n -= ( available_offset + 1 );
+            n -= available_offset;
             if ( n == 0 ) [[ unlikely ]]
                 break;
             BOOST_ASSERT_MSG( iter.pos_.node, "Incrementing out of bounds" );
         } else {
-            BOOST_ASSUME( n == ( available_offset + 1 ) ); // i.e. n is exactly one past available_offset, otherwise incrementing out of bounds/past end
-            iter.pos_.value_offset = static_cast<node_size_type>( available_offset + 1 );
-            BOOST_ASSUME( iter.pos_.value_offset == node.num_vals );
+            BOOST_ASSUME( n == available_offset ); // i.e. n is exactly one past available_offset, otherwise incrementing out of bounds/past end
+            BOOST_ASSUME( iter.pos_.value_offset + n == node.num_vals );
+            iter.pos_.value_offset = node.num_vals;
             break;
         }
     }
