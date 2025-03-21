@@ -331,16 +331,19 @@ bptree_base::base_iterator::at_positive_offset( nodes_t const nodes, iter_pos co
             iter.pos_.value_offset += static_cast<node_size_type>( n );
             BOOST_ASSUME( iter.pos_.value_offset < node.num_vals );
             break;
-        } else {
+        } else
+        if ( !precise_end_handling || node.right ) [[ likely ]] {
+            iter.pos_.node         = node.right;
+            iter.pos_.value_offset = 0;
             n -= ( available_offset + 1 );
-            if ( !precise_end_handling || node.right ) [[ likely ]]
-            {
-                iter.pos_.node         = node.right;
-                iter.pos_.value_offset = 0;
-            }
             if ( n == 0 ) [[ unlikely ]]
                 break;
             BOOST_ASSERT_MSG( iter.pos_.node, "Incrementing out of bounds" );
+        } else {
+            BOOST_ASSUME( n == ( available_offset + 1 ) ); // i.e. n is exactly one past available_offset, otherwise incrementing out of bounds/past end
+            iter.pos_.value_offset = available_offset + 1;
+            BOOST_ASSUME( iter.pos_.value_offset == node.num_vals );
+            break;
         }
     }
     return iter.pos_;
@@ -484,12 +487,12 @@ bptree_base::new_node()
     auto & free_list{ hdr.free_list_ };
     if ( free_list )
     {
-        BOOST_ASSUME( hdr.free_node_count_ );
         auto & cached_node{ node<free_node>( free_list ) };
         BOOST_ASSUME( !cached_node.num_vals );
         BOOST_ASSUME( !cached_node.left     );
         free_list = cached_node.right;
         unlink_right( cached_node );
+        BOOST_ASSUME( hdr.free_node_count_ );
         --hdr.free_node_count_;
         return as<node_placeholder>( cached_node );
     }
@@ -537,6 +540,14 @@ void bptree_base::free_leaf( node_header & leaf ) noexcept
 {
     update_leaf_list_ends( leaf );
     free( leaf );
+}
+
+[[ gnu::cold ]]
+void bptree_base::reset() noexcept // cheaper/simpler 'clear()' (when retaining the storage mapped/open is not required)
+{
+    static_assert( std::is_nothrow_destructible_v<bptree_base> && std::is_nothrow_default_constructible_v<bptree_base> );
+    std::  destroy_at( this );
+    std::construct_at( this );
 }
 
 //------------------------------------------------------------------------------
