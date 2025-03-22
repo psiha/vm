@@ -2670,7 +2670,7 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
                 hdr.root_  = hdr.first_leaf_ = hdr.last_leaf_ = {};
                 hdr.depth_ = hdr.size_ = 0;
                 BOOST_ASSUME( tgt_leaf->right == begin_leaf );
-                base::bulk_insert_into_empty( root_node, end_pos, total_size );
+                base::bulk_insert_into_empty( root_node, end_pos, previous_size + total_size );
                 BOOST_ASSUME( this->hdr().size_ == previous_size + total_size );
                 return total_size;
             }
