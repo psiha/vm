@@ -215,6 +215,8 @@ protected:
 
     [[ gnu::pure ]] size_type size() const noexcept { return hdr().size_; }
 
+    [[ gnu::pure ]] size_type used_number_of_nodes() const noexcept;
+
     [[ gnu::cold ]] node_header & create_root();
 
     [[ gnu::pure ]] static bool underflowed( auto const & node ) noexcept { return node.num_vals < node.min_values; }
@@ -2762,7 +2764,13 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
     }
 
     auto const total_size{ other.size() };
-    this->reserve_additional( total_size );
+    // We do not know that state (i.e. the fill factor) of the nodes from other
+    // and since we, for simplicity, copy them as-is in the tail-bulk phase we
+    // cannot rely on the optimistic occupancy logic in reserve_additional to
+    // produce the correct number (which would guarantee no further allocation
+    // happens beyond this point).
+    //this->reserve_additional( total_size );
+    bptree_base::reserve( this->used_number_of_nodes() + other.used_number_of_nodes() );
 
     auto const p_new_nodes_begin{ other.ra_begin() };
     auto const p_new_nodes_end  { other.ra_end  () };
@@ -2824,6 +2832,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
             for ( ;; )
             {
                 BOOST_ASSUME( src_leaf->num_vals );
+                BOOST_ASSUME( this->hdr().free_node_count_ ); // verify that we have preallocated/reserved enough nodes so that we can assume src_leaf and tgt_leaf references to be stable
                 auto & src_leaf_copy{ this->template new_node<leaf_node>() };
                 if ( !src_copy_begin )
                 {

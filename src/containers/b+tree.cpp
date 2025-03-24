@@ -69,6 +69,7 @@ bptree_base::map_memory( std::uint32_t const initial_capacity_as_number_of_nodes
     }
     return success;
 }
+
 [[ gnu::cold ]]
 void bptree_base::reserve_additional( node_slot::value_type additional_nodes )
 {
@@ -100,6 +101,11 @@ void bptree_base::assign_nodes_to_free_pool( node_slot::value_type const startin
 {
     for ( auto & n : std::views::reverse( std::span{ nodes_ }.subspan( starting_node ) ) )
         free( n );
+}
+
+bptree_base::size_type bptree_base::used_number_of_nodes() const noexcept
+{
+    return nodes_.size() - hdr().free_node_count_;
 }
 
 void bptree_base::rshift_sibling_parent_pos( node_header & node ) noexcept
