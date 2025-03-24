@@ -177,7 +177,8 @@ TEST( bp_tree, playground )
             shuffled_even_numbers.append_range( merge_appendix );
             bpt_even.insert( shuffled_even_numbers );
 
-            EXPECT_EQ( bpt.merge( std::move( bpt_even ) ), bpt_even.size() );
+            EXPECT_EQ( bpt.merge( std::move( bpt_even ) ), shuffled_even_numbers.size() );
+            EXPECT_FALSE( bpt_even./*empty()*/has_attached_storage() /*TODO rethink the guarantee here*/ );
         }
 
         EXPECT_TRUE( std::ranges::equal( std::ranges::iota_view{ 0, test_size + extra_entries_for_tree_merge }, bpt ) );

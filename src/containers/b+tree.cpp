@@ -69,6 +69,7 @@ bptree_base::map_memory( std::uint32_t const initial_capacity_as_number_of_nodes
     }
     return success;
 }
+
 [[ gnu::cold ]]
 void bptree_base::reserve_additional( node_slot::value_type additional_nodes )
 {
@@ -100,6 +101,11 @@ void bptree_base::assign_nodes_to_free_pool( node_slot::value_type const startin
 {
     for ( auto & n : std::views::reverse( std::span{ nodes_ }.subspan( starting_node ) ) )
         free( n );
+}
+
+bptree_base::size_type bptree_base::used_number_of_nodes() const noexcept
+{
+    return nodes_.size() - hdr().free_node_count_;
 }
 
 void bptree_base::rshift_sibling_parent_pos( node_header & node ) noexcept
@@ -326,21 +332,24 @@ bptree_base::base_iterator::at_positive_offset( nodes_t const nodes, iter_pos co
     for ( ;; )
     {
         auto & node{ iter.node() };
-        auto const available_offset{ static_cast<size_type>( node.num_vals - 1 - iter.pos_.value_offset ) };
-        if ( available_offset >= n ) {
+        auto const available_offset{ static_cast<node_size_type>( node.num_vals/* - 1*/ - iter.pos_.value_offset ) }; // +1 (i.e. including end position)
+        if ( n < available_offset ) {
             iter.pos_.value_offset += static_cast<node_size_type>( n );
             BOOST_ASSUME( iter.pos_.value_offset < node.num_vals );
             break;
-        } else {
-            n -= ( available_offset + 1 );
-            if ( !precise_end_handling || node.right ) [[ likely ]]
-            {
-                iter.pos_.node         = node.right;
-                iter.pos_.value_offset = 0;
-            }
+        }
+        if ( !precise_end_handling || node.right ) [[ likely ]] {
+            iter.pos_.node         = node.right;
+            iter.pos_.value_offset = 0;
+            n -= available_offset;
             if ( n == 0 ) [[ unlikely ]]
                 break;
             BOOST_ASSERT_MSG( iter.pos_.node, "Incrementing out of bounds" );
+        } else {
+            BOOST_ASSUME( n == available_offset ); // i.e. n is exactly one past available_offset, otherwise incrementing out of bounds/past end
+            BOOST_ASSUME( iter.pos_.value_offset + n == node.num_vals );
+            iter.pos_.value_offset = node.num_vals;
+            break;
         }
     }
     return iter.pos_;
@@ -484,12 +493,12 @@ bptree_base::new_node()
     auto & free_list{ hdr.free_list_ };
     if ( free_list )
     {
-        BOOST_ASSUME( hdr.free_node_count_ );
         auto & cached_node{ node<free_node>( free_list ) };
         BOOST_ASSUME( !cached_node.num_vals );
         BOOST_ASSUME( !cached_node.left     );
         free_list = cached_node.right;
         unlink_right( cached_node );
+        BOOST_ASSUME( hdr.free_node_count_ );
         --hdr.free_node_count_;
         return as<node_placeholder>( cached_node );
     }
@@ -537,6 +546,14 @@ void bptree_base::free_leaf( node_header & leaf ) noexcept
 {
     update_leaf_list_ends( leaf );
     free( leaf );
+}
+
+[[ gnu::cold ]]
+void bptree_base::reset() noexcept // cheaper/simpler 'clear()' (when retaining the storage mapped/open is not required)
+{
+    static_assert( std::is_nothrow_destructible_v<bptree_base> && std::is_nothrow_default_constructible_v<bptree_base> );
+    std::  destroy_at( this );
+    std::construct_at( this );
 }
 
 //------------------------------------------------------------------------------
