@@ -2656,7 +2656,8 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
             } else {
                 base::bulk_append_fill_leaf_if_incomplete( *src_leaf );
             }
-            if ( tgt_leaf->is_root() ) [[ unlikely ]] {
+            if ( tgt_leaf->is_root() ) [[ unlikely ]]
+            {
                 // handle the case of a bulk append to a lone root: reuse the
                 // bulk_insert_into_empty method by (re)moving the root to the
                 // start/left of the bulk of the nodes to be inserted
@@ -2797,11 +2798,17 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
                 BOOST_ASSUME( copy_size );
                 this->move_keys( *src_leaf, source_slot_offset, copy_size, *tgt_leaf, tgt_leaf->num_vals );
                 tgt_leaf->num_vals += copy_size;
-                inserted           += copy_size;
                 if ( copy_size == remaining_src_node_data )
                 {
                     if ( !src_leaf->right )
+                    {
+                        // this breaks out fully/out of the main loop, skipping
+                        // the bulk_append call below (as there is nothing more
+                        // to append) and the update of 'inserted' right after
+                        // it so we have to update it here
+                        inserted += copy_size;
                         break;
+                    }
                     src_leaf = &other.right( *src_leaf );
                 }
                 else
