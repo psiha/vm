@@ -62,10 +62,7 @@ bptree_base::map_memory( std::uint32_t const initial_capacity_as_number_of_nodes
         if ( initial_capacity_as_number_of_nodes ) {
             assign_nodes_to_free_pool( 0 );
         }
-#   ifndef NDEBUG
-        p_hdr_   = &hdr();
-        p_nodes_ = nodes_.data();
-#   endif
+        update_dbg_helpers();
     }
     return success;
 }
@@ -77,10 +74,7 @@ void bptree_base::reserve_additional( node_slot::value_type additional_nodes )
     additional_nodes -= std::min( preallocated_count, additional_nodes );
     auto const current_size{ nodes_.size() };
     nodes_.grow_by( additional_nodes, value_init );
-#ifndef NDEBUG
-    p_hdr_   = &hdr();
-    p_nodes_ = nodes_.data();
-#endif
+    update_dbg_helpers();
     assign_nodes_to_free_pool( current_size );
 }
 [[ gnu::cold ]]
@@ -90,10 +84,7 @@ void bptree_base::reserve( node_slot::value_type new_capacity_in_number_of_nodes
         return;
     auto const current_size{ nodes_.size() };
     nodes_.grow_to( new_capacity_in_number_of_nodes, value_init );
-#ifndef NDEBUG
-    p_hdr_   = &hdr();
-    p_nodes_ = nodes_.data();
-#endif
+    update_dbg_helpers();
     assign_nodes_to_free_pool( current_size );
 }
 [[ gnu::cold ]]
@@ -419,8 +410,8 @@ void bptree_base::swap( bptree_base & other ) noexcept
     using std::swap;
     swap( this->nodes_, other.nodes_ );
 #ifndef NDEBUG
-    swap( this->p_hdr_  , other.p_hdr_   );
-    swap( this->p_nodes_, other.p_nodes_ );
+    swap( this->p_hdr_ , other.p_hdr_  );
+    swap( this->nodes__, other.nodes__ );
 #endif
 }
 
@@ -506,10 +497,7 @@ bptree_base::new_node()
     BOOST_ASSUME( !new_node.num_vals );
     BOOST_ASSUME( !new_node.left     );
     BOOST_ASSUME( !new_node.right    );
-#ifndef NDEBUG
-    p_hdr_   = &this->hdr();
-    p_nodes_ = nodes_.data();
-#endif
+    update_dbg_helpers();
     return new_node;
 }
 
@@ -554,6 +542,13 @@ void bptree_base::reset() noexcept // cheaper/simpler 'clear()' (when retaining 
     static_assert( std::is_nothrow_destructible_v<bptree_base> && std::is_nothrow_default_constructible_v<bptree_base> );
     std::  destroy_at( this );
     std::construct_at( this );
+}
+
+void bptree_base::update_dbg_helpers() noexcept {
+#ifndef NDEBUG
+    p_hdr_  = &this->hdr();
+    nodes__ = nodes_;
+#endif
 }
 
 //------------------------------------------------------------------------------

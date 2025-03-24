@@ -364,11 +364,13 @@ private:
 
     void update_leaf_list_ends( node_header & removed_leaf ) noexcept;
 
+    void update_dbg_helpers() noexcept;
+
 protected:
     node_pool nodes_;
 #ifndef NDEBUG // debugging helpers (undoing type erasure done by contiguous_container_storage_base)
-    header           const * p_hdr_  {};
-    node_placeholder const * p_nodes_{};
+    header const *                    p_hdr_ {};
+    std::span<node_placeholder const> nodes__{};
 #endif
 }; // class bptree_base
 
@@ -382,11 +384,7 @@ bptree_base::map_file( auto const file, flags::named_object_construction_policy 
 {
     auto success{ nodes_.map_file( file, policy )() };
 #ifndef NDEBUG
-    if ( success )
-    {
-        p_hdr_   = &hdr();
-        p_nodes_ = nodes_.data();
-    }
+    if ( success ) update_dbg_helpers();
 #endif
     if ( success && nodes_.empty() )
         hdr() = {};
@@ -2764,13 +2762,16 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
     }
 
     auto const total_size{ other.size() };
-    // We do not know that state (i.e. the fill factor) of the nodes from other
+    // We do not know the state (i.e. the fill factor) of the nodes from 'other'
     // and since we, for simplicity, copy them as-is in the tail-bulk phase we
     // cannot rely on the optimistic occupancy logic in reserve_additional to
     // produce the correct number (which would guarantee no further allocation
     // happens beyond this point).
+    // ...this is still enough only in optimistic cases where all or most of the
+    // merge happens at the (bulk) end - otherwise lots of splitting can occur
+    // of intermediate leaves (with, then, lower load percentages)...
     //this->reserve_additional( total_size );
-    bptree_base::reserve( this->used_number_of_nodes() + other.used_number_of_nodes() );
+     bptree_base::reserve( this->used_number_of_nodes() + other.used_number_of_nodes() * 3 / 2 );
 
     auto const p_new_nodes_begin{ other.ra_begin() };
     auto const p_new_nodes_end  { other.ra_end  () };
@@ -2833,8 +2834,11 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
             for ( ;; )
             {
                 BOOST_ASSUME( src_leaf->num_vals );
-                BOOST_ASSUME( this->hdr().free_node_count_ ); // verify that we have preallocated/reserved enough nodes so that we can assume src_leaf and tgt_leaf references to be stable
+                //...mrmlj...see the note for reserve
+                //BOOST_ASSUME( this->hdr().free_node_count_ ); // verify that we have preallocated/reserved enough nodes so that we can assume tgt_leaf references to be stable (src_leaf comes from 'other')
+                auto const tgt_slot{ slot_of( *tgt_leaf ) };
                 auto & src_leaf_copy{ this->template new_node<leaf_node>() };
+                tgt_leaf = &leaf( tgt_slot );
                 if ( !src_copy_begin )
                 {
                     src_copy_begin = slot_of( src_leaf_copy );
