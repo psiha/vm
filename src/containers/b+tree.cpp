@@ -103,7 +103,7 @@ void bptree_base::assign_nodes_to_free_pool( node_slot::value_type const startin
         free( n );
 }
 
-bptree_base::size_type bptree_base::used_number_of_nodes() const noexcept
+bptree_base::node_slot::value_type bptree_base::used_number_of_nodes() const noexcept
 {
     return nodes_.size() - hdr().free_node_count_;
 }

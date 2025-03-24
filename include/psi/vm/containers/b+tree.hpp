@@ -215,7 +215,7 @@ protected:
 
     [[ gnu::pure ]] size_type size() const noexcept { return hdr().size_; }
 
-    [[ gnu::pure ]] size_type used_number_of_nodes() const noexcept;
+    [[ gnu::pure ]] node_slot::value_type used_number_of_nodes() const noexcept;
 
     [[ gnu::cold ]] node_header & create_root();
 
