@@ -2804,7 +2804,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
                 node_size_type const remaining_src_node_data( src_leaf->num_vals - source_slot_offset );
                 node_size_type const copy_size{ std::min( remaining_tgt_node_space, remaining_src_node_data ) };
                 BOOST_ASSUME( copy_size );
-                this->move_keys( *src_leaf, source_slot_offset, copy_size, *tgt_leaf, tgt_leaf->num_vals );
+                this->move_keys( *src_leaf, source_slot_offset, source_slot_offset + copy_size, *tgt_leaf, tgt_leaf->num_vals );
                 tgt_leaf->num_vals += copy_size;
                 if ( copy_size == remaining_src_node_data )
                 {
@@ -2818,6 +2818,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
                         break;
                     }
                     src_leaf = &other.right( *src_leaf );
+                    source_slot_offset = 0;
                 }
                 else
                 {
