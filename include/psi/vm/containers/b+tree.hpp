@@ -670,8 +670,8 @@ protected: // node types
 
     struct root_node : parent_node
     {
-        static auto constexpr min_children{ 2 };
-        static auto constexpr min_values  { min_children - 1 };
+        static node_size_type constexpr min_children{ 2 };
+        static node_size_type constexpr min_values  { min_children - 1 };
     }; // struct root_node
 
     struct alignas( node_size ) leaf_node : node_header
@@ -1166,7 +1166,7 @@ protected: // 'other'
         }
         std::unreachable();
     }
-
+    [[ gnu::noinline ]]
     void bulk_insert_into_empty( node_slot const begin_leaf, iter_pos const end_leaf, size_type const total_size )
     {
         BOOST_ASSUME( empty() );
@@ -1199,10 +1199,10 @@ protected: // 'other'
     }
 
     // 'pure' bulk append - assumes empty and lone-root scenarios have been handled
+    [[ gnu::noinline ]]
     void bulk_append_tail( leaf_node * src_leaf, insert_pos_t rightmost_parent_pos )
     {
-        BOOST_ASSUME( !empty() );
-        BOOST_ASSUME( !src_leaf->is_root() );
+        BOOST_ASSERT( src_leaf != static_cast<node_header const *>( &root() ) );
         for ( ;; )
         {
             BOOST_ASSUME( !src_leaf->parent );
@@ -1241,20 +1241,26 @@ protected: // 'other'
     // maintaining that invariant (TODO make this an option).
     bool bulk_append_fill_leaf_if_incomplete( leaf_node & leaf ) noexcept
     {
-        auto const missing_keys{ static_cast<node_size_type>( std::max( 0, signed( leaf.min_values - leaf.num_vals ) ) ) };
-        if ( missing_keys ) [[ unlikely ]]
+        if ( leaf.num_vals < leaf.min_values ) [[ unlikely ]]
         {
-            auto & preceding{ left( leaf ) };
-            BOOST_ASSUME( preceding.num_vals + leaf.num_vals >= leaf_node::min_values * 2 );
-            std::shift_right( &leaf.keys[ 0 ], &leaf.keys[ leaf.num_vals + missing_keys ], missing_keys );
-            this->move_keys( preceding, preceding.num_vals - missing_keys, preceding.num_vals, leaf, 0 );
-            leaf     .num_vals += missing_keys;
-            preceding.num_vals -= missing_keys;
+            bulk_append_fill_incomplete_leaf( leaf );
             return true;
         }
         return false;
     }
-
+    [[ gnu::noinline ]]
+    void bulk_append_fill_incomplete_leaf( leaf_node & leaf ) noexcept
+    {
+        BOOST_ASSUME( leaf.num_vals < leaf.min_values );
+        node_size_type const missing_keys( leaf.min_values - leaf.num_vals );
+        auto & preceding{ left( leaf ) };
+        BOOST_ASSUME( preceding.num_vals + leaf.num_vals >= leaf_node::min_values * 2 );
+        std::shift_right( &leaf.keys[ 0 ], &leaf.keys[ leaf.num_vals + missing_keys ], missing_keys );
+        this->move_keys( preceding, preceding.num_vals - missing_keys, preceding.num_vals, leaf, 0 );
+        leaf     .num_vals += missing_keys;
+        preceding.num_vals -= missing_keys;
+    }
+    [[ gnu::noinline ]]
     size_t bulk_append( node_header const & tgt_leaf, leaf_node & src_leaf, size_t const total_insertion_size, iter_pos const end_pos, node_slot const begin_leaf ) {
         if ( tgt_leaf.is_root() ) [[ unlikely ]]
         {

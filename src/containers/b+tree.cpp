@@ -132,7 +132,7 @@ void bptree_base::unlink_and_free_node( node_header & node, node_header & cached
     update_right_sibling_link( left, right.left );
     free( node );
 }
-
+[[ gnu::noinline ]]
 void bptree_base::update_leaf_list_ends( node_header & removed_leaf ) noexcept
 {
     auto & first_leaf{ hdr().first_leaf_ };
@@ -500,7 +500,7 @@ bptree_base::new_node()
     update_dbg_helpers();
     return new_node;
 }
-
+[[ gnu::noinline ]]
 void bptree_base::free( node_header & node ) noexcept
 {
     auto & hdr{ this->hdr() };
