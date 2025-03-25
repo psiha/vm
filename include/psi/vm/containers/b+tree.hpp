@@ -670,8 +670,8 @@ protected: // node types
 
     struct root_node : parent_node
     {
-        static auto constexpr min_children{ 2 };
-        static auto constexpr min_values  { min_children - 1 };
+        static node_size_type constexpr min_children{ 2 };
+        static node_size_type constexpr min_values  { min_children - 1 };
     }; // struct root_node
 
     struct alignas( node_size ) leaf_node : node_header
@@ -1070,59 +1070,6 @@ protected: // 'other'
         remove_from_parent( inner( node.parent ), node.parent_child_idx );
     }
 
-    // This function only serves the purpose of maintaining the rule about the
-    // minimum number of children per node - that rule is actually only
-    // 'academic' (for making sure that the performance/complexity guarantees
-    // will be maintained) - the tree would operate correctly even without
-    // maintaining that invariant (TODO make this an option).
-    bool bulk_append_fill_leaf_if_incomplete( leaf_node & leaf ) noexcept
-    {
-        auto const missing_keys{ static_cast<node_size_type>( std::max( 0, signed( leaf.min_values - leaf.num_vals ) ) ) };
-        if ( missing_keys ) [[ unlikely ]]
-        {
-            auto & preceding{ left( leaf ) };
-            BOOST_ASSUME( preceding.num_vals + leaf.num_vals >= leaf_node::min_values * 2 );
-            std::shift_right( &leaf.keys[ 0 ], &leaf.keys[ leaf.num_vals + missing_keys ], missing_keys );
-            this->move_keys( preceding, preceding.num_vals - missing_keys, preceding.num_vals, leaf, 0 );
-            leaf     .num_vals += missing_keys;
-            preceding.num_vals -= missing_keys;
-            return true;
-        }
-        return false;
-    }
-
-    void bulk_append( leaf_node * src_leaf, insert_pos_t rightmost_parent_pos )
-    {
-        for ( ;; )
-        {
-            BOOST_ASSUME( !src_leaf->parent );
-            auto & rightmost_parent{ inner( rightmost_parent_pos.node ) };
-            BOOST_ASSUME( rightmost_parent_pos.next_insert_offset == rightmost_parent.num_vals );
-            auto const next_src_slot{ src_leaf->right };
-            rightmost_parent_pos = insert // add src_leaf into (a) parent
-            (
-                rightmost_parent,
-                rightmost_parent_pos.next_insert_offset,
-                key_rv_arg{ /*mrmlj*/Key{ src_leaf->keys[ 0 ] } },
-                slot_of( *src_leaf )
-            );
-            if ( !next_src_slot )
-                break;
-            src_leaf = &leaf( next_src_slot );
-        }
-        hdr().last_leaf_ = slot_of( *src_leaf );
-        if ( bulk_append_fill_leaf_if_incomplete( *src_leaf ) )
-        {
-            // Borrowing from the left sibling happened _after_ src_leaf was
-            // already inserted into the parent so we have to update the
-            // separator key in the parent (since this is the rightmost leaf we
-            // know that the separator key has to be in the immediate parent -
-            // no need to call the generic update_separator()).
-            auto & prnt{ parent( *src_leaf ) };
-            BOOST_ASSUME( src_leaf->parent_child_idx == num_chldrn( prnt ) - 1 );
-            keys( prnt ).back() = src_leaf->keys[ 0 ];
-        }
-    }
 
     struct bulk_copied_input
     {
@@ -1134,6 +1081,7 @@ protected: // 'other'
         // for subsequent sorting
         tr_vector<leaf_node *, std::uint32_t> nodes;
     }; // struct bulk_copied_input
+
     template <typename I, typename S, std::ranges::subrange_kind kind>
     bulk_copied_input
     bulk_insert_prepare( std::ranges::subrange<I, S, kind> keys )
@@ -1218,7 +1166,7 @@ protected: // 'other'
         }
         std::unreachable();
     }
-
+    [[ gnu::noinline ]]
     void bulk_insert_into_empty( node_slot const begin_leaf, iter_pos const end_leaf, size_type const total_size )
     {
         BOOST_ASSUME( empty() );
@@ -1243,11 +1191,105 @@ protected: // 'other'
         hdr = &this->hdr();
         BOOST_ASSUME( hdr->depth_ == 2 );
         if ( first_unconnected_node ) { // first check if there are more than two nodes
-            bulk_append( &leaf( first_unconnected_node ), { hdr->root_, 1 } );
+            bulk_append_tail( &leaf( first_unconnected_node ), { hdr->root_, 1 } );
         }
         BOOST_ASSUME( hdr->last_leaf_ == end_leaf.node );
         BOOST_ASSUME( !!hdr->last_leaf_ );
         hdr->size_ = total_size;
+    }
+
+    // 'pure' bulk append - assumes empty and lone-root scenarios have been handled
+    [[ gnu::noinline ]]
+    void bulk_append_tail( leaf_node * src_leaf, insert_pos_t rightmost_parent_pos )
+    {
+        BOOST_ASSERT( src_leaf != static_cast<node_header const *>( &root() ) );
+        for ( ;; )
+        {
+            BOOST_ASSUME( !src_leaf->parent );
+            auto & rightmost_parent{ inner( rightmost_parent_pos.node ) };
+            BOOST_ASSUME( rightmost_parent_pos.next_insert_offset == rightmost_parent.num_vals );
+            auto const next_src_slot{ src_leaf->right };
+            rightmost_parent_pos = insert // add src_leaf into (a) parent
+            (
+                rightmost_parent,
+                rightmost_parent_pos.next_insert_offset,
+                key_rv_arg{ /*mrmlj*/Key{ src_leaf->keys[ 0 ] } },
+                slot_of( *src_leaf )
+            );
+            if ( !next_src_slot )
+                break;
+            src_leaf = &leaf( next_src_slot );
+        }
+        hdr().last_leaf_ = slot_of( *src_leaf );
+        if ( bulk_append_fill_leaf_if_incomplete( *src_leaf ) )
+        {
+            // Borrowing from the left sibling happened _after_ src_leaf was
+            // already inserted into the parent so we have to update the
+            // separator key in the parent (since this is the rightmost leaf we
+            // know that the separator key has to be in the immediate parent -
+            // no need to call the generic update_separator()).
+            auto & prnt{ parent( *src_leaf ) };
+            BOOST_ASSUME( src_leaf->parent_child_idx == num_chldrn( prnt ) - 1 );
+            keys( prnt ).back() = src_leaf->keys[ 0 ];
+        }
+    }
+
+    // This function only serves the purpose of maintaining the rule about the
+    // minimum number of children per node - that rule is actually only
+    // 'academic' (for making sure that the performance/complexity guarantees
+    // will be maintained) - the tree would operate correctly even without
+    // maintaining that invariant (TODO make this an option).
+    bool bulk_append_fill_leaf_if_incomplete( leaf_node & leaf ) noexcept
+    {
+        if ( leaf.num_vals < leaf.min_values ) [[ unlikely ]]
+        {
+            bulk_append_fill_incomplete_leaf( leaf );
+            return true;
+        }
+        return false;
+    }
+    [[ gnu::noinline ]]
+    void bulk_append_fill_incomplete_leaf( leaf_node & leaf ) noexcept
+    {
+        BOOST_ASSUME( leaf.num_vals < leaf.min_values );
+        node_size_type const missing_keys( leaf.min_values - leaf.num_vals );
+        auto & preceding{ left( leaf ) };
+        BOOST_ASSUME( preceding.num_vals + leaf.num_vals >= leaf_node::min_values * 2 );
+        std::shift_right( &leaf.keys[ 0 ], &leaf.keys[ leaf.num_vals + missing_keys ], missing_keys );
+        this->move_keys( preceding, preceding.num_vals - missing_keys, preceding.num_vals, leaf, 0 );
+        leaf     .num_vals += missing_keys;
+        preceding.num_vals -= missing_keys;
+    }
+    [[ gnu::noinline ]]
+    size_t bulk_append( node_header const & tgt_leaf, leaf_node & src_leaf, size_t const total_insertion_size, iter_pos const end_pos, node_slot const begin_leaf ) {
+        if ( tgt_leaf.is_root() ) [[ unlikely ]]
+        {
+            // handle the case of a bulk append to a lone root: reuse the
+            // bulk_insert_into_empty method by (re)moving the root to the
+            // start/left of the bulk of the nodes to be inserted
+            auto & hdr{ this->hdr() };
+            BOOST_ASSUME( hdr.depth_ == 1 );
+            BOOST_ASSUME( hdr.root_  == slot_of( tgt_leaf ) );
+            BOOST_ASSUME( hdr.first_leaf_ == hdr.root_ );
+            BOOST_ASSUME( hdr.last_leaf_  == hdr.root_ );
+            auto const root_node    { hdr.root_ };
+            auto const previous_size{ hdr.size_ };
+            hdr.root_  = hdr.first_leaf_ = hdr.last_leaf_ = {};
+            hdr.depth_ = hdr.size_ = 0;
+            BOOST_ASSUME( tgt_leaf.right == begin_leaf );
+            BOOST_ASSUME( previous_size <= leaf_node::max_values );
+            bulk_insert_into_empty( root_node, end_pos, previous_size + total_insertion_size );
+            BOOST_ASSUME( this->hdr().size_ == previous_size + total_insertion_size );
+        }
+        else
+        {
+            auto const rightmost_parent_slot{ tgt_leaf.parent };
+            auto const parent_pos           { tgt_leaf.parent_child_idx }; // key idx = child idx - 1 & this is the 'next' key
+            bulk_append_tail( &src_leaf, { rightmost_parent_slot, parent_pos } );
+            this->hdr().size_ += total_insertion_size;
+        }
+        // courtesy return for tail calls
+        return total_insertion_size;
     }
 
     [[ gnu::pure ]]  leaf_node & leaf  ( node_slot const slot ) noexcept { return node< leaf_node>( slot ); }
@@ -2656,33 +2698,9 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
             } else {
                 base::bulk_append_fill_leaf_if_incomplete( *src_leaf );
             }
-            if ( tgt_leaf->is_root() ) [[ unlikely ]]
-            {
-                // handle the case of a bulk append to a lone root: reuse the
-                // bulk_insert_into_empty method by (re)moving the root to the
-                // start/left of the bulk of the nodes to be inserted
-                auto & hdr{ this->hdr() };
-                BOOST_ASSUME( hdr.depth_ == 1 );
-                BOOST_ASSUME( hdr.root_  == slot_of( *tgt_leaf ) );
-                BOOST_ASSUME( hdr.first_leaf_ == hdr.root_ );
-                BOOST_ASSUME( hdr.last_leaf_  == hdr.root_ );
-                auto const root_node    { hdr.root_ };
-                auto const previous_size{ hdr.size_ };
-                hdr.root_  = hdr.first_leaf_ = hdr.last_leaf_ = {};
-                hdr.depth_ = hdr.size_ = 0;
-                BOOST_ASSUME( tgt_leaf->right == begin_leaf );
-                base::bulk_insert_into_empty( root_node, end_pos, previous_size + total_size );
-                BOOST_ASSUME( this->hdr().size_ == previous_size + total_size );
-                return total_size;
-            }
-            else
-            {
-                auto const rightmost_parent_slot{ tgt_leaf->parent };
-                auto const parent_pos           { tgt_leaf->parent_child_idx }; // key idx = child idx - 1 & this is the 'next' key
-                base::bulk_append( src_leaf, { rightmost_parent_slot, parent_pos } );
-            }
+
             inserted += static_cast<size_type>( total_size - so_far_consumed );
-            break;
+            return base::bulk_append( *tgt_leaf, *src_leaf, inserted, end_pos, begin_leaf );
         }
         // TODO in-the-middle partial bulk-inserts
 
@@ -2736,6 +2754,7 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
     return inserted;
 } // bp_tree_impl::insert()
 
+
 template <typename Key, typename Comparator>
 bp_tree_impl<Key, Comparator>::size_type
 bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
@@ -2771,7 +2790,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
     // merge happens at the (bulk) end - otherwise lots of splitting can occur
     // of intermediate leaves (with, then, lower load percentages)...
     //this->reserve_additional( total_size );
-     bptree_base::reserve( this->used_number_of_nodes() + other.used_number_of_nodes() * 3 / 2 );
+    bptree_base::reserve( this->used_number_of_nodes() + other.used_number_of_nodes() * 3 / 2 );
 
     auto const p_new_nodes_begin{ other.ra_begin() };
     auto const p_new_nodes_end  { other.ra_end  () };
@@ -2848,6 +2867,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
                     src_leaf->num_vals     = source_slot_offset;
 #               endif
                     this->link( *tgt_leaf, src_leaf_copy );
+                    prev_src_copy_node = tgt_slot; //...mrmlj...so that it can be used to fetch last_src_copy_node below
                     // TODO examine if we need the logic involving
                     // append_and_free here as well (as in insert())
                     this->bulk_append_fill_leaf_if_incomplete( src_leaf_copy );
@@ -2872,9 +2892,13 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
 
             auto const so_far_consumed{ static_cast<size_type>( p_new_keys - p_new_nodes_begin ) };
             BOOST_ASSUME( so_far_consumed < total_size );
-            this->bulk_append( &this->leaf( src_copy_begin ), { tgt_leaf->parent, tgt_leaf->parent_child_idx } );
             inserted += static_cast<size_type>( total_size - so_far_consumed );
-            break;
+            auto const last_src_copy_node{ this->leaf( prev_src_copy_node ).right };
+            iter_pos const end_pos{ last_src_copy_node, src_leaf->num_vals };
+            // other no longer needed (fully copied from)
+            // see the note at the end of the function
+            other.reset();
+            return base::bulk_append( *tgt_leaf, this->leaf( src_copy_begin ), inserted, end_pos, src_copy_begin );
         }
         // TODO in-the-middle partial bulk-inserts
 
