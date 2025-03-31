@@ -124,8 +124,8 @@ protected:
         // and horizontal/breadth directions (and the latter only for the leaf
         // level - to have a connected sorted 'list' of all the values).
         // However having a precise vertical back/up-link (parent_child_idx):
-        // * speeds up walks up the tree (as the parent (separator) key slots do
-        //   not have to be searched for)
+        // * speeds up walks up the tree [as the parent (separator) key slots do
+        //   not have to be searched for]
         // * simplifies code (enabling several functions to become independent
         //   of the comparator - no longer need searching - and moved up into
         //   the base b+tree classes)
@@ -2395,10 +2395,14 @@ private:
         if ( !starting_leaf.right ) [[ unlikely ]] // we are at the end of the tree/leaf level: key not present at all
             return { const_cast<leaf_node *>( &starting_leaf ), { starting_leaf.num_vals, false } };
 
-        // key in tree but not in starting leaf: go up the tree
+        // Key in tree but not in starting leaf - go up the tree:
         auto const * prnt{ &parent( starting_leaf ) };
         auto         parent_offset{ starting_leaf.parent_child_idx };
-        BOOST_ASSUME( ( parent_offset == prnt->num_vals ) || ge( prnt->keys[ parent_offset ], starting_leaf.keys[ 0 ] ) );
+        // Children are right shifted (WRT the keys array which has one less
+        // element) - those which have a key on the same/corresponding index
+        // should have a strictily less-than starting key value than the parent
+        // (separator key).
+        BOOST_ASSUME( ( parent_offset == prnt->num_vals ) || le( starting_leaf.keys[ 0 ], prnt->keys[ parent_offset ] ) );
         auto const depth{ this->hdr().depth_ }; BOOST_ASSUME( depth >= 1 );
         auto       level{ depth - 1 };
         while ( le( keys( *prnt ).back(), key ) )
@@ -2427,7 +2431,7 @@ private:
         for ( ; level < depth; ++level )
         {
             auto [pos, exact_find]{ lower_bound( *prnt, parent_offset, key ) };
-            BOOST_ASSERT( !exact_find );
+            BOOST_ASSUME( !exact_find ); // TODO: Document why does this (have to) hold?
             pos += exact_find; // traverse to the right child for separator keys
             prnt = &base::inner( children( *prnt )[ pos ] );
             parent_offset = 0;
