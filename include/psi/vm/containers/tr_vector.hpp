@@ -529,7 +529,7 @@ private:
         }
     }
 
-    void mark_freed() noexcept { std::memset( this, 0, sizeof( *this ) ); }
+    void mark_freed() noexcept { std::memset( static_cast<void *>( this ), 0, sizeof( *this ) ); }
 
 private:
     T * __restrict p_array_;
