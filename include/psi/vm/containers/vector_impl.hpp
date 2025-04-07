@@ -235,7 +235,18 @@ private:
     constexpr Impl & initialized_impl( size_type const initial_size, value_init_t ) noexcept
     {
         auto & impl{ initialized_impl( initial_size, no_init ) };
-        std::uninitialized_value_construct_n( impl.data(), impl.size() );
+        if constexpr ( std::is_trivially_constructible_v<value_type> && Impl::storage_zero_initialized )
+        {
+            BOOST_ASSERT_MSG
+            (
+                !initial_size || ( *std::max_element( impl.data(), impl.size() ) == 0 ),
+                "Broken storage promise to zero-init"
+            );
+        }
+        else
+        {
+            std::uninitialized_value_construct_n( impl.data(), impl.size() );
+        }
         return impl;
     }
 
