@@ -1883,7 +1883,7 @@ auto bptree_base_wkey<Key>::flatten( std::output_iterator<Key> auto const output
 }
 
 template <typename Key>
-auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator const end, std::output_iterator<Key> auto output, size_type const available_space ) const noexcept {
+auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator const end, std::output_iterator<Key> auto output, size_type available_space ) const noexcept {
     BOOST_ASSERT( available_space >= static_cast<std::size_t>( std::distance( begin, end ) ) );
     auto const   end_pos{   end.base().pos() };
     auto       start_pos{ begin.base().pos() };
@@ -1891,15 +1891,20 @@ auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator 
     {
         auto const & lf{ leaf( start_pos.node ) };
         BOOST_ASSUME( start_pos.value_offset < lf.num_vals );
-        auto const copy_end{ ( start_pos.node != end_pos.node ) ? lf.num_vals : end_pos.value_offset };
-        auto const copy_size{ copy_end - start_pos.value_offset };
+        auto const single_node{ start_pos.node == end_pos.node };
+        node_header::size_type const copy_end { !single_node ? lf.num_vals : end_pos.value_offset };
+        node_header::size_type const copy_size( copy_end - start_pos.value_offset );
         BOOST_ASSUME( copy_size <= available_space );
         output = std::uninitialized_copy_n( &lf.keys[ start_pos.value_offset ], copy_size, output );
-        if ( copy_size == available_space ) [[ unlikely ]] // single (partial) node data
+        if ( single_node ) [[ unlikely ]] { // single (partial) node data
+            BOOST_ASSUME( copy_size == available_space );
             return output;
+        }
+        BOOST_ASSUME( copy_size < available_space );
+        available_space        -= copy_size;
         start_pos.value_offset += copy_size;
-        if ( start_pos.value_offset == lf.max_values )
-            start_pos = { lf.right, 0 };
+        BOOST_ASSUME( start_pos.value_offset == lf.num_vals );
+        start_pos = { lf.right, 0 };
     }
 
     if ( start_pos.node != end_pos.node )
