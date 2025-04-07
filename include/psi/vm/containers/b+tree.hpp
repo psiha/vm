@@ -1883,22 +1883,29 @@ auto bptree_base_wkey<Key>::flatten( std::output_iterator<Key> auto const output
 }
 
 template <typename Key>
-auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator const end, std::output_iterator<Key> auto output, [[ maybe_unused ]] size_type const available_space ) const noexcept {
+auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator const end, std::output_iterator<Key> auto output, size_type const available_space ) const noexcept {
     BOOST_ASSERT( available_space >= static_cast<std::size_t>( std::distance( begin, end ) ) );
-    auto start_pos{ begin.base().pos() };
-    if ( start_pos.value_offset )
+    auto const   end_pos{   end.base().pos() };
+    auto       start_pos{ begin.base().pos() };
+    if ( start_pos.value_offset ) // handle leading partial node
     {
         auto const & lf{ leaf( start_pos.node ) };
-        auto const lf_keys{ keys( lf ).subspan( start_pos.value_offset ) };
-        output = std::uninitialized_copy( lf_keys.begin(), lf_keys.end(), output );
-        start_pos = { lf.right, 0 };
+        BOOST_ASSUME( start_pos.value_offset < lf.num_vals );
+        auto const copy_end{ ( start_pos.node != end_pos.node ) ? lf.num_vals : end_pos.value_offset };
+        auto const copy_size{ copy_end - start_pos.value_offset };
+        BOOST_ASSUME( copy_size <= available_space );
+        output = std::uninitialized_copy_n( &lf.keys[ start_pos.value_offset ], copy_size, output );
+        if ( copy_size == available_space ) [[ unlikely ]] // single (partial) node data
+            return output;
+        start_pos.value_offset += copy_size;
+        if ( start_pos.value_offset == lf.max_values )
+            start_pos = { lf.right, 0 };
     }
 
-    auto const end_pos{ end.base().pos() };
     if ( start_pos.node != end_pos.node )
         output = flatten( start_pos.node, end_pos.node, output );
 
-    if ( end_pos.node )
+    if ( end_pos.node ) // handle trailing partial node
     {
         auto const & lf{ leaf( end_pos.node ) };
         auto const lf_keys{ keys( lf ).subspan( 0, end_pos.value_offset ) };
