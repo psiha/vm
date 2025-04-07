@@ -916,6 +916,23 @@ public:
         }
         return data;
     }
+    template <typename U>
+    value_type * grow_to( this Impl & self, size_type const target_size, U && default_value )
+    requires std::constructible_from<T, U>
+    {
+        auto const current_size{ self.size() };
+        BOOST_ASSUME( target_size >= current_size );
+        auto const data{ self.grow_to( target_size, no_init ) };
+        auto const uninitialized_space_begin{ &data[ current_size ] };
+        auto const uninitialized_space_size { target_size - current_size };
+        try {
+            std::uninitialized_fill_n( uninitialized_space_begin, uninitialized_space_size, std::forward<U>( default_value ) );
+        } catch(...) {
+            self.storage_shrink_size_to( current_size );
+            throw;
+        }
+    }
+
     value_type * grow_by( this Impl & self, size_type const delta, auto const init_policy )
     {
         return self.grow_to( self.size() + delta, init_policy );
