@@ -931,6 +931,7 @@ public:
             self.storage_shrink_size_to( current_size );
             throw;
         }
+        return data;
     }
 
     value_type * grow_by( this Impl & self, size_type const delta, auto const init_policy )
