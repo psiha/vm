@@ -184,9 +184,14 @@ private:
     // to support this use case we have to require that the 'actual
     // implementation' derived type be explicitly specified as template
     // parameter (just like in the classic CRTP).
-    // (Explicitly using the Impl type for self then has the added benefit of
+    // Explicitly using the Impl type for self then has the added benefit of
     // eliminating the extra compile-time and binary size hit of instantiating
-    // base/vector_impl methods for/with all the possible derived types).
+    // base/vector_impl methods for/with all the possible derived types.
+    // It also has the negative effect of compilation errors when invoking non-
+    // const methods on rvalues - as rvalue references cannot bind to a an
+    // 'Impl &'...in search of a solution (other than having two overloads
+    // everywhere or using yet-another ref-proxy; those using 'auto & self' can
+    // at least simply be modified to use 'auto && self').
     // https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2021/p0847r7.html#the-shadowing-mitigation-private-inheritance-problem
     // https://stackoverflow.com/questions/844816/c-style-upcast-and-downcast-involving-private-inheritance (tunneling magic of C-style casts)
     template <typename U> [[ gnu::const ]] static constexpr Impl       & up( U       & self ) noexcept { static_assert( std::is_base_of_v<Impl, U> ); return (Impl &)self; }
@@ -392,30 +397,30 @@ public:
     //! <b>Effects</b>: Returns an iterator to the first element contained in the vector.
     //! <b>Throws</b>: Nothing.
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto            begin( this auto       & self ) noexcept { return up( self ).make_iterator( size_type{ 0 } ); }
-    [[ nodiscard ]] const_iterator cbegin( this Impl const & self ) noexcept { return self.begin(); }
+    [[ nodiscard ]] auto            begin( this auto       && self ) noexcept { return up( self ).make_iterator( size_type{ 0 } ); }
+    [[ nodiscard ]] const_iterator cbegin( this Impl const &  self ) noexcept { return self.begin(); }
 
     //! <b>Effects</b>: Returns an iterator to the end of the vector.
     //!
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto            end( this auto       & self ) noexcept { return up( self ).make_iterator( self.size() ); }
-    [[ nodiscard ]] const_iterator cend( this Impl const & self ) noexcept { return self.end(); }
+    [[ nodiscard ]] auto            end( this auto       && self ) noexcept { return up( self ).make_iterator( self.size() ); }
+    [[ nodiscard ]] const_iterator cend( this Impl const &  self ) noexcept { return self.end(); }
 
     //! <b>Effects</b>: Returns a reverse_iterator pointing to the beginning
     //! of the reversed vector.
     //! <b>Throws</b>: Nothing.
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto                    rbegin( this auto       & self ) noexcept { return std::make_reverse_iterator( self.end() ); }
-    [[ nodiscard ]] const_reverse_iterator crbegin( this Impl const & self ) noexcept { return self.rbegin(); }
+    [[ nodiscard ]] auto                    rbegin( this auto       && self ) noexcept { return std::make_reverse_iterator( self.end() ); }
+    [[ nodiscard ]] const_reverse_iterator crbegin( this Impl const &  self ) noexcept { return self.rbegin(); }
 
     //! <b>Effects</b>: Returns a reverse_iterator pointing to the end
     //! of the reversed vector.
     //! <b>Throws</b>: Nothing.
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto                    rend( this auto       & self ) noexcept { return std::make_reverse_iterator( self.begin() ); }
-    [[ nodiscard ]] const_reverse_iterator crend( this Impl const & self ) noexcept { return self.rend(); }
+    [[ nodiscard ]] auto                    rend( this auto       && self ) noexcept { return std::make_reverse_iterator( self.begin() ); }
+    [[ nodiscard ]] const_reverse_iterator crend( this Impl const &  self ) noexcept { return self.rend(); }
 
     //////////////////////////////////////////////
     //
@@ -474,7 +479,7 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto & front( this auto & self ) noexcept { return up( self ).span().front(); }
+    [[ nodiscard ]] auto & front( this auto && self ) noexcept { return up( self ).span().front(); }
 
     //! <b>Requires</b>: !empty()
     //!
@@ -484,7 +489,7 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto & back( this auto & self ) noexcept { return up( self ).span().back(); }
+    [[ nodiscard ]] auto & back( this auto && self ) noexcept { return up( self ).span().back(); }
 
     //! <b>Requires</b>: size() > n.
     //!
@@ -494,7 +499,7 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto & operator[]( this auto & self, size_type const n ) noexcept { return up( self ).span()[ n ]; }
+    [[ nodiscard ]] auto & operator[]( this auto && self, size_type const n ) noexcept { return up( self ).span()[ n ]; }
 
     //! <b>Requires</b>: size() >= n.
     //!
@@ -507,7 +512,7 @@ public:
     //! <b>Complexity</b>: Constant.
     //!
     //! <b>Note</b>: Non-standard extension
-    [[ nodiscard ]] auto nth( this auto & self, size_type const n ) noexcept
+    [[ nodiscard ]] auto nth( this auto && self, size_type const n ) noexcept
     {
         BOOST_ASSUME( n <= self.size() );
         return self.begin() + static_cast<difference_type>( n );
@@ -537,7 +542,7 @@ public:
     //! <b>Throws</b>: range_error if n >= size()
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto & at( this auto & self, size_type const n )
+    [[ nodiscard ]] auto & at( this auto && self, size_type const n )
     {
 #   if __cpp_lib_span >= 202311L
         return self.span().at( n );
@@ -557,7 +562,7 @@ public:
     template <typename Self>
     [[ nodiscard, gnu::pure ]] const_pointer data( this Self const & self ) noexcept { return const_cast<Self &>( self ).Self::data(); }
 
-    [[ nodiscard, gnu::pure ]] auto span( this auto & self ) noexcept { return std::span{ self.data(), self.size() }; }
+    [[ nodiscard, gnu::pure ]] auto span( this auto && self ) noexcept { return std::span{ self.data(), self.size() }; }
 
     //////////////////////////////////////////////
     //
@@ -847,7 +852,7 @@ public:
         self.storage_free();
     }
 
-    void swap( this auto & self, auto & other ) noexcept { std::swap( self, other ); }
+    void swap( this auto && self, auto & other ) noexcept { std::swap( self, other ); }
 
 
     ///////////////////////////////////////////////////////////////////////////
