@@ -379,6 +379,8 @@ struct tr_vector_options
     bool         explicit_geometric_growth{ true }; // if your realloc impl is slow (yes MSVC we are looking at you again)
 }; // struct tr_vector_options
 
+template <typename T>
+concept complete = sizeof( T ) >= 0 || false;
 
 template <typename T, typename sz_t = std::size_t, tr_vector_options options = {}>
 requires( is_trivially_moveable<T> )
@@ -387,7 +389,7 @@ class [[ nodiscard, clang::trivial_abi ]] tr_vector
     public vector_impl<tr_vector<T, sz_t, options>, T, sz_t>
 {
 public:
-    static std::uint8_t constexpr alignment{ options.alignment ? options.alignment : std::uint8_t{ alignof( T ) } };
+    static std::uint8_t constexpr alignment{ options.alignment ? options.alignment : std::uint8_t{ alignof( std::conditional_t<complete<T>, T, std::max_align_t> ) } };
 
     using size_type      = sz_t;
     using value_type     = T;
@@ -400,7 +402,7 @@ private:
 public:
     using base::base;
     constexpr tr_vector() noexcept : p_array_{ nullptr }, size_{ 0 }, capacity_{ 0 } {}
-    constexpr explicit tr_vector( tr_vector const & other )
+    constexpr tr_vector( tr_vector const & other )
     {
         auto const data{ storage_init( other.size() ) };
         try { std::uninitialized_copy_n( other.data(), other.size(), data ); }

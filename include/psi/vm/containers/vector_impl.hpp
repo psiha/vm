@@ -153,7 +153,11 @@ public:
     using const_pointer          = value_type const *;
     using       reference        = value_type       &;
     using const_reference        = value_type const &;
+#if 0 // fails for incomplete T
     using param_const_ref        = std::conditional_t<can_be_passed_in_reg<value_type>, value_type const, pass_in_reg<value_type>>;
+#else
+    using param_const_ref        = pass_in_reg<value_type>;
+#endif
     using       size_type        = sz_t;
     using difference_type        = std::make_signed_t<size_type>;
 #if defined( _LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR )
@@ -167,7 +171,7 @@ public:
     using       iterator         =       pointer;
     using const_iterator         = const_pointer;
 #endif
-    using reverse_iterator       = std::reverse_iterator<      iterator>;
+    using       reverse_iterator = std::reverse_iterator<      iterator>;
     using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 
 private:
