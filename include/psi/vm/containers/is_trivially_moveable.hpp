@@ -18,20 +18,26 @@ namespace std
 {
 #if defined( _LIBCPP_VERSION )
 inline namespace __1 {
+#elif defined( __GLIBCXX__ )
+_GLIBCXX_BEGIN_NAMESPACE_VERSION
 #endif
     template <typename T, size_t size> class array;
     template <typename T, typename A> class vector;
-#if !defined( __GLIBCXX__ )
+#if defined( __GLIBCXX__ )
+_GLIBCXX_BEGIN_NAMESPACE_CXX11
+    template <class E, class T, class A> class basic_string;
+_GLIBCXX_END_NAMESPACE_CXX11
+#else
     template <class E, class T, class A> class basic_string;
 #endif
     template <class T, class D> class unique_ptr;
     template <typename S> class function;
     template <class T1, class T2> struct pair;
+    template <typename... T> class variant;
 #if defined( _LIBCPP_VERSION )
 } // namespace __1
-#endif
-#if defined( __GLIBCXX__ )
-inline namespace __cxx11 { template <class E, class T, class A> class basic_string; }
+#elif defined( __GLIBCXX__ )
+_GLIBCXX_END_NAMESPACE_VERSION
 #endif
 } // namespace std
 //------------------------------------------------------------------------------
@@ -124,6 +130,7 @@ template <typename E, typename T, typename A> bool constexpr is_trivially_moveab
 #if defined( __GLIBCXX__ )
 template <typename S> bool constexpr is_trivially_moveable<std::function<S>>{ true };
 #endif
+template <typename... T> bool constexpr is_trivially_moveable<std::variant<T...>>{( is_trivially_moveable<T> && ... )};
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm
