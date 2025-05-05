@@ -163,7 +163,7 @@ protected:
     {
         node_slot      node        {};
         node_size_type value_offset{};
-
+        [[ gnu::pure ]]
         bool operator==( this iter_pos const self, iter_pos const other ) noexcept { return ( self.node == other.node ) && ( self.value_offset == other.value_offset ); }
     };
 
@@ -1890,7 +1890,10 @@ auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator 
     if ( start_pos.value_offset ) // handle leading partial node
     {
         auto const & lf{ leaf( start_pos.node ) };
-        BOOST_ASSUME( start_pos.value_offset < lf.num_vals );
+        BOOST_ASSUME( start_pos.value_offset <= lf.num_vals );
+        if ( start_pos.value_offset == lf.num_vals ) {
+            BOOST_ASSUME( start_pos == end_pos );
+        }
         auto const single_node{ start_pos.node == end_pos.node };
         node_header::size_type const copy_end { !single_node ? lf.num_vals : end_pos.value_offset };
         node_header::size_type const copy_size( copy_end - start_pos.value_offset );
