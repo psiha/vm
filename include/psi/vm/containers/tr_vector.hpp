@@ -274,7 +274,7 @@ struct crt_aligned_allocator
         bool success{ false };
 #   ifdef _MSC_VER  // no try_realloc for others so this cannot be safely implemented
         // TODO:
-        //  - Linux: switch to mmap+mremap on for non trivial_abi types
+        //  - Linux: switch to mmap+mremap for non trivial_abi types
         //  - OSX https://stackoverflow.com/questions/72637850/how-to-use-virtual-memory-implement-realloc-on-mac-osx
         if ( reuse && ( command & bc::expand_fwd ) && ( alignment <= detail::guaranteed_alignment ) )
         {
