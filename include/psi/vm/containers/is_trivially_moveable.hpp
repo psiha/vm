@@ -23,8 +23,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 #endif
     template <typename T, size_t size> class array;
     template <typename T, typename A> class vector;
-#if defined( __GLIBCXX__ )
-_GLIBCXX_BEGIN_NAMESPACE_CXX11
+#if _GLIBCXX_USE_CXX11_ABI
+inline _GLIBCXX_BEGIN_NAMESPACE_CXX11
     template <class E, class T, class A> class basic_string;
 _GLIBCXX_END_NAMESPACE_CXX11
 #else
