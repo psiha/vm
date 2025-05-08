@@ -30,6 +30,8 @@
 #include <boost/container/detail/version_type.hpp>
 
 #include <cstdlib>
+#include <memory>
+#include <utility>
 
 #ifdef __linux__
 #include <malloc.h>
