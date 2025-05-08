@@ -1894,13 +1894,15 @@ auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator 
         if ( start_pos.value_offset == lf.num_vals ) {
             BOOST_ASSUME( start_pos == end_pos );
         }
-        auto const single_node{ start_pos.node == end_pos.node };
-        node_header::size_type const copy_end { !single_node ? lf.num_vals : end_pos.value_offset };
+        auto const start_node_is_end_node{ start_pos.node == end_pos.node };
+        node_header::size_type const copy_end { start_node_is_end_node ? end_pos.value_offset : lf.num_vals };
         node_header::size_type const copy_size( copy_end - start_pos.value_offset );
         BOOST_ASSUME( copy_size <= available_space );
         output = std::uninitialized_copy_n( &lf.keys[ start_pos.value_offset ], copy_size, output );
-        if ( single_node ) [[ unlikely ]] { // single (partial) node data
-            BOOST_ASSUME( copy_size == available_space );
+        if ( copy_size == available_space ) { // single (partial) node data
+            // not simply testing start_node_is_end_node as it does not cover
+            // the edge case of where start_pos is the last value of a node and
+            // end_pos is the very first value of the next node
             return output;
         }
         BOOST_ASSUME( copy_size < available_space );
@@ -2249,19 +2251,19 @@ protected:
         // fit within a single node (making it not worth it to go up the tree
         // like find_next, the lower_bound version, does).
         auto * p_node{ &node };
-        // extracted initial call to upper_bound that as it is the only one that
+        // extracted the initial call to upper_bound as it is the only one that
         // has to take the offset in to account (simplifies the loop slightly)
         auto pos  { upper_bound( *p_node, offset, value ) };
         auto count{ static_cast<size_type>( pos - offset ) };
         for ( ; ; )
         {
-            if ( ( pos < p_node->num_vals ) || !p_node->right ) [[ likely ]]
-                return { { slot_of( *p_node ), pos }, count };
+            if ( ( pos < p_node->num_vals ) || !p_node->right )
+                break;
             p_node = &right( *p_node );
             pos    = upper_bound( *p_node, value );
             count += pos;
         }
-        std::unreachable();
+        return { { slot_of( *p_node ), pos }, count };
     }
 
 
@@ -3125,13 +3127,13 @@ private:
     [[ using gnu: pure, sysv_abi ]]
     auto equal_range_impl( Reg auto const key ) const noexcept
     {
-        auto const find_result{ this->find_internal( key, unique ) };
-        if ( find_result.first ) [[ likely ]] {
-            auto const begin{ make_iter( *find_result.first, find_result.second ) };
+        auto const [p_leaf, leaf_offset]{ this->find_internal( key, unique ) };
+        if ( p_leaf ) [[ likely ]] {
+            auto const begin{ make_iter( *p_leaf, leaf_offset ) };
             if constexpr ( unique ) {
                 return std::ranges::subrange( begin, std::next( begin ), 1 );
             } else {
-                auto const [pos, count]{ this->upper_bound_across_nodes( *find_result.first, find_result.second, key ) };
+                auto const [pos, count]{ this->upper_bound_across_nodes( *p_leaf, leaf_offset, key ) };
                 return std::ranges::subrange
                 (
                     begin,
