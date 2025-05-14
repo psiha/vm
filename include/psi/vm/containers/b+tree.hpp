@@ -1089,7 +1089,7 @@ protected: // 'other'
         auto constexpr can_preallocate{ kind == std::ranges::subrange_kind::sized };
         size_type input_size;
         tr_vector<leaf_node *, std::uint32_t> nodes;
-        typename tr_vector<leaf_node *, std::uint32_t>::iterator p_node;
+        auto p_node{ nodes.end() };
         if constexpr ( can_preallocate ) {
             input_size = static_cast<size_type>( keys.size() );
             if ( !input_size ) [[ unlikely ]] // minor optimization for 'complex' ranges (like complex/compound views which have size methods but which are non trivial) - reuse size info for empty check
@@ -1153,7 +1153,7 @@ protected: // 'other'
                 BOOST_ASSUME( !input_size );
                 if ( p_keys != keys.end() ) {
                     auto & new_leaf{ new_node<leaf_node>() };
-                    link( leaf, new_leaf );
+                    link( this->leaf( leaf_slot ), new_leaf ); // new_node could have invalidated the 'leaf' reference so it must not be used anymore
                     leaf_slot = slot_of( new_leaf );
                     continue;
                 }
