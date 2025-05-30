@@ -242,6 +242,11 @@ protected:
         // also used for underflowing nodes and (most problematically) for root nodes 'interpreted' as inner nodes...TODO...
         //BOOST_ASSUME( node.num_vals >= node.min_values );
     }
+    static void verify_min_max( auto const & node ) noexcept
+    { // temporary wrkrnd version for the comment above in version()
+        BOOST_ASSUME( node.num_vals <= node.max_values );
+        BOOST_ASSUME( node.num_vals >= node.min_values );
+    }
 
     static constexpr auto keys    ( auto       & node ) noexcept { verify( node );                                             return std::span{ node.keys    , static_cast<size_type>( node.num_vals      ) }; }
     static constexpr auto keys    ( auto const & node ) noexcept { verify( node );                                             return std::span{ node.keys    , static_cast<size_type>( node.num_vals      ) }; }
@@ -851,7 +856,6 @@ protected: // split_to_insert and its helpers
         auto [node_slot, new_slot]{ bptree_base::new_spillover_node_for( node_to_split ) };
         auto p_node    { &node<N>( node_slot ) };
         auto p_new_node{ &node<N>(  new_slot ) };
-        verify( *p_node );
         BOOST_ASSUME( p_node->num_vals == max );
         BOOST_ASSERT
         (
@@ -865,8 +869,8 @@ protected: // split_to_insert and its helpers
             : insert_into_existing_node( *p_node, *p_new_node, std::move( value ), insert_pos,                                                key_right_child )
         };
 
-        verify( *p_node     );
-        verify( *p_new_node );
+        verify_min_max( *p_node     );
+        verify_min_max( *p_new_node );
         BOOST_ASSUME( p_node->num_vals == mid );
 
         if ( std::is_same_v<N, leaf_node> && !p_new_node->right ) {
@@ -1116,7 +1120,7 @@ protected: // 'other'
             // fill this leaf
             if constexpr ( can_preallocate ) {
                 auto const size_to_copy{ static_cast<node_size_type>( std::min<size_type>( leaf.max_values, input_size - count ) ) };
-                BOOST_ASSUME( size_to_copy );
+                BOOST_ASSUME( size_to_copy > 0 );
                 std::copy_n( p_keys, size_to_copy, leaf.keys );
                 leaf.num_vals  = size_to_copy;
                 count         += size_to_copy;
@@ -1186,6 +1190,12 @@ protected: // 'other'
         auto       & first_root_right{ right( first_root_left ) };
         first_root_right.parent_child_idx = 1;
         hdr->depth_                       = 1;
+        // if ( !first_unconnected_node ) then first_root_right is the last leaf
+        // and it might be incomplete - we could perform this check&fix in an
+        // appropriate else branch below but then we would also have to perform
+        // the parent separator key update (like in bulk_append_tail) - so we
+        // simply perform it beforehand.
+        bulk_append_fill_leaf_if_incomplete( first_root_right );
         auto const first_unconnected_node{ first_root_right.right };
         new_root( begin_leaf, first_root_left.right, key_rv_arg{ /*mrmlj*/Key{ first_root_right.keys[ 0 ] } } ); // may invalidate references
         hdr = &this->hdr();
@@ -1259,6 +1269,8 @@ protected: // 'other'
         this->move_keys( preceding, preceding.num_vals - missing_keys, preceding.num_vals, leaf, 0 );
         leaf     .num_vals += missing_keys;
         preceding.num_vals -= missing_keys;
+        verify_min_max( leaf      );
+        verify_min_max( preceding );
     }
     [[ gnu::noinline ]]
     size_t bulk_append( node_header const & tgt_leaf, leaf_node & src_leaf, size_t const total_insertion_size, iter_pos const end_pos, node_slot const begin_leaf ) {
@@ -1395,7 +1407,7 @@ protected: // 'other'
         // Borrow from left sibling if possible
         if ( p_left_sibling && can_borrow( *p_left_sibling ) )
         {
-            verify( *p_left_sibling );
+            verify_min_max( *p_left_sibling );
             node.num_vals++;
             rshift_keys( node );
             node_size_type const left_separator_key_idx( parent_child_idx - 1 );
@@ -1423,7 +1435,7 @@ protected: // 'other'
             }
 
             p_left_sibling->num_vals--;
-            verify( *p_left_sibling );
+            verify_min_max( *p_left_sibling );
 
             final_node_original_keys_offset = 1;
 
@@ -1434,7 +1446,7 @@ protected: // 'other'
         else
         if ( p_right_sibling && can_borrow( *p_right_sibling ) )
         {
-            verify( *p_right_sibling );
+            verify_min_max( *p_right_sibling );
             node.num_vals++;
             auto const right_separator_key_idx{ parent_child_idx };
             auto & right_separator_key{ keys( parent )[ right_separator_key_idx ] };
@@ -1461,7 +1473,7 @@ protected: // 'other'
             }
 
             p_right_sibling->num_vals--;
-            verify( *p_right_sibling );
+            verify_min_max( *p_right_sibling );
 
             BOOST_ASSUME( node.            num_vals == N::min_values - ( missing_values - 1 ) );
             BOOST_ASSUME( p_right_sibling->num_vals >= N::min_values );
@@ -1470,14 +1482,16 @@ protected: // 'other'
         else
         {
             if ( p_left_sibling ) {
-                verify( *p_left_sibling );
+                // need not hold for nonunique trees&bulk erase underflow
+                //verify_min_max( *p_left_sibling );
+				verify( *p_left_sibling );
                 BOOST_ASSUME( parent_has_key_copy == leaf_node_type );
                 // Merge node -> left sibling
                 final_node                      = node.left;
                 final_node_original_keys_offset = p_left_sibling->num_vals;
                 merge_right_into_left( parent, *p_left_sibling, node );
             } else {
-                verify( *p_right_sibling );
+                verify_min_max( *p_right_sibling );
                 BOOST_ASSUME( parent_key_idx == 0 );
                 // no comparator in base classes :/
                 //BOOST_ASSUME( leq( parent.keys[ parent_key_idx ], p_right_sibling->keys[ 0 ] ) );
@@ -1534,7 +1548,9 @@ protected: // 'other'
         target.num_vals += source.num_vals;
         source.num_vals  = 0;
 
-        verify( target );
+        // need not hold for nonunique trees&bulk erase underflow
+        //verify_min_max( target );
+		verify( target );
         unlink_and_free_node( source, target );
     }
 
@@ -1577,7 +1593,7 @@ protected: // 'other'
         left.num_vals += right.num_vals;
         BOOST_ASSUME( left.num_vals >= left.max_values - 1 ); BOOST_ASSUME( left.num_vals <= left.max_values );
 
-        verify( left );
+        verify_min_max( left );
         remove_from_parent( parent, right.parent_child_idx );
         unlink_and_free_node( right, left );
     }
@@ -2397,6 +2413,7 @@ protected:
         base::verify( node );
     }
 #endif
+    using base::verify_min_max;
 
 private:
     insertion_point_t find_next( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, Reg auto const key ) const noexcept
@@ -2513,7 +2530,13 @@ bp_tree_impl<Key, Comparator>::merge
     }
     if ( !available_space ) [[ unlikely ]]
     {
-        if ( ( target_offset != target.num_vals ) && eq( target.keys[ target_offset ], src_keys[ 0 ] ) ) [[ unlikely ]]
+        // if the first source key already exists simply 'consume' it and return
+        // (in hope that a different target leaf, with available space, will be
+        // selected next time)
+        if (
+            ( target_offset != target.num_vals ) &&
+            eq( target.keys[ target_offset ], src_keys[ 0 ] )
+        ) [[ unlikely ]]
         {
             return std::make_tuple<node_size_type, node_size_type>( 0, 1, &target, target_offset );
         }
@@ -2537,6 +2560,7 @@ bp_tree_impl<Key, Comparator>::merge
         {
             next_tgt_offset = lower_bound( tgt, next_tgt_offset, key_const_arg{ src.keys[ next_src_offset ] } ).pos;
         }
+        verify_min_max( tgt );
         return std::make_tuple<node_size_type, node_size_type>( 1, 1, &tgt, next_tgt_offset );
     }
 
@@ -2585,7 +2609,8 @@ bp_tree_impl<Key, Comparator>::merge
         tgt_size        = static_cast<node_size_type>( new_tgt_size            );
         next_tgt_offset = target_offset + 1;
     }
-    verify( target );
+    if ( !target.is_root() )
+        verify_min_max( target );
     BOOST_ASSUME( inserted_size <= copy_size );
     return std::make_tuple( inserted_size, copy_size, &target, next_tgt_offset );
 }
@@ -3034,10 +3059,8 @@ public:
 
         leaf_node & leaf{ location.leaf };
         if ( this->hdr().depth_ != 1 ) // i.e. leaf is not the root
-        {
-            this->verify( leaf );
-            BOOST_ASSUME( leaf.num_vals >= leaf.min_values );
-        }
+            this->verify_min_max( leaf );
+
         return this->erase_single( location );
     }
 
