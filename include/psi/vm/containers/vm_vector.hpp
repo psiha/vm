@@ -369,7 +369,8 @@ public:
     // vm::vectors w/o being templated (contiguous_storage_base does not
     // publicize functionality that could be used to make it out of sync with the
     // corresponding vm::vector)
-    contiguous_storage_base & storage_base() noexcept { return *this; }
+    contiguous_storage_base       & storage_base()       noexcept { return *this; }
+    contiguous_storage_base const & storage_base() const noexcept { return *this; }
 
 private: friend vec_impl;
     //! <b>Effects</b>: If n is less than or equal to capacity(), this call has no
@@ -475,7 +476,12 @@ template <typename Header>
         };
     }
 } // header_data()
-
+template <typename Header>
+[[ gnu::const ]] auto header_data( std::span<std::byte const> const hdr_storage ) noexcept
+{
+    auto const mutable_data{ header_data<Header>( std::bit_cast<std::span<std::byte>>( hdr_storage ) ) };
+    return std::pair{ mutable_data.first, std::bit_cast<std::span<std::byte const>>( mutable_data.second ) };
+}
 
 // None of the existing or so far introduced traits give information on whether
 // a type can reliably be persisted - of the existing ones, only is_fundamental
