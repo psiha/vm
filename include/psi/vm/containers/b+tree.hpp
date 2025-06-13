@@ -130,7 +130,7 @@ protected:
         //   of the comparator - no longer need searching - and moved up into
         //   the base b+tree classes)
         // * while at the same time being a negligible overhead considering we
-        //   are targeting much larger (page or at least n*cacheline size sized)
+        //   are targeting much larger (page or at least n*cacheline-size sized)
         //   nodes.
         node_slot parent          {};
         node_slot left            {};
