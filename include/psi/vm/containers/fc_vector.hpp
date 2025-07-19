@@ -71,13 +71,13 @@ class [[ clang::trivial_abi ]] fc_vector
     public vector_impl<fc_vector<T, capacity_param, overflow_handler>, T, typename boost::uint_value_t<capacity_param>::least>
 {
 public:
-    using size_type  = typename boost::uint_value_t<capacity_param>::least;
+    using  size_type = typename boost::uint_value_t<capacity_param>::least;
     using value_type = T;
 
     static size_type constexpr static_capacity{ capacity_param };
 
 private:
-    using base = vector_impl<fc_vector<T, static_capacity, overflow_handler>, T, typename boost::uint_value_t<static_capacity>::least>;
+    using base = vector_impl<fc_vector<T, static_capacity, overflow_handler>, T, size_type>;
 
     // https://github.com/llvm/llvm-project/issues/54535
     // https://github.com/llvm/llvm-project/issues/42585
@@ -178,14 +178,15 @@ private:
     void fixed_copy( fc_vector const & __restrict source ) noexcept
     requires( fixed_sized_copy )
     {
-        std::memcpy( this, &source, sizeof( *this ) );
+        // voidptr cast to silence Clang 20 -Wnontrivial-memcall
+        std::memcpy( static_cast<void *>( this ), &source, sizeof( *this ) );
         BOOST_ASSUME( this->size_ == source.size() );
     }
 
 private:
     size_type                                size_;
     noninitialized_array<T, static_capacity> array_;
-}; // struct static_vector
+}; // struct fc_vector
 
 template <typename T, std::uint32_t capacity, auto overflow_handler>
 bool constexpr is_trivially_moveable<fc_vector<T, capacity, overflow_handler>>{ is_trivially_moveable<T> };
