@@ -383,6 +383,8 @@ public:
     {
         self = std::move( other );
     }
+    template <std::ranges::range Rng>
+    void assign_range( this Impl & self, Rng && data ) { self.assign( std::forward<Rng>( data ) ); }
 
     //! <b>Effects</b>: Assigns the n copies of val to *this.
     //!
