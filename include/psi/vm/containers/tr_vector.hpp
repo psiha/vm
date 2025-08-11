@@ -72,9 +72,9 @@ namespace detail
         return crt_alloc_size( address );
     }
 
-    [[ using gnu: assume_aligned( guaranteed_alignment ), malloc, returns_nonnull ]]
+    [[ using gnu: cold, assume_aligned( guaranteed_alignment ), malloc, returns_nonnull ]]
 #ifdef _MSC_VER
-    __declspec( noalias, restrict )
+    __declspec( restrict, noalias )
 #endif
     inline void * crt_realloc( void * const existing_allocation_address, std::size_t const new_size )
     {
@@ -84,7 +84,7 @@ namespace detail
         return new_allocation;
     }
 
-    [[ using gnu: assume_aligned( guaranteed_alignment ), malloc, returns_nonnull ]]
+    [[ using gnu: cold, assume_aligned( guaranteed_alignment ), malloc, returns_nonnull ]]
 #ifdef _MSC_VER
     __declspec( noalias, restrict )
 #endif
@@ -184,7 +184,7 @@ struct crt_aligned_allocator
     [[ nodiscard ]]
     [[ using gnu: cold, assume_aligned( alignment ), malloc, returns_nonnull ]]
 #ifdef _MSC_VER
-    __declspec( noalias, restrict )
+    __declspec( restrict, noalias )
 #endif
     static pointer allocate( size_type const count, [[ maybe_unused ]] void const * const hint = nullptr )
     {
@@ -455,9 +455,9 @@ public:
     auto release() noexcept { auto data{ p_array_ }; mark_freed(); return data; }
 
 private: friend base;
-    [[ using gnu: cold, assume_aligned( alignment ), malloc, returns_nonnull, noinline ]]
+    [[ using gnu: cold, assume_aligned( alignment ), malloc, returns_nonnull ]]
 #ifdef _MSC_VER
-    __declspec( noalias, restrict )
+    __declspec( restrict, noalias )
 #endif
     constexpr value_type * storage_init( size_type const initial_size )
     {
