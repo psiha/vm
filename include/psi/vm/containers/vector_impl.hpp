@@ -338,8 +338,10 @@ public:
         auto       cur   { self.begin() };
         auto const end_it{ self.end  () };
         if constexpr ( std::random_access_iterator<It> ) {
-            auto const overwrite_size{ std::min( self.size(), std::distance( first, last ) ) };
-            std::tie( first, cur ) = std::ranges::copy_n( first, overwrite_size, cur );
+            auto const overwrite_size{ std::min( self.size(), static_cast<typename Impl::size_type>( std::distance( first, last ) ) ) };
+            auto const next_iters{ std::ranges::copy_n( first, overwrite_size, cur ) };
+            first = next_iters.in;
+            cur   = next_iters.out;
         } else {
             while ( ( first != last ) && ( cur != end_it ) )
                 *cur++ = *first++;
