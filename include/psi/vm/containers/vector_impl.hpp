@@ -593,10 +593,14 @@ public:
     {
         return *std::construct_at( &placeholder, std::forward<Args>( args )... );
     }
-    template <class ...Args> // support for boost::container::flat_tree implementation(s)
-    static reference construct_at( value_type & placeholder, boost::container::try_emplace_t &&, Args &&...args ) noexcept( std::is_nothrow_constructible_v<value_type, Args...> )
+    template <typename Key, typename...Args> // support for boost::container::flat_tree implementation(s)
+    static reference construct_at( value_type & placeholder, boost::container::try_emplace_t &&, Key && key, Args &&...args )
+    noexcept( std::is_nothrow_constructible_v<value_type, std::piecewise_construct_t, std::tuple<Key>, std::tuple<Args...>> )
     {
-        return construct_at( placeholder, std::forward<Args>( args )... );
+              std::construct_at( &placeholder.first , std::forward<Key>( key ) );
+        try { std::construct_at( &placeholder.second, std::forward<Args>( args )... ); }
+        catch( ... ) { std::destroy_at( &placeholder.first ); throw; }
+        return placeholder;
     }
     static reference construct_at( value_type & placeholder ) noexcept( std::is_nothrow_default_constructible_v<value_type> )
     {
