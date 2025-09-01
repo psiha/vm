@@ -381,9 +381,6 @@ struct tr_vector_options
     bool         explicit_geometric_growth{ true }; // if your realloc impl is slow (yes MSVC we are looking at you again)
 }; // struct tr_vector_options
 
-template <typename T>
-concept complete = sizeof( T ) >= 0 || false;
-
 template <typename T, typename sz_t = std::size_t, tr_vector_options options = {}>
 requires( is_trivially_moveable<T> )
 class [[ nodiscard, clang::trivial_abi ]] tr_vector

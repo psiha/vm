@@ -113,7 +113,10 @@ bool constexpr is_trivially_moveable
 }; // is_trivially_moveable
 
 template <typename T>
-requires requires{ T::is_trivially_moveable; }
+concept complete = sizeof( T ) >= 0 || false;
+
+template <typename T>
+requires complete<T> and requires{ T::is_trivially_moveable; }
 bool constexpr is_trivially_moveable<T>{ T::is_trivially_moveable };
 
 template <typename T1, typename T2>
