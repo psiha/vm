@@ -72,6 +72,7 @@ namespace detail
         return crt_alloc_size( address );
     }
 
+    // From GCC docs: realloc-like functions have this property (malloc/restrict) as long as the old pointer is never referred to (including comparing it to the new pointer) after the function returns a non-NULL value.
     [[ using gnu: cold, assume_aligned( guaranteed_alignment ), malloc, returns_nonnull ]]
 #ifdef _MSC_VER
     __declspec( restrict, noalias )
@@ -452,9 +453,9 @@ public:
     auto release() noexcept { auto data{ p_array_ }; mark_freed(); return data; }
 
 private: friend base;
-    [[ using gnu: cold, assume_aligned( alignment ), malloc, returns_nonnull ]]
+    [[ using gnu: cold, assume_aligned( alignment ), returns_nonnull ]]
 #ifdef _MSC_VER
-    __declspec( restrict, noalias )
+    __declspec( noalias )
 #endif
     constexpr value_type * storage_init( size_type const initial_size )
     {
