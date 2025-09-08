@@ -122,7 +122,7 @@ public:
     constexpr fc_vector & operator=( fc_vector const & other ) noexcept( std::is_nothrow_copy_constructible_v<T> )
     {
         if constexpr ( fixed_sized_copy ) {
-            std::destroy_n( data(), size() );
+            destroy_contents();
             fixed_copy( other );
             return *this;
         } else {
@@ -132,12 +132,14 @@ public:
     constexpr fc_vector & operator=( fc_vector && other ) noexcept( std::is_nothrow_move_assignable_v<T> )
     {
         if constexpr ( fixed_sized_move ) {
-            std::destroy_n( data(), size() );
+            destroy_contents();
             return *(new (this) fc_vector( std::move( other ) ));
         } else {
             return static_cast<fc_vector &>( base::operator=( std::move( other ) ) );
         }
     }
+
+    constexpr ~fc_vector() noexcept { destroy_contents(); }
 
     [[ nodiscard, gnu::pure  ]]        constexpr size_type size    () const noexcept { BOOST_ASSUME( size_ <= static_capacity ); return size_; }
     [[ nodiscard, gnu::const ]] static constexpr size_type capacity()       noexcept { return static_capacity; }
@@ -173,6 +175,8 @@ private: friend base; // contiguous storage implementation
     constexpr void storage_inc_size() noexcept; // TODO
 
     constexpr void storage_free() noexcept { size_ = 0; }
+
+    constexpr void destroy_contents() noexcept { std::destroy_n( data(), size() ); }
 
 private:
     void fixed_copy( fc_vector const & __restrict source ) noexcept
