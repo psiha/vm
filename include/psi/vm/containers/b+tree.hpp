@@ -2176,9 +2176,21 @@ protected: // pass-in-reg public function overloads/impls
     }
 
 private:
+    static decltype( auto ) prefetch( Comparator const & comp, Reg auto const key ) noexcept
+    {
+        // Support 'transparent' comparators that deal with references/pointers/
+        // non-local data (e.g. containers of pointers or IDs) and provide a
+        // method to 'fetch' the actual value to be compared against (so that at
+        // least does not have to be fetched from memory multiple times).
+        if constexpr ( requires { comp.val( key ); } )
+            return comp.val( key );
+        else
+            return key;
+    }
+
     // lower_bound find >limited to/within a node<
     [[ using gnu: pure, hot, noinline, sysv_abi, leaf ]]
-    static find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const value, pass_in_reg<Comparator> const comparator ) noexcept
+    static find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const key, pass_in_reg<Comparator> const comparator ) noexcept
     {
         // TODO branchless binary search, Alexandrescu's TLC,
         // https://orlp.net/blog/bitwise-binary-search
@@ -2188,6 +2200,7 @@ private:
         BOOST_ASSUME( num_vals >  0                     );
         BOOST_ASSUME( num_vals <= leaf_node::max_values );
         Comparator const & __restrict comp( comparator );
+        decltype( auto ) value{ prefetch( comp, key ) };
         if constexpr ( use_linear_search_for_sorted_array<Comparator, Key, leaf_node::max_values> )
         {
             for ( node_size_type k{ 0 }; ; )
@@ -2226,11 +2239,12 @@ private:
 protected:
     // upper_bound find >limited to/within a node<
     [[ using gnu: pure, hot, noinline, sysv_abi, leaf ]]
-    static node_size_type upper_bound( Key const keys[], node_size_type const num_vals, Reg auto const value, pass_in_reg<Comparator> const comparator ) noexcept
+    static node_size_type upper_bound( Key const keys[], node_size_type const num_vals, Reg auto const key, pass_in_reg<Comparator> const comparator ) noexcept
     {
         BOOST_ASSUME( num_vals >  0                     );
         BOOST_ASSUME( num_vals <= leaf_node::max_values );
         Comparator const & __restrict comp( comparator );
+        decltype( auto ) value{ prefetch( comp, key ) };
         if constexpr ( use_linear_search_for_sorted_array<Comparator, Key, leaf_node::max_values> )
         {
             for ( node_size_type k{ 0 }; ; )
@@ -2518,12 +2532,18 @@ bp_tree_impl<Key, Comparator>::merge
     node_size_type       input_length   ( source.num_vals   - source_offset   );
     node_size_type const available_space( target.max_values - target.num_vals );
     auto   const src_keys{ &source.keys[ source_offset ] };
-    auto &       tgt_keys{ target.keys };
-    BOOST_ASSERT( lower_bound( target, src_keys[ 0 ] ).pos == target_offset );
+    auto &       tgt_keys{  target.keys };
+    BOOST_ASSERT
+    (
+        ( lower_bound( target, src_keys[ 0 ] ).pos == target_offset ) ||
+        // in non unique contents lower_bound will return the first occurrence while target_offset should point past the last occurrence
+        ( !unique && eq( tgt_keys[ target_offset - 1 ], src_keys[ 0 ] ) )
+    );
+
     if ( target_offset == 0 ) [[ unlikely ]]
     {
         auto const & new_separator{ src_keys[ 0 ] };
-        BOOST_ASSERT( comp()( new_separator, tgt_keys[ 0 ] ) );
+        BOOST_ASSERT( le( new_separator, tgt_keys[ 0 ] ) );
         base::update_separator( target, new_separator );
         // TODO rather simply insert the source leaf into the parent (if all of
         // its keys come before the first key in target)
@@ -2542,26 +2562,27 @@ bp_tree_impl<Key, Comparator>::merge
         }
         // support merging nodes from another tree instance:
         auto const source_slot{ base::is_my_node( source ) ? slot_of( source ) : node_slot{} };
-        auto       [target_slot, next_tgt_offset]{ base::split_to_insert( target, target_offset, pass_rv_in_reg{ /*mrmlj*/Key{ src_keys[ 0 ] } }, {} ) };
+        auto       [target_slot, nxt_tgt_offset]{ base::split_to_insert( target, target_offset, pass_rv_in_reg{ /*mrmlj*/Key{ src_keys[ 0 ] } }, {} ) };
         auto const & src{ source_slot ? leaf( source_slot ) : source };
         auto       & tgt{               leaf( target_slot )          };
-        BOOST_ASSUME( next_tgt_offset <= tgt.num_vals );
-        auto const next_src_offset{ static_cast<node_size_type>( source_offset + 1 ) };
+        BOOST_ASSUME( nxt_tgt_offset <= tgt.num_vals );
+        BOOST_ASSUME( nxt_tgt_offset >  0 );
+        auto const nxt_src_offset{ static_cast<node_size_type>( source_offset + 1 ) };
         // next_tgt_offset returned by split_to_insert points to the
         // position in the target node that immediately follows the
         // position for the inserted src_keys[ 0 ] - IOW it need not be
         // the position for src.keys[ next_src_offset ]
         if
         (
-            ( next_tgt_offset != tgt.num_vals ) && // necessary check because find assumes non-empty input
-            ( next_src_offset != src.num_vals ) && // possible edge case where there was actually only one key left in the source
+            ( nxt_tgt_offset != tgt.num_vals ) && // necessary check because find assumes non-empty input
+            ( nxt_src_offset != src.num_vals ) && // possible edge case where there was actually only one key left in the source
             false                                  // not really worth it: the caller still has to call find on/for returns from all the other branches
         )
         {
-            next_tgt_offset = lower_bound( tgt, next_tgt_offset, key_const_arg{ src.keys[ next_src_offset ] } ).pos;
+            nxt_tgt_offset = lower_bound( tgt, nxt_tgt_offset, key_const_arg{ src.keys[ nxt_src_offset ] } ).pos;
         }
         verify_min_max( tgt );
-        return std::make_tuple<node_size_type, node_size_type>( 1, 1, &tgt, next_tgt_offset );
+        return std::make_tuple<node_size_type, node_size_type>( 1, 1, &tgt, nxt_tgt_offset );
     }
 
     auto copy_size{ std::min( input_length, available_space ) };
