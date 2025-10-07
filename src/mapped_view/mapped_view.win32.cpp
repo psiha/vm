@@ -23,6 +23,10 @@
 
 #include <boost/assert.hpp>
 
+#ifndef NDEBUG
+#include <cstdio> // for fputs
+#endif
+
 #pragma comment( lib, "onecore.lib" ) // for MapViewOfFile2
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -186,7 +190,12 @@ void discard( mapped_span const range ) noexcept
 void flush_async( mapped_span const range ) noexcept
 {
     // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwflushvirtualmemory
-    BOOST_VERIFY( ::FlushViewOfFile( range.data(), range.size() ) );
+    if ( !::FlushViewOfFile( range.data(), range.size() ) ) [[ unlikely ]]
+    {
+#   ifndef NDEBUG //...mrmlj...catching ghosts
+        std::fputs( err::make_exception( err::last_win32_error{} ).what(), stderr );
+#   endif
+    }
 }
 
 void flush_blocking( mapped_span const range, file_handle::const_reference const source_file ) noexcept
