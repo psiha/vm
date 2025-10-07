@@ -193,7 +193,7 @@ access_privileges::system const access_privileges::system::_644            = { (
 
 access_privileges::system::~system() noexcept
 {
-    if ( dynamic )
+    if ( dynamic ) [[ unlikely ]]
     {
         BOOST_ASSUME( p_sd );
         BOOST_ASSUME( p_sd != process_default.p_sd );
