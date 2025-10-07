@@ -3,6 +3,9 @@
 
 #include <psi/build/has_builtin.hpp>
 
+#include <boost/assert.hpp>
+#include <boost/config_ex.hpp>
+
 #include <cstdint>
 #include <std_fix/bit>
 #include <type_traits>
@@ -33,28 +36,32 @@ namespace align_detail
 [[ using gnu: const, always_inline ]] constexpr auto align_down( auto const value, auto const alignment ) noexcept
 {
     using T = decltype( value );
+    auto const is_power_of_2{ std::has_single_bit( unsigned( alignment ) ) };
+    BOOST_ASSUME( is_power_of_2 );
 #if __has_builtin( __builtin_constant_p )
-    if ( __builtin_constant_p( alignment ) && /*is power of 2*/std::has_single_bit( unsigned( alignment ) ) )
+    if ( __builtin_constant_p( alignment ) )
         return __builtin_align_down( value, alignment );
     else
 #endif
     if constexpr ( std::is_pointer_v<T> )
         return std::bit_cast<T>( align_down( std::bit_cast<std::uintptr_t>( value ), alignment ) );
     else
-        return static_cast<T>( value / alignment * alignment );
+        return static_cast<T>( value & ~( T( alignment ) - 1 ) );
 }
 [[ using gnu: const, always_inline ]] constexpr auto align_up( auto const value, auto const alignment ) noexcept
 {
     using T = decltype( value );
+    auto const is_power_of_2{ std::has_single_bit( unsigned( alignment ) ) };
+    BOOST_ASSUME( is_power_of_2 );
 #if __has_builtin( __builtin_constant_p )
-    if ( __builtin_constant_p( alignment ) && /*is power of 2*/std::has_single_bit( unsigned( alignment ) ) )
+    if ( __builtin_constant_p( alignment ) )
         return __builtin_align_up( value, alignment );
     else
 #endif
     if constexpr ( std::is_pointer_v<T> )
         return std::bit_cast<T>( align_up( std::bit_cast<std::uintptr_t>( value ), alignment ) );
     else
-        return static_cast<T>( align_detail::generic_divide_up( value, alignment ) * alignment );
+        return static_cast<T>( ( value + alignment - 1 ) & ~( T( alignment ) - 1 ) );
 }
 
 template <unsigned alignment> [[ using gnu: const, always_inline ]] constexpr auto align_down( auto const value ) noexcept { return align_down( value, alignment ); }
