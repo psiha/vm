@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -79,14 +80,14 @@ public:
     using difference_type = std::make_signed_t<size_type>;
     using storage_result  = err::fallible_result<void, error>;
 
-    bptree_base( header_info hdr_info = {} ) noexcept;
+    bptree_base() noexcept;
 
     [[ gnu::pure ]] bool empty() const noexcept { return BOOST_UNLIKELY( size() == 0 ); }
 
     void clear() noexcept;
 
-    storage_result map_file  ( auto file, flags::named_object_construction_policy ) noexcept;
-    storage_result map_memory( std::uint32_t initial_capacity_as_number_of_nodes = 0 ) noexcept;
+    storage_result map_file  ( auto file, flags::named_object_construction_policy, header_info = {} ) noexcept;
+    storage_result map_memory( std::uint32_t initial_capacity_as_number_of_nodes = 0, header_info = {} ) noexcept;
 
     std::span<std::byte> user_header_data() noexcept;
 
@@ -194,7 +195,7 @@ protected:
         depth_t               depth_{};
     }; // struct header
 
-    using node_pool = vm::vm_vector<node_placeholder, node_slot::value_type, false>;
+    using node_pool = vm::vm_vector<node_placeholder, node_slot::value_type>;
 
 protected:
     void swap( bptree_base & other ) noexcept;
@@ -385,9 +386,9 @@ template <> // tell vm_vector it is safe to persist nodes
 inline bool constexpr does_not_hold_addresses<bptree_base::node_placeholder>{ true };
 
 bptree_base::storage_result
-bptree_base::map_file( auto const file, flags::named_object_construction_policy const policy ) noexcept
+bptree_base::map_file( auto const file, flags::named_object_construction_policy const policy, header_info const hdr_info ) noexcept
 {
-    auto success{ nodes_.map_file( file, policy )() };
+    auto success{ nodes_.map_file( file, policy, hdr_info.add_header<header>() )() };
 #ifndef NDEBUG
     if ( success ) update_dbg_helpers();
 #endif

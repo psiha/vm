@@ -34,10 +34,7 @@ namespace psi::vm
 
 // https://en.wikipedia.org/wiki/Judy_array
 
-bptree_base::bptree_base( header_info const hdr_info ) noexcept
-    :
-    nodes_{ hdr_info.add_header<header>() }
-{}
+bptree_base::bptree_base() noexcept = default;
 
 void bptree_base::clear() noexcept
 {
@@ -53,9 +50,9 @@ bptree_base::header &
 bptree_base::hdr() noexcept { return *header_data().first; }
 
 bptree_base::storage_result
-bptree_base::map_memory( std::uint32_t const initial_capacity_as_number_of_nodes ) noexcept
+bptree_base::map_memory( std::uint32_t const initial_capacity_as_number_of_nodes, header_info const hdr_info ) noexcept
 {
-    auto success{ nodes_.map_memory( initial_capacity_as_number_of_nodes, value_init )() };
+    auto success{ nodes_.map_memory( initial_capacity_as_number_of_nodes, hdr_info.add_header<header>(), value_init )() };
     if ( success )
     {
         hdr() = {};
