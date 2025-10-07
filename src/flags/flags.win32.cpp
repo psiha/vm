@@ -200,7 +200,11 @@ access_privileges::system::~system() noexcept
         BOOST_ASSUME( p_sd != unrestricted   .p_sd );
         auto & sd( get_dynamic_sd() );
         if ( sd.release() == 0 ) [[ unlikely ]]
-            delete &sd; // (?)delete through void to silence new-delete-(size-)mismatch sanitizers
+#       if __SANITIZE_ADDRESS__ || __has_extension( address_sanitizer )
+            delete static_cast<void const *>( &sd ); // delete through void to silence new-delete-(size-)mismatch sanitizers
+#       else
+            delete &sd;
+#       endif
     }
 }
 
