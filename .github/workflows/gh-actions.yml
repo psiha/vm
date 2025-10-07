@@ -11,6 +11,7 @@ on:
 jobs:
   build:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
 
     strategy:
       # Set fail-fast to false to ensure that feedback is delivered for all matrix combinations. Consider changing this to true when your workflow is stable.
@@ -23,40 +24,26 @@ jobs:
       #
       # To add more build types (Release, Debug, RelWithDebInfo, etc.) customize the build_type list.
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-2025, macos-26]
         build_type: [Debug, Release]
-        c_compiler: [clang, msvc]
         include:
-          - os: windows-latest
+          - os: windows-2025
             c_compiler: msvc
             cpp_compiler: msvc
           - os: ubuntu-latest
             c_compiler: clang
             cpp_compiler: clang++
-          - os: macos-latest
+          - os: macos-26
             c_compiler: clang
             cpp_compiler: clang++
-        exclude:
-          - os: windows-latest
-            c_compiler: clang
-          - os: windows-latest
-            build_type: Debug
-          - os: ubuntu-latest
-            c_compiler: msvc
-          - os: macos-latest
-            c_compiler: msvc
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
         submodules: true
-    - uses: actions/setup-java@v3
-      with:
-        java-version: '23'
-        distribution: 'temurin'
 
     - name: Setup latest Xcode on MacOS
-      if: matrix.os == 'macos-latest'
+      if: matrix.os == 'macos-26'
       uses: maxim-lobanov/setup-xcode@v1
       with:
         xcode-version: latest
@@ -65,12 +52,12 @@ jobs:
     # luckily latest is now ARM by default:
     # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#supported-runners-and-hardware-resources
     - name: Install LLVM and Clang on MacOS
-      if: matrix.os == 'macos-latest'
-      uses: KyleMayes/install-llvm-action@v2.0.5
+      if: matrix.os == 'macos-26'
+      uses: KyleMayes/install-llvm-action@v2.0.7
       with:
         # https://github.com/KyleMayes/install-llvm-action/issues/65
         arch: arm64
-        version: 18
+        version: 20
         env: true
 
     - name: Install LLVM and Clang on Linux

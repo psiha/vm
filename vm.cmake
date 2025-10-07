@@ -1,10 +1,14 @@
 # https://gitlab.kitware.com/cmake/cmake/-/issues/25725
+# https://github.com/llvm/llvm-project/issues/83435
+#...and yet and yet...still w/ Clang 19.5 VS 17.14.16
 if ( CMAKE_CXX_COMPILER_ID MATCHES Clang AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT MATCHES MSVC )
-    add_compile_options( $<$<COMPILE_LANGUAGE:CXX>:/clang:-std=gnu++2b> )
-elseif( MSVC ) # :wat: :wat: suddenly stopped 'recognizing' CMAKE_CXX_STANDARD !?
-    add_compile_options( /std:c++latest )
+    unset( CMAKE_CXX_STANDARD )
+    add_compile_options( $<$<COMPILE_LANGUAGE:CXX>:/clang:-std=gnu++2c> )
 else()
     set( CMAKE_CXX_STANDARD 26 )
+    if ( MSVC ) # CMAKE_CXX_STANDARD is ignored??
+        add_compile_options( -std:c++latest )
+    endif()
 endif()
 
 # TODO finish and replace file globbing
