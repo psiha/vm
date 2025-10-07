@@ -685,7 +685,7 @@ protected: // node types
         // TODO support for maps (i.e. keys+values)
         using value_type = Key;
 
-        static node_size_type constexpr storage_space{ node_size - align_up<node_size_type>( sizeof( node_header ), alignof( Key ) ) };
+        static node_size_type constexpr storage_space{ node_size_type( node_size - align_up<node_size_type>( sizeof( node_header ), alignof( Key ) ) ) };
         static node_size_type constexpr max_values   { storage_space / sizeof( Key ) };
         static node_size_type constexpr min_values   { ihalf_ceil<max_values> };
 
@@ -1287,8 +1287,8 @@ protected: // 'other'
             BOOST_ASSUME( hdr.last_leaf_  == hdr.root_ );
             auto const root_node    { hdr.root_ };
             auto const previous_size{ hdr.size_ };
-            hdr.root_  = hdr.first_leaf_ = hdr.last_leaf_ = {};
-            hdr.depth_ = hdr.size_ = 0;
+            hdr.root_ = hdr.first_leaf_ = hdr.last_leaf_ = {};
+            hdr.size_ = hdr.depth_ = 0;
             BOOST_ASSUME( tgt_leaf.right == begin_leaf );
             BOOST_ASSUME( previous_size <= leaf_node::max_values );
             bulk_insert_into_empty( root_node, end_pos, previous_size + total_insertion_size );
