@@ -222,9 +222,7 @@ TEST( bp_tree, playground )
         EXPECT_EQ( bpt.find( -42 ), bpt.end() );
 
         bpt.clear();
-#   ifndef __APPLE__ // linker error (the workaround at EOF does not help)
         bpt.print();
-#   endif
     }
 }
 
@@ -268,10 +266,3 @@ TEST( bp_tree, nonunique )
 //------------------------------------------------------------------------------
 } // namespace psi::vm
 //------------------------------------------------------------------------------
-#ifdef __APPLE__ // Xcode 16.1 Symbol not found: __ZNSt3__119__is_posix_terminalEP7__sFILE
-namespace std { inline namespace __1 {
-#include <unistd.h>
-[[ gnu::weak, gnu::visibility( "default" ) ]]
-extern bool __is_posix_terminal(FILE* __stream) { return isatty(fileno(__stream)); }
-}}
-#endif
