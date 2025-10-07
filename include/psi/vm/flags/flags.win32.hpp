@@ -164,9 +164,9 @@ struct access_privileges
         static system const nix_default    ;
         static system const _644           ;
 
-        constexpr         system(                                                                             ) noexcept : p_sd( nullptr    ), dynamic( false         ) {}
-        constexpr         system( SECURITY_DESCRIPTOR const * __restrict p_sd_param, bool const dynamic_param ) noexcept : p_sd( p_sd_param ), dynamic( dynamic_param ) {}
-        BOOST_FORCEINLINE system( system const & __restrict other                                             ) noexcept : p_sd( other.p_sd ), dynamic( other.dynamic )
+        constexpr         system(                                                                  ) noexcept : p_sd( nullptr    ), dynamic( false         ) {}
+        constexpr         system( SECURITY_DESCRIPTOR const * p_sd_param, bool const dynamic_param ) noexcept : p_sd( p_sd_param ), dynamic( dynamic_param ) {}
+        BOOST_FORCEINLINE system( system const & other                                             ) noexcept : p_sd( other.p_sd ), dynamic( other.dynamic )
         {
             if ( dynamic )
             {
@@ -178,26 +178,9 @@ struct access_privileges
             }
         }
 
-        //...mrmlj...to enable const members...system( system && other ) noexcept : p_sd( other.p_sd ), dynamic( other.dynamic ) { other.p_sd = nullptr; other.dynamic = false; }
-        ~system() noexcept
-        {
-            if ( dynamic )
-            {
-                BOOST_ASSUME( p_sd );
-                BOOST_ASSUME( p_sd != process_default.p_sd );
-                BOOST_ASSUME( p_sd != unrestricted   .p_sd );
-                auto & sd( get_dynamic_sd() );
-        #ifdef __clang__
-            #pragma clang diagnostic push
-            #pragma clang diagnostic ignored "-Wdelete-incomplete"
-        #endif
-                if ( BOOST_UNLIKELY( sd.release() ) == 0 )
-                    delete static_cast<void const *>( &sd ); // delete through void to silence new-delete-(size-)mismatch sanitizers
-        #ifdef __clang__
-            #pragma clang diagnostic pop
-        #endif
-            }
-        }
+        //...mrmlj...to enable const members...
+        // system( system && other ) noexcept : p_sd( other.p_sd ), dynamic( other.dynamic ) { other.p_sd = nullptr; other.dynamic = false; }
+        ~system() noexcept;
 
         SECURITY_DESCRIPTOR const * __restrict const p_sd   ;
         bool                                   const dynamic;
