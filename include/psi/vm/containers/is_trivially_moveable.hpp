@@ -89,6 +89,7 @@ namespace psi::vm
 // https://gcc.gnu.org/onlinedocs/gcc-11.4.0/libstdc++/api/a06570.html __is_location_invariant
 // https://quuxplusone.github.io/blog/2019/02/20/p1144-what-types-are-relocatable
 // https://quuxplusone.github.io/blog/2018/09/28/trivially-relocatable-vs-destructive-movable
+// https://quuxplusone.github.io/blog/2024/06/15/who-uses-trivial-relocation
 // https://github.com/Quuxplusone/libcxx/blob/trivially-relocatable/test/libcxx/type_traits/is_trivially_relocatable.pass.cpp
 // https://brevzin.github.io/c++/2024/10/21/trivial-relocation
 // https://github.com/abseil/abseil-cpp/pull/1625
@@ -101,7 +102,9 @@ namespace psi::vm
 template <typename T>
 bool constexpr is_trivially_moveable
 {
-#ifdef __clang__
+#if defined( __cpp_trivial_relocatability ) || __has_builtin( __builtin_is_cpp_trivially_relocatable )
+    __builtin_is_cpp_trivially_relocatable( T ) ||
+#elif defined( __clang__ )
     __is_trivially_relocatable( T ) ||
 #endif
 #if defined( __cpp_lib_trivially_relocatable /*P1144*/ ) || defined( __cpp_trivial_relocatability /*P2786*/ )

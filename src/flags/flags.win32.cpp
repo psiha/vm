@@ -191,6 +191,23 @@ access_privileges::system const access_privileges::system::nix_default     = { d
                                                                              };
 access_privileges::system const access_privileges::system::_644            = { ( nix_default.get_dynamic_sd().add_ref(), nix_default.p_sd ), true }; //access_privileges::system::nix_default;
 
+access_privileges::system::~system() noexcept
+{
+    if ( dynamic ) [[ unlikely ]]
+    {
+        BOOST_ASSUME( p_sd );
+        BOOST_ASSUME( p_sd != process_default.p_sd );
+        BOOST_ASSUME( p_sd != unrestricted   .p_sd );
+        auto & sd( get_dynamic_sd() );
+        if ( sd.release() == 0 ) [[ unlikely ]]
+#       if __SANITIZE_ADDRESS__ || __has_extension( address_sanitizer )
+            delete static_cast<void const *>( &sd ); // delete through void to silence new-delete-(size-)mismatch sanitizers
+#       else
+            delete &sd;
+#       endif
+    }
+}
+
 //------------------------------------------------------------------------------
 } // flags
 //------------------------------------------------------------------------------

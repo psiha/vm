@@ -19,7 +19,7 @@ include( ${CMAKE_CURRENT_BINARY_DIR}/cmake/get_cpm.cmake )
 
 # Add packages
 
-set( boost_ver boost-1.87.0 )
+set( boost_ver boost-1.89.0 )
 CPMAddPackage( "gh:boostorg/static_assert#${boost_ver}"   ) # Boost::core dependency
 CPMAddPackage( "gh:boostorg/throw_exception#${boost_ver}" ) # Boost::core dependency
 CPMAddPackage( "gh:boostorg/config#${boost_ver}"          ) # Boost::core dependency
@@ -47,8 +47,10 @@ if ( ${CMAKE_SYSTEM_NAME} MATCHES "Linux" )
 endif()
 include( ${build_SOURCE_DIR}/build_options.cmake )
 
-PSI_add_compile_options( Debug ${PSI_compiler_runtime_sanity_checks} )
-PSI_add_link_options   ( Debug ${PSI_linker_runtime_sanity_checks}   )
+if ( NOT ( MSVC AND GitHubCIRun ) ) # the related wrkrnd in gh-actions.yml does not work so...
+    PSI_add_compile_options( Debug ${PSI_compiler_runtime_sanity_checks} )
+    PSI_add_link_options   ( Debug ${PSI_linker_runtime_sanity_checks}   )
+endif()
 
 PSI_add_compile_options( Release ${PSI_compiler_LTO} ${PSI_compiler_optimize_for_size} ${PSI_compiler_disable_thread_safe_init} ${PSI_compiler_fastmath} ${PSI_compiler_debug_symbols} )
 

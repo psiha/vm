@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -39,6 +40,7 @@ namespace psi::vm
 //------------------------------------------------------------------------------
 
 PSI_WARNING_DISABLE_PUSH()
+PSI_WARNING_MSVC_DISABLE( 4127 ) // conditional expression is constant
 PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
 
 template <typename K, bool transparent_comparator, typename StoredKeyType>
@@ -79,14 +81,14 @@ public:
     using difference_type = std::make_signed_t<size_type>;
     using storage_result  = err::fallible_result<void, error>;
 
-    bptree_base( header_info hdr_info = {} ) noexcept;
+    bptree_base() noexcept;
 
     [[ gnu::pure ]] bool empty() const noexcept { return BOOST_UNLIKELY( size() == 0 ); }
 
     void clear() noexcept;
 
-    storage_result map_file  ( auto file, flags::named_object_construction_policy ) noexcept;
-    storage_result map_memory( std::uint32_t initial_capacity_as_number_of_nodes = 0 ) noexcept;
+    storage_result map_file  ( auto file, flags::named_object_construction_policy, header_info = {} ) noexcept;
+    storage_result map_memory( std::uint32_t initial_capacity_as_number_of_nodes = 0, header_info = {} ) noexcept;
 
     std::span<std::byte> user_header_data() noexcept;
 
@@ -194,7 +196,7 @@ protected:
         depth_t               depth_{};
     }; // struct header
 
-    using node_pool = vm::vm_vector<node_placeholder, node_slot::value_type, false>;
+    using node_pool = vm::vm_vector<node_placeholder, node_slot::value_type>;
 
 protected:
     void swap( bptree_base & other ) noexcept;
@@ -385,9 +387,9 @@ template <> // tell vm_vector it is safe to persist nodes
 inline bool constexpr does_not_hold_addresses<bptree_base::node_placeholder>{ true };
 
 bptree_base::storage_result
-bptree_base::map_file( auto const file, flags::named_object_construction_policy const policy ) noexcept
+bptree_base::map_file( auto const file, flags::named_object_construction_policy const policy, header_info const hdr_info ) noexcept
 {
-    auto success{ nodes_.map_file( file, policy )() };
+    auto success{ nodes_.map_file( file, policy, hdr_info.add_header<header>() )() };
 #ifndef NDEBUG
     if ( success ) update_dbg_helpers();
 #endif
@@ -514,7 +516,7 @@ public:
         BOOST_ASSUME( verify_comparable( left, right ) );
         return left.index_ <=> right.index_;
     }
-    [[ gnu::pure ]] friend auto operator==( base_random_access_iterator const & left, base_random_access_iterator const & right ) noexcept
+    [[ gnu::pure ]] friend bool operator==( base_random_access_iterator const & left, base_random_access_iterator const & right ) noexcept
     {
         BOOST_ASSUME( verify_comparable( left, right ) );
         return left.index_ == right.index_;
@@ -684,7 +686,7 @@ protected: // node types
         // TODO support for maps (i.e. keys+values)
         using value_type = Key;
 
-        static node_size_type constexpr storage_space{ node_size - align_up<node_size_type>( sizeof( node_header ), alignof( Key ) ) };
+        static node_size_type constexpr storage_space{ node_size_type( node_size - align_up<node_size_type>( sizeof( node_header ), alignof( Key ) ) ) };
         static node_size_type constexpr max_values   { storage_space / sizeof( Key ) };
         static node_size_type constexpr min_values   { ihalf_ceil<max_values> };
 
@@ -1161,7 +1163,9 @@ protected: // 'other'
                     leaf_slot = slot_of( new_leaf );
                     continue;
                 }
+#           ifdef __clang__
                 #pragma clang loop unroll( disable )
+#           endif
                 for ( auto & leaf_ptr : nodes ) {
                     leaf_ptr = &this->leaf( reinterpret_cast<node_slot const &>( leaf_ptr ) );
                 }
@@ -1286,8 +1290,8 @@ protected: // 'other'
             BOOST_ASSUME( hdr.last_leaf_  == hdr.root_ );
             auto const root_node    { hdr.root_ };
             auto const previous_size{ hdr.size_ };
-            hdr.root_  = hdr.first_leaf_ = hdr.last_leaf_ = {};
-            hdr.depth_ = hdr.size_ = 0;
+            hdr.root_ = hdr.first_leaf_ = hdr.last_leaf_ = {};
+            hdr.size_ = hdr.depth_ = 0;
             BOOST_ASSUME( tgt_leaf.right == begin_leaf );
             BOOST_ASSUME( previous_size <= leaf_node::max_values );
             bulk_insert_into_empty( root_node, end_pos, previous_size + total_insertion_size );
@@ -1728,7 +1732,7 @@ public:
     ra_iterator   operator--(int) noexcept { return static_cast<ra_iterator &&>( base::operator--(0) ); }
 
     friend constexpr auto operator<=>( ra_iterator const & left, ra_iterator const & right ) noexcept { return static_cast<base const &>( left ) <=> static_cast<base const &>( right ); }
-    friend constexpr auto operator== ( ra_iterator const & left, ra_iterator const & right ) noexcept { return static_cast<base const &>( left ) ==  static_cast<base const &>( right ); }
+    friend constexpr bool operator== ( ra_iterator const & left, ra_iterator const & right ) noexcept { return static_cast<base const &>( left ) ==  static_cast<base const &>( right ); }
 
     operator fwd_iterator() const noexcept { return static_cast<fwd_iterator const &>( static_cast<base_iterator const &>( *this ) ); }
 }; // class ra_iterator
