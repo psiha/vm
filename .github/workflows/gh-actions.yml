@@ -66,13 +66,13 @@ jobs:
       run: |
         wget https://apt.llvm.org/llvm.sh
         chmod u+x llvm.sh
-        sudo ./llvm.sh 19 all
-        echo "PATH=/usr/lib/llvm-19/bin:$PATH" >> $GITHUB_ENV
-        echo "LLVM_PATH=/usr/lib/llvm-19" >> $GITHUB_ENV
-        echo "LD_LIBRARY_PATH=/usr/lib/llvm-19/lib" >> $GITHUB_ENV
-        echo "DYLD_LIBRARY_PATH=/usr/lib/llvm-19/lib" >> $GITHUB_ENV
-        echo "CC=/usr/lib/llvm-19/bin/clang" >> $GITHUB_ENV
-        echo "CXX=/usr/lib/llvm-19/bin/clang++" >> $GITHUB_ENV
+        sudo ./llvm.sh 21 all
+        echo "PATH=/usr/lib/llvm-21/bin:$PATH" >> $GITHUB_ENV
+        echo "LLVM_PATH=/usr/lib/llvm-21" >> $GITHUB_ENV
+        echo "LD_LIBRARY_PATH=/usr/lib/llvm-21/lib" >> $GITHUB_ENV
+        echo "DYLD_LIBRARY_PATH=/usr/lib/llvm-21/lib" >> $GITHUB_ENV
+        echo "CC=/usr/lib/llvm-21/bin/clang" >> $GITHUB_ENV
+        echo "CXX=/usr/lib/llvm-21/bin/clang++" >> $GITHUB_ENV
       shell: sh
 
     - name: Set reusable strings
@@ -103,6 +103,9 @@ jobs:
 
     - name: Test
       working-directory: ${{ steps.strings.outputs.build-output-dir }}
+      env:
+        # https://github.com/actions/runner-images/issues/8891
+        ASAN_WIN_CONTINUE_ON_INTERCEPTION_FAILURE: 1
       # Execute tests defined by the CMake configuration. Note that --build-config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
       # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
       run: >
