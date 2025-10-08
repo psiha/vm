@@ -46,7 +46,7 @@ namespace align_detail
     if constexpr ( std::is_pointer_v<T> )
         return std::bit_cast<T>( align_down( std::bit_cast<std::uintptr_t>( value ), alignment ) );
     else
-        return static_cast<T>( value & ~( T( alignment ) - 1 ) );
+        return static_cast<T>( value & ~T( alignment - 1 ) );
 }
 [[ using gnu: const, always_inline ]] constexpr auto align_up( auto const value, auto const alignment ) noexcept
 {
@@ -61,7 +61,7 @@ namespace align_detail
     if constexpr ( std::is_pointer_v<T> )
         return std::bit_cast<T>( align_up( std::bit_cast<std::uintptr_t>( value ), alignment ) );
     else
-        return static_cast<T>( ( value + alignment - 1 ) & ~( T( alignment ) - 1 ) );
+        return static_cast<T>( ( value + alignment - 1 ) & ~T( alignment - 1 ) );
 }
 
 template <unsigned alignment> [[ using gnu: const, always_inline ]] constexpr auto align_down( auto const value ) noexcept { return align_down( value, alignment ); }

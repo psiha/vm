@@ -515,7 +515,7 @@ public:
         BOOST_ASSUME( verify_comparable( left, right ) );
         return left.index_ <=> right.index_;
     }
-    [[ gnu::pure ]] friend auto operator==( base_random_access_iterator const & left, base_random_access_iterator const & right ) noexcept
+    [[ gnu::pure ]] friend bool operator==( base_random_access_iterator const & left, base_random_access_iterator const & right ) noexcept
     {
         BOOST_ASSUME( verify_comparable( left, right ) );
         return left.index_ == right.index_;
@@ -1729,7 +1729,7 @@ public:
     ra_iterator   operator--(int) noexcept { return static_cast<ra_iterator &&>( base::operator--(0) ); }
 
     friend constexpr auto operator<=>( ra_iterator const & left, ra_iterator const & right ) noexcept { return static_cast<base const &>( left ) <=> static_cast<base const &>( right ); }
-    friend constexpr auto operator== ( ra_iterator const & left, ra_iterator const & right ) noexcept { return static_cast<base const &>( left ) ==  static_cast<base const &>( right ); }
+    friend constexpr bool operator== ( ra_iterator const & left, ra_iterator const & right ) noexcept { return static_cast<base const &>( left ) ==  static_cast<base const &>( right ); }
 
     operator fwd_iterator() const noexcept { return static_cast<fwd_iterator const &>( static_cast<base_iterator const &>( *this ) ); }
 }; // class ra_iterator
