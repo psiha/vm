@@ -62,9 +62,9 @@ err::fallible_result<void, nt::error> set_size( mapping & the_mapping, std::uint
             // NtExtendSection does not support downsizing - can at least be used as a size getter (avoid get_size call)
             BOOST_ASSERT( ntsz.QuadPart == static_cast<LONGLONG>( get_size( the_mapping ) ) );
             the_mapping.close(); // no strong guarantee :/
-            auto const file_reisze_result{ set_size( the_mapping.underlying_file(), new_size )() };
-            if ( !file_reisze_result )
-                return nt::error/*...mrmlj...*/( file_reisze_result.error().get() ); // TODO fully move to NativeNT API https://cpp.hotexamples.com/examples/-/-/NtSetInformationFile/cpp-ntsetinformationfile-function-examples.html
+            auto const file_resize_result{ set_size( the_mapping.underlying_file(), new_size )() };
+            if ( !file_resize_result )
+                return nt::error/*...mrmlj...*/( file_resize_result.error().get() ); // TODO fully move to NativeNT API https://cpp.hotexamples.com/examples/-/-/NtSetInformationFile/cpp-ntsetinformationfile-function-examples.html
             auto const new_mapping_handle{ detail::create_mapping_impl::map_file( the_mapping.file, the_mapping.ap, the_mapping.view_mapping_flags.page_protection, new_size ) };
             the_mapping.reset( new_mapping_handle );
             if ( !the_mapping )
