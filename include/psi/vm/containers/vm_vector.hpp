@@ -387,7 +387,8 @@ public:
     }
 
     template <typename InitPolicy = value_init_t>
-    auto map_memory( sz_t const initial_data_size = 0, header_info const hdr_info = {}, InitPolicy = {} ) noexcept
+    err::fallible_result<void, error>
+    map_memory( sz_t const initial_data_size = 0, header_info const hdr_info = {}, InitPolicy = {} ) noexcept
     {
         auto result{ storage_t::map_memory(
             to_byte_sz( initial_data_size ),
@@ -407,7 +408,7 @@ public:
         else
             std::ranges::uninitialized_default_construct( *this );
 
-        return result.as_fallible_result();
+        return err::success;
     }
 
     using storage_t::empty;
