@@ -102,7 +102,7 @@ namespace psi::vm
 template <typename T>
 bool constexpr is_trivially_moveable
 {
-#if defined( __cpp_trivial_relocatability )
+#if defined( __cpp_trivial_relocatability ) || __has_builtin( __builtin_is_cpp_trivially_relocatable )
     __builtin_is_cpp_trivially_relocatable( T ) ||
 #elif defined( __clang__ )
     __is_trivially_relocatable( T ) ||

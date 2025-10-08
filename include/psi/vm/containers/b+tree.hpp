@@ -40,6 +40,7 @@ namespace psi::vm
 //------------------------------------------------------------------------------
 
 PSI_WARNING_DISABLE_PUSH()
+PSI_WARNING_MSVC_DISABLE( 4127 ) // conditional expression is constant
 PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
 
 template <typename K, bool transparent_comparator, typename StoredKeyType>
@@ -1162,7 +1163,9 @@ protected: // 'other'
                     leaf_slot = slot_of( new_leaf );
                     continue;
                 }
+#           ifdef __clang__
                 #pragma clang loop unroll( disable )
+#           endif
                 for ( auto & leaf_ptr : nodes ) {
                     leaf_ptr = &this->leaf( reinterpret_cast<node_slot const &>( leaf_ptr ) );
                 }
