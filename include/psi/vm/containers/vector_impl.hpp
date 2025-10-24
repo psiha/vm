@@ -376,10 +376,12 @@ public:
         {
             // TODO specialized path for non-random-access ranges with 'cached' size information
         }
+        auto const begin{ std::begin( data ) };
+        auto const end  { std::end  ( data ) };
         if constexpr ( std::is_rvalue_reference_v<Rng> )
-            self.assign( std::make_move_iterator( data.begin() ), std::make_move_iterator( data.end() ) );
+            self.assign( std::make_move_iterator( begin ), std::make_move_iterator( end ) );
         else
-            self.assign( data.begin(), data.end() );
+            self.assign( begin, end );
     }
     void assign( this Impl & self, Impl && other ) noexcept( std::is_nothrow_move_assignable_v<Impl> )
     {
