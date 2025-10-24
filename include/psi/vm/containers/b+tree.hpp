@@ -686,7 +686,7 @@ protected: // node types
         // TODO support for maps (i.e. keys+values)
         using value_type = Key;
 
-        static node_size_type constexpr storage_space{ node_size_type( node_size - align_up<node_size_type>( sizeof( node_header ), alignof( Key ) ) ) };
+        static node_size_type constexpr storage_space{ node_size - align_up<node_size_type>( sizeof( node_header ), alignof( Key ) ) };
         static node_size_type constexpr max_values   { storage_space / sizeof( Key ) };
         static node_size_type constexpr min_values   { ihalf_ceil<max_values> };
 
