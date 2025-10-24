@@ -142,7 +142,7 @@ struct header_info
 
     std::uint32_t size     { 0 };
     std::uint8_t  alignment{ minimal_subheader_alignment };
-    bool          extendable;
+    bool          extendable{ false }; // inverse of the cpp 'final' keyword - whether the header is allowed to be extended with additional data (e.g. in derived types)
     align_t       data_extra_alignment{ minimal_data_alignment }; // e.g. for vectorization or overlaying complex types over std::byte storage
 }; // header_info
 
@@ -154,6 +154,7 @@ template <typename Header>
     auto const in_alignment{ header_info::minimal_subheader_alignment };
     if constexpr ( alignof( Header ) <= in_alignment ) // even with all the assume hints Clang v18 still cannot eliminate redundant fixups so we have to do it explicitly
     {
+        BOOST_ASSERT( hdr_storage.size() >= __datasizeof( Header ) );
         return std::pair
         {
             reinterpret_cast<Header *>( hdr_storage.data() ),

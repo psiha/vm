@@ -49,11 +49,11 @@ contiguous_storage::client_to_storage_size( size_type const sz ) const noexcept
 [[ gnu::noinline ]]
 void * contiguous_storage::expand_capacity( std::size_t const target_capacity )
 {
-    BOOST_ASSUME( target_capacity > vm_capacity() );
+    BOOST_ASSUME( target_capacity > mapped_size() );
     // basic (1.5x) geometric growth implementation
     // TODO: make this configurable (and probably move out/down to container
     // class templates)
-    auto const current_fc_capacity{ fs_capacity() };
+    auto const current_fc_capacity{ storage_size() };
     if ( current_fc_capacity < target_capacity ) [[ unlikely ]]
     {
         auto const new_fs_capacity{ std::max( target_capacity, current_fc_capacity * 3U / 2U ) };
