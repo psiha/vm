@@ -240,9 +240,9 @@ contiguous_storage::map_file( file_handle file, flags::named_object_construction
             }
             if
             (
-                ( on_disk_sizes.data_offset       != hdr.data_offset       ) ||
-                ( on_disk_sizes.client_hdr_size() != hdr.client_hdr_size() ) ||
-                ( on_disk_sizes.data_size          > mapping_size          )
+                ( match.data_offset       != hdr.data_offset       ) ||
+                ( match.client_hdr_size() != hdr.client_hdr_size() ) ||
+                ( match.data_size          > mapping_size          )
             ) [[ unlikely ]]
             {
                 // Corrupted file: bogus or unexpected on-disk header
