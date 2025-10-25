@@ -3001,7 +3001,8 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
             )
         };
         tgt_leaf = tgt_next_leaf;
-        verify_min_max( *tgt_leaf );
+        if ( !tgt_leaf->is_root() )
+            verify_min_max( *tgt_leaf );
 
         p_new_keys += consumed_source;
         inserted   += inserted_count;
