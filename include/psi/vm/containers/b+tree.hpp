@@ -2760,16 +2760,29 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
             if ( ( tgt_leaf->num_vals + src_leaf->num_vals ) <= tgt_leaf->max_values ) {
                 auto const src_size{ src_leaf->num_vals };
                 base::append_and_free( *tgt_leaf, *src_leaf );
+                if ( !tgt_leaf->is_root() )
+                    verify_min_max( *tgt_leaf );
                 if ( !tgt_leaf->right ) {
                     BOOST_ASSUME( so_far_consumed + src_size == total_size );
                     inserted += static_cast<size_type>( total_size - so_far_consumed );
                     break;
                 }
                 src_leaf = &right( *tgt_leaf );
-            } else {
-                base::bulk_append_fill_leaf_if_incomplete( *src_leaf );
+            } else
+            if ( 
+                !base::bulk_append_fill_leaf_if_incomplete( *src_leaf ) &&
+                ( tgt_leaf->num_vals < tgt_leaf->min_values ) // in case tgt_leaf is the root it too could be incomplete
+            ) { [[ unlikely ]]
+                BOOST_ASSUME( tgt_leaf->is_root() );
+                node_size_type const missing_keys( tgt_leaf->min_values - tgt_leaf->num_vals );
+                BOOST_ASSUME( tgt_leaf->num_vals + src_leaf->num_vals >= leaf_node::min_values * 2 );
+                this->move_keys( *src_leaf, 0, missing_keys, *tgt_leaf, tgt_leaf->num_vals );
+                std::shift_left( &src_leaf->keys[ 0 ], &src_leaf->keys[ src_leaf->num_vals ], missing_keys );
+                tgt_leaf->num_vals += missing_keys;
+                src_leaf->num_vals -= missing_keys;
             }
-
+            verify_min_max( *tgt_leaf );
+            verify_min_max( *src_leaf );
             inserted += static_cast<size_type>( total_size - so_far_consumed );
             return base::bulk_append( *tgt_leaf, *src_leaf, inserted, end_pos, begin_leaf );
         }
@@ -2785,6 +2798,9 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
             )
         };
         tgt_leaf = tgt_next_leaf;
+        if ( !tgt_leaf->is_root() ) {
+            verify_min_max( *tgt_leaf );
+        }
 
         // merge might have caused a relocation (by calling split_to_insert)
         // TODO use iter_pos directly
@@ -2796,7 +2812,9 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
 
         if ( p_new_keys.pos() == end_pos ) [[ unlikely ]] {
             BOOST_ASSERT( source_slot == p_new_keys.pos().node );
-            break;
+            BOOST_ASSERT( !src_leaf->right );
+            free( *src_leaf ); // see the comment below
+            break;     
         }
 
         if ( source_slot != p_new_keys.pos().node ) // have we moved to the next node?
@@ -2983,6 +3001,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
             )
         };
         tgt_leaf = tgt_next_leaf;
+        verify_min_max( *tgt_leaf );
 
         p_new_keys += consumed_source;
         inserted   += inserted_count;
