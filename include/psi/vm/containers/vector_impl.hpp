@@ -343,8 +343,10 @@ public:
             first = next_iters.in;
             cur   = next_iters.out;
         } else {
-            while ( ( first != last ) && ( cur != end_it ) )
-                *cur++ = *first++;
+            while ( ( first != last ) && ( cur != end_it ) ) {
+                *cur++ = *first;
+                ++first;
+            }
         }
 
         if ( first == last )
