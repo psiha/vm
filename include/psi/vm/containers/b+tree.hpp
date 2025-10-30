@@ -2768,8 +2768,12 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
                     break;
                 }
                 src_leaf = &right( *tgt_leaf );
-            } else
-            if ( 
+            }
+            // yes - an else if will not do here because of yet another edge
+            // case: when exactly two source leaves remain _and_ the one before
+            // last is merged/consume in the if above _and_ the last remaining
+            // one is incomplete
+            if (
                 !base::bulk_append_fill_leaf_if_incomplete( *src_leaf ) &&
                 ( tgt_leaf->num_vals < tgt_leaf->min_values ) // in case tgt_leaf is the root it too could be incomplete
             ) { [[ unlikely ]]
