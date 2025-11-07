@@ -1,6 +1,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2024.
+/// Copyright (c) Domagoj Saric 2010 - 2026.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.

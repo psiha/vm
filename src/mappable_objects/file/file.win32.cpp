@@ -1,6 +1,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2025.
+/// Copyright (c) Domagoj Saric 2010 - 2026.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -121,6 +121,7 @@ namespace detail
         // so we emulate those by creating a 2GB one and counting on:
         // - the NT kernel to be lazy and
         // - that amount to be 'enough for everyone'.
+        // https://learn.microsoft.com/en-gb/windows/win32/memory/memory-limits-for-windows-releases
         extern std::size_t const max_anonymous_pf_mapping_size{ align_up<std::size_t>( std::numeric_limits<std::int32_t>::max(), reserve_granularity ) };
 
         using desired_access_t = flags::mapping::access_rights::object;
