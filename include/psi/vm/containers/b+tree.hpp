@@ -2558,6 +2558,7 @@ bp_tree_impl<Key, Comparator>::merge
         // (in hope that a different target leaf, with available space, will be
         // selected next time)
         if (
+            !unique && // skip duplicates only for unique instances
             ( target_offset != target.num_vals ) &&
             eq( target.keys[ target_offset ], src_keys[ 0 ] )
         ) [[ unlikely ]]
@@ -2580,7 +2581,7 @@ bp_tree_impl<Key, Comparator>::merge
         (
             ( nxt_tgt_offset != tgt.num_vals ) && // necessary check because find assumes non-empty input
             ( nxt_src_offset != src.num_vals ) && // possible edge case where there was actually only one key left in the source
-            false                                  // not really worth it: the caller still has to call find on/for returns from all the other branches
+            false                                 // not really worth it: the caller still has to call find on/for returns from all the other branches
         )
         {
             nxt_tgt_offset = lower_bound( tgt, nxt_tgt_offset, key_const_arg{ src.keys[ nxt_src_offset ] } ).pos;
@@ -2595,16 +2596,15 @@ bp_tree_impl<Key, Comparator>::merge
     // size accordingly to maintain the sorted property).
     if ( target.right )
     {
-        auto const & right_delimiter    { right( target ).keys[ 0 ] };
-        auto const   less_than_right_pos{ lower_bound( src_keys, copy_size, key_const_arg{ right_delimiter } ) };
-        BOOST_ASSUME( !less_than_right_pos.exact_find );
-        if ( less_than_right_pos.pos != copy_size )
+        auto const & right_delimiter{ right( target ).keys[ 0 ] };
+        auto const   leq_right_pos  { lower_bound( src_keys, copy_size, key_const_arg{ right_delimiter } ) };
+        BOOST_ASSUME( !leq_right_pos.exact_find || !unique );
+        if ( leq_right_pos.pos != copy_size )
         {
-            BOOST_ASSUME( less_than_right_pos.pos < copy_size );
-            node_size_type const input_end_for_target( less_than_right_pos.pos + source_offset );
-            BOOST_ASSUME( input_end_for_target >  source_offset   );
-            BOOST_ASSUME( input_end_for_target <= source.num_vals );
-            copy_size = static_cast<node_size_type>( input_end_for_target - source_offset );
+            BOOST_ASSUME( leq_right_pos.pos                 >  0               );
+            BOOST_ASSUME( leq_right_pos.pos                 <  copy_size       );
+            BOOST_ASSUME( leq_right_pos.pos + source_offset <= source.num_vals );
+            copy_size = static_cast<node_size_type>( leq_right_pos.pos );
         }
     }
 
@@ -2620,7 +2620,7 @@ bp_tree_impl<Key, Comparator>::merge
     }
     else
     {
-        BOOST_ASSUME( copy_size + tgt_size <= leaf_node::max_values );
+        BOOST_ASSUME( tgt_size + copy_size <= leaf_node::max_values );
         // make room for merge: move existing values (beyond the insertion/merge
         // point) to the end of the buffer
         std::move_backward( &tgt_keys[ target_offset ], &tgt_keys[ tgt_size ], &tgt_keys[ tgt_size + copy_size ] );
@@ -2632,7 +2632,7 @@ bp_tree_impl<Key, Comparator>::merge
         ) };
         inserted_size   = static_cast<node_size_type>( new_tgt_size - tgt_size );
         tgt_size        = static_cast<node_size_type>( new_tgt_size            );
-        next_tgt_offset = target_offset + 1;
+        next_tgt_offset = target_offset + inserted_size;
     }
     if ( !target.is_root() )
         verify_min_max( target );
