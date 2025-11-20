@@ -96,9 +96,9 @@ public:
 
 protected:
 #if 0 // favoring CPU cache & branch prediction (linear scans) _vs_ TLB and disk access related issues, TODO make this configurable
-    static constexpr auto node_size{ page_size };
+    static constexpr std::uint16_t node_size{ page_size };
 #else
-    static constexpr auto node_size{ 256 };
+    static constexpr std::uint16_t node_size{ 256 };
 #endif
 
     using depth_t = std::uint8_t;
@@ -686,9 +686,9 @@ protected: // node types
         // TODO support for maps (i.e. keys+values)
         using value_type = Key;
 
-        static node_size_type constexpr storage_space{ node_size - align_up<node_size_type>( sizeof( node_header ), alignof( Key ) ) };
-        static node_size_type constexpr max_values   { storage_space / sizeof( Key ) };
-        static node_size_type constexpr min_values   { ihalf_ceil<max_values> };
+        static node_size_type constexpr storage_space = node_size - align_up( sizeof( node_header ), alignof( Key ) );
+        static node_size_type constexpr max_values    { storage_space / sizeof( Key ) };
+        static node_size_type constexpr min_values    { ihalf_ceil<max_values> };
 
         Key keys[ max_values ];
     }; // struct leaf_node
