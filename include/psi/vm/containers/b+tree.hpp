@@ -1295,7 +1295,7 @@ protected: // 'other'
             auto const root_node    { hdr.root_ };
             auto const previous_size{ hdr.size_ };
             if ( previous_size < leaf_node::min_values ) { BOOST_ASSUME( tgt_leaf.num_vals == leaf_node::min_values ); } // was filled minimally by a previous step to form a valid leaf_node
-            else                                         { BOOST_ASSUME( tgt_leaf.num_vals == previous_size         ); }
+            else                                         { BOOST_ASSUME( tgt_leaf.num_vals <= previous_size         ); } // may be less if src_leaf was incomplete and was filled from the root node
             hdr.root_ = hdr.first_leaf_ = hdr.last_leaf_ = {};
             hdr.size_ = hdr.depth_ = 0;
             BOOST_ASSUME( tgt_leaf.right == begin_leaf );
