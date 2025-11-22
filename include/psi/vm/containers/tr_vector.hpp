@@ -73,7 +73,7 @@ namespace detail
     }
 
     // From GCC docs: realloc-like functions have this property (malloc/restrict) as long as the old pointer is never referred to (including comparing it to the new pointer) after the function returns a non-NULL value.
-    [[ using gnu: cold, assume_aligned( guaranteed_alignment ), malloc, returns_nonnull ]]
+    [[ using gnu: cold, assume_aligned( guaranteed_alignment ), malloc ]]
 #ifdef _MSC_VER
     __declspec( restrict, noalias )
 #endif
@@ -85,7 +85,7 @@ namespace detail
         return new_allocation;
     }
 
-    [[ using gnu: cold, assume_aligned( guaranteed_alignment ), malloc, returns_nonnull ]]
+    [[ using gnu: cold, assume_aligned( guaranteed_alignment ), malloc, ]]
 #ifdef _MSC_VER
     __declspec( noalias, restrict )
 #endif
@@ -121,13 +121,13 @@ namespace detail
             BOOST_VERIFY( posix_memalign( &new_allocation, alignment, new_size ) == 0 );
         }
 #   endif
-        if ( !new_allocation ) [[ unlikely ]]
+        if ( ( new_allocation == nullptr ) && ( new_size != 0 ) ) [[ unlikely ]]
             throw_bad_alloc();
         return new_allocation;
     } // crt_aligned_realloc()
 
     template <std::uint8_t alignment>
-    [[ using gnu: assume_aligned( alignment ), malloc, returns_nonnull ]]
+    [[ using gnu: assume_aligned( alignment ), malloc ]]
 #ifdef _MSC_VER
     __declspec( noalias, restrict )
 #endif
@@ -401,6 +401,7 @@ private:
 
 public:
     using base::base;
+    // cannot use a defaulted constructor with default member initializers as they would overwrite the values stored by storage_init called by base()
     constexpr tr_vector() noexcept : p_array_{ nullptr }, size_{ 0 }, capacity_{ 0 } {}
     constexpr tr_vector( tr_vector const & other )
     {
@@ -413,10 +414,9 @@ public:
     constexpr tr_vector & operator=( tr_vector const & other ) { return ( *this = tr_vector( other ) ); }
     constexpr tr_vector & operator=( tr_vector && other ) noexcept
     {
-        std::swap( this->p_array_ , other.p_array_  );
-        std::swap( this->size_    , other.size_     );
-        std::swap( this->capacity_, other.capacity_ );
-        other.clear();
+        this->p_array_  = std::exchange( other.p_array_ , nullptr );
+        this->size_     = std::exchange( other.size_    , 0U      );
+        this->capacity_ = std::exchange( other.capacity_, 0U      );
         return *this;
     }
     constexpr ~tr_vector() noexcept { base::clear(); }
@@ -426,9 +426,9 @@ public:
     {
         if constexpr ( options.cache_capacity )
         {
-            BOOST_ASSUME( capacity_.value >= size_ );
-            BOOST_ASSERT( this->empty() || ( capacity_.value <= al::size( p_array_ ) ) );
-            return capacity_.value;
+            BOOST_ASSUME( capacity_ >= size_ );
+            BOOST_ASSERT( this->empty() || ( capacity_ <= al::size( p_array_ ) ) );
+            return capacity_;
         }
         else
         {
@@ -453,15 +453,22 @@ public:
     auto release() noexcept { auto data{ p_array_ }; mark_freed(); return data; }
 
 private: friend base;
-    [[ using gnu: cold, assume_aligned( alignment ), returns_nonnull ]]
+    [[ using gnu: cold, assume_aligned( alignment ) ]]
 #ifdef _MSC_VER
     __declspec( noalias )
 #endif
     constexpr value_type * storage_init( size_type const initial_size )
     {
-        p_array_ = al::allocate( initial_size );
-        size_    = initial_size;
-        update_capacity( initial_size );
+        if ( initial_size )
+        {
+            p_array_ = al::allocate( initial_size );
+            size_    = initial_size;
+            update_capacity( initial_size );
+        }
+        else
+        {
+            mark_freed();
+        }
         return data();
     }
     [[ using gnu: assume_aligned( alignment ), returns_nonnull ]]
@@ -523,10 +530,10 @@ private:
         if constexpr ( options.cache_capacity ) {
 #       if defined( _MSC_VER )
             BOOST_ASSERT( !requested_capacity || ( al::size( p_array_ ) == requested_capacity ) ); // see note in crt_alloc_size
-            capacity_.value = requested_capacity;
+            capacity_ = requested_capacity;
 #       else
-            capacity_.value = al::size( p_array_ );
-            BOOST_ASSUME( capacity_.value >= requested_capacity );
+            capacity_ = al::size( p_array_ );
+            BOOST_ASSUME( capacity_ >= requested_capacity );
 #       endif
         }
     }
@@ -534,6 +541,7 @@ private:
     void mark_freed() noexcept { std::memset( static_cast<void *>( this ), 0, sizeof( *this ) ); }
 
 private:
+    // see the note for the default constructor
     T * __restrict p_array_;
     size_type      size_;
 #ifdef _MSC_VER
@@ -541,7 +549,7 @@ private:
 #else
     [[ no_unique_address ]]
 #endif
-    detail::capacity<sz_t, options.cache_capacity> capacity_;
+    std::conditional_t<options.cache_capacity, sz_t, decltype( std::ignore )> capacity_;
 }; // struct tr_vector
 
 //------------------------------------------------------------------------------
