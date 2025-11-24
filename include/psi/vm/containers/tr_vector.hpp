@@ -407,7 +407,7 @@ public:
     {
         auto const data{ storage_init( other.size() ) };
         try { std::uninitialized_copy_n( other.data(), other.size(), data ); }
-        catch(...) { al::deallocate( data, capacity() ); throw; }
+        catch(...) { storage_free(); throw; }
     }
     constexpr tr_vector( tr_vector && other ) noexcept : p_array_{ other.p_array_ }, size_{ other.size_ }, capacity_{ other.capacity_ } { other.mark_freed(); }
 
@@ -419,7 +419,16 @@ public:
         this->capacity_ = std::exchange( other.capacity_, 0U      );
         return *this;
     }
-    constexpr ~tr_vector() noexcept { base::clear(); }
+    constexpr ~tr_vector() noexcept
+    {
+        // for non trivial types have/generate one check for both the destroy
+        // loop and call to free
+        if ( std::is_trivially_destructible_v<T> || p_array_ )
+        {
+            std::destroy_n( data(), size() );
+            storage_free();
+        }
+    }
 
     [[ nodiscard, gnu::pure ]] size_type size    () const noexcept { return size_; }
     [[ nodiscard, gnu::pure ]] size_type capacity() const noexcept
@@ -505,7 +514,7 @@ private: friend base;
 
     void storage_free() noexcept
     {
-        al::deallocate( data(), capacity() );
+        al::deallocate( data(), options.cache_capacity ? capacity() : 0 );
         mark_freed();
     }
 

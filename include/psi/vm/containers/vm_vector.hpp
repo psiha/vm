@@ -375,7 +375,7 @@ public:
     vm_vector(                    ) = default;
     vm_vector( vm_vector const &  ) = delete;
     vm_vector( vm_vector       && ) = default;
-   ~vm_vector(                    ) = default;
+   ~vm_vector(                    ) = default; // when/if !is_trivially_moveable a call to std::destroy must be added
 
     vm_vector & operator=( vm_vector &&      ) = default;
     vm_vector & operator=( vm_vector const & ) = default;
