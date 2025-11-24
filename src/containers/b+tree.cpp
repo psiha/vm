@@ -121,36 +121,76 @@ void bptree_base::update_right_sibling_link( node_header const & left_node, node
 
 void bptree_base::unlink_and_free_node( node_header & node, node_header & cached_left_sibling ) noexcept
 {
-    auto & left { cached_left_sibling };
-    auto & right{ node };
-    BOOST_ASSUME( left .right == slot_of( right ) );
-    BOOST_ASSUME( right.left  == slot_of( left  ) );
-    left.right = right.right;
-    update_right_sibling_link( left, right.left );
+    auto & left{ cached_left_sibling };
+    // update left sibling link
+    BOOST_ASSUME( left.right == slot_of( node ) );
+    BOOST_ASSUME( node.left  == slot_of( left ) );
+    left.right = node.right;
+    update_right_sibling_link( left, node.left );
     free( node );
+    BOOST_ASSERT( !node.parent );
+    BOOST_ASSERT( !node.left   );
+    BOOST_ASSERT( !node.right || slot_of( node ) == hdr().free_list_ );
 }
 [[ gnu::noinline ]]
 void bptree_base::update_leaf_list_ends( node_header & removed_leaf ) noexcept
 {
-    auto & first_leaf{ hdr().first_leaf_ };
-    auto &  last_leaf{ hdr().last_leaf_  };
+    auto & hdr{ this->hdr() };
     auto const slot{ slot_of( removed_leaf ) };
-    if ( slot == first_leaf ) [[ unlikely ]]
+    if ( slot == hdr.first_leaf_ ) [[ unlikely ]]
     {
         BOOST_ASSUME( !removed_leaf.left );
-        first_leaf = removed_leaf.right;
+        set_first_leaf( hdr, removed_leaf.right );
     }
-    if ( slot == last_leaf ) [[ unlikely ]]
+    if ( slot == hdr.last_leaf_ ) [[ unlikely ]]
     {
         BOOST_ASSUME( !removed_leaf.right );
-        last_leaf = removed_leaf.left;
+        set_last_leaf( hdr, removed_leaf.left );
     }
 }
-
+void bptree_base::set_first_leaf( header & /*cached*/hdr, node_slot const new_leftmost_leaf ) noexcept
+{
+    BOOST_ASSERT( new_leftmost_leaf ); // otherwise we are or are transitioning into the lone root state which should be handled separately
+    BOOST_ASSERT( !node( new_leftmost_leaf ).left ); // should have no left sibling
+    hdr.first_leaf_ = new_leftmost_leaf;
+}
+void bptree_base::set_last_leaf ( header & /*cached*/hdr, node_slot const new_rightmost_leaf ) noexcept
+{
+    BOOST_ASSERT( new_rightmost_leaf ); // otherwise we are or are transitioning into the lone root state which should be handled separately
+    BOOST_ASSERT( !node( new_rightmost_leaf ).right ); // should have no right sibling
+    hdr.last_leaf_ = new_rightmost_leaf;
+}
+[[ gnu::noinline ]]
 void bptree_base::unlink_and_free_leaf( node_header & leaf, node_header & cached_left_sibling ) noexcept
 {
+    // Ugh: cannot simply perform the two-liner _and_ use the set_*_leaf
+    // checking setters in update_leaf_list_ends as the conditions that they
+    // check for are fulfilled only at the later, unlink_and_free_node, step...
+    // so we have to duplicate&inline the update_leaf_list_ends logic.
+    // TODO: cleaner solution for this chicken&egg ughliness.
+#if 0
     update_leaf_list_ends( leaf );
     unlink_and_free_node( leaf, cached_left_sibling );
+#else
+    auto & hdr{ this->hdr() };
+    auto const  leftmost{ std::exchange( hdr.first_leaf_, node_slot{} ) };
+    auto const rightmost{ std::exchange( hdr.last_leaf_ , node_slot{} ) };
+    auto const slot{ slot_of( leaf ) };
+    node_header const leaf_hdr{ leaf };
+    unlink_and_free_node( leaf, cached_left_sibling );
+    hdr.first_leaf_ =  leftmost;
+    hdr.last_leaf_  = rightmost;
+    if ( slot == hdr.first_leaf_ ) [[ unlikely ]]
+    {
+        BOOST_ASSUME( !leaf_hdr.left );
+        set_first_leaf( hdr, leaf_hdr.right );
+    }
+    if ( slot == hdr.last_leaf_ ) [[ unlikely ]]
+    {
+        BOOST_ASSUME( !leaf_hdr.right );
+        set_last_leaf( hdr, leaf_hdr.left );
+    }
+#endif
 }
 
 
@@ -504,7 +544,8 @@ void bptree_base::free( node_header & node ) noexcept
     auto & free_list{ hdr.free_list_ };
     auto & free_node{ static_cast<struct free_node &>( node ) };
     auto const free_node_slot{ slot_of( free_node ) };
-    BOOST_ASSUME( free_node_slot != hdr.last_leaf_ ); // should have been handled in the dedicated overload
+    BOOST_ASSUME( free_node_slot != hdr.first_leaf_ ); // should have been handled in the dedicated overload
+    BOOST_ASSUME( free_node_slot != hdr.last_leaf_  ); // ditto
 #ifndef NDEBUG
     if ( free_node.left )
         BOOST_ASSERT( left( free_node ).right != free_node_slot );
