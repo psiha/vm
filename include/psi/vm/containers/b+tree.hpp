@@ -364,6 +364,9 @@ protected:
 
     void reset() noexcept;
 
+    void set_first_leaf( header &, node_slot ) noexcept;
+    void set_last_leaf ( header &, node_slot ) noexcept;
+
 private:
     auto header_data() noexcept { return vm::header_data<header>( nodes_.user_header_data() ); }
 
@@ -876,7 +879,7 @@ protected: // split_to_insert and its helpers
         BOOST_ASSUME( p_node->num_vals == mid );
 
         if ( std::is_same_v<N, leaf_node> && !p_new_node->right ) {
-            hdr().last_leaf_ = new_slot;
+            set_last_leaf( hdr(), new_slot );
         }
 
         // propagate the mid key to the parent
@@ -1179,8 +1182,8 @@ protected: // 'other'
     {
         BOOST_ASSUME( empty() );
         auto * hdr{ &this->hdr() };
-        hdr->first_leaf_ = begin_leaf;
-        hdr->last_leaf_  = end_leaf.node;
+        set_first_leaf( *hdr, begin_leaf    );
+        set_last_leaf ( *hdr, end_leaf.node );
         BOOST_ASSUME( hdr->depth_ == 0 );
         if ( begin_leaf == end_leaf.node ) [[ unlikely ]] // single-node-sized initial insert
         {
@@ -1199,7 +1202,7 @@ protected: // 'other'
         // appropriate else branch below but then we would also have to perform
         // the parent separator key update (like in bulk_append_tail) - so we
         // simply perform it beforehand.
-        std::ignore = bulk_append_fill_leaf_if_incomplete( first_root_right );
+        BOOST_VERIFY( bulk_append_fill_leaf_if_incomplete( first_root_right ) != incomplete_resolution::merged_and_freed );
         auto const first_unconnected_node{ first_root_right.right };
         new_root( begin_leaf, first_root_left.right, key_rv_arg{ /*mrmlj*/Key{ first_root_right.keys[ 0 ] } } ); // may invalidate references
         hdr = &this->hdr();
@@ -1207,7 +1210,7 @@ protected: // 'other'
         if ( first_unconnected_node ) { // first check if there are more than two nodes
             bulk_append_tail( &leaf( first_unconnected_node ), { hdr->root_, 1 } );
         }
-        BOOST_ASSUME( hdr->last_leaf_ == end_leaf.node );
+        BOOST_ASSUME( hdr->last_leaf_ == end_leaf.node || /*in case it got merged*/ hdr->free_list_ == end_leaf.node );
         BOOST_ASSUME( !!hdr->last_leaf_ );
         hdr->size_ = total_size;
     }
@@ -1244,6 +1247,7 @@ protected: // 'other'
         }
         else
         {
+            BOOST_ASSUME( !leaf.right );
             append_and_free( preceding, leaf );
             return incomplete_resolution::merged_and_freed;
         }
@@ -1259,10 +1263,15 @@ protected: // 'other'
             auto const next_src_slot{ src_leaf->right };
             // handle a super edge case: appending 2 nodes to a lone root such
             // that the three nodes together add up to only two nodes minimally
-            // filled (resulting in the last one having to be merged and freeed)
-            if ( bulk_append_fill_leaf_if_incomplete( *src_leaf ) == incomplete_resolution::merged_and_freed ) [[ unlikely ]] {
-                BOOST_ASSUME( !next_src_slot ); // this should only ever happen with the last input node
-                break;
+            // filled (resulting in the last one having to be merged and freed)
+            if ( next_src_slot ) {
+                verify_min_max( *src_leaf );
+            } else { // this should only ever happen with the last input node
+                auto const preceding{ src_leaf->left };
+                if ( bulk_append_fill_leaf_if_incomplete( *src_leaf ) == incomplete_resolution::merged_and_freed ) [[ unlikely ]] {
+                    src_leaf = &leaf( preceding );
+                    break;
+                }
             }
             auto & rightmost_parent{ inner( rightmost_parent_pos.node ) };
             BOOST_ASSUME( rightmost_parent_pos.next_insert_offset == rightmost_parent.num_vals );
@@ -1277,7 +1286,7 @@ protected: // 'other'
                 break;
             src_leaf = &leaf( next_src_slot );
         }
-        hdr().last_leaf_ = slot_of( *src_leaf );
+        set_last_leaf( hdr(), slot_of( *src_leaf ) );
     }
     [[ gnu::noinline ]]
     size_t bulk_append( node_header const & tgt_leaf, leaf_node & src_leaf, size_t const total_insertion_size, iter_pos const end_pos, node_slot const begin_leaf )
@@ -1549,7 +1558,6 @@ protected: // 'other'
         insrt_child( target, pos, child_slot, slot_of( target ) );
     }
 
-    [[ gnu::sysv_abi ]]
     void append_and_free( leaf_node & __restrict target, leaf_node & __restrict source ) noexcept
     {
         BOOST_ASSUME( target.num_vals + source.num_vals <= target.max_values );
@@ -1562,9 +1570,10 @@ protected: // 'other'
         //verify_min_max( target );
 		verify( target );
         unlink_and_free_node( source, target );
+        // does not assume that there is nothing right of source (e.g. could be
+        // an in-the-middle removal with underflow)
     }
 
-    [[ gnu::sysv_abi ]]
     void merge_right_into_left
     (
         inner_node & __restrict parent,
@@ -1582,7 +1591,7 @@ protected: // 'other'
         append_and_free( left, right );
         remove_from_parent( parent, parent_child_idx );
     }
-    [[ gnu::sysv_abi ]]
+
     void merge_right_into_left
     (
         inner_node & __restrict parent,
@@ -1905,7 +1914,8 @@ auto bptree_base_wkey<Key>::flatten( std::output_iterator<Key> auto const output
     BOOST_VERIFY( available_space >= this->size() );
     if ( empty() ) [[ unlikely ]]
         return output;
-    return flatten( first_leaf(), leaf( hdr().last_leaf_ ).right, output );
+    BOOST_ASSERT( !leaf( hdr().last_leaf_ ).right ); // broken last_leaf (should have null-right sibling)
+    return flatten( first_leaf(), {}, output );
 }
 
 template <typename Key>
