@@ -146,10 +146,10 @@ protected:
         [[ gnu::pure ]] bool is_root() const noexcept { return !parent; }
 
 #   ifndef __clang__ // https://github.com/llvm/llvm-project/issues/36032
-    protected: // merely to prevent slicing (in return-node-by-ref cases)
-        constexpr node_header            ( node_header const & ) noexcept = default;
-        constexpr node_header            ( node_header &&      ) noexcept = default;
-    public:
+        // merely to prevent slicing (in return-node-by-ref cases)
+        constexpr explicit node_header( node_header const & ) noexcept = default;
+        constexpr explicit node_header( node_header &&      ) noexcept = default;
+
         constexpr node_header            (                     ) noexcept = default;
         constexpr node_header & operator=( node_header &&      ) noexcept = default;
         constexpr node_header & operator=( node_header const & ) noexcept = default;
@@ -689,9 +689,9 @@ protected: // node types
         // TODO support for maps (i.e. keys+values)
         using value_type = Key;
 
-        static node_size_type constexpr storage_space = node_size - align_up( sizeof( node_header ), alignof( Key ) );
-        static node_size_type constexpr max_values    { storage_space / sizeof( Key ) };
-        static node_size_type constexpr min_values    { ihalf_ceil<max_values> };
+        static node_size_type constexpr storage_space{ static_cast<node_size_type>( node_size - align_up( sizeof( node_header ), alignof( Key ) ) ) };
+        static node_size_type constexpr max_values   { storage_space / sizeof( Key ) };
+        static node_size_type constexpr min_values   { ihalf_ceil<max_values> };
 
         Key keys[ max_values ];
     }; // struct leaf_node
