@@ -1202,7 +1202,7 @@ protected: // 'other'
         // appropriate else branch below but then we would also have to perform
         // the parent separator key update (like in bulk_append_tail) - so we
         // simply perform it beforehand.
-        BOOST_VERIFY( bulk_append_fill_leaf_if_incomplete( first_root_right ) != incomplete_resolution::merged_and_freed );
+        bulk_append_fill_leaf_if_incomplete( first_root_right );
         auto const first_unconnected_node{ first_root_right.right };
         new_root( begin_leaf, first_root_left.right, key_rv_arg{ /*mrmlj*/Key{ first_root_right.keys[ 0 ] } } ); // may invalidate references
         hdr = &this->hdr();
@@ -1220,13 +1220,29 @@ protected: // 'other'
     // 'academic' (for making sure that the performance/complexity guarantees
     // will be maintained) - the tree would operate correctly even without
     // maintaining that invariant (TODO make this an option).
-    enum struct [[ nodiscard ]] incomplete_resolution { not_incomplete = false, filled, merged_and_freed };
-    incomplete_resolution bulk_append_fill_leaf_if_incomplete( leaf_node & leaf ) noexcept
+    enum struct incomplete_resolution { not_incomplete = false, filled, merged_and_freed };
+    [[ nodiscard ]]
+    incomplete_resolution bulk_append_fill_leaf_if_incomplete( leaf_node * & p_leaf ) noexcept
     {
-        if ( leaf.num_vals < leaf.min_values ) [[ unlikely ]]
+        if ( p_leaf->num_vals < p_leaf->min_values ) [[ unlikely ]]
         {
-            return bulk_append_fill_incomplete_leaf( leaf );
+            auto const preceding{ p_leaf->left };
+            auto const result{ bulk_append_fill_incomplete_leaf( *p_leaf ) };
+            switch ( result ) {
+                case incomplete_resolution::filled: break;
+                case incomplete_resolution::merged_and_freed: p_leaf = &leaf( preceding ); break;
+                default: BOOST_UNREACHABLE();
+            }
+            return result;
         }
+        return incomplete_resolution::not_incomplete;
+    }
+    incomplete_resolution bulk_append_fill_leaf_if_incomplete( leaf_node & leaf ) noexcept
+    { // version for callers which known that merge&free should not happen
+        auto p_leaf{ &leaf };
+        auto const result{ bulk_append_fill_leaf_if_incomplete( p_leaf ) };
+        BOOST_ASSUME( result != incomplete_resolution::merged_and_freed );
+        BOOST_ASSUME( p_leaf == &leaf );
         return incomplete_resolution::not_incomplete;
     }
     [[ gnu::noinline ]]
@@ -1267,9 +1283,7 @@ protected: // 'other'
             if ( next_src_slot ) {
                 verify_min_max( *src_leaf );
             } else { // this should only ever happen with the last input node
-                auto const preceding{ src_leaf->left };
-                if ( bulk_append_fill_leaf_if_incomplete( *src_leaf ) == incomplete_resolution::merged_and_freed ) [[ unlikely ]] {
-                    src_leaf = &leaf( preceding );
+                if ( bulk_append_fill_leaf_if_incomplete( src_leaf ) == incomplete_resolution::merged_and_freed ) [[ unlikely ]] {
                     break;
                 }
             }
@@ -2761,14 +2775,20 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
         {
             auto const so_far_consumed{ p_new_keys.absolute_offset() };
             BOOST_ASSUME( so_far_consumed < total_size );
+            // at this point we know that all the remaining items will in fact
+            // be inserted (even for unique instances) since we are inserting
+            // right of/after all the existing data/items - so precalculate the
+            // inserted count - before all of the horrendous ifology below
+            inserted += static_cast<size_type>( total_size - so_far_consumed );
             // before proceeding with the bulk_append we have to:
             // - prepare the current src_leaf (so that it does not have a hole
             //   at the beginning)
             std::shift_left( &src_leaf->keys[ 0 ], &src_leaf->keys[ src_leaf->num_vals ], source_slot_offset );
             src_leaf->num_vals -= source_slot_offset;
+            // - link it with/append it to existing leaves
             base::link( *tgt_leaf, *src_leaf );
             // - fill it up if it is underflowed to make it a valid node (either
-            //   by merging with the left sibling, tgt_leaf, or 'borrowing' from
+            //   by merging with the left sibling (tgt_leaf) or 'borrowing' from
             //   the next src leaf, the right sibling)
             // (yes, in case src_leaf is really incomplete, the shift_left above
             // is theoretically redundant, i.e. could be merged with the shifts/
@@ -2780,8 +2800,7 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
                     verify_min_max( *tgt_leaf );
                 if ( !tgt_leaf->right ) {
                     BOOST_ASSUME( so_far_consumed + src_size == total_size );
-                    inserted += static_cast<size_type>( total_size - so_far_consumed );
-                    break;
+                    break; // to the trailing size_ update & return
                 }
                 src_leaf = &right( *tgt_leaf );
             }
@@ -2789,8 +2808,21 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
             // case: when exactly two source leaves remain _and_ the one before
             // last is merged/consumed in the if above _and_ the last remaining
             // one is incomplete
+            auto const fill_result{ base::bulk_append_fill_leaf_if_incomplete( src_leaf ) };
+            if ( fill_result == base::incomplete_resolution::merged_and_freed ) {
+                BOOST_ASSUME( tgt_leaf == src_leaf );
+                if ( !tgt_leaf->right ) [[ likely ]] {
+                    break; // to the trailing size_ update & return
+                } else {
+                    // we should actually never reach here: since
+                    // bulk_copied_input input is generated to have all nodes
+                    // full (except possibly the last one)
+                    src_leaf = &right( *tgt_leaf );
+                    BOOST_UNREACHABLE();
+                }
+            } else
             if (
-                ( base::bulk_append_fill_leaf_if_incomplete( *src_leaf ) == base::incomplete_resolution::not_incomplete ) &&
+                ( fill_result == base::incomplete_resolution::not_incomplete ) &&
                 ( tgt_leaf->num_vals < tgt_leaf->min_values ) // in case tgt_leaf is the root it too could be incomplete
             ) { [[ unlikely ]]
                 BOOST_ASSUME( tgt_leaf->is_root() );
@@ -2803,7 +2835,7 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
             }
             verify_min_max( *tgt_leaf );
             verify_min_max( *src_leaf );
-            inserted += static_cast<size_type>( total_size - so_far_consumed );
+           
             return base::bulk_append( *tgt_leaf, *src_leaf, inserted, end_pos, begin_leaf );
         }
         // TODO in-the-middle partial bulk-inserts
@@ -2979,7 +3011,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
                     prev_src_copy_node = tgt_slot; //...mrmlj...so that it can be used to fetch last_src_copy_node below
                     // TODO examine if we need the logic involving
                     // append_and_free here as well (as in insert())
-                    BOOST_VERIFY( this->bulk_append_fill_leaf_if_incomplete( src_leaf_copy ) != base::incomplete_resolution::merged_and_freed );
+                    this->bulk_append_fill_leaf_if_incomplete( src_leaf_copy );
                 }
                 else
                 {
