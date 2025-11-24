@@ -958,13 +958,13 @@ protected: // 'other'
             BOOST_ASSUME( !leaf.right );
             if ( leaf.num_vals == 0 )
             {
-                root_ = {};
-                free( leaf );
+                BOOST_ASSUME( hdr.first_leaf_ == root_ );
+                BOOST_ASSUME( hdr.last_leaf_  == root_ );
+                root_ = hdr.first_leaf_ = hdr.last_leaf_ = {};
+                bptree_base::free( leaf );
                 --depth_;
                 BOOST_ASSUME( depth_ == 0 );
                 BOOST_ASSUME( hdr.size_ == 1 );
-                BOOST_ASSUME( !hdr.first_leaf_ );
-                BOOST_ASSUME( !hdr.last_leaf_  );
                 next_pos = {}; // empty end_pos
             }
         }
