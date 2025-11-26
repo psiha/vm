@@ -95,10 +95,10 @@ public:
     bool has_attached_storage() const noexcept { return nodes_.has_attached_storage(); }
 
 protected:
-#if 0 // favoring CPU cache & branch prediction (linear scans) _vs_ TLB and disk access related issues, TODO make this configurable
-    static constexpr std::uint16_t node_size{ page_size };
+#if PSI_VM_BT_PAGE_SIZED_NODES // TODO make this properly configurable (a template parameter)
+    static constexpr std::uint16_t node_size{ page_size }; // favoring TLB and disk access related issues
 #else
-    static constexpr std::uint16_t node_size{ 256 };
+    static constexpr std::uint16_t node_size{ 256 }; // favoring CPU cache & branch prediction (linear scans w/ trivial data and comparators)
 #endif
 
     using depth_t = std::uint8_t;
@@ -1127,9 +1127,9 @@ protected: // 'other'
                 auto const size_to_copy{ static_cast<node_size_type>( std::min<size_type>( leaf.max_values, input_size - count ) ) };
                 BOOST_ASSUME( size_to_copy > 0 );
                 std::copy_n( p_keys, size_to_copy, leaf.keys );
+                std::advance( p_keys, size_to_copy );
                 leaf.num_vals  = size_to_copy;
                 count         += size_to_copy;
-                p_keys        += size_to_copy;
                 *p_node++      = &leaf;
                 BOOST_ASSUME( hdr().free_node_count_ ); // manual/local free node accounting
                 --this->hdr().free_node_count_;
@@ -2100,7 +2100,8 @@ public:
     [[ nodiscard ]] bool            contains   ( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return contains_impl   ( pass_in_reg{ key } ); }
     [[ nodiscard ]] const_iterator  find_after ( const_iterator const pos, LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return find_after( pos, pass_in_reg{ key } ); }
 
-    size_type merge( bp_tree_impl && other, bool unique );
+    size_type merge( bp_tree_impl       && other, bool unique );
+    size_type merge( bp_tree_impl const &  other, bool unique );
 
     void swap( bp_tree_impl & other ) noexcept { base::swap( other ); }
 
@@ -2898,7 +2899,7 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
 
 template <typename Key, typename Comparator>
 bp_tree_impl<Key, Comparator>::size_type
-bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
+bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const unique )
 {
     // This function follows nearly the same logic as bulk insert (consult it
     // for more comments), the main differences being:
@@ -2913,13 +2914,13 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
     //      being modified.
     // TODO further deduplicate with insert
 
+    // (this is a refurbished move-merge implementation that only had its
+    // explicitly other-destructive calls removed - good enough while only
+    // trivial types are supported - TODO calls like move_keys will need to be
+    // changed also to support non trivial types)
+
     if ( other.empty() )
         return 0;
-
-    if ( this->empty() ) {
-        swap( other );
-        return size();
-    }
 
     auto const total_size{ other.size() };
     // We do not know the state (i.e. the fill factor) of the nodes from 'other'
@@ -3036,9 +3037,6 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
             inserted += static_cast<size_type>( total_size - so_far_consumed );
             auto const last_src_copy_node{ this->leaf( prev_src_copy_node ).right };
             iter_pos const end_pos{ last_src_copy_node, src_leaf->num_vals };
-            // other no longer needed (fully copied from)
-            // see the note at the end of the function
-            other.reset();
             return base::bulk_append( *tgt_leaf, this->leaf( src_copy_begin ), inserted, end_pos, src_copy_begin );
         }
         // TODO in-the-middle partial bulk-inserts
@@ -3073,6 +3071,22 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
 
     BOOST_ASSUME( inserted <= total_size );
     this->hdr().size_ += inserted;
+
+    return inserted;
+} // bp_tree_impl::merge()
+
+template <typename Key, typename Comparator>
+bp_tree_impl<Key, Comparator>::size_type
+bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
+{
+    if ( this->empty() ) {
+        swap( other );
+        return size();
+    }
+
+    // does not actually move-out values - makes no difference currently (with
+    // only trivial types support) - TODO
+    auto const inserted{ merge( static_cast<bp_tree_impl const &>( other ), unique ) };
     // TODO significant modifications will be required here when adding support
     // for non trivial types: avoid redundant destruction of moved out values -
     // make sure all are moved out or in-situ reset/destroyed (in case of
@@ -3081,8 +3095,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
     static_assert( std::is_trivially_destructible_v<Key> );
     other.reset();
     return inserted;
-} // bp_tree_impl::merge()
-
+}
 
 template <typename Key, bool unique, typename Comparator = std::less<>>
 class bp_tree
@@ -3141,7 +3154,8 @@ public:
     size_type insert( std::initializer_list<T> const  keys ) { return impl_base::insert( this->bulk_insert_prepare( std::ranges::subrange( keys       ) ), unique ); }
     size_type insert( std::ranges::range auto const & keys ) { return impl_base::insert( this->bulk_insert_prepare( std::ranges::subrange( keys       ) ), unique ); }
 
-    size_type merge( bp_tree && other ) { return impl_base::merge( std::move( other ), unique ); }
+    size_type merge( bp_tree       && other ) { return impl_base::merge( std::move( other ), unique ); }
+    size_type merge( bp_tree const &  other ) { return impl_base::merge(            other  , unique ); }
 
     [[ nodiscard ]] [[ gnu::sysv_abi, gnu::noinline ]]
     bool erase( key_const_arg key ) noexcept
