@@ -1317,8 +1317,13 @@ protected: // 'other'
             BOOST_ASSUME( hdr.last_leaf_  == hdr.root_ );
             auto const root_node    { hdr.root_ };
             auto const previous_size{ hdr.size_ };
+#       if 0 // these need not hold as the root could have been filled up beyond
+            // the minimum prior to any bulk_append_fill_leaf_if_incomplete-like
+            // call (e.g. if
+            // previous_size + a_source_leaf.num_vals < leaf_node::max_values)
             if ( previous_size < leaf_node::min_values ) { BOOST_ASSUME( tgt_leaf.num_vals == leaf_node::min_values ); } // was filled minimally by a previous step to form a valid leaf_node
             else                                         { BOOST_ASSUME( tgt_leaf.num_vals <= previous_size         ); } // may be less if src_leaf was incomplete and was filled from the root node
+#       endif
             hdr.root_ = hdr.first_leaf_ = hdr.last_leaf_ = {};
             hdr.size_ = hdr.depth_ = 0;
             BOOST_ASSUME( tgt_leaf.right == begin_leaf );
@@ -2565,7 +2570,7 @@ bp_tree_impl<Key, Comparator>::merge
     verify( target );
     BOOST_ASSUME( source_offset < source.num_vals );
     node_size_type       input_length   ( source.num_vals   - source_offset   );
-    node_size_type const available_space( target.max_values - target.num_vals );
+    node_size_type const available_space( target.max_values - target.num_vals ); // recheck: do we need a different value for roots here?
     auto   const src_keys{ &source.keys[ source_offset ] };
     auto &       tgt_keys{  target.keys };
     BOOST_ASSERT
@@ -3000,7 +3005,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
                 auto const tgt_slot{ slot_of( *tgt_leaf ) };
                 auto & src_leaf_copy{ this->template new_node<leaf_node>() };
                 tgt_leaf = &leaf( tgt_slot );
-                if ( !src_copy_begin )
+                if ( !src_copy_begin ) [[ unlikely ]]
                 {
                     src_copy_begin = slot_of( src_leaf_copy );
                     this->move_keys( *src_leaf, source_slot_offset, src_leaf->num_vals, src_leaf_copy, 0 );
