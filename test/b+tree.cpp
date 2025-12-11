@@ -319,15 +319,15 @@ TEST( bp_tree, insert_presorted )
 
     // Test 3: insert_presorted with interleaved data
     {
-        bptree_set<int> bpt;
+        bptree_set<unsigned> bpt;
         bpt.map_memory( test_size );
 
-        tr_vector<int> odds{ test_size / 2, no_init };
+        tr_vector<unsigned> odds{ test_size / 2, no_init };
         for ( auto i{ 0U }; i < test_size / 2; ++i )
             odds[ i ] = i * 2 + 1;
         EXPECT_EQ( bpt.insert_presorted( odds ), odds.size() );
 
-        tr_vector<int> evens{ test_size / 2, no_init };
+        tr_vector<unsigned> evens{ test_size / 2, no_init };
         for ( auto i{ 0U }; i < test_size / 2; ++i )
             evens[ i ] = i * 2;
         EXPECT_EQ( bpt.insert_presorted( evens ), evens.size() );
@@ -388,7 +388,7 @@ TEST( bp_tree, insert_merge_at_node_boundary )
     // returning tgt_next_offset == tgt_leaf->num_vals, which previously could
     // cause issues in find_next_insertion_point.
     
-    bptree_set<int> bpt;
+    bptree_set<unsigned> bpt;
     bpt.map_memory();
 
     // First, insert values that will create a specific tree structure.
@@ -400,7 +400,7 @@ TEST( bp_tree, insert_merge_at_node_boundary )
     auto constexpr max_per_node{ decltype(bpt)::leaf_node::max_values };
 
     // Insert initial sorted data that fills exactly one node
-    std::array<int, max_per_node> initial_data;
+    std::array<unsigned, max_per_node> initial_data;
     for ( auto i{ 0U }; i < max_per_node; ++i )
         initial_data[ i ] = i * 2; // even numbers
 
@@ -409,7 +409,7 @@ TEST( bp_tree, insert_merge_at_node_boundary )
     // Now insert interleaved values that will:
     // 1. Fill up the first node to max capacity
     // 2. Need to continue into a new/split node
-    std::array<int, max_per_node> interleaved_data;
+    std::array<unsigned, max_per_node> interleaved_data;
     for ( auto i{ 0U }; i < max_per_node; ++i )
         interleaved_data[ i ] = i * 2 + 1; // odd numbers
 
@@ -430,19 +430,19 @@ TEST( bp_tree, insert_presorted_merge_at_node_boundary )
 {
     // Same test but for insert_presorted
     
-    bptree_set<int> bpt;
+    bptree_set<unsigned> bpt;
     bpt.map_memory();
 
     auto constexpr max_per_node{ decltype(bpt)::leaf_node::max_values };
     
     // Insert initial sorted data
-    std::array<int, max_per_node> initial_data;
+    std::array<unsigned, max_per_node> initial_data;
     for ( auto i{ 0U }; i < max_per_node; ++i )
         initial_data[ i ] = i * 2; // even numbers
     EXPECT_EQ( bpt.insert_presorted( initial_data ), initial_data.size() );
     
     // Insert interleaved presorted values
-    std::array<int, max_per_node> interleaved_data;
+    std::array<unsigned, max_per_node> interleaved_data;
     for ( auto i{ 0U }; i < max_per_node; ++i )
         interleaved_data[ i ] = i * 2 + 1; // odd numbers
     EXPECT_EQ( bpt.insert_presorted( interleaved_data ), interleaved_data.size() );
@@ -460,26 +460,26 @@ TEST( bp_tree, insert_triggers_multiple_splits )
     // Test that exercises repeated splits during bulk insert,
     // ensuring node boundary handling works correctly across multiple splits
     
-    bptree_set<int> bpt;
+    bptree_set<unsigned> bpt;
     bpt.map_memory();
 
     auto constexpr max_per_node{ decltype(bpt)::leaf_node::max_values };
     auto const test_size{ max_per_node * 5 }; // Enough to cause multiple splits
     
     // First insert: every 3rd number
-    tr_vector<int> first_batch;
-    for ( int i = 0; i < test_size; i += 3 )
+    tr_vector<unsigned> first_batch;
+    for ( auto i{ 0U }; i < test_size; i += 3 )
         first_batch.push_back( i );
 
     EXPECT_EQ( bpt.insert( first_batch ), first_batch.size() );
-    
+
     // Second insert: numbers that interleave with first batch
-    tr_vector<int> second_batch;
-    for ( int i = 0; i < test_size; ++i ) {
+    tr_vector<unsigned> second_batch;
+    for ( auto i{ 0U }; i < test_size; ++i ) {
         if ( i % 3 != 0 )
             second_batch.push_back( i );
     }
-    
+
     EXPECT_EQ( bpt.insert( second_batch ), second_batch.size() );
     
     // Verify correctness

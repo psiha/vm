@@ -985,10 +985,13 @@ private:
         auto const elements_to_move{ static_cast<size_type>( current_size - position_index ) };
         if constexpr ( is_trivially_moveable<value_type> )
         {
+            PSI_WARNING_DISABLE_PUSH()
+            PSI_WARNING_CLANG_DISABLE( -Wnontrivial-memcall ) // e.g. for trivial_abi std::string
             // does not use is_trivially_moveable/trivial_abi and is incorrect
             // (i.e. an uninitialized_move_backwards is required)
             //std::uninitialized_move_n( &data[ position_index ], elements_to_move, &data[ position_index + n ] );
             std::memmove( &data[ position_index + n ], &data[ position_index ], elements_to_move * sizeof( *data ) );
+            PSI_WARNING_DISABLE_POP()
         }
         else
         {
