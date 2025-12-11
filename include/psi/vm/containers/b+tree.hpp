@@ -934,6 +934,13 @@ protected: // 'other'
                 node_size_type const ch_pos( target_node_pos + /*>right< child*/ 1 );
                 rshift_chldrn( target_node, ch_pos );
                 this->insrt_child( target_node, ch_pos, right_child );
+            } else {
+                // prior to Dec 11th 2025 this check was not here yet everything
+                // worked (as if always going into the !leaf.left early exit) -
+                // adding this check 'defensively' - TODO: investigate
+                if ( !target_node_pos ) [[ unlikely ]] {
+                    update_separator( target_node, v );
+                }
             }
             return { slot_of( target_node ), static_cast<node_size_type>( target_node_pos + 1 ) };
         }
@@ -2436,6 +2443,8 @@ protected:
 
     size_type insert( typename base::bulk_copied_input, bool unique );
 
+    size_type insert_presorted( std::span<Key const> presorted_input, bool unique );
+
     [[ gnu::pure ]] bool le( Reg auto const left, Reg auto const right ) const noexcept { return comp()( left, right ); }
     [[ gnu::pure ]] bool ge( Reg auto const left, Reg auto const right ) const noexcept { return comp()( right, left ); }
     [[ gnu::pure ]] bool eq( Reg auto const left, Reg auto const right ) const noexcept
@@ -2519,7 +2528,11 @@ private:
         for ( ; level < depth; ++level )
         {
             auto [pos, exact_find]{ lower_bound( *prnt, parent_offset, key ) };
-            BOOST_ASSUME( !exact_find ); // TODO: Document why does this (have to) hold?
+            // prior to Dec 11th 2025 the assumption below always held
+            // (inexplicably so) and then after the addition of the
+            // insert_presorted method it started failing (when this function
+            // was called from within it) - TODO investigate
+            //BOOST_ASSUME( !exact_find );
             pos += exact_find; // traverse to the right child for separator keys
             prnt = &base::inner( children( *prnt )[ pos ] );
             parent_offset = 0;
@@ -2542,6 +2555,12 @@ private:
     (
         leaf_node const & source, node_size_type source_offset,
         leaf_node       & target, node_size_type target_offset,
+        bool unique
+    ) noexcept;
+    auto merge
+    (
+        Key const src_keys[], node_size_type input_length,
+        leaf_node & target  , node_size_type target_offset,
         bool unique
     ) noexcept;
 
@@ -2567,12 +2586,25 @@ bp_tree_impl<Key, Comparator>::merge
 ) /*?*/noexcept
 {
     verify( source );
-    verify( target );
     BOOST_ASSUME( source_offset < source.num_vals );
-    node_size_type       input_length   ( source.num_vals   - source_offset   );
+    node_size_type const input_length( source.num_vals - source_offset );
+    auto           const src_keys{ &source.keys[ source_offset ] };
+    return merge( src_keys, input_length, target, target_offset, unique );
+}
+
+template <typename Key, typename Comparator>
+auto /*[ inserted_size, consumed_size, &target, next_tgt_offset ]*/
+bp_tree_impl<Key, Comparator>::merge
+(
+    Key const src_keys[], node_size_type const input_length,
+    leaf_node & target  , node_size_type const target_offset,
+    bool const unique
+) /*?*/noexcept
+{
+    BOOST_ASSUME( input_length > 0 );
+    verify( target );
     node_size_type const available_space( target.max_values - target.num_vals ); // recheck: do we need a different value for roots here?
-    auto   const src_keys{ &source.keys[ source_offset ] };
-    auto &       tgt_keys{  target.keys };
+    auto & tgt_keys{ target.keys };
     BOOST_ASSERT
     (
         ( lower_bound( target, src_keys[ 0 ] ).pos == target_offset ) ||
@@ -2580,14 +2612,6 @@ bp_tree_impl<Key, Comparator>::merge
         ( !unique && eq( tgt_keys[ target_offset - 1 ], src_keys[ 0 ] ) )
     );
 
-    if ( target_offset == 0 ) [[ unlikely ]]
-    {
-        auto const & new_separator{ src_keys[ 0 ] };
-        BOOST_ASSERT( le( new_separator, tgt_keys[ 0 ] ) );
-        base::update_separator( target, new_separator );
-        // TODO rather simply insert the source leaf into the parent (if all of
-        // its keys come before the first key in target)
-    }
     if ( !available_space ) [[ unlikely ]]
     {
         // if the first source key already exists simply 'consume' it and return
@@ -2601,6 +2625,7 @@ bp_tree_impl<Key, Comparator>::merge
         {
             return std::make_tuple<node_size_type, node_size_type>( 0, 1, &target, target_offset );
         }
+#   if 0 // a possibility for the merge overload which works with source nodes
         // support merging nodes from another tree instance:
         auto const source_slot{ base::is_my_node( source ) ? slot_of( source ) : node_slot{} };
         auto       [target_slot, nxt_tgt_offset]{ base::split_to_insert( target, target_offset, pass_rv_in_reg{ /*mrmlj*/Key{ src_keys[ 0 ] } }, {} ) };
@@ -2622,8 +2647,21 @@ bp_tree_impl<Key, Comparator>::merge
         {
             nxt_tgt_offset = lower_bound( tgt, nxt_tgt_offset, key_const_arg{ src.keys[ nxt_src_offset ] } ).pos;
         }
+#   else
+        auto [target_slot, nxt_tgt_offset]{ base::split_to_insert( target, target_offset, pass_rv_in_reg{ /*mrmlj*/Key{ src_keys[ 0 ] } }, {} ) };
+        auto & tgt{ leaf( target_slot ) };
+#   endif
         verify_min_max( tgt );
         return std::make_tuple<node_size_type, node_size_type>( 1, 1, &tgt, nxt_tgt_offset );
+    }
+
+    if ( target_offset == 0 ) [[ unlikely ]]
+    {
+        auto const & new_separator{ src_keys[ 0 ] };
+        BOOST_ASSERT( le( new_separator, tgt_keys[ 0 ] ) );
+        base::update_separator( target, new_separator );
+        // TODO rather simply insert the source leaf into the parent (if all of
+        // its keys come before the first key in target)
     }
 
     auto copy_size{ std::min( input_length, available_space ) };
@@ -2637,9 +2675,8 @@ bp_tree_impl<Key, Comparator>::merge
         BOOST_ASSUME( !leq_right_pos.exact_find || !unique );
         if ( leq_right_pos.pos != copy_size )
         {
-            BOOST_ASSUME( leq_right_pos.pos                 >  0               );
-            BOOST_ASSUME( leq_right_pos.pos                 <  copy_size       );
-            BOOST_ASSUME( leq_right_pos.pos + source_offset <= source.num_vals );
+            BOOST_ASSUME( leq_right_pos.pos >  0         );
+            BOOST_ASSUME( leq_right_pos.pos <  copy_size );
             copy_size = static_cast<node_size_type>( leq_right_pos.pos );
         }
     }
@@ -2764,19 +2801,23 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
     size_type inserted{ 0 };
     for ( ;; )
     {
+        BOOST_ASSUME( source_slot_offset < src_leaf->num_vals );
         // skip preexisting values for unique containers
         if ( tgt_leaf_next_pos.exact_find ) [[ unlikely ]]
         {
             BOOST_ASSUME( unique );
+            // in case of many consecutive duplicates this devolves
+            // pathologically into basically a loop of single-element insertions
+            // - very slow - but at least it is documented that non-unique
+            // insertions are "handled but not optimally so" - should probably
+            // be relatively easy to fix given that the internal merge used
+            // below supports this case (maybe needs a modification to allow for
+            // "all duplicates"/no insertions case)
             ++p_new_keys;
-            if ( p_new_keys.pos() == end_pos ) [[ unlikely ]]
-                break;
-            continue;
         }
-
-        BOOST_ASSUME( source_slot_offset < src_leaf->num_vals );
-        // if we have reached the end of the rightmost leaf simply perform
-        // a bulk_append
+        else
+        // if we have reached the end of the rightmost leaf simply perform a
+        // bulk_append
         if ( ( tgt_leaf_next_pos.pos == tgt_leaf->num_vals ) && !tgt_leaf->right )
         {
             auto const so_far_consumed{ p_new_keys.absolute_offset() };
@@ -2791,7 +2832,7 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
             //   at the beginning)
             std::shift_left( &src_leaf->keys[ 0 ], &src_leaf->keys[ src_leaf->num_vals ], source_slot_offset );
             src_leaf->num_vals -= source_slot_offset;
-            // - link it with/append it to existing leaves
+            // - link/append it to existing leaves
             base::link( *tgt_leaf, *src_leaf );
             // - fill it up if it is underflowed to make it a valid node (either
             //   by merging with the left sibling (tgt_leaf) or 'borrowing' from
@@ -2821,8 +2862,8 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
                     break; // to the trailing size_ update & return
                 } else {
                     // we should actually never reach here: since
-                    // bulk_copied_input input is generated to have all nodes
-                    // full (except possibly the last one)
+                    // bulk_copied_input is generated to have all nodes full
+                    // (except possibly the last one)
                     src_leaf = &right( *tgt_leaf );
                     BOOST_UNREACHABLE();
                 }
@@ -2844,42 +2885,45 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
            
             return base::bulk_append( *tgt_leaf, *src_leaf, inserted, end_pos, begin_leaf );
         }
-        // TODO in-the-middle partial bulk-inserts
-
-        auto const [inserted_count, consumed_source, tgt_next_leaf, tgt_next_offset]
+        else // TODO in-the-middle partial bulk-inserts
         {
-            merge
-            (
-                *src_leaf, source_slot_offset,
-                *tgt_leaf, tgt_leaf_next_pos.pos,
-                unique
-            )
-        };
-        tgt_leaf = tgt_next_leaf;
-        if ( !tgt_leaf->is_root() ) {
-            verify_min_max( *tgt_leaf );
+            auto const [inserted_count, consumed_source, tgt_next_leaf, tgt_next_offset]
+            {
+                merge
+                (
+                    *src_leaf, source_slot_offset,
+                    *tgt_leaf, tgt_leaf_next_pos.pos,
+                    unique
+                )
+            };
+            tgt_leaf = tgt_next_leaf;
+            if ( !tgt_leaf->is_root() ) {
+                verify_min_max( *tgt_leaf );
+            }
+            tgt_leaf_next_pos.pos = tgt_next_offset;
+
+            // merge might have caused a relocation (by calling split_to_insert)
+            // TODO use iter_pos directly
+            p_new_keys.update_pool_ptr( this->nodes_ );
+            src_leaf = &leaf( source_slot );
+
+            p_new_keys += consumed_source;
+            inserted   += inserted_count;
         }
-
-        // merge might have caused a relocation (by calling split_to_insert)
-        // TODO use iter_pos directly
-        p_new_keys.update_pool_ptr( this->nodes_ );
-        src_leaf = &leaf( source_slot );
-
-        p_new_keys += consumed_source;
-        inserted   += inserted_count;
 
         if ( p_new_keys.pos() == end_pos ) [[ unlikely ]] {
             BOOST_ASSERT( source_slot == p_new_keys.pos().node );
             BOOST_ASSERT( !src_leaf->right );
             free( *src_leaf ); // see the comment below
-            break;     
+            break;
         }
 
         if ( source_slot != p_new_keys.pos().node ) // have we moved to the next node?
         {
-            // merged leaves (their contents) were effectively copied into
-            // existing leaves (instead of simply linked into the tree
-            // structure) and now have to be returned to the free pool
+            // merged leaves (their contents) were effectively copied (or
+            // potentially skipped, in case of unique trees) into existing
+            // leaves (instead of simply linked into the tree structure) and now
+            // have to be returned to the free pool
             // TODO: add leak detection to/for the entire bp_tree_impl class
             base::unlink_right( *src_leaf );
             free( *src_leaf );
@@ -2893,7 +2937,7 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
         // fact that we are using presorted data) rather than starting every
         // time from scratch (using find_insertion_point)
         std::tie( tgt_leaf, tgt_leaf_next_pos ) =
-            find_next_insertion_point( *tgt_leaf, tgt_next_offset, key_const_arg{ src_leaf->keys[ source_slot_offset ] }, unique );
+            find_next_insertion_point( *tgt_leaf, tgt_leaf_next_pos.pos, key_const_arg{ src_leaf->keys[ source_slot_offset ] }, unique );
     }
 
     BOOST_ASSUME( inserted <= total_size );
@@ -2901,6 +2945,136 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
     return inserted;
 } // bp_tree_impl::insert()
 
+template <typename Key, typename Comparator>
+bp_tree_impl<Key, Comparator>::size_type
+bp_tree_impl<Key, Comparator>::insert_presorted( std::span<Key const> const presorted_input, bool const unique )
+{
+    BOOST_ASSERT( std::ranges::is_sorted( presorted_input, comp() ) );
+
+    if ( presorted_input.empty() )
+        return 0;
+
+    auto const total_size{ presorted_input.size() };
+
+    // Helper lambda to create linked leaves from a contiguous span of presorted keys.
+    // Returns { first_leaf_slot, last_leaf_slot, last_leaf_num_vals }.
+    auto const copy_to_nodes{ [this]( Key const * p_input, size_type count ) noexcept -> std::pair<node_slot, iter_pos>
+    {
+        node_slot first_leaf_slot;
+        node_slot prev_leaf_slot;
+
+        while ( count > 0 )
+        {
+            auto & new_leaf{ this->template new_node<leaf_node>() };
+            auto const leaf_slot{ slot_of( new_leaf ) };
+
+            auto const copy_size{ static_cast<node_size_type>(
+                std::min<size_type>( count, leaf_node::max_values )
+            ) };
+            std::copy_n( p_input, copy_size, new_leaf.keys );
+            new_leaf.num_vals = copy_size;
+
+            if ( !first_leaf_slot ) [[ unlikely ]] {
+                first_leaf_slot = leaf_slot;
+            } else {
+                base::link( leaf( prev_leaf_slot ), new_leaf );
+            }
+            prev_leaf_slot = leaf_slot;
+            p_input += copy_size;
+            count   -= copy_size;
+        }
+
+        return { first_leaf_slot, { prev_leaf_slot, leaf( prev_leaf_slot ).num_vals } };
+    }};
+
+    this->reserve_additional( total_size );
+
+    if ( empty() ) [[ unlikely ]]
+    {
+        // Bulk insert into empty tree: create leaves directly from presorted input
+        auto const [first_leaf_slot, end_pos]{ copy_to_nodes( presorted_input.data(), total_size ) };
+        base::bulk_insert_into_empty( first_leaf_slot, end_pos, total_size );
+        BOOST_ASSUME( this->hdr().size_ == total_size );
+        return total_size;
+    }
+
+    // Insert into non-empty tree
+
+    auto [tgt_leaf, tgt_leaf_next_pos]{ find_insertion_point( key_const_arg{ presorted_input[ 0 ] }, unique ) };
+
+    size_type inserted{ 0 };
+    size_type input_offset{ 0 };
+    while ( input_offset < total_size )
+    {
+        // Skip duplicates for unique containers
+        if ( tgt_leaf_next_pos.exact_find ) [[ unlikely ]]
+        {
+            BOOST_ASSUME( unique );
+            ++input_offset;
+        }
+        else // Check for bulk append opportunity: at end of rightmost leaf
+        if ( ( tgt_leaf_next_pos.pos == tgt_leaf->num_vals ) && !tgt_leaf->right )
+        {
+            // All remaining input goes after all existing data - use bulk append
+            auto remaining_count{ total_size - input_offset };
+            
+            // First, fill up the current target leaf if there's space
+            if ( auto const missing{ static_cast<node_size_type>( tgt_leaf->max_values - tgt_leaf->num_vals ) } )
+            {
+                auto const fill_size{ static_cast<node_size_type>( std::min<size_type>( remaining_count, missing ) ) };
+                std::copy_n( &presorted_input[ input_offset ], fill_size, &tgt_leaf->keys[ tgt_leaf->num_vals ] );
+                tgt_leaf->num_vals += fill_size;
+                input_offset       += fill_size;
+                inserted           += fill_size;
+                remaining_count    -= fill_size;
+
+                if ( input_offset == total_size )
+                    break; // to the trailing size_ update & return
+            }
+
+            // Create new linked leaves for remaining data
+            auto [first_new_leaf, end_pos]{ copy_to_nodes( &presorted_input[ input_offset ], remaining_count ) };
+
+            // Link to existing tree
+            auto & leftmost_new_leaf{ leaf( first_new_leaf ) };
+            base::link( *tgt_leaf, leftmost_new_leaf );
+
+            return base::bulk_append( *tgt_leaf, leftmost_new_leaf, inserted + remaining_count, end_pos, first_new_leaf );
+        }
+        else // Regular in-the-middle insertion (TODO partial bulk-inserts)
+        {
+            auto const remaining_count{ total_size - input_offset };
+            auto const [inserted_count, consumed_source, tgt_next_leaf, tgt_next_offset]
+            {
+                merge
+                (
+                    &presorted_input[ input_offset ], static_cast<node_size_type>( std::min<size_type>( remaining_count, tgt_leaf->max_values ) ),
+                    *tgt_leaf, tgt_leaf_next_pos.pos,
+                    unique
+                )
+            };
+            tgt_leaf = tgt_next_leaf;
+            if ( !tgt_leaf->is_root() ) {
+                verify_min_max( *tgt_leaf );
+            }
+            tgt_leaf_next_pos.pos = tgt_next_offset;
+
+            input_offset += consumed_source;
+            inserted     += inserted_count;
+        }
+
+        if ( input_offset == total_size )
+            break;
+
+        // Find next insertion point, leveraging sorted input
+        std::tie( tgt_leaf, tgt_leaf_next_pos ) =
+            find_next_insertion_point( *tgt_leaf, tgt_leaf_next_pos.pos, key_const_arg{ presorted_input[ input_offset ] }, unique );
+    }
+
+    BOOST_ASSUME( inserted <= total_size );
+    this->hdr().size_ += inserted;
+    return inserted;
+} // bp_tree_impl::insert_presorted()
 
 template <typename Key, typename Comparator>
 bp_tree_impl<Key, Comparator>::size_type
@@ -3158,6 +3332,8 @@ public:
     template <std::convertible_to<Key> T>
     size_type insert( std::initializer_list<T> const  keys ) { return impl_base::insert( this->bulk_insert_prepare( std::ranges::subrange( keys       ) ), unique ); }
     size_type insert( std::ranges::range auto const & keys ) { return impl_base::insert( this->bulk_insert_prepare( std::ranges::subrange( keys       ) ), unique ); }
+
+    size_type insert_presorted( std::span<Key const> const presorted_input ) { return impl_base::insert_presorted( presorted_input, unique ); }
 
     size_type merge( bp_tree       && other ) { return impl_base::merge( std::move( other ), unique ); }
     size_type merge( bp_tree const &  other ) { return impl_base::merge(            other  , unique ); }

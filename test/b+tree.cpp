@@ -1,5 +1,6 @@
 #include <psi/vm/containers/b+tree.hpp>
 #include <psi/vm/containers/b+tree_print.hpp>
+#include <psi/vm/containers/tr_vector.hpp>
 
 #include <boost/assert.hpp>
 #include <boost/container/flat_set.hpp>
@@ -95,9 +96,9 @@ TEST( bp_tree, playground )
     // TODO different types, insertion from non contiguous containers
 
 #ifdef NDEBUG
-    auto const test_size{ 4853735 };
+    auto const test_size{ 7853735 };
 #else
-    auto const test_size{  258735 };
+    auto const test_size{ 1458357 };
 #endif
     std::ranges::iota_view constexpr sorted_numbers{ 0, test_size };
     auto const seed{ std::random_device{}() };
@@ -121,7 +122,14 @@ TEST( bp_tree, playground )
             for ( auto const & n : second_third ) { EXPECT_EQ( bpt.insert( n           ).second, true               ); } // single value
                                                     EXPECT_EQ( bpt.insert( third_third )       , third_third.size() );   // bulk into non-empty
 
-            EXPECT_EQ( bpt.insert( second_third ), 0 );
+            { // exercise non-unique insertions
+                auto nonunique_copies{ std::ranges::to<std::vector>( second_third ) };
+                EXPECT_EQ( bpt.insert( nonunique_copies ), 0 );
+                auto const non_yet_inserted_value{ nums.back() * 2 };
+                nonunique_copies[ nonunique_copies.size() / 2 ] = non_yet_inserted_value;
+                EXPECT_EQ( bpt.insert( nonunique_copies ), 1 );
+                EXPECT_TRUE( bpt.erase( non_yet_inserted_value ) );
+            }
         }
 
         static_assert( std::forward_iterator<bptree_set<int>::const_iterator> );
@@ -154,7 +162,7 @@ TEST( bp_tree, playground )
 
         {
             auto const ra{ bpt.random_access() };
-            for ( auto n : std::views::iota( 0, test_size / 55 ) ) // slow operation (not really amortized constant time): use a smaller subset of the input
+            for ( auto n : std::views::iota( 0, test_size / 555 ) ) // slow operation (not really amortized constant time): use a smaller subset of the input
                 EXPECT_EQ( ra[ n ], n );
         }
 
@@ -235,9 +243,9 @@ TEST( bp_tree, nonunique )
 {
     auto const test_num{ 33 };
 #ifdef NDEBUG
-    auto const test_size{ 853735 };
+    auto const test_size{ 1853735 };
 #else
-    auto const test_size{  23567 };
+    auto const test_size{  193567 };
 #endif
     bptree_multiset<int> bpt;
     bpt.map_memory( test_size );
@@ -266,6 +274,218 @@ TEST( bp_tree, nonunique )
     for ( auto const n : numbers )
         EXPECT_EQ( bpt.erase( n ), n != test_num );
     EXPECT_TRUE( bpt.empty() );
+}
+
+TEST( bp_tree, insert_presorted )
+{
+#ifdef NDEBUG
+    auto const test_size{ 74853736 };
+#else
+    auto const test_size{  1458358 };
+#endif
+    std::ranges::iota_view const sorted_numbers{ 0, test_size };
+    auto const seed{ std::random_device{}() };
+    std::println( "Seed {}", seed );
+
+    // Test 1: insert_presorted into empty tree
+    {
+        bptree_set<int> bpt;
+        bpt.map_memory( test_size );
+        
+        auto sorted_vec{ std::ranges::to<std::vector>( sorted_numbers ) };
+        EXPECT_EQ( bpt.insert_presorted( sorted_vec ), static_cast<std::size_t>( test_size ) );
+        EXPECT_EQ( bpt.size(), static_cast<std::size_t>( test_size ) );
+        EXPECT_TRUE( std::ranges::equal( bpt, sorted_numbers ) );
+    }
+
+    // Test 2: insert_presorted into non-empty tree (append scenario)
+    {
+        bptree_set<int> bpt;
+        bpt.map_memory( test_size * 2 );
+
+        auto const half{ test_size / 2 };
+        std::ranges::iota_view const first_half { 0, half };
+        std::ranges::iota_view const second_half{ half, test_size };
+        
+        auto first_half_vec{ std::ranges::to<std::vector>( first_half ) };
+        EXPECT_EQ( bpt.insert_presorted( first_half_vec ), first_half_vec.size() );
+        
+        auto second_half_vec{ std::ranges::to<std::vector>( second_half ) };
+        EXPECT_EQ( bpt.insert_presorted( second_half_vec ), second_half_vec.size() );
+        
+        EXPECT_EQ( bpt.size(), static_cast<std::size_t>( test_size ) );
+        EXPECT_TRUE( std::ranges::equal( bpt, sorted_numbers ) );
+    }
+
+    // Test 3: insert_presorted with interleaved data
+    {
+        bptree_set<unsigned> bpt;
+        bpt.map_memory( test_size );
+
+        tr_vector<unsigned> odds{ test_size / 2, no_init };
+        for ( auto i{ 0U }; i < test_size / 2; ++i )
+            odds[ i ] = i * 2 + 1;
+        EXPECT_EQ( bpt.insert_presorted( odds ), odds.size() );
+
+        tr_vector<unsigned> evens{ test_size / 2, no_init };
+        for ( auto i{ 0U }; i < test_size / 2; ++i )
+            evens[ i ] = i * 2;
+        EXPECT_EQ( bpt.insert_presorted( evens ), evens.size() );
+
+        EXPECT_EQ( bpt.size(), static_cast<std::size_t>( test_size ) );
+        EXPECT_TRUE( std::ranges::equal( bpt, sorted_numbers ) );
+    }
+
+    // Test 4: insert_presorted with duplicates (unique tree should skip them)
+    {
+        bptree_set<int> bpt;
+        bpt.map_memory( test_size );
+
+        auto sorted_vec{ std::ranges::to<std::vector>( sorted_numbers ) };
+        EXPECT_EQ( bpt.insert_presorted( sorted_vec ), static_cast<std::size_t>( test_size ) );
+        EXPECT_EQ( bpt.insert_presorted( sorted_vec ), 0 ); // all duplicates
+        EXPECT_EQ( bpt.size(), static_cast<std::size_t>( test_size ) );
+    }
+
+    // Test 5: insert_presorted on multiset (non-unique)
+    {
+        bptree_multiset<int> bpt;
+        bpt.map_memory( test_size * 2 );
+
+        auto sorted_vec{ std::ranges::to<std::vector>( sorted_numbers ) };
+        EXPECT_EQ( bpt.insert_presorted( sorted_vec ), static_cast<std::size_t>( test_size ) );
+        EXPECT_EQ( bpt.insert_presorted( sorted_vec ), static_cast<std::size_t>( test_size ) );
+        EXPECT_EQ( bpt.size(), static_cast<std::size_t>( test_size * 2 ) );
+    }
+
+    // Test 6: insert_presorted with empty input
+    {
+        bptree_set<int> bpt;
+        bpt.map_memory();
+        
+        std::span<int const> empty_span;
+        EXPECT_EQ( bpt.insert_presorted( empty_span ), 0 );
+        EXPECT_TRUE( bpt.empty() );
+    }
+
+    // Test 7: insert_presorted with single element
+    {
+        bptree_set<int> bpt;
+        bpt.map_memory();
+        
+        std::array<int, 1> single{ 42 };
+        EXPECT_EQ( bpt.insert_presorted( single ), 1 );
+        EXPECT_EQ( bpt.size(), 1 );
+        EXPECT_NE( bpt.find( 42 ), bpt.end() );
+    }
+}
+
+// these generated tests below need more work (do not actually test what they purport to)
+
+TEST( bp_tree, insert_merge_at_node_boundary )
+{
+    // This test exercises the code path where merge() fills up a node completely,
+    // returning tgt_next_offset == tgt_leaf->num_vals, which previously could
+    // cause issues in find_next_insertion_point.
+    
+    bptree_set<unsigned> bpt;
+    bpt.map_memory();
+
+    // First, insert values that will create a specific tree structure.
+    // We want to create a situation where:
+    // 1. A node gets filled to capacity during merge
+    // 2. The next key to insert should go into the next node
+    
+    // Get the max values per node to craft our test data
+    auto constexpr max_per_node{ decltype(bpt)::leaf_node::max_values };
+
+    // Insert initial sorted data that fills exactly one node
+    std::array<unsigned, max_per_node> initial_data;
+    for ( auto i{ 0U }; i < max_per_node; ++i )
+        initial_data[ i ] = i * 2; // even numbers
+
+    EXPECT_EQ( bpt.insert( initial_data ), initial_data.size() );
+
+    // Now insert interleaved values that will:
+    // 1. Fill up the first node to max capacity
+    // 2. Need to continue into a new/split node
+    std::array<unsigned, max_per_node> interleaved_data;
+    for ( auto i{ 0U }; i < max_per_node; ++i )
+        interleaved_data[ i ] = i * 2 + 1; // odd numbers
+
+    // This bulk insert should trigger the merge-at-node-boundary code path
+    EXPECT_EQ( bpt.insert( interleaved_data ), interleaved_data.size() );
+    
+    // Verify the tree is correctly sorted
+    EXPECT_TRUE( std::ranges::is_sorted( bpt, bpt.comp() ) );
+    
+    // Verify all values are present
+    for ( auto v : initial_data )
+        EXPECT_NE( bpt.find( v ), bpt.end() );
+    for ( auto v : interleaved_data )
+        EXPECT_NE( bpt.find( v ), bpt.end() );
+}
+
+TEST( bp_tree, insert_presorted_merge_at_node_boundary )
+{
+    // Same test but for insert_presorted
+    
+    bptree_set<unsigned> bpt;
+    bpt.map_memory();
+
+    auto constexpr max_per_node{ decltype(bpt)::leaf_node::max_values };
+    
+    // Insert initial sorted data
+    std::array<unsigned, max_per_node> initial_data;
+    for ( auto i{ 0U }; i < max_per_node; ++i )
+        initial_data[ i ] = i * 2; // even numbers
+    EXPECT_EQ( bpt.insert_presorted( initial_data ), initial_data.size() );
+    
+    // Insert interleaved presorted values
+    std::array<unsigned, max_per_node> interleaved_data;
+    for ( auto i{ 0U }; i < max_per_node; ++i )
+        interleaved_data[ i ] = i * 2 + 1; // odd numbers
+    EXPECT_EQ( bpt.insert_presorted( interleaved_data ), interleaved_data.size() );
+    
+    EXPECT_TRUE( std::ranges::is_sorted( bpt, bpt.comp() ) );
+    
+    for ( auto v : initial_data )
+        EXPECT_NE( bpt.find( v ), bpt.end() );
+    for ( auto v : interleaved_data )
+        EXPECT_NE( bpt.find( v ), bpt.end() );
+}
+
+TEST( bp_tree, insert_triggers_multiple_splits )
+{
+    // Test that exercises repeated splits during bulk insert,
+    // ensuring node boundary handling works correctly across multiple splits
+    
+    bptree_set<unsigned> bpt;
+    bpt.map_memory();
+
+    auto constexpr max_per_node{ decltype(bpt)::leaf_node::max_values };
+    auto const test_size{ max_per_node * 5 }; // Enough to cause multiple splits
+    
+    // First insert: every 3rd number
+    tr_vector<unsigned> first_batch;
+    for ( auto i{ 0U }; i < test_size; i += 3 )
+        first_batch.push_back( i );
+
+    EXPECT_EQ( bpt.insert( first_batch ), first_batch.size() );
+
+    // Second insert: numbers that interleave with first batch
+    tr_vector<unsigned> second_batch;
+    for ( auto i{ 0U }; i < test_size; ++i ) {
+        if ( i % 3 != 0 )
+            second_batch.push_back( i );
+    }
+
+    EXPECT_EQ( bpt.insert( second_batch ), second_batch.size() );
+    
+    // Verify correctness
+    EXPECT_EQ( bpt.size(), static_cast<std::size_t>( test_size ) );
+    EXPECT_TRUE( std::ranges::is_sorted( bpt, bpt.comp() ) );
+    EXPECT_TRUE( std::ranges::equal( bpt, std::views::iota( 0, test_size ) ) );
 }
 
 //------------------------------------------------------------------------------

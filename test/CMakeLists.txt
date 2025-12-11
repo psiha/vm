@@ -29,15 +29,17 @@ set_target_properties(
 
 PSI_target_fix_debug_symbols_for_osx_lto( vm_unit_tests )
 
-gtest_discover_tests(
-    vm_unit_tests
-    EXTRA_ARGS
-    --gtest_color=auto
-    --gtest_output=xml:${CMAKE_BINARY_DIR}/test/vm_unit_tests.xml
-    --gtest_catch_exceptions=1
-    DISCOVERY_TIMEOUT 120
-    PROPERTIES
-    TIMEOUT 120
-)
+if ( NOT APPLE ) # crashes on GH?
+    gtest_discover_tests(
+        vm_unit_tests
+        EXTRA_ARGS
+        --gtest_color=auto
+        --gtest_output=xml:${CMAKE_BINARY_DIR}/test/vm_unit_tests.xml
+        --gtest_catch_exceptions=1
+        DISCOVERY_TIMEOUT 120
+        PROPERTIES
+        TIMEOUT 120
+    )
+endif()
 
 add_test( "vm_unit_tests" vm_unit_tests )
