@@ -12,6 +12,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 #pragma once
+
+#include <psi/build/disable_warnings.hpp>
+
 #include <type_traits>
 //------------------------------------------------------------------------------
 namespace std
@@ -98,13 +101,16 @@ namespace psi::vm
 // https://github.com/llvm/llvm-project/issues/69394 is_trivially_relocatable isn't correct under Windows
 // https://github.com/llvm/llvm-project/issues/86354 is_trivially_relocatable isn't correct under Apple Clang
 
+PSI_WARNING_DISABLE_PUSH()
+PSI_WARNING_CLANG_DISABLE( -Wdeprecated-builtins )
 // allowed/expected to be user-specialized for custom types
 template <typename T>
 bool constexpr is_trivially_moveable
 {
 #if defined( __cpp_trivial_relocatability ) || __has_builtin( __builtin_is_cpp_trivially_relocatable )
     __builtin_is_cpp_trivially_relocatable( T ) ||
-#elif defined( __clang__ )
+#endif
+#if defined( __clang__ ) // with Clang support both P1144 and the older builtin
     __is_trivially_relocatable( T ) ||
 #endif
 #if defined( __cpp_lib_trivially_relocatable /*P1144*/ ) || defined( __cpp_trivial_relocatability /*P2786*/ )
@@ -114,6 +120,7 @@ bool constexpr is_trivially_moveable
     std::is_trivially_move_assignable_v<T> ||
     std::is_trivially_move_constructible_v<T> // beyond P2786 optimistic heuristic https://github.com/psiha/vm/pull/34#discussion_r1914536293
 }; // is_trivially_moveable
+PSI_WARNING_DISABLE_POP()
 
 template <typename T>
 concept complete = sizeof( T ) >= 0 || false;
