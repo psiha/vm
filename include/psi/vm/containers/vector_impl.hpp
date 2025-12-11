@@ -706,7 +706,7 @@ public:
     //!
     //! <b>Complexity</b>: If position is end(), amortized constant time
     //!   Linear time otherwise.
-    iterator insert( this Impl & self, const_iterator const position, value_type && x ) requires( !std::is_trivial_v<value_type> ) { return self.emplace( position, std::move( x ) ); }
+    iterator insert( this Impl & self, const_iterator const position, value_type && x ) requires( !std::is_trivially_move_constructible_v<value_type> ) { return self.emplace( position, std::move( x ) ); }
 
     //! <b>Requires</b>: position must be a valid iterator of *this.
     //!
