@@ -986,7 +986,9 @@ private:
         if constexpr ( is_trivially_moveable<value_type> )
         {
             PSI_WARNING_DISABLE_PUSH()
+#       if defined( __clang__ ) && ( __clang_major__ >= 20 )
             PSI_WARNING_CLANG_DISABLE( -Wnontrivial-memcall ) // e.g. for trivial_abi std::string
+#       endif
             // does not use is_trivially_moveable/trivial_abi and is incorrect
             // (i.e. an uninitialized_move_backwards is required)
             //std::uninitialized_move_n( &data[ position_index ], elements_to_move, &data[ position_index + n ] );
