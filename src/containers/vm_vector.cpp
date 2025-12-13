@@ -117,9 +117,11 @@ void contiguous_storage::reserve( size_type const new_capacity )
 
 void * contiguous_storage::grow_to( size_type const target_size )
 {
-    BOOST_ASSUME( target_size >= size() );
-    reserve( target_size );
-    stored_size() = target_size;
+    if ( target_size > size() ) [[ likely ]]
+    {
+        reserve( target_size );
+        stored_size() = target_size;
+    }
     return data();
 }
 
@@ -135,6 +137,7 @@ void * contiguous_storage::shrink_to( size_type const target_size ) noexcept
         return data();
     }
 
+    sz = target_size;
     return shrink_to_slow( target_size );
 }
 
