@@ -890,6 +890,9 @@ public:
     value_type * grow_to( this Impl & self, size_type const target_size, default_init_t )
     {
         auto const current_size{ self.size() };
+        if ( target_size <= current_size ) [[ unlikely ]] { // meh, already/also handled by storage_grow_to()
+            return self.data();
+        }
         auto const data{ self.grow_to( target_size, no_init ) };
         if constexpr ( !std::is_trivially_default_constructible_v<value_type> ) {
             try {
@@ -905,7 +908,9 @@ public:
     value_type * grow_to( this Impl & self, size_type const target_size, value_init_t )
     {
         auto const current_size{ self.size() };
-        BOOST_ASSUME( target_size >= current_size );
+        if ( target_size <= current_size ) [[ unlikely ]] {
+            return self.data();
+        }
         auto const data{ self.grow_to( target_size, no_init ) };
         auto const uninitialized_space_begin{ &data[ current_size ] };
         auto const uninitialized_space_size { target_size - current_size };
@@ -942,7 +947,9 @@ public:
     requires std::constructible_from<T, U>
     {
         auto const current_size{ self.size() };
-        BOOST_ASSUME( target_size >= current_size );
+        if ( target_size <= current_size ) [[ unlikely ]] {
+            return self.data();
+        }
         auto const data{ self.grow_to( target_size, no_init ) };
         auto const uninitialized_space_begin{ &data[ current_size ] };
         auto const uninitialized_space_size { target_size - current_size };
