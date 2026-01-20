@@ -46,13 +46,21 @@ bool constexpr can_be_passed_in_reg
 }; // can_be_passed_in_reg
 
 template <typename T>
+bool constexpr statically_sized_container{
+    requires { T::static_capacity; } or
+    requires { T::static_size;     } or
+    requires { T::capacity();      } or
+    requires { requires( std::integral_constant<std::size_t, T{}.size()>::value != 0 ); }
+};
+
+template <typename T>
 struct optimal_const_ref { using type = T const &; };
 
 template <typename Char>
 struct optimal_const_ref<std::basic_string<Char>> { using type = std::basic_string_view<Char>; };
 
 template <std::ranges::contiguous_range Rng>
-requires( not std::ranges::borrowed_range<Rng> ) // no need to convert 'views' to spans
+requires( not std::ranges::borrowed_range<Rng> and not statically_sized_container<Rng> ) // no need to convert 'views' to spans
 struct optimal_const_ref<Rng> { using type = std::span<std::ranges::range_value_t<Rng> const>; };
 
 template <typename T>
