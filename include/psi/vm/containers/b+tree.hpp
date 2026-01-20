@@ -2228,7 +2228,7 @@ private:
         // Support 'transparent' comparators that deal with references/pointers/
         // non-local data (e.g. containers of pointers or IDs) and provide a
         // method to 'fetch' the actual value to be compared against (so that at
-        // least does not have to be fetched from memory multiple times).
+        // least that value does not have to be fetched from memory multiple times).
         if constexpr ( requires { comp.val( key ); } )
             return comp.val( key );
         else
