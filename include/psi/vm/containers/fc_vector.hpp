@@ -50,14 +50,14 @@ union [[ clang::trivial_abi ]] noninitialized_array // utility for easier debugg
     T data[ size ];
 }; // noninitialized_array
 
-struct assert_on_overflow { // VS17.12.3 MSVC still does not support static operator()
-    [[ noreturn ]] void operator()() const noexcept {
+struct assert_on_overflow {
+    [[ noreturn ]] static void operator()() noexcept {
         BOOST_ASSERT_MSG( false, "Static vector overflow!" );
         std::unreachable();
     }
 }; // assert_on_overflow
 struct throw_on_overflow {
-    [[ noreturn ]] void operator()() const { detail::throw_out_of_range(); }
+    [[ noreturn ]] static void operator()() { detail::throw_out_of_range(); }
 }; // throw_on_overflow
 
 
