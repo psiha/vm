@@ -391,6 +391,8 @@ class [[ nodiscard, clang::trivial_abi ]] tr_vector
 public:
     static std::uint8_t constexpr alignment{ options.alignment ? options.alignment : std::uint8_t{ alignof( std::conditional_t<complete<T>, T, std::max_align_t> ) } };
 
+    static bool constexpr storage_zero_initialized{ false };
+
     using size_type      = sz_t;
     using value_type     = T;
     using allocator_type = crt_aligned_allocator<T, sz_t, alignment>;

@@ -76,6 +76,8 @@ public:
 
     static size_type constexpr static_capacity{ capacity_param };
 
+    static bool constexpr storage_zero_initialized{ false };
+
 private:
     using base = vector_impl<fc_vector<T, static_capacity, overflow_handler>, T, size_type>;
 
