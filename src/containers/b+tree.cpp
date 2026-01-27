@@ -42,12 +42,21 @@ void bptree_base::clear() noexcept
     hdr() = {};
 }
 
+[[ gnu::pure ]]
 std::span<std::byte>
 bptree_base::user_header_data() noexcept { return header_data().second; }
 
-[[ gnu::pure, gnu::hot, gnu::always_inline ]]
+[[ gnu::pure ]]
 bptree_base::header &
-bptree_base::hdr() noexcept { return *header_data().first; }
+bptree_base::get_hdr() noexcept { return *header_data().first; }
+
+[[ gnu::pure, gnu::hot ]]
+bptree_base::header &
+bptree_base::hdr() noexcept
+{
+    BOOST_ASSUME( p_hdr_ == &get_hdr() );
+    return *p_hdr_;
+}
 
 bptree_base::storage_result
 bptree_base::map_memory( std::uint32_t const initial_capacity_as_number_of_nodes, header_info const hdr_info ) noexcept
@@ -55,11 +64,11 @@ bptree_base::map_memory( std::uint32_t const initial_capacity_as_number_of_nodes
     auto success{ nodes_.map_memory( initial_capacity_as_number_of_nodes, hdr_info.add_header<header>(), value_init )() };
     if ( success )
     {
+        update_cached_pointers();
         hdr() = {};
         if ( initial_capacity_as_number_of_nodes ) {
             assign_nodes_to_free_pool( 0 );
         }
-        update_dbg_helpers();
     }
     return success;
 }
@@ -71,7 +80,7 @@ void bptree_base::reserve_additional( node_slot::value_type additional_nodes )
     additional_nodes -= std::min( preallocated_count, additional_nodes );
     auto const current_size{ nodes_.size() };
     nodes_.grow_by( additional_nodes, value_init );
-    update_dbg_helpers();
+    update_cached_pointers();
     assign_nodes_to_free_pool( current_size );
 }
 [[ gnu::cold ]]
@@ -81,7 +90,7 @@ void bptree_base::reserve( node_slot::value_type new_capacity_in_number_of_nodes
         return;
     auto const current_size{ nodes_.size() };
     nodes_.grow_to( new_capacity_in_number_of_nodes, value_init );
-    update_dbg_helpers();
+    update_cached_pointers();
     assign_nodes_to_free_pool( current_size );
 }
 [[ gnu::cold ]]
@@ -534,7 +543,7 @@ bptree_base::new_node()
     BOOST_ASSUME( !new_node.num_vals );
     BOOST_ASSUME( !new_node.left     );
     BOOST_ASSUME( !new_node.right    );
-    update_dbg_helpers();
+    update_cached_pointers();
     return new_node;
 }
 [[ gnu::noinline ]]
@@ -582,9 +591,12 @@ void bptree_base::reset() noexcept // cheaper/simpler 'clear()' (when retaining 
     std::construct_at( this );
 }
 
+void bptree_base::update_cached_pointers() noexcept {
+    p_hdr_ = &get_hdr();
+    update_dbg_helpers();
+}
 void bptree_base::update_dbg_helpers() noexcept {
 #ifndef NDEBUG
-    p_hdr_  = &this->hdr();
     nodes__ = nodes_;
 #endif
 }

@@ -70,6 +70,44 @@ constexpr bool use_linear_search_for_sorted_array
 }; // use_linear_search_for_sorted_array
 
 
+// utility to help avoid having to write custom move ctors/assignments when having
+// non-owning unique pointers as members
+template <typename T>
+struct [[ clang::trivial_abi]] unique_nonowned_ptr {
+    constexpr unique_nonowned_ptr() noexcept = default;
+    constexpr unique_nonowned_ptr( T * const p ) noexcept : ptr{ p } {}
+    constexpr ~unique_nonowned_ptr() noexcept = default;
+    constexpr unique_nonowned_ptr( unique_nonowned_ptr && other ) noexcept : ptr{ std::exchange( other.ptr, nullptr ) } {}
+    constexpr unique_nonowned_ptr & operator=( unique_nonowned_ptr && other ) noexcept { ptr = std::exchange( other.ptr, nullptr ); return *this; }
+    constexpr unique_nonowned_ptr & operator=( T * const other ) noexcept { ptr = other; return *this; }
+    [[ gnu::pure ]] constexpr bool operator==( unique_nonowned_ptr const & other ) const noexcept = default;
+    [[ gnu::pure ]] constexpr bool operator==( T const * const other ) const noexcept { return ptr == other; }
+    [[ gnu::pure ]] constexpr T       * get()       noexcept { return ptr; }
+    [[ gnu::pure ]] constexpr T const * get() const noexcept { return ptr; }
+    [[ gnu::pure ]] constexpr T       & operator*()       noexcept { return *ptr; }
+    [[ gnu::pure ]] constexpr T const & operator*() const noexcept { return *ptr; }
+    [[ gnu::pure ]] constexpr T       * operator->()       noexcept { return ptr; }
+    [[ gnu::pure ]] constexpr T const * operator->() const noexcept { return ptr; }
+
+    constexpr explicit operator bool() const noexcept { return ptr != nullptr; }
+
+    T * __restrict ptr{ nullptr };
+}; // class unique_nonowned_ptr
+
+
+// utility for passing non trivial predicates to algorithms which pass them around by-val
+template <typename Pred>
+decltype( auto ) make_trivially_copyable_predicate( Pred && __restrict pred ) noexcept {
+    if constexpr ( can_be_passed_in_reg<std::remove_cvref<Pred>> ) {
+        return std::forward<Pred>( pred );
+    } else {
+        return [&pred]( auto const & ... args ) noexcept( noexcept( pred( args... ) ) ) {
+            return pred( args... );
+        };
+    }
+} // make_trivially_copyable_predicate
+
+
 ////////////////////////////////////////////////////////////////////////////////
 // \class bptree_base
 ////////////////////////////////////////////////////////////////////////////////
@@ -370,16 +408,19 @@ protected:
 private:
     auto header_data() noexcept { return vm::header_data<header>( nodes_.user_header_data() ); }
 
+    header & get_hdr() noexcept;
+
     void assign_nodes_to_free_pool( node_slot::value_type starting_node ) noexcept;
 
     void update_leaf_list_ends( node_header & removed_leaf ) noexcept;
 
+    void update_cached_pointers() noexcept;
     void update_dbg_helpers() noexcept;
 
 protected:
+    unique_nonowned_ptr<header> p_hdr_; // cached pointer to header in mapped storage (compilers/clang still unable to fully optimize away the vm::header_data code)
     node_pool nodes_;
 #ifndef NDEBUG // debugging helpers (undoing type erasure done by contiguous_container_storage_base)
-    header const *                    p_hdr_ {};
     std::span<node_placeholder const> nodes__{};
 #endif
 }; // class bptree_base
@@ -393,11 +434,12 @@ bptree_base::storage_result
 bptree_base::map_file( auto const file, flags::named_object_construction_policy const policy, header_info const hdr_info ) noexcept
 {
     auto success{ nodes_.map_file( file, policy, hdr_info.add_header<header>() )() };
-#ifndef NDEBUG
-    if ( success ) update_dbg_helpers();
-#endif
-    if ( success && nodes_.empty() )
-        hdr() = {};
+    if ( success )
+    {
+        update_cached_pointers();
+        if ( nodes_.empty() )
+            hdr() = {};
+    }
     return success;
 }
 
@@ -438,7 +480,9 @@ public:
     }
 
 public: // extensions
-    iter_pos const & pos() const noexcept { return pos_; }
+    using position = iter_pos;
+    [[ gnu::pure ]]
+    position const & pos() const noexcept { return pos_; }
 
 protected: friend class bptree_base;
     using nodes_t =
@@ -2109,8 +2153,8 @@ public:
     [[ gnu::pure ]] const_ra_iterator ra_begin() const noexcept { return static_cast<ra_iterator &&>( mutable_this().base::ra_begin() ); }
     [[ gnu::pure ]] const_ra_iterator ra_end  () const noexcept { return static_cast<ra_iterator &&>( mutable_this().base::ra_end  () ); }
 
-    [[ nodiscard ]] bool            contains   ( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return contains_impl   ( pass_in_reg{ key } ); }
-    [[ nodiscard ]] const_iterator  find_after ( const_iterator const pos, LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return find_after( pos, pass_in_reg{ key } ); }
+    [[ nodiscard ]] bool           contains  ( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return contains_impl( pass_in_reg{ key } ); }
+    [[ nodiscard ]] const_iterator find_after( const_iterator const pos, LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return find_after_impl( pos.base().pos(), pass_in_reg{ key } ); }
 
     size_type merge( bp_tree_impl       && other, bool unique );
     size_type merge( bp_tree_impl const &  other, bool unique );
@@ -2121,6 +2165,30 @@ public:
 
     // UB if the comparator is changed in such a way as to invalidate the order of elements already in the container
     [[ nodiscard, gnu::pure ]] Comparator & mutable_comp() noexcept { return *this; }
+
+    // Utility comparison functions (wrappers around the comparator)
+    [[ gnu::pure ]] bool le( Reg auto const left, Reg auto const right ) const noexcept { return comp()( left, right ); }
+    [[ gnu::pure ]] bool ge( Reg auto const left, Reg auto const right ) const noexcept { return comp()( right, left ); }
+    [[ gnu::pure ]] bool eq( Reg auto const left, Reg auto const right ) const noexcept
+    {
+        if constexpr ( requires{ comp().eq( left, right ); } )
+            return comp().eq( left, right );
+        if constexpr ( is_simple_comparator<Comparator> && requires{ left == right; } )
+            return left == right;
+        return !comp()( left, right ) && !comp()( right, left );
+    }
+    [[ gnu::pure ]] bool leq( Reg auto const left, Reg auto const right ) const noexcept
+    {
+        if constexpr ( requires{ comp().leq( left, right ); } )
+            return comp().leq( left, right );
+        return !comp()( right, left );
+    }
+    [[ gnu::pure ]] bool geq( Reg auto const left, Reg auto const right ) const noexcept
+    {
+        if constexpr ( requires{ comp().geq( left, right ); } )
+            return comp().geq( left, right );
+        return !comp()( left, right );
+    }
 
 protected: // pass-in-reg public function overloads/impls
     bp_tree_impl & mutable_this() const noexcept { return const_cast<bp_tree_impl &>( *this ); }
@@ -2265,7 +2333,7 @@ private:
         }
         else
         {
-            auto const pos_iter  { std::lower_bound( &keys[ 0 ], &keys[ num_vals ], value, comp ) };
+            auto const pos_iter  { std::lower_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) ) };
             auto const pos_idx   { static_cast<node_size_type>( std::distance( &keys[ 0 ], pos_iter ) ) };
             auto const exact_find{ ( pos_idx != num_vals ) && !comp( value, keys[ pos_idx ] ) };
             return { pos_idx, exact_find };
@@ -2305,7 +2373,7 @@ protected:
         }
         else
         {
-            auto const pos_iter{ std::upper_bound( &keys[ 0 ], &keys[ num_vals ], value, comp ) };
+            auto const pos_iter{ std::upper_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) ) };
             auto const pos_idx { static_cast<node_size_type>( std::distance( &keys[ 0 ], pos_iter ) ) };
             return pos_idx;
         }
@@ -2444,29 +2512,6 @@ protected:
     size_type insert( typename base::bulk_copied_input, bool unique );
 
     size_type insert_presorted( std::span<Key const> presorted_input, bool unique );
-
-    [[ gnu::pure ]] bool le( Reg auto const left, Reg auto const right ) const noexcept { return comp()( left, right ); }
-    [[ gnu::pure ]] bool ge( Reg auto const left, Reg auto const right ) const noexcept { return comp()( right, left ); }
-    [[ gnu::pure ]] bool eq( Reg auto const left, Reg auto const right ) const noexcept
-    {
-        if constexpr ( requires{ comp().eq( left, right ); } )
-            return comp().eq( left, right );
-        if constexpr ( is_simple_comparator<Comparator> && requires{ left == right; } )
-            return left == right;
-        return !comp()( left, right ) && !comp()( right, left );
-    }
-    [[ gnu::pure ]] bool leq( Reg auto const left, Reg auto const right ) const noexcept
-    {
-        if constexpr ( requires{ comp().leq( left, right ); } )
-            return comp().leq( left, right );
-        return !comp()( right, left );
-    }
-    [[ gnu::pure ]] bool geq( Reg auto const left, Reg auto const right ) const noexcept
-    {
-        if constexpr ( requires{ comp().geq( left, right ); } )
-            return comp().geq( left, right );
-        return !comp()( left, right );
-    }
 
 #if !( defined( _MSC_VER ) && !defined( __clang__ ) )
     // ambiguous call w/ VS 17.11, 17.12
@@ -2738,15 +2783,6 @@ bp_tree_impl<Key, Comparator>::merge_interleaved_values
     }
 }
 
-namespace detail
-{
-    template <typename Comparator>
-    struct comp_ref
-    {
-        [[ gnu::pure, gnu::always_inline ]] decltype( auto ) operator()( auto const &... args ) noexcept { return impl( args... ); }
-        Comparator const & __restrict impl;
-    }; // struct comp_ref
-} // namespace detail
 
 template <typename Key, typename Comparator>
 bp_tree_impl<Key, Comparator>::size_type
@@ -2767,19 +2803,16 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
         // full)
         typename base::ra_full_node_iterator const sort_begin{ input.nodes.data(), 0          };
         typename base::ra_full_node_iterator const sort_end  { input.nodes.data(), total_size };
-        // Standard sort ABIs/impls pass the comparator around by-value: wrkrnd for
-        // big or non-trivial comparators.
-        using comp_by_val_helper = std::conditional_t<can_be_passed_in_reg<Comparator>, Comparator, detail::comp_ref<Comparator>>;
         if constexpr ( requires{ comp().sort( sort_begin, sort_end ); } ) // does the comparator offer a specialized sort function?
             comp().sort( sort_begin, sort_end );
         else
 #   if __has_include( <boost/sort/pdqsort/pdqsort.hpp> )
         if constexpr ( requires{ Comparator::is_branchless; requires( Comparator::is_branchless ); } )
-            boost::sort::pdqsort_branchless( sort_begin, sort_end, comp_by_val_helper{ comp() } );
+            boost::sort::pdqsort_branchless( sort_begin, sort_end, make_trivially_copyable_predicate( comp() ) );
         else
-            boost::sort::pdqsort( sort_begin, sort_end, comp_by_val_helper{ comp() } );
+            boost::sort::pdqsort( sort_begin, sort_end, make_trivially_copyable_predicate( comp() ) );
 #   else
-            boost::movelib::pdqsort( sort_begin, sort_end, comp_by_val_helper{ comp() } );
+            boost::movelib::pdqsort( sort_begin, sort_end, make_trivially_copyable_predicate( comp() ) );
 #   endif
         input.nodes.clear();
     }
@@ -3033,7 +3066,9 @@ bp_tree_impl<Key, Comparator>::insert_presorted( std::span<Key const> const pres
             }
 
             // Create new linked leaves for remaining data
+            auto const tgt_leaf_slot{ slot_of( *tgt_leaf ) };
             auto [first_new_leaf, end_pos]{ copy_to_nodes( &presorted_input[ input_offset ], remaining_count ) };
+            tgt_leaf = &leaf( tgt_leaf_slot );
 
             // Link to existing tree
             auto & leftmost_new_leaf{ leaf( first_new_leaf ) };
@@ -3284,8 +3319,6 @@ class bp_tree
 private:
     using impl_base = bp_tree_impl<Key, Comparator>;
 
-    using impl_base::eq;
-    using impl_base::le;
     using impl_base::leaf;
     using impl_base::make_iter;
 
@@ -3305,6 +3338,8 @@ public:
     using impl_base::empty;
     using impl_base::end;
     using impl_base::erase;
+    using impl_base::eq;
+    using impl_base::le;
 
     [[ nodiscard ]] const_iterator find       ( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return impl_base::find_impl       ( pass_in_reg{ key }, unique ); }
     [[ nodiscard ]] const_iterator lower_bound( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return impl_base::lower_bound_impl( pass_in_reg{ key }, unique ); }
