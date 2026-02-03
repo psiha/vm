@@ -865,7 +865,11 @@ public:
     void clear( this Impl & self ) noexcept
     {
         std::destroy( self.begin(), self.end() );
+#   if 0 // default to STL behaviour (keep capacity) - TODO make this configurable?
+        self.storage_shrink_size_to( 0 );
+#   else
         self.storage_shrink_to( 0 );
+#   endif
     }
 
     void swap( this auto && self, auto & other ) noexcept { std::swap( self, other ); }
