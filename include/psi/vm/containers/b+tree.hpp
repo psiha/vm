@@ -2733,26 +2733,45 @@ bp_tree_impl<Key, Comparator>::erase_sorted( std::span<Key const> const keys_to_
     size_t    key_idx     { 0 };
 
     // Find first key with full tree traversal
-    leaf_node * p_leaf{ nullptr };
-    node_size_type offset{ 0 };
-    // TODO a loop is not necessary - simply use the first result of find_nodes_for - if no exact hit was found the find_next in the main loop should find the next hit
-    // (probably requires a restructuring of the main loop)
-    while ( key_idx < keys_to_remove.size() )
-    {
-        auto const location{ find_nodes_for( keys_to_remove[ key_idx ], unique ) };
-        if ( location.leaf_offset.exact_find )
-        {
-            p_leaf = &location.leaf;
-            offset = location.leaf_offset.pos;
-            break;
-        }
-        ++key_idx;
-    }
-    if ( !p_leaf )
-        return 0;
+    auto const location{ find_nodes_for( keys_to_remove[ key_idx ], unique ) };
+    leaf_node * p_leaf{ &location.leaf };
+    node_size_type offset{ location.leaf_offset.pos };
+    bool exact_match{ location.leaf_offset.exact_find };
 
     while ( key_idx < keys_to_remove.size() )
     {
+        // If we don't have an exact match yet, find the next matching key
+        if ( !exact_match ) [[ unlikely ]]
+        {
+            // Use find_next to locate the next key
+            auto [next_leaf, found_pos]{ find_next( *p_leaf, offset, keys_to_remove[ key_idx ] ) };
+            if ( !found_pos.exact_find ) [[ unlikely ]]
+            {
+                // Key not found via find_next - fall back to find_nodes_for
+                while ( key_idx < keys_to_remove.size() )
+                {
+                    auto location_retry{ find_nodes_for( keys_to_remove[ key_idx ], unique ) };
+                    if ( location_retry.leaf_offset.exact_find )
+                    {
+                        p_leaf = &location_retry.leaf;
+                        offset = location_retry.leaf_offset.pos;
+                        exact_match = true;
+                        break;
+                    }
+                    ++key_idx;
+                }
+                if ( key_idx >= keys_to_remove.size() )
+                    break;
+                if ( !exact_match )
+                    break; // Should not happen if keys exist
+                continue; // Continue to erase the found key
+            }
+            
+            p_leaf = next_leaf;
+            offset = found_pos.pos;
+            exact_match = true;
+        }
+        
         // Verify key at current position
         BOOST_ASSERT( eq( p_leaf->keys[ offset ], keys_to_remove[ key_idx ] ) );
 
@@ -2782,31 +2801,13 @@ bp_tree_impl<Key, Comparator>::erase_sorted( std::span<Key const> const keys_to_
 
         // Check if next key is at the current position
         if ( offset < p_leaf->num_vals && eq( p_leaf->keys[ offset ], keys_to_remove[ key_idx ] ) )
-            continue;
-
-        // Use find_next to locate the next key
-        auto [next_leaf, found_pos]{ find_next( *p_leaf, offset, keys_to_remove[ key_idx ] ) };
-        if ( !found_pos.exact_find ) [[ unlikely ]]
         {
-            // Key not found via find_next - fall back to find_nodes_for
-            while ( key_idx < keys_to_remove.size() )
-            {
-                auto location{ find_nodes_for( keys_to_remove[ key_idx ], unique ) };
-                if ( location.leaf_offset.exact_find )
-                {
-                    p_leaf = &location.leaf;
-                    offset = location.leaf_offset.pos;
-                    break;
-                }
-                ++key_idx;
-            }
-            if ( key_idx >= keys_to_remove.size() )
-                break;
+            exact_match = true;
             continue;
         }
-
-        p_leaf = next_leaf;
-        offset = found_pos.pos;
+        
+        // Mark that we don't have an exact match - next iteration will use find_next
+        exact_match = false;
     }
 
     return erased_count;
