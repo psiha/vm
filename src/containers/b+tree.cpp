@@ -39,6 +39,7 @@ bptree_base::bptree_base() noexcept = default;
 void bptree_base::clear() noexcept
 {
     nodes_.clear();
+    update_cached_pointers(); // required for targets which cannot downsize mappings but have to unmap-remap (e.g. Windows)
     hdr() = {};
 }
 
