@@ -119,6 +119,8 @@ public:
     using difference_type = std::make_signed_t<size_type>;
     using storage_result  = err::fallible_result<void, error>;
 
+    static bool constexpr all_bulk_erase_keys_must_exist{ true };
+
     bptree_base() noexcept;
 
     [[ gnu::pure ]] bool empty() const noexcept { return BOOST_UNLIKELY( size() == 0 ); }
@@ -2352,6 +2354,9 @@ private:
     }
 
 protected:
+    size_type replace_keys_inplace( std::span<Key const> old_keys, std::span<Key const> new_keys, bool unique ) noexcept;
+    size_type erase_sorted        ( std::span<Key const> keys_to_remove                         , bool unique ) noexcept;
+
     // upper_bound find >limited to/within a node<
     [[ using gnu: pure, hot, noinline, sysv_abi, leaf ]]
     static node_size_type upper_bound( Key const keys[], node_size_type const num_vals, Reg auto const key, pass_in_reg<Comparator> const comparator ) noexcept
@@ -2615,9 +2620,197 @@ private:
         Key const source1[], node_size_type source1_size,
         Key       target [], bool unique
     ) const noexcept;
+
 }; // class bp_tree_impl
 
 PSI_WARNING_DISABLE_POP()
+
+
+//--------------------------------------------------------------------------
+// Replace keys in-place (used for row index updates after compaction).
+//
+// When row indices change but the sort order (determined by the comparator
+// looking up coordinate values) remains the same, this method replaces old
+// row indices with new ones using efficient tree traversal.
+//
+// Preconditions:
+// - old_keys and new_keys have the same size
+// - Both spans are sorted by the tree's comparator ordering
+// - Each old_keys[i] exists in the tree
+// - Each pair (old_keys[i], new_keys[i]) compares equivalent (same position)
+//
+// Returns: number of keys replaced (i.e. old_keys.size())
+//--------------------------------------------------------------------------
+
+template <typename Key, typename Comparator>
+bp_tree_impl<Key, Comparator>::size_type
+bp_tree_impl<Key, Comparator>::replace_keys_inplace( std::span<Key const> const old_keys, std::span<Key const> const new_keys, bool const unique ) noexcept
+{
+    BOOST_ASSERT( old_keys.size() == new_keys.size() );
+    BOOST_ASSERT( this   ->size() >= old_keys.size() || !this->all_bulk_erase_keys_must_exist );
+    if ( old_keys.empty() || ( !this->all_bulk_erase_keys_must_exist && this->empty() ) )
+        return 0;
+
+    size_type replaced{ 0 };
+    size_t    key_idx { 0 };
+
+    // Find starting position for first key
+    auto const location{ find_nodes_for( old_keys[ key_idx ], unique ) };
+    if ( !location.leaf_offset.exact_find ) [[ unlikely ]] {
+        BOOST_ASSUME( !this->all_bulk_erase_keys_must_exist );
+        return 0; // First key not found
+    }
+
+    auto p_leaf{ &location.leaf };
+    auto offset{ location.leaf_offset.pos };
+
+    while ( key_idx < old_keys.size() )
+    {
+        // Verify and replace the key at current position
+        BOOST_ASSERT( p_leaf->keys[ offset ] == old_keys[ key_idx ] );
+        BOOST_ASSERT_MSG(
+            eq( old_keys[ key_idx ], new_keys[ key_idx ] ),
+            "Replacement key must compare equivalent to old key (same ordering position)"
+        );
+        p_leaf->keys[ offset ] = new_keys[ key_idx ];
+        ++replaced;
+        ++key_idx;
+
+        if ( key_idx >= old_keys.size() )
+            break;
+
+        // Find next key - first optimistically try within current leaf
+        ++offset;
+        if ( offset < p_leaf->num_vals ) [[ likely ]]
+        {
+            // Try in-leaf lower_bound for next key
+            auto const pos{ lower_bound( *p_leaf, offset, old_keys[ key_idx ] ) };
+            if ( pos.exact_find ) [[ likely ]]
+            {
+                offset = pos.pos;
+                continue;
+            }
+        }
+
+        // Key not in current leaf - use find_next to jump to it
+        auto const [next_leaf, next_pos]{ find_next( *p_leaf, offset, old_keys[ key_idx ] ) };
+        if ( !next_pos.exact_find ) [[ unlikely ]] {
+            BOOST_ASSUME( !this->all_bulk_erase_keys_must_exist );
+            break; // Key not found
+        }
+
+        p_leaf = next_leaf;
+        offset = next_pos.pos;
+    }
+
+    BOOST_ASSERT( replaced == old_keys.size() );
+    return replaced;
+}
+
+//--------------------------------------------------------------------------
+// Bulk erase with pre-sorted keys.
+//
+// Removes multiple keys using find_nodes_for for the first key, then
+// find_next for subsequent keys to avoid repeated tree traversals.
+//
+// Preconditions:
+// - keys_to_remove is sorted by the tree's comparator ordering
+//
+// Returns: number of keys actually removed
+//--------------------------------------------------------------------------
+
+template <typename Key, typename Comparator>
+bp_tree_impl<Key, Comparator>::size_type
+bp_tree_impl<Key, Comparator>::erase_sorted( std::span<Key const> const keys_to_remove, bool const unique ) noexcept
+{
+    BOOST_ASSERT( this->size() >= keys_to_remove.size() || !this->all_bulk_erase_keys_must_exist );
+    if ( keys_to_remove.empty() || ( !this->all_bulk_erase_keys_must_exist && this->empty() ) )
+        return 0;
+
+    BOOST_ASSERT( std::ranges::is_sorted( keys_to_remove, comp() ) );
+
+    size_type erased_count{ 0 };
+    size_t    key_idx     { 0 };
+
+    // Find first key with full tree traversal
+    leaf_node * p_leaf{ nullptr };
+    node_size_type offset{ 0 };
+    // TODO a loop is not necessary - simply use the first result of find_nodes_for - if no exact hit was found the find_next in the main loop should find the next hit
+    // (probably requires a restructuring of the main loop)
+    while ( key_idx < keys_to_remove.size() )
+    {
+        auto const location{ find_nodes_for( keys_to_remove[ key_idx ], unique ) };
+        if ( location.leaf_offset.exact_find )
+        {
+            p_leaf = &location.leaf;
+            offset = location.leaf_offset.pos;
+            break;
+        }
+        ++key_idx;
+    }
+    if ( !p_leaf )
+        return 0;
+
+    while ( key_idx < keys_to_remove.size() )
+    {
+        // Verify key at current position
+        BOOST_ASSERT( eq( p_leaf->keys[ offset ], keys_to_remove[ key_idx ] ) );
+
+        // Update separator key if erasing at position 0
+        if ( offset == 0 && p_leaf->num_vals > 1 ) [[ unlikely ]]
+        {
+            this->update_separator( *p_leaf, p_leaf->keys[ 1 ] );
+        }
+
+        // Erase the key
+        auto next_pos{ this->erase( *p_leaf, offset ) };
+        ++erased_count;
+        ++key_idx;
+
+        if ( key_idx >= keys_to_remove.size() || this->empty() )
+            break;
+
+        // Find next key using find_next from current position
+        if ( !next_pos.node ) [[ unlikely ]]
+        {
+            // At end of tree - should not happen if keys exist
+            break;
+        }
+
+        p_leaf = &this->leaf( next_pos.node );
+        offset = next_pos.value_offset;
+
+        // Check if next key is at the current position
+        if ( offset < p_leaf->num_vals && eq( p_leaf->keys[ offset ], keys_to_remove[ key_idx ] ) )
+            continue;
+
+        // Use find_next to locate the next key
+        auto [next_leaf, found_pos]{ find_next( *p_leaf, offset, keys_to_remove[ key_idx ] ) };
+        if ( !found_pos.exact_find ) [[ unlikely ]]
+        {
+            // Key not found via find_next - fall back to find_nodes_for
+            while ( key_idx < keys_to_remove.size() )
+            {
+                auto location{ find_nodes_for( keys_to_remove[ key_idx ], unique ) };
+                if ( location.leaf_offset.exact_find )
+                {
+                    p_leaf = &location.leaf;
+                    offset = location.leaf_offset.pos;
+                    break;
+                }
+                ++key_idx;
+            }
+            if ( key_idx >= keys_to_remove.size() )
+                break;
+            continue;
+        }
+
+        p_leaf = next_leaf;
+        offset = found_pos.pos;
+    }
+
+    return erased_count;
+}
 
 
 template <typename Key, typename Comparator>
@@ -3472,6 +3665,9 @@ public:
         this->hdr().size_ -= count;
         return count;
     }
+
+    size_type replace_keys_inplace( std::span<Key const> const old_keys, std::span<Key const> const new_keys ) noexcept { return impl_base::replace_keys_inplace( old_keys, new_keys, unique ); }
+    size_type erase_sorted        ( std::span<Key const> const keys_to_remove ) noexcept { return impl_base::erase_sorted( keys_to_remove, unique ); }
 
 private:
     [[ using gnu: pure, sysv_abi ]]
