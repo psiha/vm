@@ -2679,7 +2679,7 @@ bp_tree_impl<Key, Comparator>::replace_keys_inplace( std::span<Key const> const 
         if ( key_idx >= old_keys.size() )
             break;
 
-        // Find next key - first optimistially try within current leaf
+        // Find next key - first optimistically try within current leaf
         ++offset;
         if ( offset < p_leaf->num_vals ) [[ likely ]]
         {
