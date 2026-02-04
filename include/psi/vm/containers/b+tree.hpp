@@ -2762,16 +2762,14 @@ bp_tree_impl<Key, Comparator>::erase_sorted( std::span<Key const> const keys_to_
                 }
                 if ( key_idx >= keys_to_remove.size() )
                     break;
-                if ( !exact_match )
-                    break; // Should not happen if keys exist
                 continue; // Continue to erase the found key
             }
-            
+
             p_leaf = next_leaf;
             offset = found_pos.pos;
             exact_match = true;
         }
-        
+
         // Verify key at current position
         BOOST_ASSERT( eq( p_leaf->keys[ offset ], keys_to_remove[ key_idx ] ) );
 
@@ -2805,7 +2803,7 @@ bp_tree_impl<Key, Comparator>::erase_sorted( std::span<Key const> const keys_to_
             exact_match = true;
             continue;
         }
-        
+
         // Mark that we don't have an exact match - next iteration will use find_next
         exact_match = false;
     }
