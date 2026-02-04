@@ -1,3 +1,0 @@
-/home/runner/work/vm/vm/_codeql_build_dir/_deps/type_traits-subbuild/CMakeFiles/type_traits-populate.dir
-/home/runner/work/vm/vm/_codeql_build_dir/_deps/type_traits-subbuild/CMakeFiles/edit_cache.dir
-/home/runner/work/vm/vm/_codeql_build_dir/_deps/type_traits-subbuild/CMakeFiles/rebuild_cache.dir

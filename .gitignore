@@ -2,5 +2,6 @@
 
 out/*
 build/*
+_codeql_build_dir/*
 bin/*
 .vs/*

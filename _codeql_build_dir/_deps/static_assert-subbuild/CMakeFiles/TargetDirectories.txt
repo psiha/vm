@@ -1,3 +1,0 @@
-/home/runner/work/vm/vm/_codeql_build_dir/_deps/static_assert-subbuild/CMakeFiles/static_assert-populate.dir
-/home/runner/work/vm/vm/_codeql_build_dir/_deps/static_assert-subbuild/CMakeFiles/edit_cache.dir
-/home/runner/work/vm/vm/_codeql_build_dir/_deps/static_assert-subbuild/CMakeFiles/rebuild_cache.dir
