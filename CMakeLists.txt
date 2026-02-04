@@ -14,12 +14,20 @@ file(
   ${CMAKE_CURRENT_BINARY_DIR}/cmake/get_cpm.cmake
 )
 set( CPM_SOURCE_CACHE "${CMAKE_CURRENT_BINARY_DIR}/deps" )
+
+if ( APPLE ) # :wat: GH CI
+    set( GIT_EXECUTABLE /usr/bin/git CACHE FILEPATH "Path to git executable" FORCE )
+    message( STATUS "Using git: ${GIT_EXECUTABLE}" )
+    execute_process( COMMAND ${GIT_EXECUTABLE} --version OUTPUT_VARIABLE GIT_VERSION_OUTPUT )
+    message( STATUS "Git version: ${GIT_VERSION_OUTPUT}" )
+endif()
+
 include( ${CMAKE_CURRENT_BINARY_DIR}/cmake/get_cpm.cmake )
 
 
 # Add packages
 
-set( boost_ver boost-1.89.0 )
+set( boost_ver boost-1.90.0 )
 CPMAddPackage( "gh:boostorg/static_assert#${boost_ver}"   ) # Boost::core dependency
 CPMAddPackage( "gh:boostorg/throw_exception#${boost_ver}" ) # Boost::core dependency
 CPMAddPackage( "gh:boostorg/config#${boost_ver}"          ) # Boost::core dependency
