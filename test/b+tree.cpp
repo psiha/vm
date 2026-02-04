@@ -459,13 +459,13 @@ TEST( bp_tree, insert_triggers_multiple_splits )
 {
     // Test that exercises repeated splits during bulk insert,
     // ensuring node boundary handling works correctly across multiple splits
-    
+
     bptree_set<unsigned> bpt;
     bpt.map_memory();
 
     auto constexpr max_per_node{ decltype(bpt)::leaf_node::max_values };
     auto const test_size{ max_per_node * 5 }; // Enough to cause multiple splits
-    
+
     // First insert: every 3rd number
     tr_vector<unsigned> first_batch;
     for ( auto i{ 0U }; i < test_size; i += 3 )
@@ -481,11 +481,549 @@ TEST( bp_tree, insert_triggers_multiple_splits )
     }
 
     EXPECT_EQ( bpt.insert( second_batch ), second_batch.size() );
-    
+
     // Verify correctness
     EXPECT_EQ( bpt.size(), static_cast<std::size_t>( test_size ) );
     EXPECT_TRUE( std::ranges::is_sorted( bpt, bpt.comp() ) );
     EXPECT_TRUE( std::ranges::equal( bpt, std::views::iota( 0, test_size ) ) );
+}
+
+//------------------------------------------------------------------------------
+// Helper to verify tree invariants
+//------------------------------------------------------------------------------
+template <typename BPTree>
+void verify_invariants( BPTree const & bpt, std::string_view context = "" )
+{
+    // 1. Tree must be sorted according to its comparator
+    EXPECT_TRUE( std::ranges::is_sorted( bpt, bpt.comp() ) )
+        << "Tree is not sorted" << ( context.empty() ? "" : " after " ) << context;
+
+    // 2. Size must match iteration count
+    auto const iteration_count{ static_cast<std::size_t>( std::distance( bpt.begin(), bpt.end() ) ) };
+    EXPECT_EQ( bpt.size(), iteration_count )
+        << "Size mismatch" << ( context.empty() ? "" : " after " ) << context;
+
+    // 3. Random access iteration must also match
+    auto const ra_count{ static_cast<std::size_t>( std::distance( bpt.ra_begin(), bpt.ra_end() ) ) };
+    EXPECT_EQ( bpt.size(), ra_count )
+        << "Random access size mismatch" << ( context.empty() ? "" : " after " ) << context;
+
+    // 4. Forward and random access iterations must yield same values
+    if ( !bpt.empty() ) {
+        EXPECT_TRUE( std::ranges::equal( bpt, bpt.random_access() ) )
+            << "Forward and random access iterators differ" << ( context.empty() ? "" : " after " ) << context;
+    }
+}
+
+
+namespace {
+    std::vector<int> indirect_values;
+
+    struct indirect_comparator {
+        using is_transparent = std::true_type; // Enable heterogeneous lookup
+
+        bool operator()( unsigned const a, unsigned const b ) const noexcept {
+            return indirect_values[ a ] < indirect_values[ b ];
+        }
+    };
+} // anonymous namespace
+
+TEST( bp_tree, replace_keys_inplace_basic )
+{
+    // Test replace_keys_inplace with a comparator that uses external values.
+    // This simulates the use case where only indirect indices change of otherwise
+    // same values.
+    using tree_type = psi::vm::bp_tree<unsigned, true, indirect_comparator>;
+    tree_type bpt;
+    bpt.map_memory();
+
+    // Setup: 10 rows with values 0, 10, 20, 30, ...
+    indirect_values.resize( 20 );
+    for ( auto i{ 0U }; i < 10; ++i )
+        indirect_values[ i ] = static_cast<int>( i * 10 );
+
+    // Insert row indices 0..9
+    std::vector<unsigned> row_indices{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+    bpt.insert( row_indices );
+    EXPECT_EQ( bpt.size(), 10 );
+
+    // Simulate row compaction: rows 3, 5, 7 get new indices 10, 11, 12
+    // but they still have the same values (30, 50, 70)
+    indirect_values[ 10 ] = 30; // same as row 3
+    indirect_values[ 11 ] = 50; // same as row 5
+    indirect_values[ 12 ] = 70; // same as row 7
+
+    // Replace old row indices with new ones
+    std::array<unsigned, 3> old_rows{ 3, 5, 7 };
+    std::array<unsigned, 3> new_rows{ 10, 11, 12 };
+
+    EXPECT_EQ( bpt.replace_keys_inplace( old_rows, new_rows ), 3 );
+
+    // With custom comparator, find() uses value-based lookup, so find(3) will
+    // still find an entry (key 10 has the same value). We need to verify the
+    // ACTUAL stored keys by looking at what the iterator points to.
+    auto it3 = bpt.find( 3 );
+    ASSERT_NE( it3, bpt.end() ); // Found entry with value 30
+    EXPECT_EQ( *it3, 10U );      // But the stored key should be 10, not 3
+
+    auto it5 = bpt.find( 5 );
+    ASSERT_NE( it5, bpt.end() ); // Found entry with value 50
+    EXPECT_EQ( *it5, 11U );      // But the stored key should be 11, not 5
+
+    auto it7 = bpt.find( 7 );
+    ASSERT_NE( it7, bpt.end() ); // Found entry with value 70
+    EXPECT_EQ( *it7, 12U );      // But the stored key should be 12, not 7
+
+    // Size should remain the same
+    EXPECT_EQ( bpt.size(), 10 );
+
+    // Also verify by collecting all keys
+    std::set<unsigned> expected{ 0, 1, 2, 10, 4, 11, 6, 12, 8, 9 };
+    std::set<unsigned> actual;
+    for ( auto key : bpt )
+        actual.insert( key );
+    EXPECT_EQ( actual, expected );
+
+    indirect_values.clear();
+}
+
+TEST( bp_tree, replace_keys_inplace_empty_input )
+{
+    bptree_set<int> bpt;
+    bpt.map_memory();
+
+    std::ranges::iota_view const numbers{ 0, 50 };
+    auto nums{ std::ranges::to<std::vector>( numbers ) };
+    bpt.insert( nums );
+
+    std::span<int const> empty_old;
+    std::span<int const> empty_new;
+
+    EXPECT_EQ( bpt.replace_keys_inplace( empty_old, empty_new ), 0 );
+    EXPECT_EQ( bpt.size(), 50 );
+}
+
+TEST( bp_tree, replace_keys_inplace_empty_tree )
+{
+    using tree_type = psi::vm::bp_tree<unsigned, true, indirect_comparator>;
+    tree_type bpt;
+    bpt.map_memory();
+
+    if ( !bpt.all_bulk_erase_keys_must_exist )
+    {
+        indirect_values = { 10, 20 };  // values for rows 0 and 1
+
+        std::array<unsigned, 2> old_keys{ 0, 1 };
+        std::array<unsigned, 2> new_keys{ 0, 1 }; // same (tree is empty, won't find them anyway)
+
+        // Should return 0 and not crash on empty tree
+        EXPECT_EQ( bpt.replace_keys_inplace( old_keys, new_keys ), 0 );
+
+        indirect_values.clear();
+    }
+    EXPECT_TRUE( bpt.empty() );
+}
+
+TEST( bp_tree, replace_keys_inplace_all_keys )
+{
+    // Replace all keys in the tree with equivalent-comparing new keys
+    using tree_type = psi::vm::bp_tree<unsigned, true, indirect_comparator>;
+    tree_type bpt;
+    bpt.map_memory();
+
+    auto const test_size{ 100U };
+
+    // Setup values: rows 0..99 have values 0..99, rows 100..199 have same values
+    indirect_values.resize( test_size * 2 );
+    for ( auto i{ 0U }; i < test_size; ++i ) {
+        indirect_values[ i ] = static_cast<int>( i );
+        indirect_values[ i + test_size ] = static_cast<int>( i ); // same values
+    }
+
+    std::vector<unsigned> old_keys( test_size );
+    std::vector<unsigned> new_keys( test_size );
+    for ( auto i{ 0U }; i < test_size; ++i ) {
+        old_keys[ i ] = i;
+        new_keys[ i ] = i + test_size; // new indices with same values
+    }
+
+    bpt.insert( old_keys );
+    EXPECT_EQ( bpt.replace_keys_inplace( old_keys, new_keys ), test_size );
+
+    // Verify all keys are replaced by checking actual stored values
+    // With the custom comparator, find(old_key) finds entries with same value,
+    // but the stored key should be the new key.
+    for ( auto i{ 0U }; i < test_size; ++i ) {
+        auto it = bpt.find( i ); // Finds entry with value i
+        ASSERT_NE( it, bpt.end() );
+        EXPECT_EQ( *it, i + test_size ); // Stored key should be new, not old
+    }
+    EXPECT_EQ( bpt.size(), test_size );
+
+    indirect_values.clear();
+}
+
+TEST( bp_tree, replace_keys_inplace_large_tree )
+{
+    // Test with a larger tree that spans multiple leaves
+    using tree_type = psi::vm::bp_tree<unsigned, true, indirect_comparator>;
+    tree_type bpt;
+    bpt.map_memory();
+
+    auto constexpr max_per_node{ tree_type::leaf_node::max_values };
+    auto const test_size{ max_per_node * 10 }; // Multiple leaves
+    auto const offset{ test_size }; // new indices start here
+
+    // Setup values
+    indirect_values.resize( test_size * 2 );
+    for ( auto i{ 0U }; i < test_size; ++i ) {
+        indirect_values[ i ] = static_cast<int>( i );
+        indirect_values[ i + offset ] = static_cast<int>( i ); // same values
+    }
+
+    std::vector<unsigned> nums( test_size );
+    for ( auto i{ 0U }; i < test_size; ++i )
+        nums[ i ] = i;
+
+    bpt.insert_presorted( nums );
+
+    // Replace every 10th key
+    std::vector<unsigned> old_keys;
+    std::vector<unsigned> new_keys;
+    for ( auto i{ 0U }; i < test_size; i += 10 ) {
+        old_keys.push_back( i );
+        new_keys.push_back( i + offset );
+    }
+
+    EXPECT_EQ( bpt.replace_keys_inplace( old_keys, new_keys ), old_keys.size() );
+
+    // Verify replacements - check actual stored keys
+    for ( size_t i{ 0 }; i < old_keys.size(); ++i ) {
+        auto it = bpt.find( old_keys[ i ] ); // Finds by value
+        ASSERT_NE( it, bpt.end() );
+        EXPECT_EQ( *it, new_keys[ i ] ); // Stored key should be new
+    }
+
+    // Verify unchanged keys are still present with original indices
+    for ( auto i{ 1U }; i < test_size; ++i ) {
+        if ( i % 10 != 0 ) {
+            auto it = bpt.find( i );
+            ASSERT_NE( it, bpt.end() );
+            EXPECT_EQ( *it, i ); // Unchanged keys retain original index
+        }
+    }
+
+    indirect_values.clear();
+}
+
+TEST( bp_tree, replace_keys_inplace_single_key )
+{
+    using tree_type = psi::vm::bp_tree<unsigned, true, indirect_comparator>;
+    tree_type bpt;
+    bpt.map_memory();
+
+    // Values: row 0-4 have values 10,20,30,40,50. Row 10 has value 30 (same as row 2)
+    indirect_values = { 10, 20, 30, 40, 50, 0, 0, 0, 0, 0, 30 };
+
+    bpt.insert( { 0U, 1U, 2U, 3U, 4U } );
+
+    std::array<unsigned, 1> old_key{ 2U };
+    std::array<unsigned, 1> new_key{ 10U }; // new index with same value (30)
+
+    EXPECT_EQ( bpt.replace_keys_inplace( old_key, new_key ), 1 );
+
+    // Verify the stored key changed from 2 to 10
+    auto it = bpt.find( 2U ); // Finds entry with value 30
+    ASSERT_NE( it, bpt.end() );
+    EXPECT_EQ( *it, 10U ); // But stored key should be 10, not 2
+
+    EXPECT_EQ( bpt.size(), 5 );
+
+    indirect_values.clear();
+}
+
+//------------------------------------------------------------------------------
+// Tests for erase_sorted (bulk removal for unique btrees)
+//------------------------------------------------------------------------------
+
+TEST( bp_tree, erase_sorted_basic )
+{
+    bptree_set<int> bpt;
+    bpt.map_memory();
+
+    // Insert 0..99
+    std::ranges::iota_view const numbers{ 0, 100 };
+    auto nums{ std::ranges::to<std::vector>( numbers ) };
+    bpt.insert( nums );
+
+    // Remove keys 10, 20, 30 (sorted)
+    std::array<int, 3> keys_to_remove{ 10, 20, 30 };
+    EXPECT_EQ( bpt.erase_sorted( keys_to_remove ), 3 );
+
+    // Verify keys are removed
+    EXPECT_EQ( bpt.find( 10 ), bpt.end() );
+    EXPECT_EQ( bpt.find( 20 ), bpt.end() );
+    EXPECT_EQ( bpt.find( 30 ), bpt.end() );
+
+    // Verify other keys are still present
+    EXPECT_NE( bpt.find( 0 ), bpt.end() );
+    EXPECT_NE( bpt.find( 99 ), bpt.end() );
+    EXPECT_NE( bpt.find( 50 ), bpt.end() );
+
+    EXPECT_EQ( bpt.size(), 97 );
+
+    verify_invariants( bpt, "erase_sorted basic" );
+}
+
+TEST( bp_tree, erase_sorted_empty_input )
+{
+    bptree_set<int> bpt;
+    bpt.map_memory();
+
+    bpt.insert( { 1, 2, 3, 4, 5 } );
+
+    std::span<int const> empty_keys;
+    EXPECT_EQ( bpt.erase_sorted( empty_keys ), 0 );
+    EXPECT_EQ( bpt.size(), 5 );
+}
+
+TEST( bp_tree, erase_sorted_empty_tree )
+{
+    bptree_set<int> bpt;
+    bpt.map_memory();
+    if ( !bpt.all_bulk_erase_keys_must_exist )
+    {
+        std::array<int, 2> keys{ 1, 2 };
+        EXPECT_EQ( bpt.erase_sorted( keys ), 0 );
+    }
+    EXPECT_TRUE( bpt.empty() );
+}
+
+TEST( bp_tree, erase_sorted_all_keys )
+{
+    bptree_set<unsigned> bpt;
+    bpt.map_memory();
+
+    auto const test_size{ 500U };
+    std::vector<unsigned> nums( test_size );
+    for ( auto i{ 0U }; i < test_size; ++i )
+        nums[ i ] = i;
+
+    bpt.insert( nums );
+    EXPECT_EQ( bpt.erase_sorted( nums ), test_size );
+    EXPECT_TRUE( bpt.empty() );
+}
+
+TEST( bp_tree, erase_sorted_large_tree )
+{
+    // Test with a larger tree spanning multiple leaves
+    bptree_set<unsigned> bpt;
+    bpt.map_memory();
+
+    auto constexpr max_per_node{ decltype(bpt)::leaf_node::max_values };
+    auto const test_size{ max_per_node * 10U };
+
+    std::vector<unsigned> nums( test_size );
+    for ( auto i{ 0U }; i < test_size; ++i )
+        nums[ i ] = i;
+
+    bpt.insert_presorted( nums );
+
+    // Remove every 5th key
+    std::vector<unsigned> keys_to_remove;
+    for ( auto i{ 0U }; i < test_size; i += 5 )
+        keys_to_remove.push_back( i );
+
+    EXPECT_EQ( bpt.erase_sorted( keys_to_remove ), keys_to_remove.size() );
+
+    // Verify
+    for ( auto k : keys_to_remove )
+        EXPECT_EQ( bpt.find( k ), bpt.end() );
+
+    // Verify remaining keys
+    for ( auto i{ 0U }; i < test_size; ++i ) {
+        if ( i % 5 != 0 )
+            EXPECT_NE( bpt.find( i ), bpt.end() );
+    }
+
+    EXPECT_EQ( bpt.size(), test_size - keys_to_remove.size() );
+    verify_invariants( bpt, "erase_sorted large tree" );
+}
+
+TEST( bp_tree, erase_sorted_nonexistent_keys )
+{
+    bptree_set<int> bpt;
+    bpt.map_memory();
+
+    bpt.insert( { 2, 4, 6, 8, 10 } );
+
+    // Try to remove keys that don't exist (odd numbers)
+    std::array<int, 3> nonexistent{ 1, 3, 5 };
+    EXPECT_EQ( bpt.erase_sorted( nonexistent ), 0 );
+    EXPECT_EQ( bpt.size(), 5 );
+}
+
+TEST( bp_tree, erase_sorted_mixed_existing_nonexisting )
+{
+    bptree_set<int> bpt;
+    bpt.map_memory();
+
+    bpt.insert( { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 } );
+
+    // Mix of existing (2, 4, 6) and non-existing (11, 12)
+    std::array<int, 5> keys{ 2, 4, 6, 11, 12 };
+    EXPECT_EQ( bpt.erase_sorted( keys ), 3 ); // Only 3 exist
+
+    EXPECT_EQ( bpt.find( 2 ), bpt.end() );
+    EXPECT_EQ( bpt.find( 4 ), bpt.end() );
+    EXPECT_EQ( bpt.find( 6 ), bpt.end() );
+    EXPECT_NE( bpt.find( 1 ), bpt.end() );
+    EXPECT_NE( bpt.find( 3 ), bpt.end() );
+    EXPECT_EQ( bpt.size(), 7 );
+
+    verify_invariants( bpt, "erase_sorted mixed" );
+}
+
+TEST( bp_tree, erase_sorted_single_key )
+{
+    bptree_set<int> bpt;
+    bpt.map_memory();
+
+    bpt.insert( { 1, 2, 3, 4, 5 } );
+
+    std::array<int, 1> key{ 3 };
+    EXPECT_EQ( bpt.erase_sorted( key ), 1 );
+    EXPECT_EQ( bpt.find( 3 ), bpt.end() );
+    EXPECT_EQ( bpt.size(), 4 );
+}
+
+TEST( bp_tree, erase_sorted_triggers_underflow )
+{
+    // Test that underflow handling works correctly
+    bptree_set<unsigned> bpt;
+    bpt.map_memory();
+
+    auto constexpr max_per_node{ decltype(bpt)::leaf_node::max_values };
+    auto constexpr min_per_node{ decltype(bpt)::leaf_node::min_values };
+
+    // Create tree with multiple leaves
+    auto const test_size{ max_per_node * 3U };
+    std::vector<unsigned> nums( test_size );
+    for ( auto i{ 0U }; i < test_size; ++i )
+        nums[ i ] = i;
+
+    bpt.insert_presorted( nums );
+
+    // Remove enough keys from middle to trigger underflow
+    std::vector<unsigned> keys_to_remove;
+    for ( auto i{ max_per_node }; i < max_per_node + min_per_node + 1; ++i )
+        keys_to_remove.push_back( i );
+
+    auto const removed{ bpt.erase_sorted( keys_to_remove ) };
+    EXPECT_EQ( removed, keys_to_remove.size() );
+
+    // Tree should still be valid - verify all invariants
+    verify_invariants( bpt, "erase_sorted underflow" );
+    EXPECT_EQ( bpt.size(), test_size - keys_to_remove.size() );
+
+    // Verify removed keys are gone
+    for ( auto k : keys_to_remove )
+        EXPECT_EQ( bpt.find( k ), bpt.end() );
+
+    // Verify remaining keys are present
+    for ( auto i{ 0U }; i < test_size; ++i ) {
+        bool const was_removed{ i >= max_per_node && i < max_per_node + min_per_node + 1 };
+        if ( !was_removed )
+            EXPECT_NE( bpt.find( i ), bpt.end() );
+    }
+}
+
+TEST( bp_tree, erase_sorted_first_leaf )
+{
+    // Test removing all keys from the first leaf (which has no left sibling)
+    bptree_set<unsigned> bpt;
+    bpt.map_memory();
+
+    auto constexpr max_per_node{ decltype(bpt)::leaf_node::max_values };
+
+    // Create tree with multiple leaves
+    auto const test_size{ max_per_node * 3U };
+    std::vector<unsigned> nums( test_size );
+    for ( auto i{ 0U }; i < test_size; ++i )
+        nums[ i ] = i;
+
+    bpt.insert_presorted( nums );
+
+    // Remove all keys from the first leaf (keys 0 to max_per_node-1)
+    std::vector<unsigned> keys_to_remove;
+    for ( auto i{ 0U }; i < max_per_node; ++i )
+        keys_to_remove.push_back( i );
+
+    auto const removed{ bpt.erase_sorted( keys_to_remove ) };
+    EXPECT_EQ( removed, keys_to_remove.size() );
+
+    // Tree should still be valid - verify all invariants
+    verify_invariants( bpt, "erase_sorted first leaf" );
+    EXPECT_EQ( bpt.size(), test_size - keys_to_remove.size() );
+
+    // Verify removed keys are gone
+    for ( auto k : keys_to_remove )
+        EXPECT_EQ( bpt.find( k ), bpt.end() );
+
+    // Verify remaining keys are present
+    for ( auto i{ max_per_node }; i < test_size; ++i ) {
+        EXPECT_NE( bpt.find( i ), bpt.end() );
+    }
+}
+
+TEST( bp_tree, erase_sorted_from_beginning )
+{
+    // Test removing keys from the beginning of the tree
+    bptree_set<unsigned> bpt;
+    bpt.map_memory();
+
+    auto constexpr max_per_node{ decltype(bpt)::leaf_node::max_values };
+
+    // Create tree with multiple leaves
+    auto const test_size{ max_per_node * 4U };
+    std::vector<unsigned> nums( test_size );
+    for ( auto i{ 0U }; i < test_size; ++i )
+        nums[ i ] = i;
+
+    bpt.insert_presorted( nums );
+
+    // Remove the first few keys (within first leaf, but not all of them)
+    std::vector<unsigned> keys_to_remove;
+    for ( auto i{ 0U }; i < max_per_node / 2; ++i )
+        keys_to_remove.push_back( i );
+
+    auto const removed{ bpt.erase_sorted( keys_to_remove ) };
+    EXPECT_EQ( removed, keys_to_remove.size() );
+
+    verify_invariants( bpt, "erase_sorted from beginning" );
+    EXPECT_EQ( bpt.size(), test_size - keys_to_remove.size() );
+}
+
+TEST( bp_tree, erase_sorted_single_leaf_tree )
+{
+    // Test erase_sorted on a tree with a single leaf (which is also the root)
+    bptree_set<int> bpt;
+    bpt.map_memory();
+
+    // Insert just a few elements (will fit in single leaf)
+    bpt.insert( { 1, 2, 3, 4, 5 } );
+
+    // Remove some keys
+    std::array<int, 2> keys{ 2, 4 };
+    EXPECT_EQ( bpt.erase_sorted( keys ), 2 );
+
+    verify_invariants( bpt, "erase_sorted single leaf" );
+    EXPECT_EQ( bpt.size(), 3 );
+
+    // Remove remaining keys
+    std::array<int, 3> remaining{ 1, 3, 5 };
+    EXPECT_EQ( bpt.erase_sorted( remaining ), 3 );
+    EXPECT_TRUE( bpt.empty() );
 }
 
 //------------------------------------------------------------------------------
