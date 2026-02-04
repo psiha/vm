@@ -24,18 +24,21 @@ jobs:
       #
       # To add more build types (Release, Debug, RelWithDebInfo, etc.) customize the build_type list.
       matrix:
-        os: [ubuntu-latest, windows-2025, macos-26]
+        os: [ubuntu-latest, windows-latest, macos-26]
         build_type: [Debug, Release]
         include:
-          - os: windows-2025
+          - os: windows-latest
             c_compiler: msvc
             cpp_compiler: msvc
+            cmake_generator: -G Ninja
           - os: ubuntu-latest
             c_compiler: clang
             cpp_compiler: clang++
+            cmake_generator: -G Ninja
           - os: macos-26
             c_compiler: clang
             cpp_compiler: clang++
+            cmake_generator: -G Ninja
 
     steps:
     - uses: actions/checkout@v4
@@ -48,17 +51,29 @@ jobs:
       with:
         xcode-version: latest
 
-    # For x64 OSX this action offers only v15 https://github.com/KyleMayes/install-llvm-action/blob/master/assets.json
-    # luckily latest is now ARM by default:
-    # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#supported-runners-and-hardware-resources
-    - name: Install LLVM and Clang on MacOS
+    - name: Install LLVM on MacOS
       if: matrix.os == 'macos-26'
-      uses: KyleMayes/install-llvm-action@v2.0.8
-      with:
-        # https://github.com/KyleMayes/install-llvm-action/issues/65
-        arch: arm64
-        version: 20
-        env: true
+      run: |
+        # https://github.com/llvm/llvm-project/releases
+        LLVM_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/LLVM-21.1.8-macOS-ARM64.tar.xz"
+        echo "Downloading from $LLVM_URL"
+        curl -L -o llvm.tar.xz $LLVM_URL
+        mkdir -p $HOME/llvm
+        tar -xf llvm.tar.xz --strip-components=1 -C $HOME/llvm
+        echo "LLVM installed to $HOME/llvm"
+        echo "$HOME/llvm/bin" >> $GITHUB_PATH
+        echo "LLVM_PATH=$HOME/llvm" >> $GITHUB_ENV
+
+        LIB_PATH="$HOME/llvm/lib"
+        echo "LD_LIBRARY_PATH=$LIB_PATH:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+        echo "$HOME/llvm/bin" >> $GITHUB_PATH
+
+        # Ensure system libraries are first on ARM64 macOS to avoid issues with Apple's libc++
+        DYLD_PREFIX="/usr/lib:"
+        echo "DYLD_LIBRARY_PATH=${DYLD_PREFIX}$LIB_PATH:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
+
+        echo "CC=$HOME/llvm/bin/clang" >> $GITHUB_ENV
+        echo "CXX=$HOME/llvm/bin/clang++" >> $GITHUB_ENV
 
     - name: Install LLVM and Clang on Linux
       if: matrix.os == 'ubuntu-latest'
@@ -87,7 +102,7 @@ jobs:
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
       run: >
         cmake -B ${{ steps.strings.outputs.build-output-dir }}
-        ${{ matrix.cmake_toolchain }}
+        ${{ matrix.cmake_generator }}
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
         -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
@@ -96,9 +111,9 @@ jobs:
 
     - name: Build
       # Build your program with the given configuration. Note that --config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
-      run: >
-        cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} &&
-        cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} --target vm_unit_tests
+      run: |
+        cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} -j
+        cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} --target vm_unit_tests -j
 
 
     - name: Test
