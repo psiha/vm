@@ -562,15 +562,15 @@ TEST( bp_tree, replace_keys_inplace_basic )
     // With custom comparator, find() uses value-based lookup, so find(3) will
     // still find an entry (key 10 has the same value). We need to verify the
     // ACTUAL stored keys by looking at what the iterator points to.
-    auto it3 = bpt.find( 3 );
+    auto it3 = bpt.find( 3U );
     ASSERT_NE( it3, bpt.end() ); // Found entry with value 30
     EXPECT_EQ( *it3, 10U );      // But the stored key should be 10, not 3
 
-    auto it5 = bpt.find( 5 );
+    auto it5 = bpt.find( 5U );
     ASSERT_NE( it5, bpt.end() ); // Found entry with value 50
     EXPECT_EQ( *it5, 11U );      // But the stored key should be 11, not 5
 
-    auto it7 = bpt.find( 7 );
+    auto it7 = bpt.find( 7U );
     ASSERT_NE( it7, bpt.end() ); // Found entry with value 70
     EXPECT_EQ( *it7, 12U );      // But the stored key should be 12, not 7
 
