@@ -51,6 +51,17 @@ jobs:
       with:
         xcode-version: latest
 
+    - name: macOS upgrade tools # :wat:
+      if: matrix.os == 'macos-26'
+      run: |
+        brew upgrade cmake
+        brew upgrade git
+        # Verify which git will be used
+        which git
+        git --version
+        # Ensure Homebrew's git is first in PATH
+        echo "/opt/homebrew/bin" >> $GITHUB_PATH
+
     - name: Install LLVM on MacOS
       if: matrix.os == 'macos-26'
       run: |
