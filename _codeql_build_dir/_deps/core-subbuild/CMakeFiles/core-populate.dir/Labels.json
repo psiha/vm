@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/core-subbuild/CMakeFiles/core-populate"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/core-subbuild/CMakeFiles/core-populate.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/core-subbuild/CMakeFiles/core-populate-complete.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/core-subbuild/core-populate-prefix/src/core-populate-stamp/core-populate-build.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/core-subbuild/core-populate-prefix/src/core-populate-stamp/core-populate-configure.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/core-subbuild/core-populate-prefix/src/core-populate-stamp/core-populate-download.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/core-subbuild/core-populate-prefix/src/core-populate-stamp/core-populate-install.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/core-subbuild/core-populate-prefix/src/core-populate-stamp/core-populate-mkdir.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/core-subbuild/core-populate-prefix/src/core-populate-stamp/core-populate-patch.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/core-subbuild/core-populate-prefix/src/core-populate-stamp/core-populate-test.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/core-subbuild/core-populate-prefix/src/core-populate-stamp/core-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"core-populate"
+		],
+		"name" : "core-populate"
+	}
+}

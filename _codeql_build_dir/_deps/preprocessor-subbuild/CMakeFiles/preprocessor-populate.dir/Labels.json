@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/preprocessor-subbuild/CMakeFiles/preprocessor-populate"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/preprocessor-subbuild/CMakeFiles/preprocessor-populate.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/preprocessor-subbuild/CMakeFiles/preprocessor-populate-complete.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/preprocessor-subbuild/preprocessor-populate-prefix/src/preprocessor-populate-stamp/preprocessor-populate-build.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/preprocessor-subbuild/preprocessor-populate-prefix/src/preprocessor-populate-stamp/preprocessor-populate-configure.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/preprocessor-subbuild/preprocessor-populate-prefix/src/preprocessor-populate-stamp/preprocessor-populate-download.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/preprocessor-subbuild/preprocessor-populate-prefix/src/preprocessor-populate-stamp/preprocessor-populate-install.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/preprocessor-subbuild/preprocessor-populate-prefix/src/preprocessor-populate-stamp/preprocessor-populate-mkdir.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/preprocessor-subbuild/preprocessor-populate-prefix/src/preprocessor-populate-stamp/preprocessor-populate-patch.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/preprocessor-subbuild/preprocessor-populate-prefix/src/preprocessor-populate-stamp/preprocessor-populate-test.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/preprocessor-subbuild/preprocessor-populate-prefix/src/preprocessor-populate-stamp/preprocessor-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"preprocessor-populate"
+		],
+		"name" : "preprocessor-populate"
+	}
+}

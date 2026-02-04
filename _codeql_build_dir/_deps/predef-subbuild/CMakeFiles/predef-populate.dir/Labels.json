@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/CMakeFiles/predef-populate"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/CMakeFiles/predef-populate.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/CMakeFiles/predef-populate-complete.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/predef-populate-prefix/src/predef-populate-stamp/predef-populate-build.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/predef-populate-prefix/src/predef-populate-stamp/predef-populate-configure.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/predef-populate-prefix/src/predef-populate-stamp/predef-populate-download.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/predef-populate-prefix/src/predef-populate-stamp/predef-populate-install.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/predef-populate-prefix/src/predef-populate-stamp/predef-populate-mkdir.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/predef-populate-prefix/src/predef-populate-stamp/predef-populate-patch.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/predef-populate-prefix/src/predef-populate-stamp/predef-populate-test.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/predef-populate-prefix/src/predef-populate-stamp/predef-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"predef-populate"
+		],
+		"name" : "predef-populate"
+	}
+}

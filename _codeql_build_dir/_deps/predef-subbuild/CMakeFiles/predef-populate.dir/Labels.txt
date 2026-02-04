@@ -1,0 +1,14 @@
+# Target labels
+ predef-populate
+# Source files and their labels
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/CMakeFiles/predef-populate
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/CMakeFiles/predef-populate.rule
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/CMakeFiles/predef-populate-complete.rule
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/predef-populate-prefix/src/predef-populate-stamp/predef-populate-build.rule
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/predef-populate-prefix/src/predef-populate-stamp/predef-populate-configure.rule
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/predef-populate-prefix/src/predef-populate-stamp/predef-populate-download.rule
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/predef-populate-prefix/src/predef-populate-stamp/predef-populate-install.rule
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/predef-populate-prefix/src/predef-populate-stamp/predef-populate-mkdir.rule
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/predef-populate-prefix/src/predef-populate-stamp/predef-populate-patch.rule
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/predef-populate-prefix/src/predef-populate-stamp/predef-populate-test.rule
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/predef-subbuild/predef-populate-prefix/src/predef-populate-stamp/predef-populate-update.rule

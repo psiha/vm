@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/config-subbuild/CMakeFiles/config-populate"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/config-subbuild/CMakeFiles/config-populate.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/config-subbuild/CMakeFiles/config-populate-complete.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/config-subbuild/config-populate-prefix/src/config-populate-stamp/config-populate-build.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/config-subbuild/config-populate-prefix/src/config-populate-stamp/config-populate-configure.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/config-subbuild/config-populate-prefix/src/config-populate-stamp/config-populate-download.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/config-subbuild/config-populate-prefix/src/config-populate-stamp/config-populate-install.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/config-subbuild/config-populate-prefix/src/config-populate-stamp/config-populate-mkdir.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/config-subbuild/config-populate-prefix/src/config-populate-stamp/config-populate-patch.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/config-subbuild/config-populate-prefix/src/config-populate-stamp/config-populate-test.rule"
+		},
+		{
+			"file" : "/home/runner/work/vm/vm/_codeql_build_dir/_deps/config-subbuild/config-populate-prefix/src/config-populate-stamp/config-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"config-populate"
+		],
+		"name" : "config-populate"
+	}
+}

@@ -1,0 +1,3 @@
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/build-subbuild/CMakeFiles/build-populate.dir
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/build-subbuild/CMakeFiles/edit_cache.dir
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/build-subbuild/CMakeFiles/rebuild_cache.dir

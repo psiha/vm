@@ -1,0 +1,5 @@
+if(EXISTS "/home/runner/work/vm/vm/_codeql_build_dir/test/vm_unit_tests[1]_tests.cmake")
+  include("/home/runner/work/vm/vm/_codeql_build_dir/test/vm_unit_tests[1]_tests.cmake")
+else()
+  add_test(vm_unit_tests_NOT_BUILT vm_unit_tests_NOT_BUILT)
+endif()

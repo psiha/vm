@@ -1,0 +1,3 @@
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/preprocessor-subbuild/CMakeFiles/preprocessor-populate.dir
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/preprocessor-subbuild/CMakeFiles/edit_cache.dir
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/preprocessor-subbuild/CMakeFiles/rebuild_cache.dir

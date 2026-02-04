@@ -1,0 +1,3 @@
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/winapi-subbuild/CMakeFiles/winapi-populate.dir
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/winapi-subbuild/CMakeFiles/edit_cache.dir
+/home/runner/work/vm/vm/_codeql_build_dir/_deps/winapi-subbuild/CMakeFiles/rebuild_cache.dir
