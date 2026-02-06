@@ -1027,5 +1027,213 @@ TEST( bp_tree, erase_sorted_single_leaf_tree )
 }
 
 //------------------------------------------------------------------------------
+// Tests for erase_sorted_exact (bulk removal requiring exact key equality)
+//------------------------------------------------------------------------------
+
+TEST( bp_tree, erase_sorted_exact_basic )
+{
+    // Basic test: erase_sorted_exact should work like erase_sorted for simple types
+    bptree_set<int> bpt;
+    bpt.map_memory();
+
+    // Insert 0..99
+    std::ranges::iota_view const numbers{ 0, 100 };
+    auto nums{ std::ranges::to<std::vector>( numbers ) };
+    bpt.insert( nums );
+
+    // Remove keys 10, 20, 30 (sorted)
+    std::array<int, 3> keys_to_remove{ 10, 20, 30 };
+    EXPECT_EQ( bpt.erase_sorted_exact( keys_to_remove ), 3 );
+
+    // Verify keys are removed
+    EXPECT_EQ( bpt.find( 10 ), bpt.end() );
+    EXPECT_EQ( bpt.find( 20 ), bpt.end() );
+    EXPECT_EQ( bpt.find( 30 ), bpt.end() );
+
+    EXPECT_EQ( bpt.size(), 97 );
+    verify_invariants( bpt, "erase_sorted_exact basic" );
+}
+
+TEST( bp_tree, erase_sorted_exact_with_indirect_comparator )
+{
+    // Test the key feature: with indirect comparator, equivalent but non-equal keys
+    // should NOT be erased.
+    using tree_type = psi::vm::bp_tree<unsigned, true, indirect_comparator>;
+    tree_type bpt;
+    bpt.map_memory();
+
+    // Setup: rows 0-4 have values 10, 20, 30, 40, 50
+    // Rows 10-14 have the SAME values (for testing equivalent but not equal keys)
+    indirect_values.resize( 20 );
+    indirect_values[ 0 ] = 10;
+    indirect_values[ 1 ] = 20;
+    indirect_values[ 2 ] = 30;
+    indirect_values[ 3 ] = 40;
+    indirect_values[ 4 ] = 50;
+    indirect_values[ 10 ] = 10;  // same value as row 0
+    indirect_values[ 11 ] = 20;  // same value as row 1
+    indirect_values[ 12 ] = 30;  // same value as row 2
+
+    // Insert row indices 0-4
+    bpt.insert( { 0U, 1U, 2U, 3U, 4U } );
+    EXPECT_EQ( bpt.size(), 5 );
+
+    // Try to erase rows 10, 11, 12 which have the SAME VALUES but are NOT in the tree
+    // erase_sorted_exact should NOT erase anything because the actual keys (10, 11, 12)
+    // are not present, only keys with equivalent values (0, 1, 2) are present.
+    std::array<unsigned, 3> wrong_keys{ 10U, 11U, 12U };
+    EXPECT_EQ( bpt.erase_sorted_exact( wrong_keys ), 0 );
+
+    // Tree should still have all 5 elements
+    EXPECT_EQ( bpt.size(), 5 );
+    EXPECT_NE( bpt.find( 0U ), bpt.end() );
+    EXPECT_NE( bpt.find( 1U ), bpt.end() );
+    EXPECT_NE( bpt.find( 2U ), bpt.end() );
+
+    // Now erase the actual keys that ARE in the tree
+    std::array<unsigned, 2> correct_keys{ 1U, 3U };
+    EXPECT_EQ( bpt.erase_sorted_exact( correct_keys ), 2 );
+
+    EXPECT_EQ( bpt.size(), 3 );
+    EXPECT_NE( bpt.find( 0U ), bpt.end() );  // still there
+    EXPECT_EQ( bpt.find( 1U ), bpt.end() );  // removed
+    EXPECT_NE( bpt.find( 2U ), bpt.end() );  // still there
+    EXPECT_EQ( bpt.find( 3U ), bpt.end() );  // removed
+    EXPECT_NE( bpt.find( 4U ), bpt.end() );  // still there
+
+    indirect_values.clear();
+}
+
+TEST( bp_tree, erase_sorted_exact_vs_erase_sorted_comparison )
+{
+    // Demonstrate the difference between erase_sorted and erase_sorted_exact
+    // with an indirect comparator
+    using tree_type = psi::vm::bp_tree<unsigned, true, indirect_comparator>;
+
+    // Setup values: rows 0-2 have values 100, 200, 300
+    // rows 5-7 have SAME values 100, 200, 300
+    indirect_values.resize( 10 );
+    indirect_values[ 0 ] = 100;
+    indirect_values[ 1 ] = 200;
+    indirect_values[ 2 ] = 300;
+    indirect_values[ 5 ] = 100;  // same value as row 0
+    indirect_values[ 6 ] = 200;  // same value as row 1
+    indirect_values[ 7 ] = 300;  // same value as row 2
+
+    // Test 1: erase_sorted would erase by comparison (finds equivalent key)
+    {
+        tree_type bpt;
+        bpt.map_memory();
+        bpt.insert( { 0U, 1U, 2U } );
+        EXPECT_EQ( bpt.size(), 3 );
+
+        // Try to erase row 5 - with erase_sorted this would erase row 0
+        // (because they compare as equivalent)
+        std::array<unsigned, 1> key{ 5U };
+        auto const erased = bpt.erase_sorted( key );
+        // erase_sorted erases by comparison, so it finds row 0 (same value) and erases it
+        EXPECT_EQ( erased, 1 );
+        EXPECT_EQ( bpt.size(), 2 );
+    }
+
+    // Test 2: erase_sorted_exact only erases exact key matches
+    {
+        tree_type bpt;
+        bpt.map_memory();
+        bpt.insert( { 0U, 1U, 2U } );
+        EXPECT_EQ( bpt.size(), 3 );
+
+        // Try to erase row 5 - with erase_sorted_exact this should NOT erase anything
+        // because row 5 is not in the tree (only row 0 with the same value is)
+        std::array<unsigned, 1> key{ 5U };
+        auto const erased = bpt.erase_sorted_exact( key );
+        EXPECT_EQ( erased, 0 );
+        EXPECT_EQ( bpt.size(), 3 );  // unchanged
+    }
+
+    indirect_values.clear();
+}
+
+TEST( bp_tree, erase_sorted_exact_large_tree )
+{
+    // Test with a larger tree spanning multiple leaves
+    using tree_type = psi::vm::bp_tree<unsigned, true, indirect_comparator>;
+    tree_type bpt;
+    bpt.map_memory();
+
+    auto constexpr max_per_node{ tree_type::leaf_node::max_values };
+    auto const test_size{ max_per_node * 5U };
+    auto const offset{ test_size }; // for creating equivalent but non-equal keys
+
+    // Setup values: rows 0..test_size-1 have sequential values
+    // rows test_size..2*test_size-1 have the SAME values
+    indirect_values.resize( test_size * 2 );
+    for ( auto i{ 0U }; i < test_size; ++i ) {
+        indirect_values[ i ] = static_cast<int>( i * 10 );
+        indirect_values[ i + offset ] = static_cast<int>( i * 10 );  // same values
+    }
+
+    // Insert rows 0..test_size-1
+    std::vector<unsigned> keys( test_size );
+    for ( auto i{ 0U }; i < test_size; ++i )
+        keys[ i ] = i;
+    bpt.insert( keys );
+
+    // Try to erase equivalent but non-existent keys (offset..offset+test_size/10)
+    std::vector<unsigned> wrong_keys;
+    for ( auto i{ 0U }; i < test_size / 10; ++i )
+        wrong_keys.push_back( i + offset );
+
+    EXPECT_EQ( bpt.erase_sorted_exact( wrong_keys ), 0 );
+    EXPECT_EQ( bpt.size(), test_size );
+
+    // Now erase actual keys
+    std::vector<unsigned> correct_keys;
+    for ( auto i{ 0U }; i < test_size; i += 10 )
+        correct_keys.push_back( i );
+
+    EXPECT_EQ( bpt.erase_sorted_exact( correct_keys ), correct_keys.size() );
+    EXPECT_EQ( bpt.size(), test_size - correct_keys.size() );
+
+    verify_invariants( bpt, "erase_sorted_exact large tree" );
+
+    indirect_values.clear();
+}
+
+TEST( bp_tree, erase_sorted_exact_mixed_present_absent )
+{
+    // Test with a mix of present and absent keys
+    using tree_type = psi::vm::bp_tree<unsigned, true, indirect_comparator>;
+    tree_type bpt;
+    bpt.map_memory();
+
+    // Values: rows 0-9 have values 0-9, rows 20-29 have same values
+    indirect_values.resize( 30 );
+    for ( auto i{ 0U }; i < 10; ++i ) {
+        indirect_values[ i ] = static_cast<int>( i );
+        indirect_values[ i + 20 ] = static_cast<int>( i );  // same values
+    }
+
+    // Insert rows 0-9
+    bpt.insert( { 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U } );
+
+    // Try to erase: 2 (present), 22 (absent but equivalent), 4 (present), 24 (absent but equivalent)
+    // Need to sort by comparator (which compares by value)
+    // 2 has value 2, 22 has value 2, 4 has value 4, 24 has value 4
+    // Sorted by comparator: 2 (val 2), 22 (val 2), 4 (val 4), 24 (val 4)
+    std::array<unsigned, 4> mixed_keys{ 2U, 22U, 4U, 24U };
+
+    // Only exact matches should be erased: 2 and 4
+    EXPECT_EQ( bpt.erase_sorted_exact( mixed_keys ), 2 );
+    EXPECT_EQ( bpt.size(), 8 );
+
+    EXPECT_EQ( bpt.find( 2U ), bpt.end() );  // removed
+    EXPECT_EQ( bpt.find( 4U ), bpt.end() );  // removed
+    EXPECT_NE( bpt.find( 0U ), bpt.end() );  // still there
+
+    indirect_values.clear();
+}
+
+//------------------------------------------------------------------------------
 } // namespace psi::vm
 //------------------------------------------------------------------------------
