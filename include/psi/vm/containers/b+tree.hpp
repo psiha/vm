@@ -2356,6 +2356,9 @@ private:
 protected:
     size_type replace_keys_inplace( std::span<Key const> old_keys, std::span<Key const> new_keys, bool unique ) noexcept;
     size_type erase_sorted        ( std::span<Key const> keys_to_remove                         , bool unique ) noexcept;
+    // Like erase_sorted, but requires exact key equality (==) not just equivalence by comparator.
+    // Useful when keys are indirect indices and comparison is by looked-up values.
+    size_type erase_sorted_exact  ( std::span<Key const> keys_to_remove                         , bool unique ) noexcept;
 
     // upper_bound find >limited to/within a node<
     [[ using gnu: pure, hot, noinline, sysv_abi, leaf ]]
@@ -2793,6 +2796,172 @@ bp_tree_impl<Key, Comparator>::erase_sorted( std::span<Key const> const keys_to_
             {
                 auto location{ find_nodes_for( keys_to_remove[ key_idx ], unique ) };
                 if ( location.leaf_offset.exact_find )
+                {
+                    p_leaf = &location.leaf;
+                    offset = location.leaf_offset.pos;
+                    break;
+                }
+                ++key_idx;
+            }
+            if ( key_idx >= keys_to_remove.size() )
+                break;
+            continue;
+        }
+
+        p_leaf = next_leaf;
+        offset = found_pos.pos;
+    }
+
+    return erased_count;
+}
+
+
+//--------------------------------------------------------------------------
+// erase_sorted_exact
+//
+// Like erase_sorted, but requires exact key equality (key_in_tree == key_to_remove)
+// not just equivalence by comparator. This is useful when keys are indirect
+// indices and comparison is done by looking up external values - two different
+// keys could compare as equivalent but we only want to erase the exact key.
+//
+// Preconditions:
+// - keys_to_remove is sorted by the tree's comparator ordering
+//
+// Returns: number of keys actually removed
+// 
+// TODO deduplicate w/ erase_sorted
+//--------------------------------------------------------------------------
+
+template <typename Key, typename Comparator>
+bp_tree_impl<Key, Comparator>::size_type
+bp_tree_impl<Key, Comparator>::erase_sorted_exact( std::span<Key const> const keys_to_remove, bool const unique ) noexcept
+{
+    BOOST_ASSERT( this->size() >= keys_to_remove.size() || !this->all_bulk_erase_keys_must_exist );
+    if ( keys_to_remove.empty() || ( !this->all_bulk_erase_keys_must_exist && this->empty() ) )
+        return 0;
+
+    BOOST_ASSERT( std::ranges::is_sorted( keys_to_remove, comp() ) );
+
+    size_type erased_count{ 0 };
+    size_t    key_idx     { 0 };
+
+    // Find first key with full tree traversal
+    leaf_node * p_leaf{ nullptr };
+    node_size_type offset{ 0 };
+
+    while ( key_idx < keys_to_remove.size() )
+    {
+        auto const location{ find_nodes_for( keys_to_remove[ key_idx ], unique ) };
+        if ( location.leaf_offset.exact_find )
+        {
+            // Check for exact key equality, not just equivalence
+            if ( location.leaf.keys[ location.leaf_offset.pos ] == keys_to_remove[ key_idx ] )
+            {
+                p_leaf = &location.leaf;
+                offset = location.leaf_offset.pos;
+                break;
+            }
+        }
+        ++key_idx;
+    }
+    if ( !p_leaf )
+        return 0;
+
+    while ( key_idx < keys_to_remove.size() )
+    {
+        // Verify exact key equality before erasing
+        if ( p_leaf->keys[ offset ] != keys_to_remove[ key_idx ] )
+        {
+            // Found equivalent key but not exact match - skip this key
+            ++key_idx;
+            if ( key_idx >= keys_to_remove.size() )
+                break;
+
+            // Try to find the next key
+            while ( key_idx < keys_to_remove.size() )
+            {
+                auto const location{ find_nodes_for( keys_to_remove[ key_idx ], unique ) };
+                if
+                (
+                    location.leaf_offset.exact_find &&
+                    location.leaf.keys[ location.leaf_offset.pos ] == keys_to_remove[ key_idx ]
+                )
+                {
+                    p_leaf = &location.leaf;
+                    offset = location.leaf_offset.pos;
+                    break;
+                }
+                ++key_idx;
+            }
+            if ( key_idx >= keys_to_remove.size() )
+                break;
+            continue;
+        }
+
+        // Update separator key if erasing at position 0
+        if ( offset == 0 && p_leaf->num_vals > 1 ) [[ unlikely ]]
+        {
+            this->update_separator( *p_leaf, p_leaf->keys[ 1 ] );
+        }
+
+        // Erase the key
+        auto next_pos{ this->erase( *p_leaf, offset ) };
+        ++erased_count;
+        ++key_idx;
+
+        if ( key_idx >= keys_to_remove.size() || this->empty() )
+            break;
+
+        // Find next key using find_next from current position
+        if ( !next_pos.node ) [[ unlikely ]]
+        {
+            // At end of tree - should not happen if keys exist
+            break;
+        }
+
+        p_leaf = &this->leaf( next_pos.node );
+        offset = next_pos.value_offset;
+
+        // Check if next key is at the current position (with exact match)
+        if
+        (
+            offset < p_leaf->num_vals &&
+            eq( p_leaf->keys[ offset ],   keys_to_remove[ key_idx ] ) &&
+                p_leaf->keys[ offset ] == keys_to_remove[ key_idx ]
+        )
+            continue;
+
+        // Use find_next to locate the next key
+        auto [next_leaf, found_pos]{ find_next( *p_leaf, offset, keys_to_remove[ key_idx ] ) };
+        if ( !found_pos.exact_find ) [[ unlikely ]]
+        {
+            // Key not found via find_next - fall back to find_nodes_for
+            while ( key_idx < keys_to_remove.size() )
+            {
+                auto location{ find_nodes_for( keys_to_remove[ key_idx ], unique ) };
+                if ( location.leaf_offset.exact_find &&
+                     location.leaf.keys[ location.leaf_offset.pos ] == keys_to_remove[ key_idx ] )
+                {
+                    p_leaf = &location.leaf;
+                    offset = location.leaf_offset.pos;
+                    break;
+                }
+                ++key_idx;
+            }
+            if ( key_idx >= keys_to_remove.size() )
+                break;
+            continue;
+        }
+
+        // Found via find_next - verify exact match
+        if ( next_leaf->keys[ found_pos.pos ] != keys_to_remove[ key_idx ] )
+        {
+            // Equivalent but not exact - need to search from scratch
+            while ( key_idx < keys_to_remove.size() )
+            {
+                auto const location{ find_nodes_for( keys_to_remove[ key_idx ], unique ) };
+                if ( location.leaf_offset.exact_find &&
+                     location.leaf.keys[ location.leaf_offset.pos ] == keys_to_remove[ key_idx ] )
                 {
                     p_leaf = &location.leaf;
                     offset = location.leaf_offset.pos;
@@ -3668,6 +3837,7 @@ public:
 
     size_type replace_keys_inplace( std::span<Key const> const old_keys, std::span<Key const> const new_keys ) noexcept { return impl_base::replace_keys_inplace( old_keys, new_keys, unique ); }
     size_type erase_sorted        ( std::span<Key const> const keys_to_remove ) noexcept { return impl_base::erase_sorted( keys_to_remove, unique ); }
+    size_type erase_sorted_exact  ( std::span<Key const> const keys_to_remove ) noexcept { return impl_base::erase_sorted_exact( keys_to_remove, unique ); }
 
 private:
     [[ using gnu: pure, sysv_abi ]]
