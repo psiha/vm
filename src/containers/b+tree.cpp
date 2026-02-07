@@ -602,6 +602,12 @@ void bptree_base::update_dbg_helpers() noexcept {
 #endif
 }
 
+void bptree_base::explicit_update_cached_pointers_wrkrnd() const noexcept {
+#if __clang_major__ >= 21 // quick-workaround for Clang 21 badcoden/crashes in bp_tree_impl<>::merge
+    const_cast<bptree_base *>( this )->update_cached_pointers();
+#endif
+}
+
 //------------------------------------------------------------------------------
 } // namespace psi::vm
 //------------------------------------------------------------------------------

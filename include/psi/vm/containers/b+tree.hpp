@@ -407,6 +407,8 @@ protected:
     void set_first_leaf( header &, node_slot ) noexcept;
     void set_last_leaf ( header &, node_slot ) noexcept;
 
+    void explicit_update_cached_pointers_wrkrnd() const noexcept;
+
 private:
     auto header_data() noexcept { return vm::header_data<header>( nodes_.user_header_data() ); }
 
@@ -3510,6 +3512,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
     //this->reserve_additional( total_size );
     bptree_base::reserve( this->used_number_of_nodes() + other.used_number_of_nodes() * 3 / 2 );
 
+    other.explicit_update_cached_pointers_wrkrnd();
     auto const p_new_nodes_begin{ other.ra_begin() };
     auto const p_new_nodes_end  { other.ra_end  () };
 
