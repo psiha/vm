@@ -452,11 +452,6 @@ public:
     //! <b>Complexity</b>: Constant.
     [[ nodiscard ]] static constexpr size_type max_size() noexcept { return static_cast<size_type>( std::numeric_limits<size_type>::max() / sizeof( value_type ) ); }
 
-    void resize( this Impl & self, size_type const new_size, auto const init_policy )
-    {
-        if ( new_size > self.size() ) self.  grow_to( new_size, init_policy );
-        else                          self.shrink_to( new_size              );
-    }
     // intentional non-standard behaviour: default_init by default
     void resize( this Impl & self, size_type const new_size ) { self.resize( new_size, default_init ); }
 
@@ -466,13 +461,10 @@ public:
     //! <b>Throws</b>: If memory allocation throws, or T's copy/move constructor throws.
     //!
     //! <b>Complexity</b>: Linear to the difference between size() and new_size.
-    void resize( this Impl & self, size_type const new_size, param_const_ref x )
+    void resize( this Impl & self, size_type const new_size, auto const initializer )
     {
-        auto const current_size{ self.size() };
-        BOOST_ASSUME( new_size >= current_size );
-        self.resize( new_size, default_init );
-        auto uninitialized_span{ self.span().subspan( current_size ) };
-        std::uninitialized_fill( uninitialized_span.begin(), uninitialized_span.end(), x );
+        if ( new_size > self.size() ) self.  grow_to( new_size, initializer );
+        else                          self.shrink_to( new_size              );
     }
 
     void shrink_to_fit( this Impl & self ) noexcept { self.storage_shrink_to( self.size() ); }
