@@ -119,7 +119,7 @@ public:
     using difference_type = std::make_signed_t<size_type>;
     using storage_result  = err::fallible_result<void, error>;
 
-    static bool constexpr all_bulk_erase_keys_must_exist{ true };
+    static bool constexpr all_bulk_erase_keys_must_exist{ false };
 
     bptree_base() noexcept;
 
