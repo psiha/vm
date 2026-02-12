@@ -25,7 +25,7 @@ namespace psi::vm
 
 namespace detail
 {
-    [[ noreturn, gnu::cold ]] void throw_out_of_range() { throw std::out_of_range( "vm::vector access out of bounds" ); }
+    [[ noreturn, gnu::cold ]] void throw_out_of_range( char const * const msg ) { throw std::out_of_range( msg ); }
 #if PSI_MALLOC_OVERCOMMIT != PSI_OVERCOMMIT_Full
     [[ noreturn, gnu::cold ]] void throw_bad_alloc   () { throw std::bad_alloc(); }
 #endif

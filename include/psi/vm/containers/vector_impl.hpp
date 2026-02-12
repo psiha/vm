@@ -61,9 +61,9 @@ PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
 
 namespace detail
 {
-    [[ noreturn, gnu::cold ]] void throw_out_of_range();
+    // throw_out_of_range declared in abi.hpp, defined in vm_vector.cpp
 #if PSI_MALLOC_OVERCOMMIT != PSI_OVERCOMMIT_Full
-    [[ noreturn, gnu::cold ]] void throw_bad_alloc   ();
+    [[ noreturn, gnu::cold ]] void throw_bad_alloc();
 #else
     [[ gnu::cold ]] inline void throw_bad_alloc() noexcept
     {
@@ -461,10 +461,11 @@ public:
     //! <b>Throws</b>: If memory allocation throws, or T's copy/move constructor throws.
     //!
     //! <b>Complexity</b>: Linear to the difference between size() and new_size.
-    void resize( this Impl & self, size_type const new_size, auto const initializer )
+    template <typename Initializer>
+    void resize( this Impl & self, size_type const new_size, Initializer && initializer )
     {
-        if ( new_size > self.size() ) self.  grow_to( new_size, initializer );
-        else                          self.shrink_to( new_size              );
+        if ( new_size > self.size() ) self.  grow_to( new_size, std::forward<Initializer>( initializer ) );
+        else                          self.shrink_to( new_size                                           );
     }
 
     void shrink_to_fit( this Impl & self ) noexcept { self.storage_shrink_to( self.size() ); }
@@ -552,7 +553,7 @@ public:
         return self.span().at( n );
 #   else
         if ( n >= self.size() )
-            detail::throw_out_of_range();
+            detail::throw_out_of_range( "psi::vm::vector::at" );
         return self[ n ];
 #   endif
     }
