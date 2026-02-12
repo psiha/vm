@@ -106,6 +106,23 @@ template <typename T> bool constexpr reg<pass_rv_in_reg<T>>{ true };
 template <typename T>
 concept Reg = reg<T>;
 
+// utility for passing non trivial predicates to algorithms which pass them around by-val
+template <typename Pred>
+decltype( auto ) make_trivially_copyable_predicate( Pred && __restrict pred ) noexcept {
+    if constexpr ( can_be_passed_in_reg<std::remove_cvref<Pred>> ) {
+        return std::forward<Pred>( pred );
+    } else {
+        return [&pred]( auto const & ... args ) noexcept( noexcept( pred( args... ) ) ) {
+            return pred( args... );
+        };
+    }
+} // make_trivially_copyable_predicate
+
+namespace detail
+{
+    [[ noreturn, gnu::cold ]] void throw_out_of_range( char const * msg );
+} // namespace detail
+
 PSI_WARNING_DISABLE_POP()
 
 //------------------------------------------------------------------------------

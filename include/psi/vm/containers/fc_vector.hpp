@@ -57,7 +57,7 @@ struct assert_on_overflow {
     }
 }; // assert_on_overflow
 struct throw_on_overflow {
-    [[ noreturn ]] static void operator()() { detail::throw_out_of_range(); }
+    [[ noreturn ]] static void operator()() { detail::throw_out_of_range( "psi::vm::fc_vector overflow" ); }
 }; // throw_on_overflow
 
 

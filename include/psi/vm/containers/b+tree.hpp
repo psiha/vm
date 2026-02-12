@@ -95,19 +95,6 @@ struct [[ clang::trivial_abi]] unique_nonowned_ptr {
 }; // class unique_nonowned_ptr
 
 
-// utility for passing non trivial predicates to algorithms which pass them around by-val
-template <typename Pred>
-decltype( auto ) make_trivially_copyable_predicate( Pred && __restrict pred ) noexcept {
-    if constexpr ( can_be_passed_in_reg<std::remove_cvref<Pred>> ) {
-        return std::forward<Pred>( pred );
-    } else {
-        return [&pred]( auto const & ... args ) noexcept( noexcept( pred( args... ) ) ) {
-            return pred( args... );
-        };
-    }
-} // make_trivially_copyable_predicate
-
-
 ////////////////////////////////////////////////////////////////////////////////
 // \class bptree_base
 ////////////////////////////////////////////////////////////////////////////////
