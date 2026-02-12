@@ -143,11 +143,16 @@ template <typename E, typename T, typename A>
 bool constexpr trivially_destructible_after_move_assignment<std::basic_string<E, T, A>>{ false };
 #endif
 
+/// Concept matching types derived from vector_impl (carry the psi_vm_vector_tag).
+template <typename T>
+concept psi_vm_vector = requires { typename std::remove_cvref_t<T>::psi_vm_vector_tag; };
+
 // see the note for up() on why the Impl parameter is used/required (even with deducing this support)
 template <typename Impl, typename T, typename sz_t>
 class [[ nodiscard, clang::trivial_abi ]] vector_impl
 {
 public:
+    using psi_vm_vector_tag      = void; // tag for constraining free comparison operators
     using value_type             = T;
     using       pointer          = value_type       *;
     using const_pointer          = value_type const *;
@@ -398,7 +403,30 @@ public:
     //!   T's copy/move constructor/assignment throws.
     //!
     //! <b>Complexity</b>: Linear to n.
-    void assign( this Impl & self, size_type const n, param_const_ref val ) = /*TODO*/ delete;
+    void assign( this Impl & self, size_type const n, param_const_ref val )
+    {
+        if constexpr ( std::is_trivially_destructible_v<value_type> )
+        {
+            self.resize( n, no_init );
+            std::uninitialized_fill_n( self.data(), n, val );
+        }
+        else
+        {
+            auto const current_size{ self.size() };
+            auto const overwrite_count{ std::min( n, current_size ) };
+            std::fill_n( self.begin(), overwrite_count, val );
+            if ( n > current_size )
+            {
+                auto const data{ self.grow_to( n, no_init ) };
+                std::uninitialized_fill_n( &data[ current_size ], n - current_size, val );
+            }
+            else
+            {
+                std::destroy( self.nth( n ), self.end() );
+                self.storage_shrink_size_to( n );
+            }
+        }
+    }
 
     //////////////////////////////////////////////
     //
@@ -626,15 +654,23 @@ public:
     }
 
     //! <b>Effects</b>: Inserts an object of type T constructed with
-    //!   std::forward<Args>(args)... in the end of the vector.
+    //!   std::forward<Args>(args)... in the end of the vector, but only
+    //!   if doing so does not require buffer reallocation.
     //!
-    //! <b>Throws</b>: If the in-place constructor throws.
+    //! <b>Returns</b>: true if the element was emplaced, false if it would
+    //!   require reallocation (invalidating pointers/iterators).
     //!
-    //! <b>Complexity</b>: Constant time.
+    //! <b>Complexity</b>: Amortized constant time.
     //!
     //! <b>Note</b>: Non-standard extension.
     template <typename... Args>
-    bool stable_emplace_back( this Impl & self, Args &&... args ) = /*TODO*/delete;
+    bool stable_emplace_back( this Impl & self, Args &&... args )
+    {
+        if ( !self.stable_reserve( self.size() + 1 ) )
+            return false;
+        self.emplace_back( std::forward<Args>( args )... );
+        return true;
+    }
 
     //! <b>Requires</b>: position must be a valid iterator of *this.
     //!
@@ -752,6 +788,42 @@ public:
     iterator insert( this Impl & self, const_iterator const position, std::initializer_list<value_type> const il )
     {
         return self.insert( position, il.begin(), il.end() );
+    }
+
+    template <std::ranges::input_range Rng>
+    iterator insert_range( this Impl & self, const_iterator const position, Rng && rng )
+    {
+        if constexpr ( std::ranges::sized_range<Rng> )
+        {
+            auto const n{ verified_cast<size_type>( std::ranges::size( rng ) ) };
+            auto const iter{ self.make_space_for_insert( position, n ) };
+            if constexpr ( std::is_rvalue_reference_v<Rng &&> )
+            {
+                if constexpr ( trivially_destructible_after_move_assignment<T> )
+                    std::uninitialized_move( std::ranges::begin( rng ), std::ranges::end( rng ), iter );
+                else
+                    std::ranges::move( rng, iter );
+            }
+            else
+            {
+                if constexpr ( trivially_destructible_after_move_assignment<T> )
+                    std::uninitialized_copy( std::ranges::begin( rng ), std::ranges::end( rng ), iter );
+                else
+                    std::ranges::copy( rng, iter );
+            }
+            return iter;
+        }
+        else
+        {
+            // Non-sized input ranges: append at end, then rotate into position.
+            // This avoids materializing into a temporary vector (à la libc++).
+            auto const pos_index{ self.index_of( position ) };
+            auto const old_size { self.size() };
+            for ( auto it{ std::ranges::begin( rng ) }; it != std::ranges::end( rng ); ++it )
+                self.emplace_back( *it );
+            std::rotate( self.nth( pos_index ), self.nth( old_size ), self.end() );
+            return self.nth( pos_index );
+        }
     }
 
     template <std::ranges::range Rng>
@@ -878,10 +950,20 @@ public:
     //!   If the request is successful, then capacity() is greater than or equal to
     //!   n; otherwise, capacity() is unchanged. In either case, size() is unchanged.
     //!
-    //! <b>Throws</b>: If memory allocation throws or T's copy/move constructor throws.
+    //! <b>Returns</b>: true if capacity() >= new_cap after the call (either
+    //!   already was, or in-place expansion succeeded), false otherwise.
     //!
     //! <b>Note</b>: Non-standard extension.
-    bool stable_reserve( this Impl & self, size_type new_cap ) = /*TODO*/ delete;
+    bool stable_reserve( this Impl & self, size_type const new_cap )
+    {
+        if ( new_cap <= self.capacity() )
+            return true;
+        // Try in-place expansion if the storage backend supports it
+        // (e.g. tr_vector on MSVC via ::_expand(), vm_vector via page mapping)
+        if constexpr ( requires { self.storage_try_expand_capacity( new_cap ); } )
+            return self.storage_try_expand_capacity( new_cap );
+        return false;
+    }
 
     value_type * grow_to( this Impl & self, size_type const target_size, no_init_t ) { return self.storage_grow_to( target_size ); }
     value_type * grow_to( this Impl & self, size_type const target_size, default_init_t )
@@ -913,8 +995,8 @@ public:
         auto const uninitialized_space_size { target_size - current_size };
         if constexpr ( std::is_trivially_constructible_v<value_type> )
         {
-            auto const new_space_bytes    { reinterpret_cast<std::uint8_t const *>( data + current_size ) };
-            auto const new_space_byte_size{ uninitialized_space_size * sizeof( value_type ) };
+            auto const new_space_bytes    { reinterpret_cast<std::uint8_t *>( data + current_size ) };
+            auto const new_space_byte_size{ static_cast<std::size_t>( uninitialized_space_size ) * sizeof( value_type ) };
             if constexpr ( Impl::storage_zero_initialized )
             {
                 BOOST_ASSERT_MSG
@@ -984,7 +1066,7 @@ private:
         self.verify_iterator( position );
         auto const position_index{ self.index_of( position ) };
         auto const current_size  { self.size() };
-        auto const new_size      { current_size + n };
+        auto const new_size      { static_cast<size_type>( current_size + n ) };
         auto const data{ self.grow_to( new_size, no_init ) };
         auto const elements_to_move{ static_cast<size_type>( current_size - position_index ) };
         if constexpr ( is_trivially_moveable<value_type> )
@@ -1024,8 +1106,10 @@ private:
 //! <b>Effects</b>: Returns the result of std::lexicographical_compare_three_way
 //!
 //! <b>Complexity</b>: Linear to the number of elements in the container.
-[[ nodiscard ]] constexpr auto operator<=>( std::ranges::range auto const & left, std::ranges::range auto const & right ) noexcept { return std::lexicographical_compare_three_way( left.begin(), left.end(), right.begin(), right.end() ); }
-[[ nodiscard ]] constexpr auto operator== ( std::ranges::range auto const & left, std::ranges::range auto const & right ) noexcept { return std::equal                            ( left.begin(), left.end(), right.begin(), right.end() ); }
+template <std::ranges::range L, std::ranges::range R> requires( psi_vm_vector<L> || psi_vm_vector<R> )
+[[ nodiscard ]] constexpr auto operator<=>( L const & left, R const & right ) noexcept { return std::lexicographical_compare_three_way( left.begin(), left.end(), right.begin(), right.end() ); }
+template <std::ranges::range L, std::ranges::range R> requires( psi_vm_vector<L> || psi_vm_vector<R> )
+[[ nodiscard ]] constexpr auto operator== ( L const & left, R const & right ) noexcept { return std::equal                            ( left.begin(), left.end(), right.begin(), right.end() ); }
 
 PSI_WARNING_DISABLE_POP()
 

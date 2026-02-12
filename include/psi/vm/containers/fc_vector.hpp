@@ -102,7 +102,8 @@ private:
 public:
     using base::base;
     constexpr fc_vector() noexcept : size_{ 0 } {}
-    constexpr explicit fc_vector( fc_vector const & other ) noexcept( std::is_nothrow_copy_constructible_v<T> )
+    [[ gnu::warning( "copying fc_vector" ) ]]
+    constexpr fc_vector( fc_vector const & other ) noexcept( std::is_nothrow_copy_constructible_v<T> )
     {
         if constexpr ( fixed_sized_copy ) {
             fixed_copy( other );
@@ -174,7 +175,7 @@ private: friend base; // contiguous storage implementation
         size_ = target_size;
     }
     constexpr void storage_dec_size() noexcept { BOOST_ASSUME( size_ >= 1 ); --size_; }
-    constexpr void storage_inc_size() noexcept; // TODO
+    constexpr void storage_inc_size() noexcept { BOOST_ASSUME( size_ < static_capacity ); ++size_; }
 
     constexpr void storage_free() noexcept { size_ = 0; }
 

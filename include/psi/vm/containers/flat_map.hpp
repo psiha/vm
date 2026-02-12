@@ -1,26 +1,26 @@
 ////////////////////////////////////////////////////////////////////////////////
-/// std::flat_map polyfill for platforms lacking <flat_map> (notably MSVC STL)
+/// psi::vm flat sorted associative map containers
 ///
-/// Implements the C++23 std::flat_map interface (P0429R9) with separate key
-/// and value containers for cache-friendly key-only iteration.
+/// Provides flat_map (unique keys) and flat_multimap (equivalent keys allowed).
 ///
 /// Architecture:
-///   flat_map privately inherits detail::paired_storage<KC, MC>, a comparator-
-///   agnostic base that synchronises dual-container operations (insert, erase,
-///   append, clear, reserve, replace, ...). The base class doubles as the
-///   standard-required `containers` type returned by extract().
+///   flat_impl<Storage, Compare> — shared base holding storage, comparator,
+///     capacity (empty, size, clear, reserve, shrink_to_fit), key_comp,
+///     comparison, merge, lookup index helpers, and deducing-this sort utilities.
+///   flat_map_impl<Key, T, Compare, KC, MC> — map-specific base (inherits flat_impl).
+///     Adds iterator, lookup, positional erase, erase by key,
+///     extract/replace, observers, erase_if.
+///     Does NOT depend on uniqueness semantics.
+///   flat_map<Key, T, Compare, KC, MC> — unique sorted map (inherits flat_map_impl).
+///     Adds unique emplace/insert, operator[], at(), try_emplace, insert_or_assign,
+///     constructors with dedup, unique merge.
+///   flat_multimap<Key, T, Compare, KC, MC> — equivalent sorted map (inherits flat_map_impl).
+///     Adds multi emplace/insert, constructors without dedup, multi merge.
 ///
 /// Extensions beyond C++23 std::flat_map:
 ///   - reserve(n), shrink_to_fit()        — bulk pre-allocation / compaction
 ///   - merge(source) (lvalue & rvalue)    — std::map-style element transfer
-///   - insert_range(sorted_unique_t, R&&) — sorted bulk range insert
-///
-/// Differences from the standard interface:
-///   - Uses psi::vm::sorted_unique_t instead of std::sorted_unique_t
-///   - containers type = paired_storage base (aggregate with .keys / .values),
-///     not a separate nested struct
-///   - extract() returns by move-constructing the base (conditionally noexcept)
-///   - replace() is conditionally noexcept (move-assignable containers)
+///   - insert_range(sorted_hint_t, R&&)   — sorted bulk range insert
 ///
 /// Copyright (c) Domagoj Saric.
 ///
@@ -35,7 +35,9 @@
 //------------------------------------------------------------------------------
 #pragma once
 
-#include "abi.hpp"
+#include "flat_common.hpp"
+#include "is_trivially_moveable.hpp"
+#include "lookup.hpp"
 
 #include <boost/assert.hpp>
 
@@ -46,6 +48,7 @@
 #include <initializer_list>
 #include <iterator>
 #include <ranges>
+#include <span>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -54,12 +57,19 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
-//==============================================================================
-// detail::paired_storage — comparator-agnostic synchronized dual-container ops
-// Serves as the flat_map/flat_set divergence point (flat_set uses a simpler
-// single-container equivalent).
-//==============================================================================
+// Forward declarations for friend access
+template <typename Key, typename T, typename Compare, typename KeyContainer, typename MappedContainer> class flat_map;
+template <typename Key, typename T, typename Compare, typename KeyContainer, typename MappedContainer> class flat_multimap;
+
+
 namespace detail {
+
+//==============================================================================
+// paired_storage — comparator-agnostic synchronized dual-container ops
+//
+// Serves as the flat_map storage type; flat_set uses a simpler single-container
+// storage directly.
+//==============================================================================
 
 template <typename KeyContainer, typename MappedContainer>
 struct paired_storage
@@ -72,34 +82,129 @@ struct paired_storage
     >;
     using difference_type = std::ptrdiff_t;
 
+    constexpr paired_storage() = default;
+
+    constexpr paired_storage( KeyContainer k, MappedContainer v )
+        noexcept( std::is_nothrow_move_constructible_v<KeyContainer> && std::is_nothrow_move_constructible_v<MappedContainer> )
+        : keys{ std::move( k ) }, values{ std::move( v ) } {}
+
+    template <std::input_iterator InputIt>
+    constexpr paired_storage( InputIt first, InputIt last ) { append_range( std::ranges::subrange( first, last ) ); }
+
     KeyContainer    keys;
     MappedContainer values;
 
     //--------------------------------------------------------------------------
+    // SCARY iterator (type-independent of comparator)
+    //
+    // Stores a pointer to the paired_storage + index.  The iterator type
+    // depends on KC/MC but NOT on Compare.
+    //--------------------------------------------------------------------------
+    using key_type    = typename KeyContainer::value_type;
+    using mapped_type = typename MappedContainer::value_type;
+    using value_type  = ::std::pair<key_type, mapped_type>;
+
+    template <bool IsConst>
+    class iterator_impl
+    {
+    public:
+        using iterator_concept  = std::random_access_iterator_tag;
+        using iterator_category = std::random_access_iterator_tag;
+        using value_type        = std::pair<key_type, mapped_type>;
+        using difference_type   = std::ptrdiff_t;
+        using reference         = std::pair<key_type const &,
+                                            std::conditional_t<IsConst,
+                                                mapped_type const &,
+                                                mapped_type       &>>;
+
+        struct arrow_proxy {
+            reference ref;
+            constexpr reference       * operator->()       noexcept { return &ref; }
+            constexpr reference const * operator->() const noexcept { return &ref; }
+        };
+        using pointer = arrow_proxy;
+
+    private:
+        friend paired_storage;
+        friend iterator_impl<!IsConst>;
+
+        using storage_t = std::conditional_t<IsConst, paired_storage const, paired_storage>;
+
+        storage_t * __restrict storage_{ nullptr };
+        size_type              idx_    { 0 };
+
+        constexpr iterator_impl( storage_t * const s, size_type const i ) noexcept
+            : storage_{ s }, idx_{ i } {}
+
+    public:
+        constexpr iterator_impl() noexcept = default;
+        constexpr iterator_impl( iterator_impl const & ) noexcept = default;
+        constexpr iterator_impl & operator=( iterator_impl const & ) noexcept = default;
+
+        // Implicit mutable → const conversion
+        constexpr iterator_impl( iterator_impl<false> const & other ) noexcept requires IsConst
+            : storage_{ other.storage_ }, idx_{ other.idx_ } {}
+
+        [[nodiscard]] constexpr size_type index() const noexcept { return idx_; }
+
+        constexpr reference operator*() const noexcept {
+            return { storage_->keys[ idx_ ], storage_->values[ idx_ ] };
+        }
+
+        constexpr arrow_proxy operator->() const noexcept { return { **this }; }
+
+        constexpr reference operator[]( difference_type const n ) const noexcept {
+            return *( *this + n );
+        }
+
+        constexpr iterator_impl & operator++(     ) noexcept { ++idx_; return *this; }
+        constexpr iterator_impl   operator++( int ) noexcept { auto tmp{ *this }; ++idx_; return tmp; }
+        constexpr iterator_impl & operator--(     ) noexcept { --idx_; return *this; }
+        constexpr iterator_impl   operator--( int ) noexcept { auto tmp{ *this }; --idx_; return tmp; }
+
+        constexpr iterator_impl & operator+=( difference_type const n ) noexcept { idx_ = static_cast<size_type>( static_cast<difference_type>( idx_ ) + n ); return *this; }
+        constexpr iterator_impl & operator-=( difference_type const n ) noexcept { idx_ = static_cast<size_type>( static_cast<difference_type>( idx_ ) - n ); return *this; }
+
+        friend constexpr iterator_impl operator+( iterator_impl it, difference_type const n ) noexcept { return { it.storage_, static_cast<size_type>( static_cast<difference_type>( it.idx_ ) + n ) }; }
+        friend constexpr iterator_impl operator+( difference_type const n, iterator_impl it ) noexcept { return { it.storage_, static_cast<size_type>( static_cast<difference_type>( it.idx_ ) + n ) }; }
+        friend constexpr iterator_impl operator-( iterator_impl it, difference_type const n ) noexcept { return { it.storage_, static_cast<size_type>( static_cast<difference_type>( it.idx_ ) - n ) }; }
+
+        friend constexpr difference_type operator-( iterator_impl const & a, iterator_impl const & b ) noexcept { return static_cast<difference_type>( a.idx_ ) - static_cast<difference_type>( b.idx_ ); }
+
+        friend constexpr bool operator== ( iterator_impl const & a, iterator_impl const & b ) noexcept { return a.idx_  == b.idx_; }
+        friend constexpr auto operator<=>( iterator_impl const & a, iterator_impl const & b ) noexcept { return a.idx_ <=> b.idx_; }
+    }; // iterator_impl
+
+    using iterator       = iterator_impl<false>;
+    using const_iterator = iterator_impl<true>;
+
+    constexpr iterator       make_iter( size_type const pos )       noexcept { return { this, pos }; }
+    constexpr const_iterator make_iter( size_type const pos ) const noexcept { return { this, pos }; }
+
+    constexpr iterator       begin()       noexcept { return make_iter( 0 ); }
+    constexpr const_iterator begin() const noexcept { return make_iter( 0 ); }
+    constexpr iterator       end  ()       noexcept { return make_iter( static_cast<size_type>( keys.size() ) ); }
+    constexpr const_iterator end  () const noexcept { return make_iter( static_cast<size_type>( keys.size() ) ); }
+
+    //--------------------------------------------------------------------------
     // Zip view for synchronized sort/merge/unique
     //--------------------------------------------------------------------------
-    auto zip_view() noexcept { return std::views::zip( keys, values ); }
+    constexpr auto zip_view() noexcept { return std::views::zip( keys, values ); }
 
     //--------------------------------------------------------------------------
     // Truncate both containers to newSize (shrink-only, noexcept)
     //--------------------------------------------------------------------------
-    void truncate_to( size_type const newSize ) noexcept
+    constexpr void truncate_to( size_type const newSize ) noexcept
     {
-        if constexpr ( requires { keys.shrink_to( newSize ); } )
-            keys.shrink_to( newSize );
-        else
-            keys.resize( newSize );
-        if constexpr ( requires { values.shrink_to( newSize ); } )
-            values.shrink_to( newSize );
-        else
-            values.resize( newSize );
+        detail::truncate_to( keys,   newSize );
+        detail::truncate_to( values, newSize );
     }
 
     //--------------------------------------------------------------------------
     // Synchronized single-element insert at position (exception-safe)
     //--------------------------------------------------------------------------
     template <typename K, typename V>
-    void insert_element_at( size_type const pos, K && key, V && val ) {
+    constexpr void insert_element_at( size_type const pos, K && key, V && val ) {
         auto const p{ static_cast<difference_type>( pos ) };
         keys.insert( keys.begin() + p, std::forward<K>( key ) );
         try {
@@ -113,13 +218,15 @@ struct paired_storage
     //--------------------------------------------------------------------------
     // Synchronized erase
     //--------------------------------------------------------------------------
-    void erase_element_at( size_type const pos ) noexcept {
+    constexpr void erase_element_at( size_type const pos ) noexcept
+    {
         auto const p{ static_cast<difference_type>( pos ) };
         keys  .erase( keys  .begin() + p );
         values.erase( values.begin() + p );
     }
 
-    void erase_elements( size_type const first, size_type const last ) noexcept {
+    constexpr void erase_elements( size_type const first, size_type const last ) noexcept
+    {
         auto const f{ static_cast<difference_type>( first ) };
         auto const l{ static_cast<difference_type>( last  ) };
         keys  .erase( keys  .begin() + f, keys  .begin() + l );
@@ -130,7 +237,8 @@ struct paired_storage
     // Bulk append from separate key/value ranges (exception-safe)
     //--------------------------------------------------------------------------
     template <typename KR, typename VR>
-    void append_ranges( KR && key_rg, VR && val_rg ) {
+    constexpr void append_ranges( KR && key_rg, VR && val_rg )
+    {
         auto const oldSize{ keys.size() };
         keys.append_range( std::forward<KR>( key_rg ) );
         try {
@@ -142,34 +250,22 @@ struct paired_storage
     }
 
     //--------------------------------------------------------------------------
-    // Bulk append from pair iterator range
+    // Bulk append from a range of pair-like elements (matches vector::append_range)
     //--------------------------------------------------------------------------
-    template <typename InputIt>
-    void append_from( InputIt const first, InputIt const last ) {
-        auto rg{ std::ranges::subrange( first, last ) };
+    template <std::ranges::input_range R>
+    constexpr void append_range( R && rg ) {
         append_ranges( rg | std::views::keys, rg | std::views::values );
-    }
-
-    //--------------------------------------------------------------------------
-    // Move-append from raw container pair (for rvalue merge)
-    //--------------------------------------------------------------------------
-    void append_move_containers( KeyContainer & src_keys, MappedContainer & src_values ) {
-        append_ranges
-        (
-            src_keys   | std::views::as_rvalue,
-            src_values | std::views::as_rvalue
-        );
     }
 
     //--------------------------------------------------------------------------
     // Reserve / Shrink
     //--------------------------------------------------------------------------
-    void reserve( size_type const n ) {
+    constexpr void reserve( size_type const n ) {
         keys  .reserve( n );
         values.reserve( n );
     }
 
-    void shrink_to_fit() noexcept {
+    constexpr void shrink_to_fit() noexcept {
         keys  .shrink_to_fit();
         values.shrink_to_fit();
     }
@@ -177,7 +273,7 @@ struct paired_storage
     //--------------------------------------------------------------------------
     // Replace (move-assign both containers)
     //--------------------------------------------------------------------------
-    void replace( KeyContainer new_keys, MappedContainer new_values )
+    constexpr void replace( KeyContainer new_keys, MappedContainer new_values )
         noexcept( std::is_nothrow_move_assignable_v<KeyContainer> && std::is_nothrow_move_assignable_v<MappedContainer> )
     {
         BOOST_ASSERT( new_keys.size() == new_values.size() );
@@ -188,26 +284,310 @@ struct paired_storage
     //--------------------------------------------------------------------------
     // Clear / Swap
     //--------------------------------------------------------------------------
-    void clear() noexcept {
+    constexpr void clear() noexcept {
         keys  .clear();
         values.clear();
     }
 
-    void swap_storage( paired_storage & other ) noexcept {
+    friend constexpr void swap( paired_storage & a, paired_storage & b ) noexcept {
         using std::swap;
-        swap( keys,   other.keys   );
-        swap( values, other.values );
+        swap( a.keys,   b.keys   );
+        swap( a.values, b.values );
+    }
+
+    //--------------------------------------------------------------------------
+    // Comparison
+    //--------------------------------------------------------------------------
+    friend constexpr bool operator==( paired_storage const & a, paired_storage const & b ) noexcept {
+        return a.keys == b.keys && a.values == b.values;
+    }
+
+    friend constexpr auto operator<=>( paired_storage const & a, paired_storage const & b ) noexcept
+    requires std::three_way_comparable<typename KeyContainer::value_type> && std::three_way_comparable<typename MappedContainer::value_type>
+    {
+        if ( auto const cmp{ std::lexicographical_compare_three_way( a.keys.begin(), a.keys.end(), b.keys.begin(), b.keys.end() ) }; cmp != 0 )
+            return cmp;
+        return std::lexicographical_compare_three_way( a.values.begin(), a.values.end(), b.values.begin(), b.values.end() );
     }
 }; // struct paired_storage
+
+
+//==============================================================================
+// paired_storage overloads of storage abstraction helpers
+// (found by ADL at flat_impl template instantiation time)
+//==============================================================================
+
+// truncate_to — paired_storage overload (delegates to member)
+template <typename KC, typename MC>
+constexpr void truncate_to( paired_storage<KC,MC> & s, typename paired_storage<KC,MC>::size_type const n ) noexcept {
+    s.truncate_to( n );
+}
+
+// keys_of — extract the keys container from paired_storage
+template <typename KC, typename MC>
+constexpr auto       & keys_of( paired_storage<KC,MC>       & s ) noexcept { return s.keys; }
+template <typename KC, typename MC>
+constexpr auto const & keys_of( paired_storage<KC,MC> const & s ) noexcept { return s.keys; }
+
+// sort_storage — paired_storage overload (zip-view sort)
+template <bool Unique, typename KC, typename MC, typename Comp>
+constexpr void sort_storage( paired_storage<KC,MC> & storage, Comp const & comp ) {
+    auto zv{ storage.zip_view() };
+    std::ranges::sort( zv, comp, key_proj() );
+    if constexpr ( Unique ) {
+        auto const newEnd{ std::ranges::unique( zv, key_equiv( comp ), key_proj() ).begin() };
+        storage.truncate_to( static_cast<typename paired_storage<KC,MC>::size_type>( newEnd - zv.begin() ) );
+    }
+}
+
+// sort_merge_storage — paired_storage overload (zip-view sort + merge)
+template <bool Unique, bool WasSorted, typename KC, typename MC, typename Comp>
+constexpr void sort_merge_storage( paired_storage<KC,MC> & storage, Comp const & comp, typename paired_storage<KC,MC>::size_type const oldSize ) {
+    if ( storage.keys.size() <= oldSize )
+        return;
+    auto zv{ storage.zip_view() };
+    auto const appendStart{ zv.begin() + static_cast<std::ptrdiff_t>( oldSize ) };
+
+    if constexpr ( !WasSorted )
+        std::ranges::sort( appendStart, zv.end(), comp, key_proj() );
+
+    if ( oldSize > 0 )
+        std::ranges::inplace_merge( zv.begin(), appendStart, zv.end(), comp, key_proj() );
+
+    if constexpr ( Unique ) {
+        auto const newEnd{ std::ranges::unique( zv, key_equiv( comp ), key_proj() ).begin() };
+        storage.truncate_to( static_cast<typename paired_storage<KC,MC>::size_type>( newEnd - zv.begin() ) );
+    }
+}
+
+// storage_erase_at — paired_storage overload
+template <typename KC, typename MC>
+constexpr void storage_erase_at( paired_storage<KC,MC> & s, typename paired_storage<KC,MC>::size_type const pos ) noexcept {
+    s.erase_element_at( pos );
+}
+
+// storage_erase_range — paired_storage overload
+template <typename KC, typename MC>
+constexpr void storage_erase_range( paired_storage<KC,MC> & s, typename paired_storage<KC,MC>::size_type const first, typename paired_storage<KC,MC>::size_type const last ) noexcept {
+    s.erase_elements( first, last );
+}
+
+// storage_move_append — paired_storage overload
+template <typename KC, typename MC>
+constexpr void storage_move_append( paired_storage<KC,MC> & dest, paired_storage<KC,MC> & source ) {
+    dest.append_ranges( source.keys | std::views::as_rvalue, source.values | std::views::as_rvalue );
+}
+
+// storage_emplace_back_from — paired_storage overload
+template <typename KC, typename MC>
+constexpr void storage_emplace_back_from( paired_storage<KC,MC> & dest, paired_storage<KC,MC> & source, typename paired_storage<KC,MC>::size_type const idx ) {
+    dest.keys  .emplace_back( std::move( source.keys  [ idx ] ) );
+    dest.values.emplace_back( std::move( source.values[ idx ] ) );
+}
+
+// storage_move_element — paired_storage overload
+template <typename KC, typename MC>
+constexpr void storage_move_element( paired_storage<KC,MC> & s, typename paired_storage<KC,MC>::size_type const dst, typename paired_storage<KC,MC>::size_type const src ) noexcept {
+    s.keys  [ dst ] = std::move( s.keys  [ src ] );
+    s.values[ dst ] = std::move( s.values[ src ] );
+}
+
+// erase_if — paired_storage overload (map path)
+// zip_view yields tuple<Key&, Value&>; projection converts to pair so the
+// predicate receives pair<Key const &, Value &> as mandated by the standard.
+// The projection is required for indirect_unary_predicate constraint
+// satisfaction on all three implementations (P2165R4 tuple→pair implicit
+// conversion does not satisfy the constraint).
+// Exception-safe: clears on predicate exception (basic guarantee) to
+// maintain key/value synchronisation.
+template <typename KC, typename MC, typename Pred>
+constexpr auto erase_if( paired_storage<KC,MC> & s, Pred pred ) {
+    try {
+        auto zv{ s.zip_view() };
+        auto const it{ std::ranges::remove_if( zv, std::move( pred ),
+            []( auto && tup ) noexcept {
+                return std::pair<typename KC::value_type const &, typename MC::value_type&>{ tup };
+            }
+        ) };
+        auto const newSize{ static_cast<typename paired_storage<KC,MC>::size_type>( it.begin() - zv.begin() ) };
+        auto const erased { static_cast<typename paired_storage<KC,MC>::size_type>( s.keys.size() ) - newSize };
+        s.truncate_to( newSize );
+        return erased;
+    } catch ( ... ) {
+        s.clear();
+        throw;
+    }
+}
 
 } // namespace detail
 
 
-struct sorted_unique_t { explicit sorted_unique_t() = default; };
-inline constexpr sorted_unique_t sorted_unique{};
+//==============================================================================
+// flat_map_impl — shared base for flat_map and flat_multimap
+//
+// Provides everything that does NOT depend on uniqueness semantics:
+//   iterators, lookup, positional erase, erase by key,
+//   extract/replace, observers, erase_if.
+//   Inherits from flat_impl for: storage, comparator, empty, size, clear,
+//   reserve, shrink_to_fit, key_comp, comparison, merge, lookup helpers,
+//   sort utilities.
+//==============================================================================
+
+template
+<
+    typename Key,
+    typename T,
+    typename Compare         = std::less<Key>,
+    typename KeyContainer    = std::vector<Key>,
+    typename MappedContainer = std::vector<T>
+>
+class flat_map_impl
+    : public flat_impl<detail::paired_storage<KeyContainer, MappedContainer>, Compare>
+{
+    using storage   = detail::paired_storage<KeyContainer, MappedContainer>;
+    using flat_base = flat_impl<storage, Compare>;
+
+    static_assert( std::is_same_v<Key, typename KeyContainer   ::value_type>, "KeyContainer::value_type must be Key" );
+    static_assert( std::is_same_v<T,   typename MappedContainer::value_type>, "MappedContainer::value_type must be T" );
+
+    template <typename, typename, typename, typename, typename> friend class flat_map;
+    template <typename, typename, typename, typename, typename> friend class flat_multimap;
+
+public:
+    //--------------------------------------------------------------------------
+    // Member types (key_compare, nothrow_move_constructible — inherited)
+    //--------------------------------------------------------------------------
+    using typename flat_base::size_type;
+    using typename flat_base::difference_type;
+    using typename flat_base::key_type;
+    using mapped_type           = T;
+    using value_type            = std::pair<key_type, mapped_type>;
+    using reference             = std::pair<key_type const &, mapped_type       &>;
+    using const_reference       = std::pair<key_type const &, mapped_type const &>;
+    using key_container_type    = KeyContainer;
+    using mapped_container_type = MappedContainer;
+    using containers            = storage;
+
+    // Inherited from flat_impl → Komparator
+    using flat_base::transparent_comparator;
+    using typename flat_base::key_const_arg;
+
+    //--------------------------------------------------------------------------
+    // value_compare
+    //--------------------------------------------------------------------------
+    class value_compare : private Compare {
+        friend flat_map_impl;
+        constexpr value_compare( Compare c ) noexcept( std::is_nothrow_move_constructible_v<Compare> ) : Compare{ std::move( c ) } {}
+    public:
+        constexpr bool operator()( const_reference a, const_reference b ) const noexcept { return Compare::operator()( a.first, b.first ); }
+    };
+
+    //--------------------------------------------------------------------------
+    // Iterator — SCARY: type depends on KC/MC, not on Compare
+    //--------------------------------------------------------------------------
+public:
+    using iterator               = typename storage::iterator;
+    using const_iterator         = typename storage::const_iterator;
+    using reverse_iterator       = std::reverse_iterator<iterator>;
+    using const_reverse_iterator = std::reverse_iterator<const_iterator>;
+
+    //--------------------------------------------------------------------------
+    // Iterators (cbegin/cend, rbegin/rend, crbegin/crend inherited from flat_impl)
+    //--------------------------------------------------------------------------
+    constexpr auto begin( this auto && self ) noexcept { return self.storage_.begin(); }
+    constexpr auto end  ( this auto && self ) noexcept { return self.storage_.end  (); }
+
+    //--------------------------------------------------------------------------
+    // Capacity (empty, size, reserve, shrink_to_fit — inherited from flat_impl)
+    //--------------------------------------------------------------------------
+    [[nodiscard]] constexpr size_type max_size() const noexcept { return std::min( this->storage_.keys.max_size(), this->storage_.values.max_size() ); }
+
+    //--------------------------------------------------------------------------
+    // Lookup — find, contains, count, lower_bound, upper_bound, equal_range
+    // are all inherited from flat_impl.
+    //--------------------------------------------------------------------------
+
+    //--------------------------------------------------------------------------
+    // Modifiers — erase
+    //--------------------------------------------------------------------------
+    constexpr iterator erase( const_iterator const pos ) noexcept { return this->erase_pos_impl( pos ); }
+    constexpr iterator erase(       iterator const pos ) noexcept { return erase( const_iterator{ pos } ); }
+    constexpr iterator erase( const_iterator const first, const_iterator const last ) noexcept { return this->erase_range_impl( first, last ); }
+    template <LookupType<transparent_comparator, key_type> K = key_type>
+    constexpr size_type erase( K const & key ) noexcept {
+        return this->erase_by_key_impl( key );
+    }
+
+    //--------------------------------------------------------------------------
+    // Extraction & replacement (extract, keys inherited from flat_impl)
+    //--------------------------------------------------------------------------
+    constexpr void replace( KeyContainer new_keys, MappedContainer new_values )
+        noexcept( std::is_nothrow_move_assignable_v<KeyContainer> && std::is_nothrow_move_assignable_v<MappedContainer> )
+    {
+        this->storage_.replace( std::move( new_keys ), std::move( new_values ) );
+    }
+
+    //--------------------------------------------------------------------------
+    // Observers (key_comp, key_comp_mutable — inherited from flat_impl)
+    //--------------------------------------------------------------------------
+    [[nodiscard]] constexpr value_compare value_comp() const noexcept { return value_compare{ this->key_comp() }; }
+
+    [[nodiscard]] constexpr mapped_container_type const & values() const noexcept { return this->storage_.values; }
+    [[nodiscard]] constexpr std::span<mapped_type>        values()       noexcept { return this->storage_.values; }
+
+    // erase_if: inherited from flat_impl (friend, found via ADL)
+
+    // Key-container iterator → map iterator (compute index, construct zip iterator)
+    constexpr auto iter_from_key( this auto && self, auto const key_it ) noexcept {
+        auto const idx{ static_cast<size_type>( key_it - self.storage_.keys.begin() ) };
+        return self.make_iter( idx );
+    }
+
+    // Iterator factory from index position (const/non-const dispatched via storage_)
+    constexpr auto make_iter( this auto && self, size_type const pos ) noexcept {
+        return self.storage_.make_iter( pos );
+    }
+
+    // Iterator → index conversion
+    constexpr size_type iter_index( const_iterator const it ) const noexcept {
+        return it.index();
+    }
+
+    //--------------------------------------------------------------------------
+    // Protected interface for derived classes
+    //--------------------------------------------------------------------------
+protected:
+    constexpr flat_map_impl() = default;
+
+    constexpr explicit flat_map_impl( Compare const & comp ) noexcept( std::is_nothrow_copy_constructible_v<Compare> )
+        : flat_base{ comp } {}
+
+    constexpr flat_map_impl( Compare const & comp, KeyContainer keys, MappedContainer values ) noexcept( flat_base::nothrow_move_constructible )
+        : flat_base{ comp, storage{ std::move( keys ), std::move( values ) } }
+    {
+        BOOST_ASSERT( this->storage_.keys.size() == this->storage_.values.size() );
+    }
+
+    // "Fake deducing-this" forwarder — passes Derived & through to flat_impl
+    template <typename Derived, typename... Args>
+    requires std::derived_from<std::remove_cvref_t<Derived>, flat_map_impl>
+    constexpr flat_map_impl( Derived & self, Args &&... args )
+        : flat_base{ self, std::forward<Args>( args )... } {}
+
+    // Pre-sorted iterator pair (no Derived needed — no sorting)
+    template <std::input_iterator InputIt>
+    constexpr flat_map_impl( Compare const & comp, InputIt first, InputIt last )
+        : flat_base{ comp, first, last } {}
+
+    constexpr flat_map_impl( flat_map_impl const & ) = default;
+    constexpr flat_map_impl( flat_map_impl && )      = default;
+    constexpr flat_map_impl & operator=( flat_map_impl const & ) = default;
+    constexpr flat_map_impl & operator=( flat_map_impl && )      = default;
+}; // class flat_map_impl
+
 
 //==============================================================================
-// flat_map — sorted associative container with separate key/value storage
+// flat_map — unique sorted map
 //==============================================================================
 
 template
@@ -219,662 +599,401 @@ template
     typename MappedContainer = std::vector<T>
 >
 class flat_map
-    : private detail::paired_storage<KeyContainer, MappedContainer>
+    : public flat_map_impl<Key, T, Compare, KeyContainer, MappedContainer>
 {
-    using base = detail::paired_storage<KeyContainer, MappedContainer>;
+    using base = flat_map_impl<Key, T, Compare, KeyContainer, MappedContainer>;
+    using typename base::difference_type;
 
-    static_assert( std::is_same_v<Key, typename KeyContainer   ::value_type>, "KeyContainer::value_type must be Key" );
-    static_assert( std::is_same_v<T,   typename MappedContainer::value_type>, "MappedContainer::value_type must be T" );
-
-public:
-    //--------------------------------------------------------------------------
-    // Member types
-    //--------------------------------------------------------------------------
-    using key_type              = Key;
-    using mapped_type           = T;
-    using value_type            = std::pair<key_type, mapped_type>;
-    using key_compare           = Compare;
-    using reference             = std::pair<key_type const &, mapped_type       &>;
-    using const_reference       = std::pair<key_type const &, mapped_type const &>;
-    using size_type             = typename base::size_type;
-    using difference_type       = typename base::difference_type;
-    using key_container_type    = KeyContainer;
-    using mapped_container_type = MappedContainer;
-    using containers            = base;
-
-    //--------------------------------------------------------------------------
-    // value_compare
-    //--------------------------------------------------------------------------
-    class value_compare : private key_compare {
-        friend flat_map;
-        value_compare( key_compare c ) noexcept( std::is_nothrow_move_constructible_v<key_compare> ) : key_compare{ std::move( c ) } {}
-    public:
-        bool operator()( const_reference a, const_reference b ) const noexcept { return key_compare::operator()( a.first, b.first ); }
-    };
-
-    //--------------------------------------------------------------------------
-    // Iterator
-    //--------------------------------------------------------------------------
-private:
-    template <bool IsConst>
-    class iterator_impl
-    {
-    public:
-        using iterator_concept  = std::random_access_iterator_tag;
-        using iterator_category = std::random_access_iterator_tag;
-        using value_type        = flat_map::value_type;
-        using difference_type   = flat_map::difference_type;
-        using reference         = std::conditional_t<IsConst, flat_map::const_reference, flat_map::reference>;
-
-        struct arrow_proxy {
-            reference ref;
-            constexpr reference       * operator->()       noexcept { return &ref; }
-            constexpr reference const * operator->() const noexcept { return &ref; }
-        };
-        using pointer = arrow_proxy;
-
-    private:
-        friend flat_map;
-        friend iterator_impl<!IsConst>;
-
-        using map_ptr = std::conditional_t<IsConst, flat_map const *, flat_map *>;
-
-        map_ptr         map_{ nullptr };
-        difference_type idx_{ 0 };
-
-        constexpr iterator_impl( map_ptr const m, difference_type const i ) noexcept : map_{ m }, idx_{ i } {}
-
-    public:
-        constexpr iterator_impl() noexcept = default;
-        constexpr iterator_impl( iterator_impl const & ) noexcept = default;
-        constexpr iterator_impl & operator=( iterator_impl const & ) noexcept = default;
-
-        constexpr iterator_impl( iterator_impl<!IsConst> const & other ) noexcept requires IsConst
-            : map_{ other.map_ }, idx_{ other.idx_ } {}
-
-        constexpr reference operator*() const noexcept {
-            return { map_->base::keys[ static_cast<size_type>( idx_ ) ], map_->base::values[ static_cast<size_type>( idx_ ) ] };
-        }
-
-        constexpr arrow_proxy operator->() const noexcept { return { **this }; }
-
-        constexpr reference operator[]( difference_type const n ) const noexcept {
-            return *( *this + n );
-        }
-
-        constexpr iterator_impl & operator++(     )    noexcept { ++idx_; return *this; }
-        constexpr iterator_impl   operator++( int ) noexcept { auto tmp{ *this }; ++idx_; return tmp; }
-        constexpr iterator_impl & operator--(     )    noexcept { --idx_; return *this; }
-        constexpr iterator_impl   operator--( int ) noexcept { auto tmp{ *this }; --idx_; return tmp; }
-
-        constexpr iterator_impl & operator+=( difference_type const n ) noexcept { idx_ += n; return *this; }
-        constexpr iterator_impl & operator-=( difference_type const n ) noexcept { idx_ -= n; return *this; }
-
-        friend constexpr iterator_impl operator+( iterator_impl it, difference_type const n ) noexcept { return { it.map_, it.idx_ + n }; }
-        friend constexpr iterator_impl operator+( difference_type const n, iterator_impl it ) noexcept { return { it.map_, it.idx_ + n }; }
-        friend constexpr iterator_impl operator-( iterator_impl it, difference_type const n ) noexcept { return { it.map_, it.idx_ - n }; }
-
-        friend constexpr difference_type operator-( iterator_impl const & a, iterator_impl const & b ) noexcept { return a.idx_ - b.idx_; }
-
-        friend constexpr bool operator==( iterator_impl const & a, iterator_impl const & b ) noexcept { return a.idx_ == b.idx_; }
-        friend constexpr auto operator<=>( iterator_impl const & a, iterator_impl const & b ) noexcept { return a.idx_ <=> b.idx_; }
-    }; // iterator_impl
 
 public:
-    using iterator               = iterator_impl<false>;
-    using const_iterator         = iterator_impl<true>;
-    using reverse_iterator       = std::reverse_iterator<iterator>;
-    using const_reverse_iterator = std::reverse_iterator<const_iterator>;
+    using typename base::key_type;
+    using typename base::mapped_type;
+    using typename base::value_type;
+    using typename base::size_type;
+    using typename base::iterator;
+    using typename base::const_iterator;
+    using typename base::const_reference;
+    using sorted_hint_t = sorted_unique_t;
+    static constexpr bool unique{ true };
+    using base::transparent_comparator;
 
     //--------------------------------------------------------------------------
-    // Constructors
+    // Constructors — one-liners via "fake deducing-this" base constructors
     //--------------------------------------------------------------------------
+    constexpr flat_map() = default;
 
-    static auto constexpr nothrow_move_constructible
-    {
-        std::is_nothrow_move_constructible_v<KeyContainer   > &&
-        std::is_nothrow_move_constructible_v<MappedContainer> &&
-        std::is_nothrow_copy_constructible_v<Compare        >
-    };
+    constexpr explicit flat_map( Compare const & comp ) noexcept( std::is_nothrow_copy_constructible_v<Compare> )
+        : base{ comp } {}
 
-    flat_map() = default;
+    constexpr flat_map( KeyContainer keys, MappedContainer values, Compare const & comp = Compare{} )
+        : base{ *this, comp, typename base::containers{ std::move( keys ), std::move( values ) } } {}
 
-    explicit flat_map( Compare const & comp ) noexcept( std::is_nothrow_copy_constructible_v<Compare> )
-        : comp_{ comp } {}
-
-    flat_map( KeyContainer keys, MappedContainer values, Compare const & comp = Compare{} ) noexcept( nothrow_move_constructible )
-        : base{ std::move( keys ), std::move( values ) }, comp_{ comp }
-    {
-        BOOST_ASSERT( base::keys.size() == base::values.size() );
-        sort_and_unique();
-    }
-
-    flat_map( sorted_unique_t, KeyContainer keys, MappedContainer values, Compare const & comp = Compare{} ) noexcept( nothrow_move_constructible )
-        : base{ std::move( keys ), std::move( values ) }, comp_{ comp }
-    {
-        BOOST_ASSERT( base::keys.size() == base::values.size() );
-    }
+    constexpr flat_map( sorted_unique_t, KeyContainer keys, MappedContainer values, Compare const & comp = Compare{} ) noexcept( base::nothrow_move_constructible )
+        : base{ comp, std::move( keys ), std::move( values ) } {}
 
     template <std::input_iterator InputIt>
-    flat_map( InputIt first, InputIt const last, Compare const & comp = Compare{} )
-        : comp_{ comp }
-    {
-        base::append_from( first, last );
-        sort_and_unique();
-    }
+    constexpr flat_map( InputIt first, InputIt const last, Compare const & comp = Compare{} )
+        : base{ *this, comp, first, last } {}
 
     template <std::input_iterator InputIt>
-    flat_map( sorted_unique_t, InputIt first, InputIt const last, Compare const & comp = Compare{} )
-        : comp_{ comp }
-    {
-        base::append_from( first, last );
-    }
+    constexpr flat_map( sorted_unique_t, InputIt first, InputIt const last, Compare const & comp = Compare{} )
+        : base{ comp, first, last } {}
 
     template <std::ranges::input_range R>
-    flat_map( std::from_range_t, R && rg, Compare const & comp = Compare{} )
-        : comp_{ comp }
-    {
-        insert_range( std::forward<R>( rg ) );
-    }
+    constexpr flat_map( std::from_range_t tag, R && rg, Compare const & comp = Compare{} )
+        : base{ *this, comp, tag, std::forward<R>( rg ) } {}
 
-    flat_map( std::initializer_list<value_type> const il, Compare const & comp = Compare{} )
+    constexpr flat_map( std::initializer_list<value_type> const il, Compare const & comp = Compare{} )
         : flat_map( il.begin(), il.end(), comp ) {}
 
-    flat_map( sorted_unique_t, std::initializer_list<value_type> il, Compare const & comp = Compare{} )
-        : flat_map( sorted_unique, il.begin(), il.end(), comp ) {}
+    constexpr flat_map( sorted_unique_t s, std::initializer_list<value_type> il, Compare const & comp = Compare{} )
+        : flat_map( s, il.begin(), il.end(), comp ) {}
 
-    flat_map( flat_map const & ) = default;
-    flat_map( flat_map && )      = default;
+    constexpr flat_map( flat_map const & ) = default;
+    constexpr flat_map( flat_map && )      = default;
 
-    flat_map & operator=( flat_map const & ) = default;
-    flat_map & operator=( flat_map && )      = default;
+    constexpr flat_map & operator=( flat_map const & ) = default;
+    constexpr flat_map & operator=( flat_map && )      = default;
 
-    flat_map & operator=( std::initializer_list<value_type> il ) {
-        clear();
-        insert( il );
+    constexpr flat_map & operator=( std::initializer_list<value_type> il ) {
+        this->assign( il );
         return *this;
     }
 
     //--------------------------------------------------------------------------
-    // Iterators
+    // Swap (type-safe: only flat_map ↔ flat_map, not flat_map ↔ flat_multimap)
     //--------------------------------------------------------------------------
-    iterator       begin()       noexcept { return { this, 0 }; }
-    const_iterator begin() const noexcept { return { this, 0 }; }
-    iterator       end  ()       noexcept { return { this, static_cast<difference_type>( base::keys.size() ) }; }
-    const_iterator end  () const noexcept { return { this, static_cast<difference_type>( base::keys.size() ) }; }
-
-    const_iterator cbegin() const noexcept { return begin(); }
-    const_iterator cend  () const noexcept { return end  (); }
-
-    reverse_iterator       rbegin()       noexcept { return reverse_iterator      { end  () }; }
-    const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator{ end  () }; }
-    reverse_iterator       rend  ()       noexcept { return reverse_iterator      { begin() }; }
-    const_reverse_iterator rend  () const noexcept { return const_reverse_iterator{ begin() }; }
-
-    const_reverse_iterator crbegin() const noexcept { return rbegin(); }
-    const_reverse_iterator crend  () const noexcept { return rend  (); }
-
-    //--------------------------------------------------------------------------
-    // Capacity
-    //--------------------------------------------------------------------------
-    [[nodiscard]] bool      empty   () const noexcept { return base::keys.empty(); }
-    [[nodiscard]] size_type size    () const noexcept { return static_cast<size_type>( base::keys.size() ); }
-    [[nodiscard]] size_type max_size() const noexcept { return std::min( base::keys.max_size(), base::values.max_size() ); }
+    constexpr void swap( flat_map & other ) noexcept { this->swap_impl( other ); }
+    friend constexpr void swap( flat_map & a, flat_map & b ) noexcept { a.swap( b ); }
 
     //--------------------------------------------------------------------------
     // Element access
     //--------------------------------------------------------------------------
-    mapped_type & operator[]( key_type const & key ) {
+    constexpr mapped_type & operator[]( key_type const & key ) {
         return try_emplace( key ).first->second;
     }
 
-    mapped_type & operator[]( key_type && key ) {
+    constexpr mapped_type & operator[]( key_type && key ) {
         return try_emplace( std::move( key ) ).first->second;
     }
 
-    template <typename K> requires( requires{ typename Compare::is_transparent; } )
-    mapped_type & operator[]( K && key ) {
+    template <typename K> requires( transparent_comparator )
+    constexpr mapped_type & operator[]( K && key ) {
         return try_emplace( std::forward<K>( key ) ).first->second;
     }
 
-    mapped_type       & at( key_type const & key )       { auto const it{ find( key ) }; if ( it == end() ) detail::throw_out_of_range( "psi::vm::flat_map::at" ); return it->second; }
-    mapped_type const & at( key_type const & key ) const { auto const it{ find( key ) }; if ( it == end() ) detail::throw_out_of_range( "psi::vm::flat_map::at" ); return it->second; }
-
-    template <typename K> requires( requires{ typename Compare::is_transparent; } )
-    mapped_type       & at( K const & key )       { auto const it{ find( key ) }; if ( it == end() ) detail::throw_out_of_range( "psi::vm::flat_map::at" ); return it->second; }
-    template <typename K> requires( requires{ typename Compare::is_transparent; } )
-    mapped_type const & at( K const & key ) const { auto const it{ find( key ) }; if ( it == end() ) detail::throw_out_of_range( "psi::vm::flat_map::at" ); return it->second; }
+    template <LookupType<transparent_comparator, key_type> K = key_type>
+    constexpr auto & at( this auto && self, K const & key ) {
+        auto const it{ self.find( key ) };
+        if ( it == self.end() )
+            detail::throw_out_of_range( "psi::vm::flat_map::at" );
+        return it->second;
+    }
 
     //--------------------------------------------------------------------------
-    // Lookup
+    // Lookup — find, contains, count, lower_bound, upper_bound, equal_range
+    // inherited from flat_impl. count() uses self.unique for optimization.
     //--------------------------------------------------------------------------
-private:
-    template <typename K>
-    [[nodiscard]] size_type lower_bound_index( K const & key ) const noexcept {
-        auto const comp{ make_trivially_copyable_predicate( comp_ ) };
-        return static_cast<size_type>( std::lower_bound( base::keys.begin(), base::keys.end(), key, comp ) - base::keys.begin() );
-    }
-    template <typename K>
-    [[nodiscard]] size_type upper_bound_index( K const & key ) const noexcept {
-        auto const comp{ make_trivially_copyable_predicate( comp_ ) };
-        return static_cast<size_type>( std::upper_bound( base::keys.begin(), base::keys.end(), key, comp ) - base::keys.begin() );
-    }
-    template <typename K>
-    [[nodiscard]] bool key_eq_at( size_type const pos, K const & key ) const noexcept {
-        return pos < base::keys.size() && !comp_( key, base::keys[ pos ] );
-    }
-
-public:
-    iterator       find( key_type const & key )       noexcept { auto const pos{ lower_bound_index( key ) }; return key_eq_at( pos, key ) ? iterator      { this, static_cast<difference_type>( pos ) } : end(); }
-    const_iterator find( key_type const & key ) const noexcept { auto const pos{ lower_bound_index( key ) }; return key_eq_at( pos, key ) ? const_iterator{ this, static_cast<difference_type>( pos ) } : end(); }
-
-    template <typename K> requires( requires{ typename Compare::is_transparent; } )
-    iterator       find( K const & key )       noexcept { auto const pos{ lower_bound_index( key ) }; return key_eq_at( pos, key ) ? iterator      { this, static_cast<difference_type>( pos ) } : end(); }
-    template <typename K> requires( requires{ typename Compare::is_transparent; } )
-    const_iterator find( K const & key ) const noexcept { auto const pos{ lower_bound_index( key ) }; return key_eq_at( pos, key ) ? const_iterator{ this, static_cast<difference_type>( pos ) } : end(); }
-
-    [[nodiscard]] size_type count   ( key_type const & key ) const noexcept { return find( key ) != end() ? 1 : 0; }
-    [[nodiscard]] bool      contains( key_type const & key ) const noexcept { return find( key ) != end(); }
-
-    template <typename K> requires( requires{ typename Compare::is_transparent; } )
-    [[nodiscard]] size_type count   ( K const & key ) const noexcept { return find( key ) != end() ? 1 : 0; }
-    template <typename K> requires( requires{ typename Compare::is_transparent; } )
-    [[nodiscard]] bool      contains( K const & key ) const noexcept { return find( key ) != end(); }
-
-    iterator       lower_bound( key_type const & key )       noexcept { return { this, static_cast<difference_type>( lower_bound_index( key ) ) }; }
-    const_iterator lower_bound( key_type const & key ) const noexcept { return { this, static_cast<difference_type>( lower_bound_index( key ) ) }; }
-    iterator       upper_bound( key_type const & key )       noexcept { return { this, static_cast<difference_type>( upper_bound_index( key ) ) }; }
-    const_iterator upper_bound( key_type const & key ) const noexcept { return { this, static_cast<difference_type>( upper_bound_index( key ) ) }; }
-
-    template <typename K> requires( requires{ typename Compare::is_transparent; } )
-    iterator       lower_bound( K const & key )       noexcept { return { this, static_cast<difference_type>( lower_bound_index( key ) ) }; }
-    template <typename K> requires( requires{ typename Compare::is_transparent; } )
-    const_iterator lower_bound( K const & key ) const noexcept { return { this, static_cast<difference_type>( lower_bound_index( key ) ) }; }
-    template <typename K> requires( requires{ typename Compare::is_transparent; } )
-    iterator       upper_bound( K const & key )       noexcept { return { this, static_cast<difference_type>( upper_bound_index( key ) ) }; }
-    template <typename K> requires( requires{ typename Compare::is_transparent; } )
-    const_iterator upper_bound( K const & key ) const noexcept { return { this, static_cast<difference_type>( upper_bound_index( key ) ) }; }
-
-    std::pair<iterator, iterator>             equal_range( key_type const & key )       noexcept { return { lower_bound( key ), upper_bound( key ) }; }
-    std::pair<const_iterator, const_iterator> equal_range( key_type const & key ) const noexcept { return { lower_bound( key ), upper_bound( key ) }; }
-
-    template <typename K> requires( requires{ typename Compare::is_transparent; } )
-    std::pair<iterator, iterator>             equal_range( K const & key )       noexcept { return { lower_bound( key ), upper_bound( key ) }; }
-    template <typename K> requires( requires{ typename Compare::is_transparent; } )
-    std::pair<const_iterator, const_iterator> equal_range( K const & key ) const noexcept { return { lower_bound( key ), upper_bound( key ) }; }
 
     //--------------------------------------------------------------------------
-    // Modifiers
+    // Modifiers — optimized erase by key for unique keys
     //--------------------------------------------------------------------------
-    std::pair<iterator, bool> insert( value_type const & v ) {
-        return emplace( v.first, v.second );
+    // Explicitly forward positional erases (avoid using-declaration ambiguity on MSVC).
+    //using base::erase; // bring positional + generic erase overloads into scope
+    constexpr iterator erase( const_iterator const pos ) noexcept { return base::erase( pos ); }
+    constexpr iterator erase(       iterator const pos ) noexcept { return base::erase( pos ); }
+    constexpr iterator erase( const_iterator const first, const_iterator const last ) noexcept { return base::erase( first, last ); }
+
+    template <LookupType<transparent_comparator, key_type> K = key_type>
+    constexpr size_type erase( K const & key ) noexcept {
+        auto const it{ this->find( key ) };
+        if ( it == this->end() ) return 0;
+        detail::storage_erase_at( this->storage_, this->iter_index( const_iterator{ it } ) );
+        return 1;
     }
 
-    std::pair<iterator, bool> insert( value_type && v ) {
-        return emplace( std::move( v.first ), std::move( v.second ) );
-    }
+    //--------------------------------------------------------------------------
+    // Modifiers — unique insert / emplace
+    //--------------------------------------------------------------------------
+    using base::insert;       // bulk insert, initializer_list, sorted bulk — from flat_impl
+    using base::insert_range; // insert_range, sorted insert_range — from flat_impl
 
-    iterator insert( const_iterator hint, value_type const & v ) {
-        return emplace_hint( hint, v.first, v.second );
-    }
+    constexpr auto insert( value_type const & v ) { return emplace( v.first, v.second ); }
+    constexpr auto insert( value_type &&      v ) { return emplace( std::move( v.first ), std::move( v.second ) ); }
 
-    iterator insert( const_iterator hint, value_type && v ) {
-        return emplace_hint( hint, std::move( v.first ), std::move( v.second ) );
-    }
+    constexpr iterator insert( const_iterator hint, value_type const & v ) { return emplace_hint( hint, v.first, v.second ); }
+    constexpr iterator insert( const_iterator hint, value_type &&      v ) { return emplace_hint( hint, std::move( v.first ), std::move( v.second ) ); }
 
-    // Bulk insert — append + sort + merge + deduplicate
-    template <std::input_iterator InputIt>
-    void insert( InputIt first, InputIt last ) {
-        auto const oldSize{ size() };
-        base::append_from( first, last );
-        sort_merge_unique<false>( oldSize );
-    }
-
-    void insert( std::initializer_list<value_type> il ) {
-        insert( il.begin(), il.end() );
-    }
-
-    // Sorted unique bulk insert — append + merge + deduplicate (no sort)
-    template <std::input_iterator InputIt>
-    void insert( sorted_unique_t, InputIt first, InputIt last ) {
-        auto const oldSize{ size() };
-        base::append_from( first, last );
-        sort_merge_unique<true>( oldSize );
-    }
-
-    void insert( sorted_unique_t, std::initializer_list<value_type> il ) {
-        insert( sorted_unique, il.begin(), il.end() );
-    }
-
-    // insert_range — delegates to iterator pair insert via views::common
-    template <std::ranges::input_range R>
-    requires std::convertible_to<std::ranges::range_reference_t<R>, value_type>
-    void insert_range( R && rg ) {
-        if constexpr ( std::ranges::sized_range<R> )
-            reserve( size() + static_cast<size_type>( std::ranges::size( rg ) ) );
-        auto common{ std::forward<R>( rg ) | std::views::common };
-        insert( std::ranges::begin( common ), std::ranges::end( common ) );
-    }
-
-    template <std::ranges::input_range R>
-    requires std::convertible_to<std::ranges::range_reference_t<R>, value_type>
-    void insert_range( sorted_unique_t, R && rg ) {
-        if constexpr ( std::ranges::sized_range<R> )
-            reserve( size() + static_cast<size_type>( std::ranges::size( rg ) ) );
-        auto common{ std::forward<R>( rg ) | std::views::common };
-        insert( sorted_unique, std::ranges::begin( common ), std::ranges::end( common ) );
+    template <typename K, typename... Args>
+    constexpr std::pair<iterator, bool> try_emplace( K && key, Args &&... args ) {
+        auto const pos{ this->lower_bound_index( key ) };
+        if ( this->key_eq_at( pos, key ) )
+            return { this->make_iter( pos ), false };
+        this->storage_.insert_element_at( pos, key_type( std::forward<K>( key ) ), mapped_type( std::forward<Args>( args )... ) );
+        return { this->make_iter( pos ), true };
     }
 
     template <typename K, typename... Args>
-    std::pair<iterator, bool> try_emplace( K && key, Args &&... args ) {
-        auto const pos{ lower_bound_index( key ) };
-        if ( key_eq_at( pos, key ) )
-            return { iterator{ this, static_cast<difference_type>( pos ) }, false };
-        base::insert_element_at( pos, key_type( std::forward<K>( key ) ), mapped_type( std::forward<Args>( args )... ) );
-        return { iterator{ this, static_cast<difference_type>( pos ) }, true };
-    }
-
-    template <typename K, typename... Args>
-    iterator try_emplace( const_iterator hint, K && key, Args &&... args ) {
-        auto const hintIdx{ static_cast<size_type>( hint.idx_ ) };
+    constexpr iterator try_emplace( const_iterator hint, K && key, Args &&... args ) {
+        auto const hintIdx{ this->iter_index( hint ) };
         bool const hintValid{
-            ( hintIdx == 0      || comp_( base::keys[ hintIdx - 1 ], key ) ) &&
-            ( hintIdx >= size() || comp_( key, base::keys[ hintIdx ] ) )
+            ( hintIdx == 0            || this->le( this->storage_.keys[ hintIdx - 1 ], key ) ) &&
+            ( hintIdx >= this->size() || this->le( key, this->storage_.keys[ hintIdx ] ) )
         };
         if ( hintValid ) {
-            base::insert_element_at( hintIdx, key_type( std::forward<K>( key ) ), mapped_type( std::forward<Args>( args )... ) );
-            return { this, static_cast<difference_type>( hintIdx ) };
+            this->storage_.insert_element_at( hintIdx, key_type( std::forward<K>( key ) ), mapped_type( std::forward<Args>( args )... ) );
+            return this->make_iter( hintIdx );
         }
-        if ( hintIdx < size() && !comp_( key, base::keys[ hintIdx ] ) && !comp_( base::keys[ hintIdx ], key ) )
-            return { this, static_cast<difference_type>( hintIdx ) };
+        if ( hintIdx < this->size() && this->eq( key, this->storage_.keys[ hintIdx ] ) )
+            return this->make_iter( hintIdx );
         return try_emplace( std::forward<K>( key ), std::forward<Args>( args )... ).first;
     }
 
     template <typename K, typename M>
-    std::pair<iterator, bool> insert_or_assign( K && key, M && value ) {
-        auto const pos{ lower_bound_index( key ) };
-        if ( key_eq_at( pos, key ) ) {
-            base::values[ pos ] = std::forward<M>( value );
-            return { iterator{ this, static_cast<difference_type>( pos ) }, false };
+    constexpr std::pair<iterator, bool> insert_or_assign( K && key, M && value ) {
+        auto const pos{ this->lower_bound_index( key ) };
+        if ( this->key_eq_at( pos, key ) ) {
+            this->storage_.values[ pos ] = std::forward<M>( value );
+            return { this->make_iter( pos ), false };
         }
-        base::insert_element_at( pos, key_type( std::forward<K>( key ) ), std::forward<M>( value ) );
-        return { iterator{ this, static_cast<difference_type>( pos ) }, true };
+        this->storage_.insert_element_at( pos, key_type( std::forward<K>( key ) ), std::forward<M>( value ) );
+        return { this->make_iter( pos ), true };
     }
 
     template <typename K, typename M>
-    iterator insert_or_assign( const_iterator hint, K && key, M && value ) {
-        auto const hintIdx{ static_cast<size_type>( hint.idx_ ) };
-        if ( hintIdx < size() && !comp_( key, base::keys[ hintIdx ] ) && !comp_( base::keys[ hintIdx ], key ) ) {
-            base::values[ hintIdx ] = std::forward<M>( value );
-            return { this, hint.idx_ };
+    constexpr iterator insert_or_assign( const_iterator hint, K && key, M && value ) {
+        auto const hintIdx{ this->iter_index( hint ) };
+        if ( hintIdx < this->size() && this->eq( key, this->storage_.keys[ hintIdx ] ) ) {
+            this->storage_.values[ hintIdx ] = std::forward<M>( value );
+            return this->make_iter( hintIdx );
         }
         return insert_or_assign( std::forward<K>( key ), std::forward<M>( value ) ).first;
     }
 
     template <typename... Args>
-    std::pair<iterator, bool> emplace( Args &&... args ) {
+    constexpr std::pair<iterator, bool> emplace( Args &&... args ) {
         value_type v( std::forward<Args>( args )... );
         return try_emplace( std::move( v.first ), std::move( v.second ) );
     }
-
-    iterator emplace_hint( const_iterator hint, auto &&... args ) {
-        value_type v( std::forward<decltype( args )>( args )... );
+    template <typename... Args>
+    constexpr iterator emplace_hint( const_iterator hint, Args &&... args ) {
+        value_type v( std::forward<Args>( args )... );
         return try_emplace( hint, std::move( v.first ), std::move( v.second ) );
     }
-
-    iterator erase( iterator pos ) noexcept { return erase( const_iterator{ pos } ); }
-
-    iterator erase( const_iterator pos ) noexcept {
-        auto const idx{ static_cast<size_type>( pos.idx_ ) };
-        base::erase_element_at( idx );
-        return { this, static_cast<difference_type>( idx ) };
-    }
-
-    iterator erase( const_iterator first, const_iterator last ) noexcept {
-        auto const firstIdx{ static_cast<size_type>( first.idx_ ) };
-        auto const lastIdx { static_cast<size_type>( last .idx_ ) };
-        base::erase_elements( firstIdx, lastIdx );
-        return { this, first.idx_ };
-    }
-
-    size_type erase( key_type const & key ) noexcept {
-        auto const it{ find( key ) };
-        if ( it == end() ) return 0;
-        erase( const_iterator{ it } );
-        return 1;
-    }
-
-    template <typename K> requires( requires{ typename Compare::is_transparent; } )
-    size_type erase( K const & key ) noexcept {
-        auto const it{ find( key ) };
-        if ( it == end() ) return 0;
-        erase( const_iterator{ it } );
-        return 1;
-    }
-
-    using base::clear;
-
-    void swap( flat_map & other ) noexcept {
-        base::swap_storage( other );
-        using std::swap;
-        swap( comp_, other.comp_ );
-    }
-
-    friend void swap( flat_map & a, flat_map & b ) noexcept { a.swap( b ); }
-
-    //--------------------------------------------------------------------------
-    // Extraction & replacement
-    //--------------------------------------------------------------------------
-    containers extract() noexcept( std::is_nothrow_move_constructible_v<base> ) { return std::move( static_cast<base &>( *this ) ); }
-
-    using base::replace;
-
-    //--------------------------------------------------------------------------
-    // Observers
-    //--------------------------------------------------------------------------
-    [[nodiscard]] key_compare   key_comp  () const noexcept { return comp_; }
-    [[nodiscard]] value_compare value_comp() const noexcept { return value_compare{ comp_ }; }
-
-    [[nodiscard]] key_container_type    const & keys  () const noexcept { return base::keys;   }
-    [[nodiscard]] mapped_container_type const & values() const noexcept { return base::values; }
-
-    //--------------------------------------------------------------------------
-    // Merge (extension — not in std::flat_map, matches std::map::merge semantics)
-    //--------------------------------------------------------------------------
-    void merge( flat_map & source ) {
-        if ( source.empty() || this == &source )
-            return;
-        // O(N+M) sorted scan to find source indices to transfer
-        std::vector<size_type> transferIndices;
-        transferIndices.reserve( source.size() );
-        {
-            size_type si{ 0 };
-            size_type ti{ 0 };
-            auto const sn{ source.size() };
-            auto const tn{ size() };
-            while ( si < sn && ti < tn ) {
-                if ( comp_( source.base::keys[ si ], base::keys[ ti ] ) ) {
-                    transferIndices.push_back( si );
-                    ++si;
-                } else if ( comp_( base::keys[ ti ], source.base::keys[ si ] ) ) {
-                    ++ti;
-                } else {
-                    ++si;
-                    ++ti;
-                }
-            }
-            for ( ; si < sn; ++si )
-                transferIndices.push_back( si );
-        }
-        if ( transferIndices.empty() )
-            return;
-
-        // Append only non-duplicate elements (already in sorted order)
-        auto const oldSize{ size() };
-        for ( auto const idx : transferIndices ) {
-            base::keys  .emplace_back( std::move( source.base::keys  [ idx ] ) );
-            base::values.emplace_back( std::move( source.base::values[ idx ] ) );
-        }
-        sort_merge_unique<true>( oldSize );
-        // Compact source: remove transferred elements in O(M) single pass
-        {
-            size_type dst{ 0 };
-            size_type nextT{ 0 };
-            for ( size_type src{ 0 }, n{ source.size() }; src < n; ++src ) {
-                if ( nextT < transferIndices.size() && src == transferIndices[ nextT ] ) {
-                    ++nextT;
-                } else {
-                    if ( dst != src ) {
-                        source.base::keys  [ dst ] = std::move( source.base::keys  [ src ] );
-                        source.base::values[ dst ] = std::move( source.base::values[ src ] );
-                    }
-                    ++dst;
-                }
-            }
-            source.truncate_to( dst );
-        }
-    }
-
-    void merge( flat_map && source ) {
-        auto const oldSize{ size() };
-        base::append_move_containers( source.base::keys, source.base::values );
-        sort_merge_unique<true>( oldSize );
-        source.clear();
-    }
-
-    //--------------------------------------------------------------------------
-    // Comparison
-    //--------------------------------------------------------------------------
-    friend bool operator==( flat_map const & a, flat_map const & b ) {
-        return a.keys() == b.keys() && a.values() == b.values();
-    }
-
-    friend auto operator<=>( flat_map const & a, flat_map const & b )
-    requires std::three_way_comparable<Key> && std::three_way_comparable<T>
-    {
-        if ( auto const cmp{ std::lexicographical_compare_three_way( a.keys().begin(), a.keys().end(), b.keys().begin(), b.keys().end() ) }; cmp != 0 )
-            return cmp;
-        return std::lexicographical_compare_three_way( a.values().begin(), a.values().end(), b.values().begin(), b.values().end() );
-    }
-
-    //--------------------------------------------------------------------------
-    // erase_if (friend non-member)
-    //--------------------------------------------------------------------------
-    template <typename Pred>
-    friend size_type erase_if( flat_map & c, Pred pred ) {
-        auto zv{ c.zip_view() };
-        auto const it{ std::remove_if( zv.begin(), zv.end(), [&pred]( auto && zipped ) {
-            return pred( const_reference{ std::get<0>( zipped ), std::get<1>( zipped ) } );
-        } ) };
-        auto const newSize{ static_cast<size_type>( it - zv.begin() ) };
-        auto const erased { static_cast<size_type>( zv.end() - it ) };
-        c.truncate_to( newSize );
-        return erased;
-    }
-
-    //--------------------------------------------------------------------------
-    // Reserve (extension — not in std but useful)
-    //--------------------------------------------------------------------------
-    using base::reserve;
-    using base::shrink_to_fit;
-
-    //--------------------------------------------------------------------------
-    // Private helpers
-    //--------------------------------------------------------------------------
-private:
-    // Sort entire map and remove duplicates (first occurrence kept)
-    void sort_and_unique() {
-        auto zv{ base::zip_view() };
-        std::ranges::sort( zv, comp_, key_proj() );
-        auto const dupStart{ std::ranges::unique( zv, key_equiv(), key_proj() ).begin() };
-        base::truncate_to( static_cast<size_type>( dupStart - zv.begin() ) );
-    }
-
-    // Bulk insert: sort new tail, inplace_merge with existing, deduplicate
-    template <bool WasSorted>
-    void sort_merge_unique( size_type const oldSize ) {
-        if ( static_cast<size_type>( base::keys.size() ) <= oldSize )
-            return;
-
-        auto zv{ base::zip_view() };
-        auto const appendStart{ zv.begin() + static_cast<difference_type>( oldSize ) };
-
-        if constexpr ( !WasSorted )
-            std::ranges::sort( appendStart, zv.end(), comp_, key_proj() );
-
-        if ( oldSize > 0 )
-            std::ranges::inplace_merge( zv.begin(), appendStart, zv.end(), comp_, key_proj() );
-
-        auto const dupStart{ std::ranges::unique( zv, key_equiv(), key_proj() ).begin() };
-        base::truncate_to( static_cast<size_type>( dupStart - zv.begin() ) );
-    }
-
-    // Key projection for ranges algorithms (sort, inplace_merge, unique)
-    // key_proj() is a range adaptor, not a per-element callable — need a custom functor
-    static constexpr auto key_proj() noexcept {
-        return []<typename E>( E && e ) -> decltype(auto) {
-            return std::get<0>( std::forward<E>( e ) );
-        };
-    }
-
-    // Key equivalence predicate for ranges::unique (receives projected keys)
-    auto key_equiv() const noexcept {
-        return [this]( auto const & a, auto const & b ) {
-            return !comp_( a, b ) && !comp_( b, a );
-        };
-    }
-
-    //--------------------------------------------------------------------------
-    // Data members
-    //--------------------------------------------------------------------------
-#ifdef _MSC_VER
-    [[ msvc::no_unique_address ]]
-#else
-    [[ no_unique_address ]]
-#endif
-    key_compare comp_;
 }; // class flat_map
 
+
+//==============================================================================
+// flat_multimap — sorted map with equivalent keys allowed
+//==============================================================================
+
+template
+<
+    typename Key,
+    typename T,
+    typename Compare         = std::less<Key>,
+    typename KeyContainer    = std::vector<Key>,
+    typename MappedContainer = std::vector<T>
+>
+class flat_multimap
+    : public flat_map_impl<Key, T, Compare, KeyContainer, MappedContainer>
+{
+    using base = flat_map_impl<Key, T, Compare, KeyContainer, MappedContainer>;
+    using typename base::difference_type;
+
+
+public:
+    using typename base::key_type;
+    using typename base::mapped_type;
+    using typename base::value_type;
+    using typename base::size_type;
+    using typename base::iterator;
+    using typename base::const_iterator;
+    using sorted_hint_t = sorted_equivalent_t;
+    static constexpr bool unique{ false };
+
+    //--------------------------------------------------------------------------
+    // Constructors — one-liners via "fake deducing-this" base constructors
+    //--------------------------------------------------------------------------
+    constexpr flat_multimap() = default;
+
+    constexpr explicit flat_multimap( Compare const & comp ) noexcept( std::is_nothrow_copy_constructible_v<Compare> )
+        : base{ comp } {}
+
+    constexpr flat_multimap( KeyContainer keys, MappedContainer values, Compare const & comp = Compare{} )
+        : base{ *this, comp, typename base::containers{ std::move( keys ), std::move( values ) } } {}
+
+    constexpr flat_multimap( sorted_equivalent_t, KeyContainer keys, MappedContainer values, Compare const & comp = Compare{} ) noexcept( base::nothrow_move_constructible )
+        : base{ comp, std::move( keys ), std::move( values ) } {}
+
+    template <std::input_iterator InputIt>
+    constexpr flat_multimap( InputIt first, InputIt const last, Compare const & comp = Compare{} )
+        : base{ *this, comp, first, last } {}
+
+    template <std::input_iterator InputIt>
+    constexpr flat_multimap( sorted_equivalent_t, InputIt first, InputIt const last, Compare const & comp = Compare{} )
+        : base{ comp, first, last } {}
+
+    template <std::ranges::input_range R>
+    constexpr flat_multimap( std::from_range_t tag, R && rg, Compare const & comp = Compare{} )
+        : base{ *this, comp, tag, std::forward<R>( rg ) } {}
+
+    constexpr flat_multimap( std::initializer_list<value_type> const il, Compare const & comp = Compare{} )
+        : flat_multimap( il.begin(), il.end(), comp ) {}
+
+    constexpr flat_multimap( sorted_equivalent_t s, std::initializer_list<value_type> il, Compare const & comp = Compare{} )
+        : flat_multimap( s, il.begin(), il.end(), comp ) {}
+
+    constexpr flat_multimap( flat_multimap const & ) = default;
+    constexpr flat_multimap( flat_multimap && )      = default;
+
+    constexpr flat_multimap & operator=( flat_multimap const & ) = default;
+    constexpr flat_multimap & operator=( flat_multimap && )      = default;
+
+    constexpr flat_multimap & operator=( std::initializer_list<value_type> il ) {
+        this->assign( il );
+        return *this;
+    }
+
+    //--------------------------------------------------------------------------
+    // Swap (type-safe)
+    //--------------------------------------------------------------------------
+    constexpr void swap( flat_multimap & other ) noexcept { this->swap_impl( other ); }
+    friend constexpr void swap( flat_multimap & a, flat_multimap & b ) noexcept { a.swap( b ); }
+
+    //--------------------------------------------------------------------------
+    // Modifiers — multi insert / emplace
+    //--------------------------------------------------------------------------
+    using base::insert;       // bulk insert, initializer_list, sorted bulk — from flat_impl
+    using base::insert_range; // insert_range, sorted insert_range — from flat_impl
+
+    constexpr auto insert( value_type const & v ) { return emplace( v.first, v.second ); }
+    constexpr auto insert( value_type &&      v ) { return emplace( std::move( v.first ), std::move( v.second ) ); }
+
+    constexpr iterator insert( const_iterator hint, value_type const & v ) { return emplace_hint( hint, v.first, v.second ); }
+    constexpr iterator insert( const_iterator hint, value_type &&      v ) { return emplace_hint( hint, std::move( v.first ), std::move( v.second ) ); }
+
+    template <typename... Args>
+    constexpr iterator emplace( Args &&... args ) {
+        value_type v( std::forward<Args>( args )... );
+        auto const pos{ this->lower_bound_index( v.first ) };
+        this->storage_.insert_element_at( pos, std::move( v.first ), std::move( v.second ) );
+        return this->make_iter( pos );
+    }
+
+    constexpr iterator emplace_hint( const_iterator hint, auto &&... args ) {
+        value_type v( std::forward<decltype( args )>( args )... );
+        auto const pos{ this->hinted_insert_pos( this->iter_index( hint ), enreg( v.first ) ) };
+        this->storage_.insert_element_at( pos, std::move( v.first ), std::move( v.second ) );
+        return this->make_iter( pos );
+    }
+
+}; // class flat_multimap
+
+
 //------------------------------------------------------------------------------
-// Deduction guides
+// Deduction guides — flat_map
 //------------------------------------------------------------------------------
 
+// Container pair (unsorted)
 template <typename KC, typename MC, typename Comp = std::less<typename KC::value_type>>
-requires( !std::is_same_v<KC, sorted_unique_t> )
+requires( !std::is_same_v<KC, sorted_unique_t> && !std::is_same_v<KC, sorted_equivalent_t> )
 flat_map( KC, MC, Comp = Comp{} )
     -> flat_map<typename KC::value_type, typename MC::value_type, Comp, KC, MC>;
 
+// Container pair (sorted unique)
 template <typename KC, typename MC, typename Comp = std::less<typename KC::value_type>>
 flat_map( sorted_unique_t, KC, MC, Comp = Comp{} )
     -> flat_map<typename KC::value_type, typename MC::value_type, Comp, KC, MC>;
 
+// Iterator range (unsorted)
 template <std::input_iterator InputIt, typename Comp = std::less<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type::first_type>>>
-requires( !std::is_same_v<InputIt, sorted_unique_t> )
+requires( !std::is_same_v<InputIt, sorted_unique_t> && !std::is_same_v<InputIt, sorted_equivalent_t> )
 flat_map( InputIt, InputIt, Comp = Comp{} )
     -> flat_map<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type::first_type>,
                 typename std::iterator_traits<InputIt>::value_type::second_type,
                 Comp>;
 
+// Iterator range (sorted unique)
 template <std::input_iterator InputIt, typename Comp = std::less<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type::first_type>>>
 flat_map( sorted_unique_t, InputIt, InputIt, Comp = Comp{} )
     -> flat_map<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type::first_type>,
                 typename std::iterator_traits<InputIt>::value_type::second_type,
                 Comp>;
 
+// from_range_t
 template <std::ranges::input_range R, typename Comp = std::less<std::remove_const_t<typename std::ranges::range_value_t<R>::first_type>>>
 flat_map( std::from_range_t, R &&, Comp = Comp{} )
     -> flat_map<std::remove_const_t<typename std::ranges::range_value_t<R>::first_type>,
                 typename std::ranges::range_value_t<R>::second_type,
                 Comp>;
 
+// Initializer list (unsorted)
 template <typename Key, typename T, typename Comp = std::less<Key>>
 flat_map( std::initializer_list<std::pair<Key, T>>, Comp = Comp{} )
     -> flat_map<Key, T, Comp>;
 
+// Initializer list (sorted unique)
 template <typename Key, typename T, typename Comp = std::less<Key>>
 flat_map( sorted_unique_t, std::initializer_list<std::pair<Key, T>>, Comp = Comp{} )
     -> flat_map<Key, T, Comp>;
 
+
+//------------------------------------------------------------------------------
+// Deduction guides — flat_multimap
+//------------------------------------------------------------------------------
+
+// Container pair (unsorted)
+template <typename KC, typename MC, typename Comp = std::less<typename KC::value_type>>
+requires( !std::is_same_v<KC, sorted_unique_t> && !std::is_same_v<KC, sorted_equivalent_t> )
+flat_multimap( KC, MC, Comp = Comp{} )
+    -> flat_multimap<typename KC::value_type, typename MC::value_type, Comp, KC, MC>;
+
+// Container pair (sorted equivalent)
+template <typename KC, typename MC, typename Comp = std::less<typename KC::value_type>>
+flat_multimap( sorted_equivalent_t, KC, MC, Comp = Comp{} )
+    -> flat_multimap<typename KC::value_type, typename MC::value_type, Comp, KC, MC>;
+
+// Iterator range (unsorted)
+template <std::input_iterator InputIt, typename Comp = std::less<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type::first_type>>>
+requires( !std::is_same_v<InputIt, sorted_unique_t> && !std::is_same_v<InputIt, sorted_equivalent_t> )
+flat_multimap( InputIt, InputIt, Comp = Comp{} )
+    -> flat_multimap<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type::first_type>,
+                typename std::iterator_traits<InputIt>::value_type::second_type,
+                Comp>;
+
+// Iterator range (sorted equivalent)
+template <std::input_iterator InputIt, typename Comp = std::less<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type::first_type>>>
+flat_multimap( sorted_equivalent_t, InputIt, InputIt, Comp = Comp{} )
+    -> flat_multimap<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type::first_type>,
+                typename std::iterator_traits<InputIt>::value_type::second_type,
+                Comp>;
+
+// from_range_t
+template <std::ranges::input_range R, typename Comp = std::less<std::remove_const_t<typename std::ranges::range_value_t<R>::first_type>>>
+flat_multimap( std::from_range_t, R &&, Comp = Comp{} )
+    -> flat_multimap<std::remove_const_t<typename std::ranges::range_value_t<R>::first_type>,
+                typename std::ranges::range_value_t<R>::second_type,
+                Comp>;
+
+// Initializer list (unsorted)
+template <typename Key, typename T, typename Comp = std::less<Key>>
+flat_multimap( std::initializer_list<std::pair<Key, T>>, Comp = Comp{} )
+    -> flat_multimap<Key, T, Comp>;
+
+// Initializer list (sorted equivalent)
+template <typename Key, typename T, typename Comp = std::less<Key>>
+flat_multimap( sorted_equivalent_t, std::initializer_list<std::pair<Key, T>>, Comp = Comp{} )
+    -> flat_multimap<Key, T, Comp>;
+
+
 //------------------------------------------------------------------------------
 } // namespace psi::vm
+//------------------------------------------------------------------------------
+
+template <typename Key, typename Value, typename Compare, typename KC, typename MC>
+bool constexpr psi::vm::is_trivially_moveable<psi::vm::flat_map<Key, Value, Compare, KC, MC>>{ psi::vm::is_trivially_moveable<Compare> };
+
+template <typename Key, typename Value, typename Compare, typename KC, typename MC>
+bool constexpr psi::vm::is_trivially_moveable<psi::vm::flat_multimap<Key, Value, Compare, KC, MC>>{ psi::vm::is_trivially_moveable<Compare> };
 //------------------------------------------------------------------------------

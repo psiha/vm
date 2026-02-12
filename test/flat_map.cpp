@@ -1024,8 +1024,8 @@ TEST( flat_map, initializer_list_assignment )
 TEST( flat_map, deduction_guide_initializer_list )
 {
     psi::vm::flat_map m{ std::pair{ 1, 2 }, std::pair{ 3, 4 } };
-    static_assert( std::is_same_v<decltype( m )::key_type, int> );
-    static_assert( std::is_same_v<decltype( m )::mapped_type, int> );
+    static_assert( std::is_same_v<typename decltype( m )::key_type, int> );
+    static_assert( std::is_same_v<typename decltype( m )::mapped_type, int> );
     EXPECT_EQ( m.size(), 2 );
 }
 
@@ -1036,13 +1036,17 @@ TEST( flat_map, deduction_guide_sorted_unique_initializer_list )
     EXPECT_EQ( m.at( 1 ), 10 );
 }
 
+// Alias CTAD for container-pair and iterator-range doesn't work because Key/T
+// aren't deducible from alias template params via container::value_type.
+// These tests verify CTAD on flat_map directly (where the explicit
+// deduction guides live).
 TEST( flat_map, deduction_guide_container_pair )
 {
     std::vector<int> k{ 3, 1, 2 };
     std::vector<double> v{ 3.0, 1.0, 2.0 };
     psi::vm::flat_map m( std::move( k ), std::move( v ) );
-    static_assert( std::is_same_v<decltype( m )::key_type, int> );
-    static_assert( std::is_same_v<decltype( m )::mapped_type, double> );
+    static_assert( std::is_same_v<typename decltype( m )::key_type, int> );
+    static_assert( std::is_same_v<typename decltype( m )::mapped_type, double> );
     EXPECT_EQ( m.size(), 3 );
     EXPECT_DOUBLE_EQ( m.at( 1 ), 1.0 );
 }
@@ -1051,8 +1055,8 @@ TEST( flat_map, deduction_guide_iterator_range )
 {
     std::vector<std::pair<int, double>> src{ { 1, 1.0 }, { 2, 2.0 } };
     psi::vm::flat_map m( src.begin(), src.end() );
-    static_assert( std::is_same_v<decltype( m )::key_type, int> );
-    static_assert( std::is_same_v<decltype( m )::mapped_type, double> );
+    static_assert( std::is_same_v<typename decltype( m )::key_type, int> );
+    static_assert( std::is_same_v<typename decltype( m )::mapped_type, double> );
     EXPECT_EQ( m.size(), 2 );
 }
 

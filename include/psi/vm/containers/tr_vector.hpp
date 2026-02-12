@@ -294,7 +294,7 @@ struct crt_aligned_allocator
         if ( reuse && ( command & ( bc::shrink_in_place | bc::try_shrink_in_place ) ) )
         {
             BOOST_ASSUME( preferred_size <= current_size );
-            auto const new_address{ std::realloc( reuse, preferred_byte_size ) };
+            auto const new_address{ static_cast<pointer>( std::realloc( reuse, preferred_byte_size ) ) };
             BOOST_ASSUME( new_address == reuse );
             reuse   = new_address;
             success = true;
@@ -416,11 +416,15 @@ public:
     constexpr tr_vector & operator=( tr_vector const & other ) { return ( *this = tr_vector( other ) ); }
     constexpr tr_vector & operator=( tr_vector && other ) noexcept
     {
-        this->p_array_  = std::exchange( other.p_array_ , nullptr );
-        this->size_     = std::exchange( other.size_    , 0U      );
-        this->capacity_ = std::exchange( other.capacity_, 0U      );
+        // Swap contents: other's destructor frees our old allocation.
+        this->p_array_  = std::exchange( other.p_array_ , this->p_array_  );
+        this->size_     = std::exchange( other.size_    , this->size_     );
+        this->capacity_ = std::exchange( other.capacity_, this->capacity_ );
         return *this;
     }
+    // tr_vector's explicit operator= declarations hide the base class
+    // initializer_list overload; re-expose it.
+    constexpr tr_vector & operator=( std::initializer_list<value_type> const data ) { this->assign( data ); return *this; }
     constexpr ~tr_vector() noexcept
     {
         // for non trivial types have/generate one check for both the destroy
@@ -512,7 +516,29 @@ private: friend base;
         size_ = target_size;
     }
     void storage_dec_size() noexcept { BOOST_ASSUME( size_ >= 1 ); --size_; }
-    void storage_inc_size() noexcept; // TODO
+    void storage_inc_size() noexcept { BOOST_ASSUME( size_ < capacity() ); ++size_; }
+
+#ifdef _MSC_VER
+    //! Attempts in-place capacity expansion via ::_expand().
+    //! Returns true if capacity() >= target_capacity after the call.
+    bool storage_try_expand_capacity( size_type const target_capacity ) noexcept
+    requires( options.cache_capacity && alignment <= detail::guaranteed_alignment )
+    {
+        namespace bc = boost::container;
+        auto recv_size{ target_capacity };
+        auto reuse    { p_array_ };
+        auto const result{ al::allocation_command(
+            bc::expand_fwd | bc::nothrow_allocation,
+            target_capacity, recv_size, reuse
+        ) };
+        if ( result )
+        {
+            update_capacity( recv_size );
+            return true;
+        }
+        return false;
+    }
+#endif
 
     void storage_free() noexcept
     {
