@@ -42,3 +42,9 @@ endforeach()
 add_library( psi_vm STATIC ${vm_public_headers} ${vm_sources} )
 add_library( psi::vm ALIAS psi_vm )
 target_include_directories( psi_vm PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include" )
+
+# Debugger visualizers — Visual Studio and Ninja generators handle .natvis natively;
+# CodeLLDB (VSCode) picks them up via CMake Tools target-source discovery.
+if ( CMAKE_GENERATOR MATCHES "Visual Studio|Ninja" )
+    target_sources( psi_vm PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/psi_vm.natvis>" )
+endif()

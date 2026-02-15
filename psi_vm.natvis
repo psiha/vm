@@ -1,0 +1,254 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Visual Studio / VSCode debugger visualizers for psi::vm containers.
+
+    Integration:
+      Option A (recommended): Add to CMake target so it's automatically available:
+        target_sources(psi_vm INTERFACE
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/psi_vm.natvis>
+        )
+
+      Option B: Copy to per-user directory for global availability:
+        %USERPROFILE%\Documents\Visual Studio 2022\Visualizers\psi_vm.natvis
+
+      Option C: Add to VS project via Project > Add Existing Item.
+-->
+<AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
+
+
+    <!-- ================================================================== -->
+    <!-- psi::vm::unique_nonowned_ptr                                        -->
+    <!-- ================================================================== -->
+
+    <Type Name="psi::vm::unique_nonowned_ptr&lt;*&gt;">
+        <DisplayString Condition="ptr == nullptr">null</DisplayString>
+        <DisplayString>{*ptr}</DisplayString>
+        <Expand>
+            <ExpandedItem>*ptr</ExpandedItem>
+        </Expand>
+    </Type>
+
+
+    <!-- ================================================================== -->
+    <!-- psi::vm::noninitialized_array (union wrapper for raw array)         -->
+    <!-- ================================================================== -->
+
+    <Type Name="psi::vm::noninitialized_array&lt;*,*&gt;">
+        <DisplayString>{data}</DisplayString>
+        <Expand>
+            <ExpandedItem>data</ExpandedItem>
+        </Expand>
+    </Type>
+
+
+    <!-- ================================================================== -->
+    <!-- psi::vm::tr_vector                                                  -->
+    <!-- ================================================================== -->
+
+    <Type Name="psi::vm::tr_vector&lt;*,*,*&gt;">
+        <DisplayString>{{ size={size_} }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">size_</Item>
+            <ArrayItems>
+                <Size>size_</Size>
+                <ValuePointer>p_array_</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+
+
+    <!-- ================================================================== -->
+    <!-- psi::vm::fc_vector                                                  -->
+    <!-- ================================================================== -->
+
+    <Type Name="psi::vm::fc_vector&lt;*,*,*&gt;">
+        <DisplayString>{{ size={size_} }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">size_</Item>
+            <ArrayItems>
+                <Size>size_</Size>
+                <ValuePointer>array_.data</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+
+
+    <!-- ================================================================== -->
+    <!-- psi::vm::flat_set_impl / flat_set / flat_multiset                   -->
+    <!--                                                                     -->
+    <!-- These show the sorted keys directly. flat_set and flat_multiset     -->
+    <!-- inherit flat_set_impl, so the base visualizer covers all three.     -->
+    <!-- ================================================================== -->
+
+    <!-- flat_set_impl with std::vector storage -->
+    <Type Name="psi::vm::flat_set_impl&lt;*,*,std::vector&lt;$T1,*&gt;&gt;">
+        <DisplayString>{{ size={storage_._Mypair._Myval2._Mylast - storage_._Mypair._Myval2._Myfirst} }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">storage_._Mypair._Myval2._Mylast - storage_._Mypair._Myval2._Myfirst</Item>
+            <ArrayItems>
+                <Size>storage_._Mypair._Myval2._Mylast - storage_._Mypair._Myval2._Myfirst</Size>
+                <ValuePointer>storage_._Mypair._Myval2._Myfirst</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+
+    <!-- flat_set_impl with tr_vector storage -->
+    <Type Name="psi::vm::flat_set_impl&lt;*,*,psi::vm::tr_vector&lt;$T1,*,*&gt;&gt;">
+        <DisplayString>{{ size={storage_.size_} }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">storage_.size_</Item>
+            <ArrayItems>
+                <Size>storage_.size_</Size>
+                <ValuePointer>storage_.p_array_</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+
+    <!-- flat_set_impl with fc_vector storage -->
+    <Type Name="psi::vm::flat_set_impl&lt;*,*,psi::vm::fc_vector&lt;$T1,*,*&gt;&gt;">
+        <DisplayString>{{ size={storage_.size_} }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">storage_.size_</Item>
+            <ArrayItems>
+                <Size>storage_.size_</Size>
+                <ValuePointer>storage_.array_.data</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+
+    <!-- flat_set_impl fallback: delegate to underlying container -->
+    <Type Name="psi::vm::flat_set_impl&lt;*,*,*&gt;" Priority="Low">
+        <DisplayString>{storage_}</DisplayString>
+        <Expand>
+            <ExpandedItem>storage_</ExpandedItem>
+        </Expand>
+    </Type>
+
+
+    <!-- ================================================================== -->
+    <!-- psi::vm::detail::paired_storage                                     -->
+    <!--                                                                     -->
+    <!-- Standalone struct with public 'keys' and 'values' containers.       -->
+    <!-- Stored as flat_impl::storage_ member for flat_map/flat_multimap.    -->
+    <!-- ================================================================== -->
+
+    <Type Name="psi::vm::detail::paired_storage&lt;std::vector&lt;*,*&gt;,std::vector&lt;*,*&gt;&gt;">
+        <DisplayString>{{ size={keys._Mypair._Myval2._Mylast - keys._Mypair._Myval2._Myfirst} }}</DisplayString>
+        <Expand>
+            <Item Name="[keys]">keys</Item>
+            <Item Name="[values]">values</Item>
+        </Expand>
+    </Type>
+
+    <Type Name="psi::vm::detail::paired_storage&lt;*,*&gt;" Priority="Low">
+        <DisplayString>paired_storage</DisplayString>
+        <Expand>
+            <Item Name="[keys]">keys</Item>
+            <Item Name="[values]">values</Item>
+        </Expand>
+    </Type>
+
+
+    <!-- ================================================================== -->
+    <!-- psi::vm::flat_map_impl / flat_map / flat_multimap                   -->
+    <!--                                                                     -->
+    <!-- These display key-value pairs. storage_ is a paired_storage member  -->
+    <!-- (in flat_impl base) with public 'keys' and 'values' containers.    -->
+    <!-- ================================================================== -->
+
+    <!-- flat_map_impl with std::vector storage for keys and values -->
+    <Type Name="psi::vm::flat_map_impl&lt;*,*,*,std::vector&lt;$T1,*&gt;,std::vector&lt;$T2,*&gt;&gt;">
+        <DisplayString>{{ size={storage_.keys._Mypair._Myval2._Mylast - storage_.keys._Mypair._Myval2._Myfirst} }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">storage_.keys._Mypair._Myval2._Mylast - storage_.keys._Mypair._Myval2._Myfirst</Item>
+            <CustomListItems>
+                <Variable Name="i" InitialValue="0"/>
+                <Size>storage_.keys._Mypair._Myval2._Mylast - storage_.keys._Mypair._Myval2._Myfirst</Size>
+                <Loop Condition="i &lt; (storage_.keys._Mypair._Myval2._Mylast - storage_.keys._Mypair._Myval2._Myfirst)">
+                    <Item Name="[{*(storage_.keys._Mypair._Myval2._Myfirst + i)}]">*(storage_.values._Mypair._Myval2._Myfirst + i)</Item>
+                    <Exec>i++</Exec>
+                </Loop>
+            </CustomListItems>
+        </Expand>
+    </Type>
+
+    <!-- flat_map_impl with tr_vector storage for keys and values -->
+    <Type Name="psi::vm::flat_map_impl&lt;*,*,*,psi::vm::tr_vector&lt;$T1,*,*&gt;,psi::vm::tr_vector&lt;$T2,*,*&gt;&gt;">
+        <DisplayString>{{ size={storage_.keys.size_} }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">storage_.keys.size_</Item>
+            <CustomListItems>
+                <Variable Name="i" InitialValue="0"/>
+                <Size>storage_.keys.size_</Size>
+                <Loop Condition="i &lt; storage_.keys.size_">
+                    <Item Name="[{*(storage_.keys.p_array_ + i)}]">*(storage_.values.p_array_ + i)</Item>
+                    <Exec>i++</Exec>
+                </Loop>
+            </CustomListItems>
+        </Expand>
+    </Type>
+
+    <!-- flat_map_impl fallback: show keys and values containers separately -->
+    <Type Name="psi::vm::flat_map_impl&lt;*,*,*,*,*&gt;" Priority="Low">
+        <DisplayString>flat_map</DisplayString>
+        <Expand>
+            <Item Name="[keys]">storage_.keys</Item>
+            <Item Name="[values]">storage_.values</Item>
+        </Expand>
+    </Type>
+
+
+    <!-- ================================================================== -->
+    <!-- psi::vm::bptree_base::header                                        -->
+    <!-- ================================================================== -->
+
+    <Type Name="psi::vm::bptree_base::header">
+        <DisplayString>{{ size={size_}, depth={depth_} }}</DisplayString>
+        <Expand>
+            <Item Name="[size]">size_</Item>
+            <Item Name="[depth]">depth_</Item>
+            <Item Name="[root]">root_</Item>
+            <Item Name="[first_leaf]">first_leaf_</Item>
+            <Item Name="[last_leaf]">last_leaf_</Item>
+            <Item Name="[free_nodes]">free_node_count_</Item>
+        </Expand>
+    </Type>
+
+
+    <!-- ================================================================== -->
+    <!-- psi::vm::bptree_base / bp_tree_impl                                 -->
+    <!--                                                                     -->
+    <!-- B+ trees use memory-mapped node pools — full element iteration is   -->
+    <!-- not feasible in natvis. Show size, depth, and the header.           -->
+    <!-- ================================================================== -->
+
+    <Type Name="psi::vm::bptree_base">
+        <DisplayString Condition="p_hdr_.ptr != nullptr">{{ size={p_hdr_.ptr->size_}, depth={p_hdr_.ptr->depth_} }}</DisplayString>
+        <DisplayString>{{ empty / uninitialized }}</DisplayString>
+        <Expand>
+            <Item Name="[header]" Condition="p_hdr_.ptr != nullptr">*p_hdr_.ptr</Item>
+            <Item Name="[nodes]">nodes_</Item>
+        </Expand>
+    </Type>
+
+
+    <!-- ================================================================== -->
+    <!-- psi::vm::pass_in_reg / pass_rv_in_reg                               -->
+    <!-- ================================================================== -->
+
+    <Type Name="psi::vm::pass_in_reg&lt;*&gt;">
+        <DisplayString>{value}</DisplayString>
+        <Expand>
+            <ExpandedItem>value</ExpandedItem>
+        </Expand>
+    </Type>
+
+    <Type Name="psi::vm::pass_rv_in_reg&lt;*&gt;">
+        <DisplayString>{value}</DisplayString>
+        <Expand>
+            <ExpandedItem>value</ExpandedItem>
+        </Expand>
+    </Type>
+
+
+</AutoVisualizer>

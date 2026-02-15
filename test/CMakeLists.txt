@@ -13,6 +13,7 @@ endif()
 set( vm_test_sources
     "${CMAKE_CURRENT_SOURCE_DIR}/b+tree.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/flat_map.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/flat_set.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/vector.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/vm_vector.cpp"
 )

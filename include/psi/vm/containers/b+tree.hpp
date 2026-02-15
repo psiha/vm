@@ -4,7 +4,8 @@
 
 #include <psi/vm/align.hpp>
 #include <psi/vm/allocation.hpp>
-#include <psi/vm/containers/abi.hpp>
+#include <psi/vm/containers/komparator.hpp>
+#include <psi/vm/containers/lookup.hpp>
 #include <psi/vm/containers/tr_vector.hpp>
 
 #include <psi/build/disable_warnings.hpp>
@@ -12,11 +13,7 @@
 #include <boost/assert.hpp>
 #include <boost/config_ex.hpp>
 #include <boost/integer.hpp>
-#if __has_include( <boost/sort/pdqsort/pdqsort.hpp> )
-#include <boost/sort/pdqsort/pdqsort.hpp>
-#else
-#include <boost/move/algo/detail/pdqsort.hpp>
-#endif
+// pdqsort included transitively via komparator.hpp
 #include <boost/stl_interfaces/iterator_interface.hpp>
 #if 0 // reexamining...
 #include <boost/stl_interfaces/sequence_container_interface.hpp>
@@ -43,18 +40,11 @@ PSI_WARNING_DISABLE_PUSH()
 PSI_WARNING_MSVC_DISABLE( 4127 ) // conditional expression is constant
 PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
 
-template <typename K, bool transparent_comparator, typename StoredKeyType>
-concept LookupType = transparent_comparator || std::is_same_v<StoredKeyType, K>;
+// LookupType now shared from lookup.hpp
 
 template <typename K, bool transparent_comparator, typename StoredKeyType>
 concept InsertableType = ( transparent_comparator && std::is_convertible_v<K, StoredKeyType> ) || std::is_same_v<StoredKeyType, K>;
 
-
-// user specializations are allowed and intended:
-
-template <typename T> constexpr bool is_simple_comparator{ false };
-template <typename T> constexpr bool is_simple_comparator<std::less   <T>>{ std::is_fundamental_v<T> };
-template <typename T> constexpr bool is_simple_comparator<std::greater<T>>{ std::is_fundamental_v<T> };
 
 template <typename T>                                  constexpr bool is_statically_sized   { true };
 template <typename T> requires requires{ T{}.size(); } constexpr bool is_statically_sized<T>{ T{}.size() != 0 };
@@ -2073,10 +2063,12 @@ class bp_tree_impl
 #if 0 // reexamining...
     public  boost::stl_interfaces::sequence_container_interface<bp_tree_impl<Key, Comparator>, boost::stl_interfaces::element_layout::discontiguous>,
 #endif
-    private Comparator
+    protected Komparator<Comparator>
 {
 protected:
     using base = bptree_base_wkey<Key>;
+
+    using Komp = Komparator<Comparator>;
 
     using depth_t        = base::depth_t;
     using node_size_type = base::node_size_type;
@@ -2135,7 +2127,7 @@ public:
     using base::clear;
 
     bp_tree_impl() noexcept = default;
-    bp_tree_impl( Comparator const & comp ) noexcept : Comparator{ comp } {}
+    bp_tree_impl( Comparator const & comp ) noexcept : Komp{ comp } {}
 
     [[ gnu::pure ]] const_iterator begin() const noexcept { return static_cast<iterator &&>( mutable_this().base::begin() ); }
     [[ gnu::pure ]] const_iterator   end() const noexcept { return static_cast<iterator &&>( mutable_this().base::  end() ); }
@@ -2152,34 +2144,15 @@ public:
 
     void swap( bp_tree_impl & other ) noexcept { base::swap( other ); }
 
-    [[ nodiscard, gnu::pure ]] Comparator const & comp() const noexcept { return *this; }
+    using Komp::comp;
+    using Komp::le;
+    using Komp::ge;
+    using Komp::eq;
+    using Komp::leq;
+    using Komp::geq;
 
     // UB if the comparator is changed in such a way as to invalidate the order of elements already in the container
-    [[ nodiscard, gnu::pure ]] Comparator & mutable_comp() noexcept { return *this; }
-
-    // Utility comparison functions (wrappers around the comparator)
-    [[ gnu::pure ]] bool le( Reg auto const left, Reg auto const right ) const noexcept { return comp()( left, right ); }
-    [[ gnu::pure ]] bool ge( Reg auto const left, Reg auto const right ) const noexcept { return comp()( right, left ); }
-    [[ gnu::pure ]] bool eq( Reg auto const left, Reg auto const right ) const noexcept
-    {
-        if constexpr ( requires{ comp().eq( left, right ); } )
-            return comp().eq( left, right );
-        if constexpr ( is_simple_comparator<Comparator> && requires{ left == right; } )
-            return left == right;
-        return !comp()( left, right ) && !comp()( right, left );
-    }
-    [[ gnu::pure ]] bool leq( Reg auto const left, Reg auto const right ) const noexcept
-    {
-        if constexpr ( requires{ comp().leq( left, right ); } )
-            return comp().leq( left, right );
-        return !comp()( right, left );
-    }
-    [[ gnu::pure ]] bool geq( Reg auto const left, Reg auto const right ) const noexcept
-    {
-        if constexpr ( requires{ comp().geq( left, right ); } )
-            return comp().geq( left, right );
-        return !comp()( left, right );
-    }
+    [[ nodiscard, gnu::pure ]] Comparator & mutable_comp() noexcept { return this->comp(); }
 
 protected: // pass-in-reg public function overloads/impls
     bp_tree_impl & mutable_this() const noexcept { return const_cast<bp_tree_impl &>( *this ); }
@@ -2282,18 +2255,6 @@ protected: // pass-in-reg public function overloads/impls
     }
 
 private:
-    static decltype( auto ) prefetch( Comparator const & comp, Reg auto const key ) noexcept
-    {
-        // Support 'transparent' comparators that deal with references/pointers/
-        // non-local data (e.g. containers of pointers or IDs) and provide a
-        // method to 'fetch' the actual value to be compared against (so that at
-        // least that value does not have to be fetched from memory multiple times).
-        if constexpr ( requires { comp.val( key ); } )
-            return comp.val( key );
-        else
-            return key;
-    }
-
     // lower_bound find >limited to/within a node<
     [[ using gnu: pure, hot, noinline, sysv_abi, leaf ]]
     static find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const key, pass_in_reg<Comparator> const comparator ) noexcept
@@ -3154,17 +3115,7 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
         // full)
         typename base::ra_full_node_iterator const sort_begin{ input.nodes.data(), 0          };
         typename base::ra_full_node_iterator const sort_end  { input.nodes.data(), total_size };
-        if constexpr ( requires{ comp().sort( sort_begin, sort_end ); } ) // does the comparator offer a specialized sort function?
-            comp().sort( sort_begin, sort_end );
-        else
-#   if __has_include( <boost/sort/pdqsort/pdqsort.hpp> )
-        if constexpr ( requires{ Comparator::is_branchless; requires( Comparator::is_branchless ); } )
-            boost::sort::pdqsort_branchless( sort_begin, sort_end, make_trivially_copyable_predicate( comp() ) );
-        else
-            boost::sort::pdqsort( sort_begin, sort_end, make_trivially_copyable_predicate( comp() ) );
-#   else
-            boost::movelib::pdqsort( sort_begin, sort_end, make_trivially_copyable_predicate( comp() ) );
-#   endif
+        this->sort( sort_begin, sort_end );
         input.nodes.clear();
     }
 
