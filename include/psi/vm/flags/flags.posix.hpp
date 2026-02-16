@@ -163,8 +163,8 @@ public:
         template <privilege_scopes scope_mask>
         struct scoped_privileges
         {
-            constexpr scoped_privileges( flags_t const flags )
-                : flags( flags & static_cast<flags_t>( scope_mask ) ) {}
+            constexpr scoped_privileges( flags_t const input_flags )
+                : flags( input_flags & static_cast<flags_t>( scope_mask ) ) {}
 
             template <privilege_scopes scope>
             constexpr

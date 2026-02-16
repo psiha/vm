@@ -405,7 +405,7 @@ public:
     using base::base;
     // cannot use a defaulted constructor with default member initializers as they would overwrite the values stored by storage_init called by base()
     constexpr tr_vector() noexcept : p_array_{ nullptr }, size_{ 0 }, capacity_{ 0 } {}
-    constexpr tr_vector( tr_vector const & other )
+    constexpr tr_vector( tr_vector const & other ) : base{}
     {
         auto const data{ storage_init( other.size() ) };
         try { std::uninitialized_copy_n( other.data(), other.size(), data ); }
@@ -417,6 +417,9 @@ public:
     constexpr tr_vector & operator=( tr_vector && other ) noexcept
     {
         // Swap contents: other's destructor frees our old allocation.
+        // (but first clear - to avoid surprising callers with leaving
+        // 'something' in other, i.e. leave only capacity)
+        this->clear();
         this->p_array_  = std::exchange( other.p_array_ , this->p_array_  );
         this->size_     = std::exchange( other.size_    , this->size_     );
         this->capacity_ = std::exchange( other.capacity_, this->capacity_ );

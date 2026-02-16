@@ -174,8 +174,10 @@ protected:
     }; // struct node_header
     using node_size_type = node_header::size_type;
 
+public: //...mrmlj...needs to be public for does_not_hold_addresses<> specialization at namespace scope
     struct alignas( node_size ) node_placeholder : node_header {};
     struct alignas( node_size ) free_node        : node_header {};
+protected:
 
     // SCARY iterator parts
     struct iter_pos
@@ -883,13 +885,13 @@ protected: // split_to_insert and its helpers
         auto const max{ N::max_values };
         auto const mid{ N::min_values };
         BOOST_ASSUME( node_to_split.num_vals == max );
-        auto [node_slot, new_slot]{ bptree_base::new_spillover_node_for( node_to_split ) };
-        auto p_node    { &node<N>( node_slot ) };
+        auto [split_slot, new_slot]{ bptree_base::new_spillover_node_for( node_to_split ) };
+        auto p_node    { &node<N>( split_slot ) };
         auto p_new_node{ &node<N>(  new_slot ) };
         BOOST_ASSUME( p_node->num_vals == max );
         BOOST_ASSERT
         (
-            !p_node->parent || ( inner( p_node->parent ).children[ p_node->parent_child_idx ] == node_slot )
+            !p_node->parent || ( inner( p_node->parent ).children[ p_node->parent_child_idx ] == split_slot )
         );
 
         auto const new_insert_pos         { insert_pos - mid };
@@ -909,14 +911,14 @@ protected: // split_to_insert and its helpers
 
         // propagate the mid key to the parent
         if ( p_node->is_root() ) [[ unlikely ]] {
-            new_root( node_slot, new_slot, std::move( key_to_propagate ) );
+            new_root( split_slot, new_slot, std::move( key_to_propagate ) );
         } else {
             auto const key_pos{ static_cast<node_size_type>( p_new_node->parent_child_idx /*it is the _right_ child*/ - 1 ) };
             insert( parent( *p_node ), key_pos, std::move( key_to_propagate ), new_slot );
         }
         return insertion_into_new_node
             ? insert_pos_t{  new_slot, next_insert_pos }
-            : insert_pos_t{ node_slot, next_insert_pos };
+            : insert_pos_t{ split_slot, next_insert_pos };
     }
 
 
@@ -985,7 +987,7 @@ protected: // 'other'
             auto & root_{ hdr.root_ };
             BOOST_ASSUME( root_ == slot_of( leaf ) );
             BOOST_ASSUME( leaf.is_root() );
-            BOOST_ASSUME( hdr.size_ == leaf.num_vals + 1 );
+            BOOST_ASSUME( hdr.size_ == static_cast<size_t>( leaf.num_vals ) + 1 );
             BOOST_ASSUME( !leaf.left  );
             BOOST_ASSUME( !leaf.right );
             if ( leaf.num_vals == 0 )
@@ -1347,7 +1349,7 @@ protected: // 'other'
             BOOST_ASSUME( hdr.root_  == slot_of( tgt_leaf ) );
             BOOST_ASSUME( hdr.first_leaf_ == hdr.root_ );
             BOOST_ASSUME( hdr.last_leaf_  == hdr.root_ );
-            auto const root_node    { hdr.root_ };
+            auto const root_slot    { hdr.root_ };
             auto const previous_size{ hdr.size_ };
 #       if 0 // these need not hold as the root could have been filled up beyond
             // the minimum prior to any bulk_append_fill_leaf_if_incomplete-like
@@ -1360,7 +1362,7 @@ protected: // 'other'
             hdr.size_ = hdr.depth_ = 0;
             BOOST_ASSUME( tgt_leaf.right == begin_leaf );
             BOOST_ASSUME( previous_size <= leaf_node::max_values );
-            bulk_insert_into_empty( root_node, end_pos, previous_size + total_insertion_size );
+            bulk_insert_into_empty( root_slot, end_pos, previous_size + total_insertion_size );
             BOOST_ASSUME( this->hdr().size_ == previous_size + total_insertion_size );
         }
         else
@@ -1422,7 +1424,7 @@ protected: // 'other'
         auto constexpr parent_node_type{ requires{ node.children; } };
         auto constexpr leaf_node_type  { !parent_node_type };
 
-        auto const node_slot{ slot_of( node ) };
+        auto const this_slot{ slot_of( node ) };
         auto & parent{ inner( node.parent ) };
         verify( parent );
 
@@ -1457,7 +1459,7 @@ protected: // 'other'
         auto const parent_key_idx     { parent_child_idx - parent_has_key_copy };
         BOOST_ASSUME( !parent_has_key_copy || parent.keys[ parent_key_idx ] == node.keys[ 0 ] );
 
-        BOOST_ASSUME( parent.children[ parent_child_idx ] == node_slot );
+        BOOST_ASSUME( parent.children[ parent_child_idx ] == this_slot );
         // the left and right level dlink pointers can point 'across' parents
         // (and so cannot be used to resolve the existence of siblings)
         auto const has_right_sibling{ parent_child_idx < ( num_chldrn( parent ) - 1 ) };
@@ -1467,7 +1469,7 @@ protected: // 'other'
 
         // save&return the node (and offset) that the underflowed node's values
         // end up
-        auto           final_node                     { node_slot };
+        auto           final_node                     { this_slot };
         node_size_type final_node_original_keys_offset{ 0 };
 
         BOOST_ASSUME( has_right_sibling || has_left_sibling );
@@ -1501,7 +1503,7 @@ protected: // 'other'
                 left_separator_key = std::move( left_keys.back() );
 
                 rshift_chldrn( node );
-                insrt_child( node, 0, children( *p_left_sibling ).back(), node_slot );
+                insrt_child( node, 0, children( *p_left_sibling ).back(), this_slot );
             }
 
             p_left_sibling->num_vals--;
@@ -1537,7 +1539,7 @@ protected: // 'other'
                 //BOOST_ASSERT( le( *( node_keys.end() - 2 ), right_separator_key ) );
                 node_keys.back()    = std::move( right_separator_key );
                 right_separator_key = std::move( keys( *p_right_sibling ).front() );
-                insrt_child( node, num_chldrn( node ) - 1, children( *p_right_sibling ).front(), node_slot );
+                insrt_child( node, num_chldrn( node ) - 1, children( *p_right_sibling ).front(), this_slot );
                 lshift_keys  ( *p_right_sibling );
                 lshift_chldrn( *p_right_sibling );
             }
@@ -2206,9 +2208,9 @@ protected: // pass-in-reg public function overloads/impls
     {
         if ( empty() )
         {
-            auto & root{ static_cast<leaf_node &>( base::create_root() ) };
-            BOOST_ASSUME( root.num_vals == 1 );
-            root.keys[ 0 ] = v;
+            auto & new_root{ static_cast<leaf_node &>( base::create_root() ) };
+            BOOST_ASSUME( new_root.num_vals == 1 );
+            new_root.keys[ 0 ] = v;
             return { begin(), true };
         }
 
@@ -2446,13 +2448,13 @@ protected:
             auto const loc{ mutable_this().find_nodes_for( key, unique ) };
             return { &loc.leaf, loc.leaf_offset };
         } else {
-            auto       p_node{ &as<parent_node>( root() ) };
+            auto       p_node{ &this->template as<parent_node>( root() ) };
             auto const depth { this->hdr().depth_ };
             BOOST_ASSUME( depth >= 1 );
             for ( auto level{ 0 }; level < depth - 1; ++level )
             {
                 auto const pos{ upper_bound( *p_node, key ) };
-                p_node = &node<parent_node>( p_node->children[ std::min( pos, p_node->num_vals ) ] );
+                p_node = &this->template node<parent_node>( p_node->children[ std::min( pos, p_node->num_vals ) ] );
             }
             auto & leaf{ base::template as<leaf_node>( *p_node ) };
             auto const leaf_pos{ upper_bound( leaf, key ) };
@@ -2541,7 +2543,7 @@ private:
             parent_offset = 0;
         }
         BOOST_ASSUME( parent_offset == 0 );
-        auto const & containing_leaf{ as<leaf_node>( *prnt ) };
+        auto const & containing_leaf{ this->template as<leaf_node>( *prnt ) };
         auto const pos{ lower_bound( containing_leaf, key ) };
         BOOST_ASSUME
         (

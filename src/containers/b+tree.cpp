@@ -552,15 +552,15 @@ void bptree_base::free( node_header & node ) noexcept
 {
     auto & hdr{ this->hdr() };
     auto & free_list{ hdr.free_list_ };
-    auto & free_node{ static_cast<struct free_node &>( node ) };
-    auto const free_node_slot{ slot_of( free_node ) };
-    BOOST_ASSUME( free_node_slot != hdr.first_leaf_ ); // should have been handled in the dedicated overload
-    BOOST_ASSUME( free_node_slot != hdr.last_leaf_  ); // ditto
+    auto & freed_node{ static_cast<struct free_node &>( node ) };
+    auto const freed_node_slot{ slot_of( freed_node ) };
+    BOOST_ASSUME( freed_node_slot != hdr.first_leaf_ ); // should have been handled in the dedicated overload
+    BOOST_ASSUME( freed_node_slot != hdr.last_leaf_  ); // ditto
 #ifndef NDEBUG
-    if ( free_node.left )
-        BOOST_ASSERT( left( free_node ).right != free_node_slot );
-    if ( free_node.right )
-        BOOST_ASSERT( right( free_node ).left != free_node_slot );
+    if ( freed_node.left )
+        BOOST_ASSERT( left( freed_node ).right != freed_node_slot );
+    if ( freed_node.right )
+        BOOST_ASSERT( right( freed_node ).left != freed_node_slot );
 #endif
     // TODO (re)consider whether the calling code is expected to reset num_vals
     // (and thus mark the node as 'free'/empty) and/or unlink from its siblings
@@ -570,11 +570,11 @@ void bptree_base::free( node_header & node ) noexcept
     // We have to touch the header (i.e. its residing cache line) anyway here
     // (to update the right link) so reset/setup the whole header right now for
     // the new allocation step.
-    static_cast<node_header &>( free_node ) = {};
+    static_cast<node_header &>( freed_node ) = {};
     // update the right link
-    if ( free_list ) { BOOST_ASSUME(  hdr.free_node_count_ ); link( free_node, this->node( free_list ) ); }
+    if ( free_list ) { BOOST_ASSUME(  hdr.free_node_count_ ); link( freed_node, this->node( free_list ) ); }
     else             { BOOST_ASSUME( !hdr.free_node_count_ ); }
-    free_list = free_node_slot;
+    free_list = freed_node_slot;
     ++hdr.free_node_count_;
 }
 

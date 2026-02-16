@@ -275,11 +275,8 @@ namespace detail {
     //==============================================================================
 
     // keys_of — extract the keys container from storage
-    template <typename KC>
-    constexpr auto       & keys_of( KC       & c ) noexcept { return c; }
-    template <typename KC>
-    constexpr auto const & keys_of( KC const & c ) noexcept { return c; }
-
+    template <typename KC> constexpr auto       & keys_of( KC       & c ) noexcept { return c; }
+    template <typename KC> constexpr auto const & keys_of( KC const & c ) noexcept { return c; }
 
 
     //==============================================================================
@@ -299,25 +296,27 @@ namespace detail {
     }
 
     // sort_storage — sort + conditional dedup, truncating storage in place
-    // Single container (set): uses pdqsort for direct iterators
-    template <bool Unique, typename KC, typename Comp>
-    constexpr void sort_storage( KC & keys, Comp const & comp ) {
-        PSI_VM_PDQSORT( keys.begin(), keys.end(), make_trivially_copyable_predicate( comp ) );
+    // Single container (set): Komp is Komparator — .sort() dispatches to
+    // pdqsort_branchless when available; .comp() yields the raw comparator
+    // for STL functions (fewer template instantiations).
+    template <bool Unique, typename KC, typename Komp>
+    constexpr void sort_storage( KC & keys, Komp const & komp ) {
+        komp.sort( keys.begin(), keys.end() );
         if constexpr ( Unique )
-            unique_truncate( keys, comp );
+            unique_truncate( keys, komp.comp() );
     }
 
     // sort_merge_storage — sort appended tail, merge with sorted prefix, conditional dedup
-    // Single container (set): uses pdqsort for the appended tail
-    template <bool Unique, bool WasSorted, typename KC, typename Comp>
-    constexpr void sort_merge_storage( KC & keys, Comp const & comp, typename KC::size_type const oldSize ) {
+    template <bool Unique, bool WasSorted, typename KC, typename Komp>
+    constexpr void sort_merge_storage( KC & keys, Komp const & komp, typename KC::size_type const oldSize ) {
         using key_sz_t = typename KC::size_type;
         if ( keys.size() <= oldSize )
             return;
         auto const appendStart{ keys.begin() + static_cast<std::ptrdiff_t>( oldSize ) };
+        auto const & comp{ komp.comp() };
 
         if constexpr ( !WasSorted )
-            PSI_VM_PDQSORT( appendStart, keys.end(), make_trivially_copyable_predicate( comp ) );
+            komp.sort( appendStart, keys.end() );
 
         if constexpr ( Unique && use_set_difference_dedup ) {
             // Filter tail against prefix: removes (a) elements already in prefix,
@@ -351,10 +350,19 @@ namespace detail {
         c.erase( c.begin() + static_cast<std::ptrdiff_t>( first ), c.begin() + static_cast<std::ptrdiff_t>( last ) );
     }
 
+    // storage_append_range — append elements from a range (polyfill for containers without C++23 append_range)
+    template <typename KC, typename R>
+    constexpr void storage_append_range( KC & c, R && rg ) {
+        if constexpr ( requires { c.append_range( std::forward<R>( rg ) ); } )
+            c.append_range( std::forward<R>( rg ) );
+        else
+            c.insert( c.end(), std::ranges::begin( rg ), std::ranges::end( rg ) );
+    }
+
     // storage_move_append — move all elements from source into dest
     template <typename KC>
     constexpr void storage_move_append( KC & dest, KC & source ) {
-        dest.append_range( source | std::views::as_rvalue );
+        storage_append_range( dest, source | std::views::as_rvalue );
     }
 
     // storage_emplace_back_from — move single element at source[idx] to back of dest
@@ -362,6 +370,16 @@ namespace detail {
     constexpr void storage_emplace_back_from( KC & dest, KC & source, typename KC::size_type const idx ) {
         dest.emplace_back( std::move( source[ idx ] ) );
     }
+
+    // storage_emplace_back — unchecked append (set path: single container)
+    template <typename KC, typename... Args>
+    constexpr void storage_emplace_back( KC & c, Args &&... args ) {
+        c.emplace_back( std::forward<Args>( args )... );
+    }
+
+    // storage_back — reference to the last emplaced element
+    template <typename KC>
+    constexpr auto & storage_back( KC & c ) noexcept { return c.back(); }
 
     // storage_move_element — move element from src to dst position within same storage
     template <typename KC>
@@ -435,6 +453,21 @@ public:
         self.insert( il );
     }
 
+
+    //--------------------------------------------------------------------------
+    // Unchecked append (extension)
+    //
+    // Appends a key (set) or key-value pair (map) at the end without searching
+    // for the insertion position.  Precondition: the key is greater than all
+    // existing keys (asserted in debug builds).  This is the optimal path for
+    // building a flat container from pre-sorted unique data.
+    //--------------------------------------------------------------------------
+    template <typename... Args>
+    constexpr auto & emplace_back( this auto && self, key_type key, Args &&... args ) {
+        BOOST_ASSERT( self.empty() || self.ge( key, self.keys().back() ) );
+        storage_emplace_back( self.storage_, std::move( key ), std::forward<Args>( args )... );
+        return storage_back( self.storage_ );
+    }
 
     //--------------------------------------------------------------------------
     // Bulk insert — append + sort + merge (± dedup based on derived class's unique)
@@ -627,6 +660,18 @@ public:
     }
 
     //--------------------------------------------------------------------------
+    // Positional access
+    //--------------------------------------------------------------------------
+    constexpr auto nth( this auto && self, size_type const n ) noexcept {
+        BOOST_ASSERT( n <= self.size() );
+        return self.make_iter( n );
+    }
+
+    constexpr size_type index_of( this auto const & self, auto const it ) noexcept {
+        return self.iter_index( it );
+    }
+
+    //--------------------------------------------------------------------------
     // Extraction & observers
     //--------------------------------------------------------------------------
     constexpr Storage extract() noexcept( std::is_nothrow_move_constructible_v<Storage> ) {
@@ -651,6 +696,8 @@ protected:
     }
 
 
+    [[ nodiscard ]] constexpr Komp const & komp() const noexcept { return *this; }
+
     constexpr flat_impl() = default;
 
     constexpr explicit flat_impl( Compare const & comp ) noexcept( std::is_nothrow_copy_constructible_v<Compare> )
@@ -667,7 +714,7 @@ protected:
     constexpr flat_impl( Derived &, Compare const & comp, Storage storage )
         : Komp{ comp }, storage_{ std::move( storage ) }
     {
-        sort_storage<Derived::unique>( storage_, this->comp() );
+        sort_storage<Derived::unique>( storage_, this->komp() );
     }
 
     // Unsorted iterator pair — construct storage from [first, last), then sort
@@ -675,7 +722,7 @@ protected:
     constexpr flat_impl( Derived &, Compare const & comp, InputIt first, InputIt last )
         : Komp{ comp }, storage_{ first, last }
     {
-        sort_storage<Derived::unique>( storage_, this->comp() );
+        sort_storage<Derived::unique>( storage_, this->komp() );
     }
 
     // Pre-sorted iterator pair — no sorting needed
@@ -689,8 +736,8 @@ protected:
     constexpr flat_impl( Derived &, Compare const & comp, std::from_range_t, R && rg )
         : Komp{ comp }
     {
-        storage_.append_range( std::forward<R>( rg ) );
-        sort_storage<Derived::unique>( storage_, this->comp() );
+        detail::storage_append_range( storage_, std::forward<R>( rg ) );
+        sort_storage<Derived::unique>( storage_, this->komp() );
     }
 
     constexpr flat_impl( flat_impl const & ) = default;
@@ -789,12 +836,12 @@ protected:
 
     // Auto-detects unique from derived class
     constexpr void init_sort( this auto && self ) {
-        sort_storage<is_unique<decltype( self )>>( self.storage_, self.comp() );
+        sort_storage<is_unique<decltype( self )>>( self.storage_, self.komp() );
     }
 
     template <bool WasSorted>
     constexpr void init_sort_merge( this auto && self, size_type const oldSize ) {
-        sort_merge_storage<is_unique<decltype( self )>, WasSorted>( self.storage_, self.comp(), oldSize );
+        sort_merge_storage<is_unique<decltype( self )>, WasSorted>( self.storage_, self.komp(), oldSize );
     }
 
     //--------------------------------------------------------------------------
@@ -812,7 +859,7 @@ protected:
     template <bool WasSorted, typename InputIt>
     constexpr void bulk_insert( this auto && self, InputIt const first, InputIt const last ) {
         auto const oldSize{ self.size() };
-        self.storage_.append_range( std::ranges::subrange( first, last ) );
+        detail::storage_append_range( self.storage_, std::ranges::subrange( first, last ) );
         try {
             self.template init_sort_merge<WasSorted>( oldSize );
         } catch ( ... ) {

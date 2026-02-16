@@ -92,9 +92,7 @@ template <typename Comp>
 /// handles all cases: Komparator<C>{ c } or Komparator<C>{}.
 ///
 /// Provides derived comparison operations (le, ge, eq, leq, geq) and a
-/// sort() method that dispatches to the Comparator's own sort if available,
-/// falling back to pdqsort (branchless variant when the comparator is
-/// marked as branchless).
+/// sort() method that dispatches to the best available pdqsort variant.
 template <typename Comparator>
 struct Komparator : Comparator
 {

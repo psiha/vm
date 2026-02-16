@@ -1,6 +1,4 @@
-# This starter workflow is for a CMake project running on multiple platforms. There is a different starter workflow if you just want a single platform.
-# See: https://github.com/actions/starter-workflows/blob/main/ci/cmake-single-platform.yml
-name: Build & Test on Ubuntu, macOS, and Windows
+name: Build & Test
 
 on:
   push:
@@ -10,80 +8,42 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    name: ${{ matrix.config.name }} — ${{ matrix.build_type }}
+    runs-on: ${{ matrix.config.os }}
+    container: ${{ matrix.config.container || '' }}
+    timeout-minutes: 25
 
     strategy:
-      # Set fail-fast to false to ensure that feedback is delivered for all matrix combinations. Consider changing this to true when your workflow is stable.
       fail-fast: false
-
-      # Set up a matrix to run the following 3 configurations:
-      # 1. <Windows, Release, latest MSVC compiler toolchain on the default runner image, default generator>
-      # 2. <Linux, Release, latest GCC compiler toolchain on the default runner image, default generator>
-      # 3. <Linux, Release, latest Clang compiler toolchain on the default runner image, default generator>
-      #
-      # To add more build types (Release, Debug, RelWithDebInfo, etc.) customize the build_type list.
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-26]
+        config:
+          - { os: windows-latest, name: MSVC,        cc: msvc,   cxx: msvc,    gen: '' }
+          - { os: windows-latest, name: Clang-CL,    cc: msvc,   cxx: msvc,    gen: '-T ClangCL' }
+          - { os: ubuntu-latest,  name: Clang,       cc: clang,  cxx: clang++, gen: '-G Ninja' }
+          - { os: ubuntu-latest,  name: GCC,         cc: gcc,    cxx: g++,     gen: '-G Ninja', container: 'gcc:15' }
+          - { os: macos-26,       name: Apple-Clang, cc: clang,  cxx: clang++, gen: '-G Ninja' }
         build_type: [Debug, Release]
-        include:
-          - os: windows-latest
-            c_compiler: msvc
-            cpp_compiler: msvc
-          - os: ubuntu-latest
-            c_compiler: clang
-            cpp_compiler: clang++
-            cmake_generator: -G Ninja
-          - os: macos-26
-            c_compiler: clang
-            cpp_compiler: clang++
-            cmake_generator: -G Ninja
 
     steps:
     - uses: actions/checkout@v4
       with:
         submodules: true
 
-    - name: Setup latest Xcode on MacOS
-      if: matrix.os == 'macos-26'
+    - name: Setup latest Xcode
+      if: matrix.config.name == 'Apple-Clang'
       uses: maxim-lobanov/setup-xcode@v1
       with:
         xcode-version: latest
 
-    - name: macOS homebrew git bug wrkrnd
-      if: matrix.os == 'macos-26'
+    - name: macOS homebrew git bug workaround
+      if: matrix.config.name == 'Apple-Clang'
       run: |
         export PATH="/usr/bin:$PATH"
         which git
         git --version
 
-    # try with the apple provided version
-    #- name: Install LLVM on MacOS
-    #  if: matrix.os == 'macos-26'
-    #  run: |
-    #    # https://github.com/llvm/llvm-project/releases
-    #    LLVM_URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/LLVM-21.1.8-macOS-ARM64.tar.xz"
-    #    echo "Downloading from $LLVM_URL"
-    #    curl -L -o llvm.tar.xz $LLVM_URL
-    #    mkdir -p $HOME/llvm
-    #    tar -xf llvm.tar.xz --strip-components=1 -C $HOME/llvm
-    #    echo "LLVM installed to $HOME/llvm"
-    #    echo "$HOME/llvm/bin" >> $GITHUB_PATH
-    #    echo "LLVM_PATH=$HOME/llvm" >> $GITHUB_ENV
-    #
-    #    LIB_PATH="$HOME/llvm/lib"
-    #    echo "LD_LIBRARY_PATH=$LIB_PATH:$LD_LIBRARY_PATH" >> $GITHUB_ENV
-    #    echo "$HOME/llvm/bin" >> $GITHUB_PATH
-    #
-    #    # Ensure system libraries are first on ARM64 macOS to avoid issues with Apple's libc++
-    #    DYLD_PREFIX="/usr/lib:"
-    #    echo "DYLD_LIBRARY_PATH=${DYLD_PREFIX}$LIB_PATH:$DYLD_LIBRARY_PATH" >> $GITHUB_ENV
-    #
-    #    echo "CC=$HOME/llvm/bin/clang" >> $GITHUB_ENV
-    #    echo "CXX=$HOME/llvm/bin/clang++" >> $GITHUB_ENV
-
-    - name: Install LLVM and Clang on Linux
-      if: matrix.os == 'ubuntu-latest'
+    - name: Install LLVM/Clang 21
+      if: matrix.config.name == 'Clang'
       # https://apt.llvm.org
       run: |
         wget https://apt.llvm.org/llvm.sh
@@ -95,41 +55,43 @@ jobs:
         echo "DYLD_LIBRARY_PATH=/usr/lib/llvm-21/lib" >> $GITHUB_ENV
         echo "CC=/usr/lib/llvm-21/bin/clang" >> $GITHUB_ENV
         echo "CXX=/usr/lib/llvm-21/bin/clang++" >> $GITHUB_ENV
-      shell: sh
+
+    - name: Install build tools (GCC container)
+      if: matrix.config.name == 'GCC'
+      run: |
+        apt-get update
+        apt-get install -y ninja-build
+        cmake_ver=3.31.4
+        wget -qO- "https://github.com/Kitware/CMake/releases/download/v${cmake_ver}/cmake-${cmake_ver}-linux-x86_64.tar.gz" | tar xz --strip-components=1 -C /usr/local
+        cmake --version
 
     - name: Set reusable strings
-      # Turn repeated input strings (such as the build output directory) into step outputs. These step outputs can be used throughout the workflow file.
       id: strings
       shell: bash
       run: |
-        echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
+        echo "build-output-dir=${GITHUB_WORKSPACE}/build" >> "$GITHUB_OUTPUT"
+        echo "source-dir=${GITHUB_WORKSPACE}" >> "$GITHUB_OUTPUT"
 
     - name: Configure CMake
-      # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
-      # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
       run: >
         cmake -B ${{ steps.strings.outputs.build-output-dir }}
-        ${{ matrix.cmake_generator }}
-        -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
-        -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
+        ${{ matrix.config.gen }}
+        -DCMAKE_CXX_COMPILER=${{ matrix.config.cxx }}
+        -DCMAKE_C_COMPILER=${{ matrix.config.cc }}
         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
         -DGitHubCIRun=true
-        -S ${{ github.workspace }}
+        -S ${{ steps.strings.outputs.source-dir }}
 
     - name: Build
-      # Build your program with the given configuration. Note that --config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
       run: |
         cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} -j
         cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} --target vm_unit_tests -j
-
 
     - name: Test
       working-directory: ${{ steps.strings.outputs.build-output-dir }}
       env:
         # https://github.com/actions/runner-images/issues/8891
         ASAN_WIN_CONTINUE_ON_INTERCEPTION_FAILURE: 1
-      # Execute tests defined by the CMake configuration. Note that --build-config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
-      # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
       run: >
-        cd ${{ steps.strings.outputs.build-output-dir }}/test && 
+        cd ${{ steps.strings.outputs.build-output-dir }}/test &&
         ctest --progress --extra-verbose --output-on-failure --build-config ${{ matrix.build_type }}
