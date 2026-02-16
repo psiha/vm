@@ -417,6 +417,9 @@ public:
     constexpr tr_vector & operator=( tr_vector && other ) noexcept
     {
         // Swap contents: other's destructor frees our old allocation.
+        // (but first clear - to avoid surprising callers with leaving
+        // 'something' in other, i.e. leave only capcaity)
+        this->clear();
         this->p_array_  = std::exchange( other.p_array_ , this->p_array_  );
         this->size_     = std::exchange( other.size_    , this->size_     );
         this->capacity_ = std::exchange( other.capacity_, this->capacity_ );

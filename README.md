@@ -28,6 +28,7 @@ Cross-platform abstractions over OS virtual memory and memory-mapped I/O:
 | `tr_vector<T>` | **Trivially Relocatable Vector** — exploits trivial relocatability for move/realloc without element-wise copy |
 | `vm_vector<T>` | **VM-backed Vector** — persistent storage via memory-mapped files or shared memory, with configurable headers and allocation granularity |
 | `fc_vector<T, N>` | **Fixed Capacity Vector** — inline (stack) storage with compile-time capacity bound (`inplace_vector`-like) |
+| `vector_impl<D>` | **CRTP Base** — reusable deducing-this mixin implementing the standard vector interface boilerplate over a concrete storage backend |
 
 ---
 

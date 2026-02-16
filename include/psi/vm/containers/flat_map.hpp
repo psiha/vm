@@ -521,7 +521,7 @@ public:
     //--------------------------------------------------------------------------
     // Extraction & replacement (extract, keys inherited from flat_impl)
     //--------------------------------------------------------------------------
-    constexpr void replace( KeyContainer new_keys, MappedContainer new_values )
+    constexpr void replace( KeyContainer && new_keys, MappedContainer && new_values )
         noexcept( std::is_nothrow_move_assignable_v<KeyContainer> && std::is_nothrow_move_assignable_v<MappedContainer> )
     {
         this->storage_.replace( std::move( new_keys ), std::move( new_values ) );
@@ -698,11 +698,14 @@ public:
     //--------------------------------------------------------------------------
     // Modifiers — optimized erase by key for unique keys
     //--------------------------------------------------------------------------
-    // Explicitly forward positional erases (avoid using-declaration ambiguity on MSVC).
-    //using base::erase; // bring positional + generic erase overloads into scope
+#ifndef _MSC_VER
+    using base::erase; // positional + range + by-key from flat_map_impl
+#else
+    // MSVC workaround: [namespace.udecl]/15 hiding not applied — see flat_set.
     constexpr iterator erase( const_iterator const pos ) noexcept { return base::erase( pos ); }
     constexpr iterator erase(       iterator const pos ) noexcept { return base::erase( pos ); }
     constexpr iterator erase( const_iterator const first, const_iterator const last ) noexcept { return base::erase( first, last ); }
+#endif
 
     template <LookupType<transparent_comparator, key_type> K = key_type>
     constexpr size_type erase( K const & key ) noexcept {
