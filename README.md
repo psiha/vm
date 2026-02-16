@@ -64,12 +64,16 @@ Highlights:
 |-----------|------------|-------------|
 | `nth(n)` | all | Returns an iterator to the *n*-th element (like `begin() + n` but named, matching Boost.Container) |
 | `index_of(it)` | all | Returns the positional index of an iterator (inverse of `nth`) |
-| `emplace_back(key, args...)` | all | Unchecked sorted append — O(1) insertion when the caller guarantees the key is greater than all existing keys (debug-asserted). Returns a reference to the inserted element. Ideal for building containers from pre-sorted data |
+| `emplace_back(key, args...)` | all | Unchecked sorted append — O(1) insertion when the caller guarantees the key is ≥ all existing keys (debug-asserted). Returns a reference to the inserted element. Ideal for building containers from pre-sorted data |
 | `merge(source)` | all | Transfer elements from another container of the same type (matching Boost.Container) |
 | `reserve(n)` | all | Pre-allocate storage for *n* elements |
 | `shrink_to_fit()` | all | Release excess capacity |
-| `keys()` | all | Direct `const` access to the underlying key container |
-| `values()` | maps | Direct-and-safe mutable access to values as a span (TODO a subrange to also cover deques)|
+| `keys()` | all | Direct `const` access to the underlying key container. Note: `std::flat_set` does **not** provide `keys()` — only `std::flat_map` does — so this is an 'API uniformization' extension for sets |
+| `values()` | maps | Direct-and-safe mutable access to values as a span (TODO a subrange to also cover deques) |
+
+#### Iterator categories
+
+Unlike `std::flat_set` (whose iterators are `random_access_iterator` in libc++ due to a protective wrapper), `psi::vm` flat_*set containers expose the strongest iterator category the underlying container supports — no wrapping overhead.
 
 ---
 

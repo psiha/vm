@@ -592,6 +592,24 @@ private:
     std::conditional_t<options.cache_capacity, sz_t, decltype( std::ignore )> capacity_;
 }; // struct tr_vector
 
+// C++20-style free-function erasure (enables ADL from flat_common.hpp erase_if)
+template <typename T, typename sz_t, tr_vector_options opts, typename Pred>
+constexpr typename tr_vector<T, sz_t, opts>::size_type
+erase_if( tr_vector<T, sz_t, opts> & c, Pred pred )
+{
+    auto const it{ std::remove_if( c.begin(), c.end(), std::move( pred ) ) };
+    auto const n { static_cast<typename tr_vector<T, sz_t, opts>::size_type>( c.end() - it ) };
+    c.shrink_by( n );
+    return n;
+}
+
+template <typename T, typename sz_t, tr_vector_options opts, typename U>
+constexpr typename tr_vector<T, sz_t, opts>::size_type
+erase( tr_vector<T, sz_t, opts> & c, U const & value )
+{
+    return erase_if( c, [&value]( auto const & elem ) { return elem == value; } );
+}
+
 //------------------------------------------------------------------------------
 } // namespace psi::vm
 //------------------------------------------------------------------------------
