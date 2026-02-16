@@ -837,16 +837,15 @@ TEST( tr_vector_move, move_constructor_empties_source )
     EXPECT_EQ( moved.size(), 3 );
 }
 
-TEST( tr_vector_move, move_assignment_swaps_contents )
+TEST( tr_vector_move, move_assignment_clears_source )
 {
     tr_vector<int> v{ 1, 2, 3 };
     tr_vector<int> dest{ 10, 20 };
     dest = std::move( v );
-    // Move-assign swaps: dest gets v's data, v gets dest's old data.
+    // Move-assign: dest gets v's data, v is left empty (cleared).
     EXPECT_EQ( dest.size(), 3 );
     EXPECT_EQ( dest[ 0 ], 1 );
-    EXPECT_EQ( v.size(), 2 );
-    EXPECT_EQ( v[ 0 ], 10 );
+    EXPECT_TRUE( v.empty() );
 }
 
 
