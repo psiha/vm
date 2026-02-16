@@ -273,7 +273,7 @@ struct paired_storage
     //--------------------------------------------------------------------------
     // Replace (move-assign both containers)
     //--------------------------------------------------------------------------
-    constexpr void replace( KeyContainer new_keys, MappedContainer new_values )
+    constexpr void replace( KeyContainer && new_keys, MappedContainer && new_values )
         noexcept( std::is_nothrow_move_assignable_v<KeyContainer> && std::is_nothrow_move_assignable_v<MappedContainer> )
     {
         BOOST_ASSERT( new_keys.size() == new_values.size() );
