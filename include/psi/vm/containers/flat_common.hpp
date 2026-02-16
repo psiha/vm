@@ -275,11 +275,8 @@ namespace detail {
     //==============================================================================
 
     // keys_of — extract the keys container from storage
-    template <typename KC>
-    constexpr auto       & keys_of( KC       & c ) noexcept { return c; }
-    template <typename KC>
-    constexpr auto const & keys_of( KC const & c ) noexcept { return c; }
-
+    template <typename KC> constexpr auto       & keys_of( KC       & c ) noexcept { return c; }
+    template <typename KC> constexpr auto const & keys_of( KC const & c ) noexcept { return c; }
 
 
     //==============================================================================
@@ -299,25 +296,27 @@ namespace detail {
     }
 
     // sort_storage — sort + conditional dedup, truncating storage in place
-    // Single container (set): uses pdqsort for direct iterators
-    template <bool Unique, typename KC, typename Comp>
-    constexpr void sort_storage( KC & keys, Comp const & comp ) {
-        PSI_VM_PDQSORT( keys.begin(), keys.end(), make_trivially_copyable_predicate( comp ) );
+    // Single container (set): Komp is Komparator — .sort() dispatches to
+    // pdqsort_branchless when available; .comp() yields the raw comparator
+    // for STL functions (fewer template instantiations).
+    template <bool Unique, typename KC, typename Komp>
+    constexpr void sort_storage( KC & keys, Komp const & komp ) {
+        komp.sort( keys.begin(), keys.end() );
         if constexpr ( Unique )
-            unique_truncate( keys, comp );
+            unique_truncate( keys, komp.comp() );
     }
 
     // sort_merge_storage — sort appended tail, merge with sorted prefix, conditional dedup
-    // Single container (set): uses pdqsort for the appended tail
-    template <bool Unique, bool WasSorted, typename KC, typename Comp>
-    constexpr void sort_merge_storage( KC & keys, Comp const & comp, typename KC::size_type const oldSize ) {
+    template <bool Unique, bool WasSorted, typename KC, typename Komp>
+    constexpr void sort_merge_storage( KC & keys, Komp const & komp, typename KC::size_type const oldSize ) {
         using key_sz_t = typename KC::size_type;
         if ( keys.size() <= oldSize )
             return;
         auto const appendStart{ keys.begin() + static_cast<std::ptrdiff_t>( oldSize ) };
+        auto const & comp{ komp.comp() };
 
         if constexpr ( !WasSorted )
-            PSI_VM_PDQSORT( appendStart, keys.end(), make_trivially_copyable_predicate( comp ) );
+            komp.sort( appendStart, keys.end() );
 
         if constexpr ( Unique && use_set_difference_dedup ) {
             // Filter tail against prefix: removes (a) elements already in prefix,
@@ -663,6 +662,8 @@ protected:
     }
 
 
+    [[ nodiscard ]] constexpr Komp const & komp() const noexcept { return *this; }
+
     constexpr flat_impl() = default;
 
     constexpr explicit flat_impl( Compare const & comp ) noexcept( std::is_nothrow_copy_constructible_v<Compare> )
@@ -679,7 +680,7 @@ protected:
     constexpr flat_impl( Derived &, Compare const & comp, Storage storage )
         : Komp{ comp }, storage_{ std::move( storage ) }
     {
-        sort_storage<Derived::unique>( storage_, this->comp() );
+        sort_storage<Derived::unique>( storage_, this->komp() );
     }
 
     // Unsorted iterator pair — construct storage from [first, last), then sort
@@ -687,7 +688,7 @@ protected:
     constexpr flat_impl( Derived &, Compare const & comp, InputIt first, InputIt last )
         : Komp{ comp }, storage_{ first, last }
     {
-        sort_storage<Derived::unique>( storage_, this->comp() );
+        sort_storage<Derived::unique>( storage_, this->komp() );
     }
 
     // Pre-sorted iterator pair — no sorting needed
@@ -702,7 +703,7 @@ protected:
         : Komp{ comp }
     {
         storage_.append_range( std::forward<R>( rg ) );
-        sort_storage<Derived::unique>( storage_, this->comp() );
+        sort_storage<Derived::unique>( storage_, this->komp() );
     }
 
     constexpr flat_impl( flat_impl const & ) = default;
@@ -801,12 +802,12 @@ protected:
 
     // Auto-detects unique from derived class
     constexpr void init_sort( this auto && self ) {
-        sort_storage<is_unique<decltype( self )>>( self.storage_, self.comp() );
+        sort_storage<is_unique<decltype( self )>>( self.storage_, self.komp() );
     }
 
     template <bool WasSorted>
     constexpr void init_sort_merge( this auto && self, size_type const oldSize ) {
-        sort_merge_storage<is_unique<decltype( self )>, WasSorted>( self.storage_, self.comp(), oldSize );
+        sort_merge_storage<is_unique<decltype( self )>, WasSorted>( self.storage_, self.komp(), oldSize );
     }
 
     //--------------------------------------------------------------------------
