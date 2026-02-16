@@ -174,8 +174,8 @@ contiguous_storage::unpack( header_info const hdr_info ) noexcept
     return
     {
         .data_offset = total_hdr_size,
-        .hdr_size    = final_client_hdr_size,
-        .hdr_offset  = base_hdr_size,
+        .hdr_size    = static_cast<std::uint32_t>( final_client_hdr_size ),
+        .hdr_offset  = static_cast<std::uint32_t>( base_hdr_size ),
         .data_size   = 0
     };
 }
@@ -237,9 +237,9 @@ contiguous_storage::map_file( file_handle file, flags::named_object_construction
             auto match{ on_disk_sizes };
             if ( hdr_info.extendable )
             {
-                match.data_offset = std::min( match.data_offset, hdr.data_offset );
-                match.hdr_size    = std::min( match.data_offset, hdr.hdr_size    );
-                match.hdr_offset  = std::min( match.data_offset, hdr.hdr_offset  );
+                match.data_offset =                             std::min( match.data_offset, hdr.data_offset );
+                match.hdr_size    = static_cast<std::uint32_t>( std::min( match.data_offset, hdr.hdr_size    ) );
+                match.hdr_offset  = static_cast<std::uint32_t>( std::min( match.data_offset, hdr.hdr_offset  ) );
             }
             if
             (

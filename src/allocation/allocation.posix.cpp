@@ -61,13 +61,13 @@ void * mmap( void * const target_address, std::size_t const size, int const prot
 
 void * allocate( std::size_t & size ) noexcept
 {
-    size = __builtin_align_up( size, reserve_granularity );
+    size = align_up( size, reserve_granularity );
     return mmap( nullptr, size, PROT_READ | PROT_WRITE, /*TODO rethink*/ MAP_NORESERVE );
 }
 
 void * reserve( std::size_t & size ) noexcept
 {
-    size = __builtin_align_up( size, reserve_granularity );
+    size = align_up( size, reserve_granularity );
     return mmap( nullptr, size, PROT_NONE, /*TODO rethink*/ MAP_NORESERVE );
 }
 bool commit( void * const address, std::size_t const size ) noexcept

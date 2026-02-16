@@ -76,6 +76,7 @@ if ( ${CMAKE_SYSTEM_NAME} MATCHES "Linux" )
         PSI_add_link_options( DevRelease -lc++ -lc++abi -lm -lubsan )
         PSI_add_link_options( Release    -lc++ -lc++abi -lm         )
     else() # GCC: uses libstdc++ by default
+        add_compile_options( -Wno-attributes ) # silence warnings for [[ clang::trivial_abi ]], [[ msvc::noalias ]], etc.
         PSI_add_link_options( Debug      -lubsan )
         PSI_add_link_options( DevRelease -lubsan )
     endif()

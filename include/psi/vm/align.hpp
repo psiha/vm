@@ -38,7 +38,7 @@ namespace align_detail
     using T = decltype( value );
     auto const is_power_of_2{ std::has_single_bit( unsigned( alignment ) ) };
     BOOST_ASSUME( is_power_of_2 );
-#if __has_builtin( __builtin_constant_p )
+#if __has_builtin( __builtin_align_down )
     if ( __builtin_constant_p( alignment ) )
         return __builtin_align_down( value, alignment );
     else
@@ -53,7 +53,7 @@ namespace align_detail
     using T = decltype( value );
     auto const is_power_of_2{ std::has_single_bit( unsigned( alignment ) ) };
     BOOST_ASSUME( is_power_of_2 );
-#if __has_builtin( __builtin_constant_p )
+#if __has_builtin( __builtin_align_up )
     if ( __builtin_constant_p( alignment ) )
         return __builtin_align_up( value, alignment );
     else
