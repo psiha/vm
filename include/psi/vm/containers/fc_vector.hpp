@@ -103,7 +103,7 @@ public:
     using base::base;
     constexpr fc_vector() noexcept : size_{ 0 } {}
     [[ gnu::warning( "copying fc_vector" ) ]]
-    constexpr fc_vector( fc_vector const & other ) noexcept( std::is_nothrow_copy_constructible_v<T> )
+    constexpr fc_vector( fc_vector const & other ) noexcept( std::is_nothrow_copy_constructible_v<T> ) : base{}
     {
         if constexpr ( fixed_sized_copy ) {
             fixed_copy( other );
@@ -112,7 +112,7 @@ public:
             this->size_ = other.size();
         }
     }
-    constexpr fc_vector( fc_vector && other ) noexcept( std::is_nothrow_move_constructible_v<T> )
+    constexpr fc_vector( fc_vector && other ) noexcept( std::is_nothrow_move_constructible_v<T> ) : base{}
     {
         if constexpr ( fixed_sized_move ) {
             fixed_copy( other );

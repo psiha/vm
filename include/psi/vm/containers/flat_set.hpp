@@ -325,13 +325,13 @@ public:
     //--------------------------------------------------------------------------
     // Modifiers — optimized erase by key for unique keys (single binary search)
     //--------------------------------------------------------------------------
-#ifndef _MSC_VER
+#if !defined( _MSC_VER ) && !defined( __GNUC__ )
     using base::erase; // positional + range + by-key from flat_set_impl
 #else
-    // MSVC workaround: using-declaration fails to hide the base erase(K const &)
-    // template when the derived class provides its own override, causing C2668
-    // (ambiguous overloaded call). Per [namespace.udecl]/15, the local declaration
-    // should hide the one introduced by the using-declaration.
+    // Explicit forwarding: using-declaration fails to hide the base erase(K const &)
+    // template when the derived class provides its own override, causing ambiguity
+    // on both MSVC (C2668) and GCC. Per [namespace.udecl]/15 the local declaration
+    // should hide the using-introduced one, but in practice only Clang gets this right.
     constexpr iterator erase( const_iterator pos ) noexcept { return base::erase( pos ); }
     constexpr iterator erase( const_iterator first, const_iterator last ) noexcept { return base::erase( first, last ); }
 #endif

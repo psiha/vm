@@ -405,7 +405,7 @@ public:
     using base::base;
     // cannot use a defaulted constructor with default member initializers as they would overwrite the values stored by storage_init called by base()
     constexpr tr_vector() noexcept : p_array_{ nullptr }, size_{ 0 }, capacity_{ 0 } {}
-    constexpr tr_vector( tr_vector const & other )
+    constexpr tr_vector( tr_vector const & other ) : base{}
     {
         auto const data{ storage_init( other.size() ) };
         try { std::uninitialized_copy_n( other.data(), other.size(), data ); }

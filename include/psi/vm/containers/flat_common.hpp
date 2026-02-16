@@ -350,10 +350,19 @@ namespace detail {
         c.erase( c.begin() + static_cast<std::ptrdiff_t>( first ), c.begin() + static_cast<std::ptrdiff_t>( last ) );
     }
 
+    // storage_append_range — append elements from a range (polyfill for containers without C++23 append_range)
+    template <typename KC, typename R>
+    constexpr void storage_append_range( KC & c, R && rg ) {
+        if constexpr ( requires { c.append_range( std::forward<R>( rg ) ); } )
+            c.append_range( std::forward<R>( rg ) );
+        else
+            c.insert( c.end(), std::ranges::begin( rg ), std::ranges::end( rg ) );
+    }
+
     // storage_move_append — move all elements from source into dest
     template <typename KC>
     constexpr void storage_move_append( KC & dest, KC & source ) {
-        dest.append_range( source | std::views::as_rvalue );
+        storage_append_range( dest, source | std::views::as_rvalue );
     }
 
     // storage_emplace_back_from — move single element at source[idx] to back of dest
@@ -727,7 +736,7 @@ protected:
     constexpr flat_impl( Derived &, Compare const & comp, std::from_range_t, R && rg )
         : Komp{ comp }
     {
-        storage_.append_range( std::forward<R>( rg ) );
+        detail::storage_append_range( storage_, std::forward<R>( rg ) );
         sort_storage<Derived::unique>( storage_, this->komp() );
     }
 
@@ -850,7 +859,7 @@ protected:
     template <bool WasSorted, typename InputIt>
     constexpr void bulk_insert( this auto && self, InputIt const first, InputIt const last ) {
         auto const oldSize{ self.size() };
-        self.storage_.append_range( std::ranges::subrange( first, last ) );
+        detail::storage_append_range( self.storage_, std::ranges::subrange( first, last ) );
         try {
             self.template init_sort_merge<WasSorted>( oldSize );
         } catch ( ... ) {

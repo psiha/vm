@@ -240,9 +240,9 @@ struct paired_storage
     constexpr void append_ranges( KR && key_rg, VR && val_rg )
     {
         auto const oldSize{ keys.size() };
-        keys.append_range( std::forward<KR>( key_rg ) );
+        detail::storage_append_range( keys, std::forward<KR>( key_rg ) );
         try {
-            values.append_range( std::forward<VR>( val_rg ) );
+            detail::storage_append_range( values, std::forward<VR>( val_rg ) );
         } catch ( ... ) {
             truncate_to( oldSize );
             throw;
@@ -329,6 +329,40 @@ constexpr auto       & keys_of( paired_storage<KC,MC>       & s ) noexcept { ret
 template <typename KC, typename MC>
 constexpr auto const & keys_of( paired_storage<KC,MC> const & s ) noexcept { return s.keys; }
 
+// libstdc++ bug: ranges::sort/inplace_merge delegate to std::sort/inplace_merge
+// which create value_type temporaries. For zip_view this constructs tuple<T,T>
+// from tuple<T&,T&>&& — std::get on rvalue tuple of lvalue refs returns lvalue
+// refs (reference collapsing: T& && → T&), triggering copies instead of moves.
+// libstdc++'s own std::flat_map has the same bug (confirmed GCC 15.2.1).
+// Additionally, std::inplace_merge uses legacy iterator_category tag dispatch
+// (std::__rotate), failing entirely for zip_view iterators.
+// Workaround for inplace_merge: rotate-based merge using ranges primitives
+// (iter_swap, rotate, lower/upper_bound — no value_type temporaries).
+#ifdef __GLIBCXX__
+template <std::random_access_iterator Iter, typename Comp, typename Proj>
+constexpr void proxy_inplace_merge( Iter first, Iter middle, Iter last, Comp comp, Proj proj ) {
+    auto len1{ middle - first };
+    auto len2{ last - middle   };
+    if ( len1 == 0 || len2 == 0 ) return;
+    if ( len1 + len2 == 2 ) {
+        if ( std::invoke( comp, std::invoke( proj, *middle ), std::invoke( proj, *first ) ) )
+            std::ranges::iter_swap( first, middle );
+        return;
+    }
+    Iter cut1, cut2;
+    if ( len1 >= len2 ) {
+        cut1 = first + len1 / 2;
+        cut2 = std::ranges::lower_bound( middle, last, std::invoke( proj, *cut1 ), comp, proj );
+    } else {
+        cut2 = middle + len2 / 2;
+        cut1 = std::ranges::upper_bound( first, middle, std::invoke( proj, *cut2 ), comp, proj );
+    }
+    auto const new_middle{ std::ranges::rotate( cut1, middle, cut2 ).begin() };
+    proxy_inplace_merge( first, cut1,       new_middle, comp, proj );
+    proxy_inplace_merge( new_middle, cut2, last,       comp, proj );
+}
+#endif
+
 // sort_storage — paired_storage overload (zip-view sort)
 template <bool Unique, typename KC, typename MC, typename Comp>
 constexpr void sort_storage( paired_storage<KC,MC> & storage, Comp const & comp ) {
@@ -352,7 +386,11 @@ constexpr void sort_merge_storage( paired_storage<KC,MC> & storage, Comp const &
         std::ranges::sort( appendStart, zv.end(), comp, key_proj() );
 
     if ( oldSize > 0 )
+#   ifdef __GLIBCXX__
+        proxy_inplace_merge( zv.begin(), appendStart, zv.end(), comp, key_proj() );
+#   else
         std::ranges::inplace_merge( zv.begin(), appendStart, zv.end(), comp, key_proj() );
+#   endif
 
     if constexpr ( Unique ) {
         auto const newEnd{ std::ranges::unique( zv, key_equiv( comp ), key_proj() ).begin() };
@@ -709,10 +747,10 @@ public:
     //--------------------------------------------------------------------------
     // Modifiers — optimized erase by key for unique keys
     //--------------------------------------------------------------------------
-#ifndef _MSC_VER
+#if !defined( _MSC_VER ) && !defined( __GNUC__ )
     using base::erase; // positional + range + by-key from flat_map_impl
 #else
-    // MSVC workaround: [namespace.udecl]/15 hiding not applied — see flat_set.
+    // Explicit forwarding — see flat_set comment about using-declaration hiding bug.
     constexpr iterator erase( const_iterator const pos ) noexcept { return base::erase( pos ); }
     constexpr iterator erase(       iterator const pos ) noexcept { return base::erase( pos ); }
     constexpr iterator erase( const_iterator const first, const_iterator const last ) noexcept { return base::erase( first, last ); }

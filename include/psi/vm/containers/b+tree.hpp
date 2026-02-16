@@ -987,7 +987,7 @@ protected: // 'other'
             auto & root_{ hdr.root_ };
             BOOST_ASSUME( root_ == slot_of( leaf ) );
             BOOST_ASSUME( leaf.is_root() );
-            BOOST_ASSUME( hdr.size_ == leaf.num_vals + 1 );
+            BOOST_ASSUME( hdr.size_ == static_cast<size_t>( leaf.num_vals ) + 1 );
             BOOST_ASSUME( !leaf.left  );
             BOOST_ASSUME( !leaf.right );
             if ( leaf.num_vals == 0 )

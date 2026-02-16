@@ -184,7 +184,7 @@ TEST( bp_tree, playground )
 
             bptree_set<int> bpt_even;
             bpt_even.map_memory();
-            shuffled_even_numbers.append_range( merge_appendix );
+            shuffled_even_numbers.insert( shuffled_even_numbers.end(), merge_appendix.begin(), merge_appendix.end() );
             bpt_even.insert( shuffled_even_numbers );
 
             EXPECT_EQ( bpt.merge( std::move( bpt_even ) ), shuffled_even_numbers.size() );

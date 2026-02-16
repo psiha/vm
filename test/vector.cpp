@@ -915,6 +915,96 @@ TEST( fc_vector_specific, reserve_is_noop )
     EXPECT_EQ( v.capacity(), 16 );
 }
 
+// GCC 15.2.1 bug: inherited constructors (`using base::base`) + CRTP
+// static_cast<Impl&>(*this) downcast + writes to a union member in the derived
+// class are misoptimized by GCC's dead store elimination in Release (with
+// inlining/LTO). The writes through the union member pointer are incorrectly
+// treated as dead stores and eliminated.
+// This test verifies the gcc_dse_workaround in vector_impl::initialized_impl.
+// Without the workaround, value-initialized elements contain garbage in Release.
+// libstdc++'s std::inplace_vector (which uses the same union pattern) may have
+// the same latent bug.
+TEST( fc_vector_specific, gcc_inherited_ctor_union_dse_bug )
+{
+    // value_init through inherited constructor — triggers the bug path
+    fc_vector<int, 256> v( 10, value_init );
+    EXPECT_EQ( v.size(), 10 );
+    for ( std::uint16_t i{ 0 }; i < v.size(); ++i )
+        EXPECT_EQ( v[ i ], 0 ) << "element " << i << " not zero-initialized";
+
+    // fill constructor through inherited constructor — same bug path
+    fc_vector<int, 256> v2( 10, 42 );
+    EXPECT_EQ( v2.size(), 10 );
+    for ( std::uint16_t i{ 0 }; i < v2.size(); ++i )
+        EXPECT_EQ( v2[ i ], 42 ) << "element " << i << " not fill-initialized";
+
+    // default_init through inherited constructor — int is trivial, so
+    // default-init leaves values indeterminate; just verify size
+    fc_vector<int, 256> v3( 10, default_init );
+    EXPECT_EQ( v3.size(), 10 );
+
+    // iterator-pair constructor through inherited constructor
+    int const src[]{ 1, 2, 3, 4, 5 };
+    fc_vector<int, 256> v4( std::begin( src ), std::end( src ) );
+    EXPECT_EQ( v4.size(), 5 );
+    for ( std::uint16_t i{ 0 }; i < v4.size(); ++i )
+        EXPECT_EQ( v4[ i ], src[ i ] ) << "element " << i << " mismatch";
+}
+
+// Standalone minimal reproducer for the GCC 15.2.1 DSE bug above — does not
+// depend on fc_vector or psi::vm at all. Demonstrates: inherited constructor
+// (`using base::base`) + CRTP static_cast<Derived&>(*this) + writes to a union
+// member → GCC optimizes away the writes in Release (inlining + DSE).
+namespace gcc_dse_bug_reproducer {
+    template <typename T, unsigned N>
+    union uninit_storage {
+        constexpr  uninit_storage() noexcept {}
+        constexpr ~uninit_storage() noexcept {}
+        T data[ N ];
+    };
+
+    template <typename Derived, typename T>
+    struct crtp_base {
+        struct value_init_tag {};
+        constexpr crtp_base() = default;
+        constexpr crtp_base( unsigned n, value_init_tag ) {
+            auto & self{ static_cast<Derived &>( *this ) };
+            self.size_ = static_cast<unsigned char>( n );
+            std::uninitialized_value_construct_n( self.storage_.data, n );
+        }
+    };
+
+    template <typename T, unsigned N>
+    struct derived : crtp_base<derived<T, N>, T> {
+        using base = crtp_base<derived<T, N>, T>;
+        using base::base; // inherited constructors — triggers the bug
+        constexpr derived() noexcept : size_{ 0 } {}
+
+        unsigned char          size_;   // NO default member initializer (matching fc_vector)
+        uninit_storage<T, N>   storage_;
+
+        T       & operator[]( unsigned i )       { return storage_.data[ i ]; }
+        T const & operator[]( unsigned i ) const { return storage_.data[ i ]; }
+    };
+} // namespace gcc_dse_bug_reproducer
+
+// This test reproduces the raw GCC bug — the standalone types above do NOT have
+// the gcc_dse_workaround, so on GCC 15 Release this test demonstrates the
+// miscompilation. Disabled on GCC Release because the failure is expected (the
+// workaround lives in vector_impl.hpp, not here).
+#if defined( __GNUC__ ) && !defined( __clang__ ) && defined( NDEBUG )
+TEST( fc_vector_specific, DISABLED_gcc_dse_bug_standalone_reproducer )
+#else
+TEST( fc_vector_specific, gcc_dse_bug_standalone_reproducer )
+#endif
+{
+    using namespace gcc_dse_bug_reproducer;
+    derived<int, 256> v( 5, derived<int, 256>::base::value_init_tag{} );
+    EXPECT_EQ( v.size_, 5 );
+    for ( unsigned i{ 0 }; i < v.size_; ++i )
+        EXPECT_EQ( v[ i ], 0 ) << "element " << i << " not zero-initialized (GCC DSE bug)";
+}
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // 12. tr_vector with uint32_t size_type

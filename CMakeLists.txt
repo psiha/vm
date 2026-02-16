@@ -50,7 +50,7 @@ CPMAddPackage( "gh:psiha/std_fix#master"   )
 CPMAddPackage( "gh:psiha/err#master"       )
 CPMAddPackage( "gh:psiha/build#master"     )
 
-if ( ${CMAKE_SYSTEM_NAME} MATCHES "Linux" )
+if ( ${CMAKE_SYSTEM_NAME} MATCHES "Linux" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang" )
     set( PSI_USE_LINKER "lld" ) # for thinlto-cache-dir support
 endif()
 include( ${build_SOURCE_DIR}/build_options.cmake )
@@ -76,7 +76,13 @@ if ( ${CMAKE_SYSTEM_NAME} MATCHES "Linux" )
         PSI_add_link_options( DevRelease -lc++ -lc++abi -lm -lubsan )
         PSI_add_link_options( Release    -lc++ -lc++abi -lm         )
     else() # GCC: uses libstdc++ by default
-        add_compile_options( -Wno-attributes ) # silence warnings for [[ clang::trivial_abi ]], [[ msvc::noalias ]], etc.
+        add_compile_options(
+            -Wno-attributes              # silence warnings for [[ clang::trivial_abi ]], [[ msvc::noalias ]], etc.
+            -Wno-shadow                  # too many inherited-member vs parameter-name collisions in b+tree.hpp
+            -Wno-strict-aliasing         # reinterpret_cast in mapped_view.cpp (intentional type punning)
+            -Wno-dangling-else           # if/else in EXPECT_* macros from GTest
+            -Wno-missing-field-initializers # designated initializer on C structs
+        )
         PSI_add_link_options( Debug      -lubsan )
         PSI_add_link_options( DevRelease -lubsan )
     endif()

@@ -10,6 +10,7 @@ jobs:
   build:
     name: ${{ matrix.config.name }} — ${{ matrix.build_type }}
     runs-on: ${{ matrix.config.os }}
+    container: ${{ matrix.config.container || '' }}
     timeout-minutes: 25
 
     strategy:
@@ -19,7 +20,7 @@ jobs:
           - { os: windows-latest, name: MSVC,        cc: msvc,   cxx: msvc,    gen: '' }
           - { os: windows-latest, name: Clang-CL,    cc: msvc,   cxx: msvc,    gen: '-T ClangCL' }
           - { os: ubuntu-latest,  name: Clang,       cc: clang,  cxx: clang++, gen: '-G Ninja' }
-          - { os: ubuntu-latest,  name: GCC,         cc: gcc-14, cxx: g++-14,  gen: '-G Ninja' }
+          - { os: ubuntu-latest,  name: GCC,         cc: gcc,    cxx: g++,     gen: '-G Ninja', container: 'gcc:15' }
           - { os: macos-26,       name: Apple-Clang, cc: clang,  cxx: clang++, gen: '-G Ninja' }
         build_type: [Debug, Release]
 
@@ -55,19 +56,21 @@ jobs:
         echo "CC=/usr/lib/llvm-21/bin/clang" >> $GITHUB_ENV
         echo "CXX=/usr/lib/llvm-21/bin/clang++" >> $GITHUB_ENV
 
-    - name: Install GCC 14
+    - name: Install build tools (GCC container)
       if: matrix.config.name == 'GCC'
       run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-14 g++-14
-        echo "CC=gcc-14" >> $GITHUB_ENV
-        echo "CXX=g++-14" >> $GITHUB_ENV
+        apt-get update
+        apt-get install -y ninja-build
+        cmake_ver=3.31.4
+        wget -qO- "https://github.com/Kitware/CMake/releases/download/v${cmake_ver}/cmake-${cmake_ver}-linux-x86_64.tar.gz" | tar xz --strip-components=1 -C /usr/local
+        cmake --version
 
     - name: Set reusable strings
       id: strings
       shell: bash
       run: |
-        echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
+        echo "build-output-dir=${GITHUB_WORKSPACE}/build" >> "$GITHUB_OUTPUT"
+        echo "source-dir=${GITHUB_WORKSPACE}" >> "$GITHUB_OUTPUT"
 
     - name: Configure CMake
       run: >
@@ -77,7 +80,7 @@ jobs:
         -DCMAKE_C_COMPILER=${{ matrix.config.cc }}
         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
         -DGitHubCIRun=true
-        -S ${{ github.workspace }}
+        -S ${{ steps.strings.outputs.source-dir }}
 
     - name: Build
       run: |

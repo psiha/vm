@@ -240,10 +240,26 @@ private:
         BOOST_ASSUME( impl.size() == initial_size );
         return impl;
     }
+
+    // GCC 15.2.1 bug: when a base-class constructor inherited via
+    // `using base::base` writes through a CRTP static_cast<Impl&>(*this)
+    // downcast to a union member in the derived class, the optimizer's dead
+    // store elimination incorrectly treats those writes as dead after
+    // inlining (Release/LTO). Clobbering the data pointer prevents this.
+#if defined( __GNUC__ ) && !defined( __clang__ )
+    constexpr value_type * gcc_dse_workaround( value_type * p ) noexcept
+    {
+        if !consteval { asm volatile( "" : "+r"( p ) :: "memory" ); }
+        return p;
+    }
+#else
+    static constexpr value_type * gcc_dse_workaround( value_type * p ) noexcept { return p; }
+#endif
+
     constexpr Impl & initialized_impl( size_type const initial_size, default_init_t ) noexcept
     {
         auto & impl{ initialized_impl( initial_size, no_init ) };
-        std::uninitialized_default_construct_n( impl.data(), impl.size() );
+        std::uninitialized_default_construct_n( gcc_dse_workaround( impl.data() ), impl.size() );
         return impl;
     }
     constexpr Impl & initialized_impl( size_type const initial_size, value_init_t ) noexcept
@@ -259,7 +275,7 @@ private:
         }
         else
         {
-            std::uninitialized_value_construct_n( impl.data(), impl.size() );
+            std::uninitialized_value_construct_n( gcc_dse_workaround( impl.data() ), impl.size() );
         }
         return impl;
     }
@@ -269,7 +285,7 @@ private:
         BOOST_ASSUME( self.empty() );
         auto const sz{ other.size() };
         auto const self_data{ self.grow_to( sz, no_init ) };
-        std::uninitialized_copy_n( other.begin(), sz, self_data );
+        std::uninitialized_copy_n( other.begin(), sz, gcc_dse_workaround( self_data ) );
     }
 
 protected:
@@ -292,7 +308,7 @@ public:
     constexpr vector_impl( size_type const count, param_const_ref const value ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
     {
         auto & impl{ initialized_impl( count, no_init ) };
-        std::uninitialized_fill_n( impl.data(), count, value );
+        std::uninitialized_fill_n( gcc_dse_workaround( impl.data() ), count, value );
         BOOST_ASSUME( impl.size() == count );
     }
 
@@ -306,7 +322,7 @@ public:
             // STL utility functions handle EH safety - no need to catch to
             // reset size as Impl/the derived class should not attempt cleanup
             // if this (its base constructor) fails.
-            std::uninitialized_copy_n( first, sz, impl.data() );
+            std::uninitialized_copy_n( first, sz, gcc_dse_workaround( impl.data() ) );
         }
         else
         {
