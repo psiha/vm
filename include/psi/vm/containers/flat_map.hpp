@@ -385,6 +385,17 @@ constexpr void storage_emplace_back_from( paired_storage<KC,MC> & dest, paired_s
     dest.values.emplace_back( std::move( source.values[ idx ] ) );
 }
 
+// storage_emplace_back — paired_storage overload (key + mapped value args)
+template <typename KC, typename MC, typename K, typename... Args>
+constexpr void storage_emplace_back( paired_storage<KC,MC> & s, K && key, Args &&... args ) {
+    s.keys  .emplace_back( std::forward<K>( key ) );
+    s.values.emplace_back( std::forward<Args>( args )... );
+}
+
+// storage_back — reference to the last emplaced mapped value
+template <typename KC, typename MC>
+constexpr auto & storage_back( paired_storage<KC,MC> & s ) noexcept { return s.values.back(); }
+
 // storage_move_element — paired_storage overload
 template <typename KC, typename MC>
 constexpr void storage_move_element( paired_storage<KC,MC> & s, typename paired_storage<KC,MC>::size_type const dst, typename paired_storage<KC,MC>::size_type const src ) noexcept {

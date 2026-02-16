@@ -362,6 +362,16 @@ namespace detail {
         dest.emplace_back( std::move( source[ idx ] ) );
     }
 
+    // storage_emplace_back — unchecked append (set path: single container)
+    template <typename KC, typename... Args>
+    constexpr void storage_emplace_back( KC & c, Args &&... args ) {
+        c.emplace_back( std::forward<Args>( args )... );
+    }
+
+    // storage_back — reference to the last emplaced element
+    template <typename KC>
+    constexpr auto & storage_back( KC & c ) noexcept { return c.back(); }
+
     // storage_move_element — move element from src to dst position within same storage
     template <typename KC>
     constexpr void storage_move_element( KC & c, typename KC::size_type const dst, typename KC::size_type const src ) noexcept {
@@ -434,6 +444,21 @@ public:
         self.insert( il );
     }
 
+
+    //--------------------------------------------------------------------------
+    // Unchecked append (extension)
+    //
+    // Appends a key (set) or key-value pair (map) at the end without searching
+    // for the insertion position.  Precondition: the key is greater than all
+    // existing keys (asserted in debug builds).  This is the optimal path for
+    // building a flat container from pre-sorted unique data.
+    //--------------------------------------------------------------------------
+    template <typename... Args>
+    constexpr auto & emplace_back( this auto && self, key_type key, Args &&... args ) {
+        BOOST_ASSERT( self.empty() || self.ge( key, self.keys().back() ) );
+        storage_emplace_back( self.storage_, std::move( key ), std::forward<Args>( args )... );
+        return storage_back( self.storage_ );
+    }
 
     //--------------------------------------------------------------------------
     // Bulk insert — append + sort + merge (± dedup based on derived class's unique)

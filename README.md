@@ -53,11 +53,23 @@ A complete, compact [C++23 `std::flat_map`/`std::flat_set`](https://wg21.link/P0
 
 Highlights:
 - Inheritance-based deduplication — deducing-this based CRTP with maximum binary-level not just source-level code sharing and reuse
-- Extensions like mutable-yet-safe access to values for map containers, nth and index_of positional access, merge, reserve, shrink_to_fit...
-- When available, will use adaptive merge and pdq sort from the Boost libraries
+- When available, will use adaptive merge and pdq sort (including branchless variant) from the Boost libraries
 - Avoids the 'double not-less-than _and_ not-greater-than comparison' idiom to perform simple equivalence comparisons (using direct equality comparisons when safe to do so)
 - Optimized bulk insert: append + sort tail + adaptive merge + dedup
 - Optimizations at the micro/ABI level
+
+### Extensions beyond C++23 `std::flat_*`
+
+| Extension | Containers | Description |
+|-----------|------------|-------------|
+| `nth(n)` | all | Returns an iterator to the *n*-th element (like `begin() + n` but named, matching Boost.Container) |
+| `index_of(it)` | all | Returns the positional index of an iterator (inverse of `nth`) |
+| `emplace_back(key, args...)` | all | Unchecked sorted append — O(1) insertion when the caller guarantees the key is greater than all existing keys (debug-asserted). Returns a reference to the inserted element. Ideal for building containers from pre-sorted data |
+| `merge(source)` | all | Transfer elements from another container of the same type (matching Boost.Container) |
+| `reserve(n)` | all | Pre-allocate storage for *n* elements |
+| `shrink_to_fit()` | all | Release excess capacity |
+| `keys()` | all | Direct `const` access to the underlying key container |
+| `values()` | maps | Direct-and-safe mutable access to values as a span (TODO a subrange to also cover deques)|
 
 ---
 
