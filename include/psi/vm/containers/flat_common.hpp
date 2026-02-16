@@ -627,6 +627,18 @@ public:
     }
 
     //--------------------------------------------------------------------------
+    // Positional access
+    //--------------------------------------------------------------------------
+    constexpr auto nth( this auto && self, size_type const n ) noexcept {
+        BOOST_ASSERT( n <= self.size() );
+        return self.make_iter( n );
+    }
+
+    constexpr size_type index_of( this auto const & self, auto const it ) noexcept {
+        return self.iter_index( it );
+    }
+
+    //--------------------------------------------------------------------------
     // Extraction & observers
     //--------------------------------------------------------------------------
     constexpr Storage extract() noexcept( std::is_nothrow_move_constructible_v<Storage> ) {
