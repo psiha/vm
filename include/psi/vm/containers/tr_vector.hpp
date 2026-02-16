@@ -418,7 +418,7 @@ public:
     {
         // Swap contents: other's destructor frees our old allocation.
         // (but first clear - to avoid surprising callers with leaving
-        // 'something' in other, i.e. leave only capcaity)
+        // 'something' in other, i.e. leave only capacity)
         this->clear();
         this->p_array_  = std::exchange( other.p_array_ , this->p_array_  );
         this->size_     = std::exchange( other.size_    , this->size_     );

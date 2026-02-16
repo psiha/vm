@@ -53,10 +53,11 @@ A complete, compact [C++23 `std::flat_map`/`std::flat_set`](https://wg21.link/P0
 
 Highlights:
 - Inheritance-based deduplication — deducing-this based CRTP with maximum binary-level not just source-level code sharing and reuse
-- Extensions like mutable-yet-safe access to values for map containers, n_th and index_of positional access, merge, reserve, shrink_to_fit...
+- Extensions like mutable-yet-safe access to values for map containers, nth and index_of positional access, merge, reserve, shrink_to_fit...
 - When available, will use adaptive merge and pdq sort from the Boost libraries
-- Optimizations at the micro/ABI level
+- Avoids the 'double not-less-than _and_ not-greater-than comparison' idiom to perform simple equivalence comparisons (using direct equality comparisons when safe to do so)
 - Optimized bulk insert: append + sort tail + adaptive merge + dedup
+- Optimizations at the micro/ABI level
 
 ---
 
