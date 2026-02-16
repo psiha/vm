@@ -1,5 +1,10 @@
 ////////////////////////////////////////////////////////////////////////////////
 /// psi::vm flat_set / flat_multiset test suite
+///
+/// Typed tests exercise core flat_set behaviour across three container backends
+/// (std::vector, tr_vector, std::deque). Standalone tests cover container-
+/// specific features, transparent comparators, CTAD, forwarding, pass_in_reg,
+/// LookupType, and flat_multiset.
 ////////////////////////////////////////////////////////////////////////////////
 
 #include <psi/vm/containers/flat_set.hpp>
@@ -11,124 +16,138 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <utility>
 #include <vector>
 
-//==============================================================================
-// Type aliases for common configurations
-//==============================================================================
-
-using FS  = psi::vm::flat_set<int>;
-using FSS = psi::vm::flat_set<std::string>;
-
-// tr_vector-backed set with uint32_t size_type
-using tr_vec_set = psi::vm::flat_set<int, std::less<int>, psi::vm::tr_vector<int, std::uint32_t>>;
-
-// Transparent comparator set
-struct TransComp {
-    using is_transparent = void;
-    bool operator()( int a, int b )                const noexcept { return a < b; }
-    bool operator()( int a, long b )               const noexcept { return a < b; }
-    bool operator()( long a, int b )               const noexcept { return a < b; }
-    bool operator()( std::string_view a, std::string_view b ) const noexcept { return a < b; }
-};
-using TransSet = psi::vm::flat_set<int, TransComp>;
-
-// Multiset aliases
-using FMS = psi::vm::flat_multiset<int>;
+//------------------------------------------------------------------------------
+namespace psi::vm {
+//------------------------------------------------------------------------------
 
 //==============================================================================
-// flat_set — Construction
+// Typed-test infrastructure
 //==============================================================================
 
-TEST( flat_set, default_construction )
+template <typename KC>
+struct set_config
 {
-    FS s;
+    using key_container = KC;
+    using key_type      = typename KC::value_type;
+    using set_type      = flat_set<key_type, std::less<key_type>, KC>;
+};
+
+template <typename C>
+class flat_set_typed : public ::testing::Test {};
+
+using set_configs = ::testing::Types<
+    set_config< std::vector<int>              >,
+    set_config< tr_vector<int, std::uint32_t> >,
+    set_config< std::deque<int>               >
+>;
+
+TYPED_TEST_SUITE( flat_set_typed, set_configs );
+
+//==============================================================================
+// Construction
+//==============================================================================
+
+TYPED_TEST( flat_set_typed, default_construction )
+{
+    typename TypeParam::set_type s;
     EXPECT_TRUE( s.empty() );
-    EXPECT_EQ( s.size(), 0 );
+    EXPECT_EQ( s.size(), 0u );
     EXPECT_EQ( s.begin(), s.end() );
 }
 
-TEST( flat_set, sorted_unique_construction )
+TYPED_TEST( flat_set_typed, initializer_list_construction )
 {
-    std::vector<int> v{ 1, 2, 3 };
-    FS s( psi::vm::sorted_unique, std::move( v ) );
-    EXPECT_EQ( s.size(), 3 );
-    EXPECT_TRUE( s.contains( 1 ) );
-    EXPECT_TRUE( s.contains( 3 ) );
+    typename TypeParam::set_type s{ 3, 1, 4, 1, 5, 9 };
+    EXPECT_EQ( s.size(), 5u ); // 1 duplicate removed
 }
 
-TEST( flat_set, unsorted_container_construction )
-{
-    std::vector<int> v{ 3, 1, 4, 1, 5 };
-    FS s( std::move( v ) );
-    EXPECT_EQ( s.size(), 4 ); // 1 duplicate removed
-    auto const & k{ s.keys() };
-    EXPECT_TRUE( std::is_sorted( k.begin(), k.end() ) );
-}
-
-TEST( flat_set, range_construction )
+TYPED_TEST( flat_set_typed, range_construction )
 {
     std::vector<int> src{ 5, 2, 5, 3, 1 };
-    FS s( src.begin(), src.end() );
-    EXPECT_EQ( s.size(), 4 );
+    typename TypeParam::set_type s( src.begin(), src.end() );
+    EXPECT_EQ( s.size(), 4u );
     EXPECT_TRUE( s.contains( 1 ) );
     EXPECT_TRUE( s.contains( 5 ) );
 }
 
-TEST( flat_set, initializer_list_construction )
-{
-    FS s{ 3, 1, 4, 1, 5, 9 };
-    EXPECT_EQ( s.size(), 5 ); // 1 duplicate removed
-}
-
-TEST( flat_set, from_range_construction )
+TYPED_TEST( flat_set_typed, from_range_construction )
 {
     std::vector<int> src{ 4, 2, 4, 1 };
-    FS s( std::from_range, src );
-    EXPECT_EQ( s.size(), 3 );
+    typename TypeParam::set_type s( std::from_range, src );
+    EXPECT_EQ( s.size(), 3u );
 }
 
-TEST( flat_set, copy_construction )
+TYPED_TEST( flat_set_typed, copy_construction )
 {
-    FS orig{ 1, 2, 3 };
-    FS copy{ orig };
-    EXPECT_EQ( copy.size(), 3 );
+    typename TypeParam::set_type orig{ 1, 2, 3 };
+    typename TypeParam::set_type copy{ orig };
+    EXPECT_EQ( copy.size(), 3u );
     EXPECT_TRUE( copy.contains( 2 ) );
 }
 
-TEST( flat_set, move_construction )
+TYPED_TEST( flat_set_typed, move_construction )
 {
-    FS orig{ 1, 2, 3 };
-    FS moved{ std::move( orig ) };
-    EXPECT_EQ( moved.size(), 3 );
+    typename TypeParam::set_type orig{ 1, 2, 3 };
+    typename TypeParam::set_type moved{ std::move( orig ) };
+    EXPECT_EQ( moved.size(), 3u );
+}
+
+TYPED_TEST( flat_set_typed, sorted_unique_container_construction )
+{
+    typename TypeParam::key_container kc;
+    kc.push_back( 1 );
+    kc.push_back( 3 );
+    kc.push_back( 5 );
+    typename TypeParam::set_type s( sorted_unique, std::move( kc ) );
+    EXPECT_EQ( s.size(), 3u );
+    EXPECT_TRUE( s.contains( 1 ) );
+    EXPECT_TRUE( s.contains( 3 ) );
+    EXPECT_TRUE( s.contains( 5 ) );
+}
+
+TYPED_TEST( flat_set_typed, unsorted_container_construction )
+{
+    typename TypeParam::key_container kc;
+    kc.push_back( 3 );
+    kc.push_back( 1 );
+    kc.push_back( 4 );
+    kc.push_back( 1 );
+    kc.push_back( 5 );
+    typename TypeParam::set_type s( std::move( kc ) );
+    EXPECT_EQ( s.size(), 4u ); // 1 duplicate removed
+    auto const & k{ s.keys() };
+    EXPECT_TRUE( std::is_sorted( k.begin(), k.end() ) );
 }
 
 //==============================================================================
-// flat_set — Lookup
+// Lookup
 //==============================================================================
 
-TEST( flat_set, find_hit_and_miss )
+TYPED_TEST( flat_set_typed, find_hit_and_miss )
 {
-    FS s{ 10, 20, 30 };
+    typename TypeParam::set_type s{ 10, 20, 30 };
     EXPECT_NE( s.find( 20 ), s.end() );
     EXPECT_EQ( *s.find( 20 ), 20 );
     EXPECT_EQ( s.find( 25 ), s.end() );
 }
 
-TEST( flat_set, contains_and_count )
+TYPED_TEST( flat_set_typed, contains_and_count )
 {
-    FS s{ 1, 2, 3, 4 };
+    typename TypeParam::set_type s{ 1, 2, 3, 4 };
     EXPECT_TRUE( s.contains( 3 ) );
     EXPECT_FALSE( s.contains( 5 ) );
-    EXPECT_EQ( s.count( 3 ), 1 );
-    EXPECT_EQ( s.count( 5 ), 0 );
+    EXPECT_EQ( s.count( 3 ), 1u );
+    EXPECT_EQ( s.count( 5 ), 0u );
 }
 
-TEST( flat_set, lower_upper_bound )
+TYPED_TEST( flat_set_typed, lower_upper_bound )
 {
-    FS s{ 10, 20, 30, 40 };
+    typename TypeParam::set_type s{ 10, 20, 30, 40 };
     auto lb{ s.lower_bound( 25 ) };
     auto ub{ s.upper_bound( 25 ) };
     EXPECT_EQ( *lb, 30 );
@@ -141,41 +160,33 @@ TEST( flat_set, lower_upper_bound )
     EXPECT_EQ( *ub, 30 );
 }
 
-TEST( flat_set, equal_range )
+TYPED_TEST( flat_set_typed, equal_range )
 {
-    FS s{ 10, 20, 30 };
+    typename TypeParam::set_type s{ 10, 20, 30 };
     auto [lo, hi]{ s.equal_range( 20 ) };
     EXPECT_EQ( *lo, 20 );
     EXPECT_EQ( *hi, 30 );
 }
 
-TEST( flat_set, transparent_comparison )
-{
-    TransSet s{ 1, 2, 3 };
-    EXPECT_NE( s.find( 2L ), s.end() );   // long → int transparent
-    EXPECT_TRUE( s.contains( 3L ) );
-    EXPECT_EQ( s.count( 1L ), 1 );
-}
-
 //==============================================================================
-// flat_set — Modifiers
+// Modifiers
 //==============================================================================
 
-TEST( flat_set, insert_single )
+TYPED_TEST( flat_set_typed, insert_single )
 {
-    FS s;
+    typename TypeParam::set_type s;
     auto [it1, ok1]{ s.insert( 10 ) };
     EXPECT_TRUE( ok1 );
     EXPECT_EQ( *it1, 10 );
 
     auto [it2, ok2]{ s.insert( 10 ) };
     EXPECT_FALSE( ok2 ); // duplicate
-    EXPECT_EQ( s.size(), 1 );
+    EXPECT_EQ( s.size(), 1u );
 }
 
-TEST( flat_set, emplace )
+TYPED_TEST( flat_set_typed, emplace )
 {
-    FS s;
+    typename TypeParam::set_type s;
     auto [it, ok]{ s.emplace( 42 ) };
     EXPECT_TRUE( ok );
     EXPECT_EQ( *it, 42 );
@@ -184,209 +195,186 @@ TEST( flat_set, emplace )
     EXPECT_FALSE( ok2 );
 }
 
-TEST( flat_set, emplace_hint_sorted_input )
+TYPED_TEST( flat_set_typed, emplace_hint_sorted_input )
 {
-    FS s;
+    typename TypeParam::set_type s;
     auto it{ s.begin() };
     for ( int i{ 0 }; i < 10; ++i )
         it = s.emplace_hint( it, i ) + 1;
-    EXPECT_EQ( s.size(), 10 );
+    EXPECT_EQ( s.size(), 10u );
     EXPECT_TRUE( std::is_sorted( s.keys().begin(), s.keys().end() ) );
 }
 
-TEST( flat_set, bulk_insert )
+TYPED_TEST( flat_set_typed, bulk_insert )
 {
-    FS s{ 1, 5 };
+    typename TypeParam::set_type s{ 1, 5 };
     std::vector<int> more{ 3, 5, 7, 1 };
     s.insert( more.begin(), more.end() );
-    EXPECT_EQ( s.size(), 4 ); // 1, 3, 5, 7
+    EXPECT_EQ( s.size(), 4u ); // 1, 3, 5, 7
     EXPECT_TRUE( s.contains( 3 ) );
     EXPECT_TRUE( s.contains( 7 ) );
 }
 
-TEST( flat_set, insert_sorted_unique )
+TYPED_TEST( flat_set_typed, insert_sorted_unique )
 {
-    FS s{ 1, 5 };
+    typename TypeParam::set_type s{ 1, 5 };
     std::vector<int> more{ 2, 3, 4 };
-    s.insert( psi::vm::sorted_unique, more.begin(), more.end() );
-    EXPECT_EQ( s.size(), 5 );
+    s.insert( sorted_unique, more.begin(), more.end() );
+    EXPECT_EQ( s.size(), 5u );
 }
 
-TEST( flat_set, insert_initializer_list )
+TYPED_TEST( flat_set_typed, insert_initializer_list )
 {
-    FS s;
+    typename TypeParam::set_type s;
     s.insert( { 3, 1, 4, 1, 5 } );
-    EXPECT_EQ( s.size(), 4 );
+    EXPECT_EQ( s.size(), 4u );
 }
 
-TEST( flat_set, erase_by_key )
+TYPED_TEST( flat_set_typed, erase_by_key )
 {
-    FS s{ 1, 2, 3, 4, 5 };
-    EXPECT_EQ( s.erase( 3 ), 1 );
-    EXPECT_EQ( s.erase( 99 ), 0 );
-    EXPECT_EQ( s.size(), 4 );
+    typename TypeParam::set_type s{ 1, 2, 3, 4, 5 };
+    EXPECT_EQ( s.erase( 3 ), 1u );
+    EXPECT_EQ( s.erase( 99 ), 0u );
+    EXPECT_EQ( s.size(), 4u );
     EXPECT_FALSE( s.contains( 3 ) );
 }
 
-TEST( flat_set, erase_by_iterator )
+TYPED_TEST( flat_set_typed, erase_by_iterator )
 {
-    FS s{ 10, 20, 30 };
+    typename TypeParam::set_type s{ 10, 20, 30 };
     auto it{ s.find( 20 ) };
     auto next{ s.erase( it ) };
-    EXPECT_EQ( s.size(), 2 );
+    EXPECT_EQ( s.size(), 2u );
     EXPECT_EQ( *next, 30 );
 }
 
-TEST( flat_set, erase_range )
+TYPED_TEST( flat_set_typed, erase_range )
 {
-    FS s{ 1, 2, 3, 4, 5 };
+    typename TypeParam::set_type s{ 1, 2, 3, 4, 5 };
     auto first{ s.find( 2 ) };
     auto last { s.find( 4 ) };
     s.erase( first, last ); // erases 2, 3
-    EXPECT_EQ( s.size(), 3 );
+    EXPECT_EQ( s.size(), 3u );
     EXPECT_TRUE( s.contains( 1 ) );
     EXPECT_TRUE( s.contains( 4 ) );
     EXPECT_TRUE( s.contains( 5 ) );
 }
 
-TEST( flat_set, clear )
+TYPED_TEST( flat_set_typed, clear )
 {
-    FS s{ 1, 2, 3 };
+    typename TypeParam::set_type s{ 1, 2, 3 };
     s.clear();
     EXPECT_TRUE( s.empty() );
 }
 
-TEST( flat_set, swap )
+TYPED_TEST( flat_set_typed, swap )
 {
-    FS a{ 1, 2 };
-    FS b{ 3, 4, 5 };
+    typename TypeParam::set_type a{ 1, 2 };
+    typename TypeParam::set_type b{ 3, 4, 5 };
     a.swap( b );
-    EXPECT_EQ( a.size(), 3 );
-    EXPECT_EQ( b.size(), 2 );
+    EXPECT_EQ( a.size(), 3u );
+    EXPECT_EQ( b.size(), 2u );
     EXPECT_TRUE( a.contains( 3 ) );
     EXPECT_TRUE( b.contains( 1 ) );
 }
 
 //==============================================================================
-// flat_set — Extract / Replace / Observers
+// Extract / Replace
 //==============================================================================
 
-TEST( flat_set, extract_and_replace )
+TYPED_TEST( flat_set_typed, extract_and_replace )
 {
-    FS s{ 1, 2, 3 };
+    typename TypeParam::set_type s{ 1, 2, 3 };
     auto keys{ s.extract() };
-    EXPECT_EQ( keys.size(), 3 );
+    EXPECT_EQ( keys.size(), 3u );
     EXPECT_TRUE( s.empty() );
 
     keys.push_back( 4 );
     s.replace( std::move( keys ) );
-    EXPECT_EQ( s.size(), 4 );
-}
-
-TEST( flat_set, keys_returns_sorted )
-{
-    FS s{ 5, 3, 1, 4, 2 };
-    auto const & k{ s.keys() };
-    EXPECT_EQ( k.size(), 5 );
-    EXPECT_TRUE( std::is_sorted( k.begin(), k.end() ) );
-}
-
-TEST( flat_set, sequence_alias )
-{
-    FS s{ 1, 2, 3 };
-    EXPECT_EQ( &s.keys(), &s.sequence() );
+    EXPECT_EQ( s.size(), 4u );
 }
 
 //==============================================================================
-// flat_set — Merge
+// Merge
 //==============================================================================
 
-TEST( flat_set, merge_non_overlapping )
+TYPED_TEST( flat_set_typed, merge_non_overlapping )
 {
-    FS a{ 1, 3, 5 };
-    FS b{ 2, 4, 6 };
+    typename TypeParam::set_type a{ 1, 3, 5 };
+    typename TypeParam::set_type b{ 2, 4, 6 };
     a.merge( b );
-    EXPECT_EQ( a.size(), 6 );
+    EXPECT_EQ( a.size(), 6u );
     EXPECT_TRUE( b.empty() );
 }
 
-TEST( flat_set, merge_overlapping )
+TYPED_TEST( flat_set_typed, merge_overlapping )
 {
-    FS a{ 1, 2, 3 };
-    FS b{ 2, 3, 4, 5 };
+    typename TypeParam::set_type a{ 1, 2, 3 };
+    typename TypeParam::set_type b{ 2, 3, 4, 5 };
     a.merge( b );
-    EXPECT_EQ( a.size(), 5 ); // 1..5
-    EXPECT_EQ( b.size(), 2 ); // 2, 3 stayed (already in a)
+    EXPECT_EQ( a.size(), 5u ); // 1..5
+    EXPECT_EQ( b.size(), 2u ); // 2, 3 stayed (already in a)
 }
 
-TEST( flat_set, merge_self )
+TYPED_TEST( flat_set_typed, merge_self )
 {
-    FS s{ 1, 2, 3 };
+    typename TypeParam::set_type s{ 1, 2, 3 };
     s.merge( s );
-    EXPECT_EQ( s.size(), 3 ); // no change
+    EXPECT_EQ( s.size(), 3u ); // no change
 }
 
-TEST( flat_set, merge_rvalue )
+TYPED_TEST( flat_set_typed, merge_rvalue )
 {
-    FS a{ 1, 3 };
-    FS b{ 2, 4 };
+    typename TypeParam::set_type a{ 1, 3 };
+    typename TypeParam::set_type b{ 2, 4 };
     a.merge( std::move( b ) );
-    EXPECT_EQ( a.size(), 4 );
+    EXPECT_EQ( a.size(), 4u );
 }
 
 //==============================================================================
-// flat_set — Comparison & erase_if
+// Comparison / erase_if
 //==============================================================================
 
-TEST( flat_set, comparison )
+TYPED_TEST( flat_set_typed, comparison )
 {
-    FS a{ 1, 2, 3 };
-    FS b{ 1, 2, 3 };
-    FS c{ 1, 2, 4 };
+    typename TypeParam::set_type a{ 1, 2, 3 };
+    typename TypeParam::set_type b{ 1, 2, 3 };
+    typename TypeParam::set_type c{ 1, 2, 4 };
     EXPECT_EQ( a, b );
     EXPECT_NE( a, c );
     EXPECT_LT( a, c );
 }
 
-TEST( flat_set, erase_if_basic )
+TYPED_TEST( flat_set_typed, erase_if_basic )
 {
-    FS s{ 1, 2, 3, 4, 5, 6 };
+    typename TypeParam::set_type s{ 1, 2, 3, 4, 5, 6 };
     auto erased{ erase_if( s, []( int x ) { return x % 2 == 0; } ) };
-    EXPECT_EQ( erased, 3 );
-    EXPECT_EQ( s.size(), 3 ); // 1, 3, 5
+    EXPECT_EQ( erased, 3u );
+    EXPECT_EQ( s.size(), 3u ); // 1, 3, 5
     EXPECT_FALSE( s.contains( 2 ) );
 }
 
 //==============================================================================
-// flat_set — Reserve / Capacity / Span conversion
+// Edge cases
 //==============================================================================
 
-TEST( flat_set, reserve_and_shrink )
+TYPED_TEST( flat_set_typed, empty_operations )
 {
-    FS s;
-    s.reserve( 100 );
-    EXPECT_GE( s.capacity(), 100 );
-    s.insert( { 1, 2, 3 } );
-    s.shrink_to_fit();
-    EXPECT_EQ( s.capacity(), 3 );
-}
-
-TEST( flat_set, span_conversion )
-{
-    FS s{ 10, 20, 30 };
-    std::span<int const> sp{ s };
-    EXPECT_EQ( sp.size(), 3 );
-    EXPECT_EQ( sp[ 0 ], 10 );
-    EXPECT_EQ( sp[ 2 ], 30 );
+    typename TypeParam::set_type s;
+    EXPECT_EQ( s.find( 1 ), s.end() );
+    EXPECT_FALSE( s.contains( 1 ) );
+    EXPECT_EQ( s.count( 1 ), 0u );
+    EXPECT_EQ( s.lower_bound( 1 ), s.end() );
+    EXPECT_EQ( s.erase( 1 ), 0u );
 }
 
 //==============================================================================
-// flat_set — Iterator
+// Iterator
 //==============================================================================
 
-TEST( flat_set, iterator_random_access )
+TYPED_TEST( flat_set_typed, iterator_random_access )
 {
-    FS s{ 10, 20, 30, 40 };
+    typename TypeParam::set_type s{ 10, 20, 30, 40 };
     auto it{ s.begin() };
     EXPECT_EQ( *it, 10 );
     EXPECT_EQ( it[ 2 ], 30 );
@@ -397,9 +385,9 @@ TEST( flat_set, iterator_random_access )
     EXPECT_EQ( s.end() - s.begin(), 4 );
 }
 
-TEST( flat_set, reverse_iterator )
+TYPED_TEST( flat_set_typed, reverse_iterator )
 {
-    FS s{ 1, 2, 3 };
+    typename TypeParam::set_type s{ 1, 2, 3 };
     std::vector<int> rev;
     for ( auto it{ s.rbegin() }; it != s.rend(); ++it )
         rev.push_back( *it );
@@ -407,63 +395,96 @@ TEST( flat_set, reverse_iterator )
 }
 
 //==============================================================================
-// flat_set — IL assignment
+// Misc
 //==============================================================================
 
-TEST( flat_set, initializer_list_assignment )
+TYPED_TEST( flat_set_typed, initializer_list_assignment )
 {
-    FS s{ 1, 2, 3 };
+    typename TypeParam::set_type s{ 1, 2, 3 };
     s = { 10, 20 };
-    EXPECT_EQ( s.size(), 2 );
+    EXPECT_EQ( s.size(), 2u );
     EXPECT_TRUE( s.contains( 10 ) );
     EXPECT_FALSE( s.contains( 1 ) );
 }
 
-//==============================================================================
-// flat_set — Deduction guides
-//==============================================================================
-
-TEST( flat_set, deduction_guide_initializer_list )
+TYPED_TEST( flat_set_typed, insert_range_basic )
 {
-    psi::vm::flat_set s{ 3, 1, 4, 1, 5 };
-    static_assert( std::is_same_v<typename decltype( s )::key_type, int> );
-    EXPECT_EQ( s.size(), 4 );
+    typename TypeParam::set_type s{ 1, 3 };
+    std::vector<int> rg{ 2, 4, 5 };
+    s.insert_range( rg );
+    EXPECT_EQ( s.size(), 5u );
 }
 
-TEST( flat_set, deduction_guide_sorted_unique_initializer_list )
+TYPED_TEST( flat_set_typed, insert_range_sorted )
 {
-    psi::vm::flat_set s( psi::vm::sorted_unique, { 1, 2, 3 } );
-    EXPECT_EQ( s.size(), 3 );
+    typename TypeParam::set_type s{ 1, 5 };
+    std::vector<int> rg{ 2, 3, 4 };
+    s.insert_range( sorted_unique, rg );
+    EXPECT_EQ( s.size(), 5u );
 }
 
-TEST( flat_set, deduction_guide_container )
+TYPED_TEST( flat_set_typed, keys_returns_sorted )
 {
-    std::vector<int> v{ 3, 1, 2 };
-    psi::vm::flat_set s( std::move( v ) );
-    static_assert( std::is_same_v<typename decltype( s )::key_type, int> );
-    EXPECT_EQ( s.size(), 3 );
-}
-
-TEST( flat_set, deduction_guide_iterator_range )
-{
-    std::vector<int> src{ 5, 3, 1, 3 };
-    psi::vm::flat_set s( src.begin(), src.end() );
-    static_assert( std::is_same_v<typename decltype( s )::key_type, int> );
-    EXPECT_EQ( s.size(), 3 );
+    typename TypeParam::set_type s{ 5, 3, 1, 4, 2 };
+    auto const & k{ s.keys() };
+    EXPECT_EQ( k.size(), 5u );
+    EXPECT_TRUE( std::is_sorted( k.begin(), k.end() ) );
 }
 
 //==============================================================================
-// flat_set — tr_vector backend
+// Standalone type aliases
 //==============================================================================
 
-TEST( flat_set, tr_vector_basic )
+using FS  = flat_set<int>;
+using FSS = flat_set<std::string>;
+
+// tr_vector-backed set with uint32_t size_type
+using tr_vec_set = flat_set<int, std::less<int>, tr_vector<int, std::uint32_t>>;
+
+// Transparent comparator set
+struct TransComp {
+    using is_transparent = void;
+    bool operator()( int a, int b )                const noexcept { return a < b; }
+    bool operator()( int a, long b )               const noexcept { return a < b; }
+    bool operator()( long a, int b )               const noexcept { return a < b; }
+    bool operator()( std::string_view a, std::string_view b ) const noexcept { return a < b; }
+};
+using TransSet = flat_set<int, TransComp>;
+
+// Multiset alias
+using FMS = flat_multiset<int>;
+
+//==============================================================================
+// Container-specific tests (vector only: .data(), .reserve(), .capacity(), span)
+//==============================================================================
+
+TEST( flat_set, reserve_and_shrink )
 {
-    tr_vec_set s;
-    s.emplace( 10 );
-    s.emplace( 5 );
-    s.emplace( 15 );
-    EXPECT_EQ( s.size(), 3 );
-    EXPECT_TRUE( s.contains( 5 ) );
+    FS s;
+    s.reserve( 100 );
+    EXPECT_GE( s.capacity(), 100u );
+    s.insert( { 1, 2, 3 } );
+    s.shrink_to_fit();
+    EXPECT_EQ( s.capacity(), 3u );
+}
+
+TEST( flat_set, span_conversion )
+{
+    FS s{ 10, 20, 30 };
+    std::span<int const> sp{ s };
+    EXPECT_EQ( sp.size(), 3u );
+    EXPECT_EQ( sp[ 0 ], 10 );
+    EXPECT_EQ( sp[ 2 ], 30 );
+}
+
+TEST( flat_set, sequence_alias )
+{
+    FS s{ 1, 2, 3 };
+    EXPECT_EQ( &s.keys(), &s.sequence() );
+}
+
+TEST( flat_set, tr_vector_size_type )
+{
     static_assert( std::is_same_v<tr_vec_set::size_type, std::uint32_t> );
 }
 
@@ -471,7 +492,7 @@ TEST( flat_set, tr_vector_reserve_capacity )
 {
     tr_vec_set s;
     s.reserve( 50 );
-    EXPECT_GE( s.capacity(), 50 );
+    EXPECT_GE( s.capacity(), 50u );
     s.insert( { 1, 2, 3 } );
     auto const capBefore{ s.capacity() };
     s.shrink_to_fit();
@@ -480,156 +501,60 @@ TEST( flat_set, tr_vector_reserve_capacity )
 }
 
 //==============================================================================
-// flat_set — Transparent erase
+// Transparent comparator
 //==============================================================================
+
+TEST( flat_set, transparent_comparison )
+{
+    TransSet s{ 1, 2, 3 };
+    EXPECT_NE( s.find( 2L ), s.end() );   // long -> int transparent
+    EXPECT_TRUE( s.contains( 3L ) );
+    EXPECT_EQ( s.count( 1L ), 1u );
+}
 
 TEST( flat_set, transparent_erase )
 {
     TransSet s{ 1, 2, 3, 4 };
-    EXPECT_EQ( s.erase( 2L ), 1 );
-    EXPECT_EQ( s.size(), 3 );
+    EXPECT_EQ( s.erase( 2L ), 1u );
+    EXPECT_EQ( s.size(), 3u );
     EXPECT_FALSE( s.contains( 2 ) );
 }
 
 //==============================================================================
-// flat_set — Empty operations
+// CTAD (deduction guides)
 //==============================================================================
 
-TEST( flat_set, empty_operations )
+TEST( flat_set, deduction_guide_initializer_list )
 {
-    FS s;
-    EXPECT_EQ( s.find( 1 ), s.end() );
-    EXPECT_FALSE( s.contains( 1 ) );
-    EXPECT_EQ( s.count( 1 ), 0 );
-    EXPECT_EQ( s.lower_bound( 1 ), s.end() );
-    EXPECT_EQ( s.erase( 1 ), 0 );
+    flat_set s{ 3, 1, 4, 1, 5 };
+    static_assert( std::is_same_v<typename decltype( s )::key_type, int> );
+    EXPECT_EQ( s.size(), 4u );
 }
 
-//==============================================================================
-// flat_multiset — Basic operations
-//==============================================================================
-
-TEST( flat_multiset, allows_duplicates )
+TEST( flat_set, deduction_guide_sorted_unique_initializer_list )
 {
-    FMS s{ 3, 1, 4, 1, 5, 1 };
-    EXPECT_EQ( s.size(), 6 );
-    EXPECT_EQ( s.count( 1 ), 3 );
+    flat_set s( sorted_unique, { 1, 2, 3 } );
+    EXPECT_EQ( s.size(), 3u );
 }
 
-TEST( flat_multiset, insert_returns_iterator )
+TEST( flat_set, deduction_guide_container )
 {
-    FMS s;
-    auto it{ s.insert( 10 ) };
-    EXPECT_EQ( *it, 10 );
-    auto it2{ s.insert( 10 ) };
-    EXPECT_EQ( *it2, 10 );
-    EXPECT_EQ( s.size(), 2 );
+    std::vector<int> v{ 3, 1, 2 };
+    flat_set s( std::move( v ) );
+    static_assert( std::is_same_v<typename decltype( s )::key_type, int> );
+    EXPECT_EQ( s.size(), 3u );
 }
 
-TEST( flat_multiset, emplace )
+TEST( flat_set, deduction_guide_iterator_range )
 {
-    FMS s;
-    auto it{ s.emplace( 42 ) };
-    EXPECT_EQ( *it, 42 );
-    auto it2{ s.emplace( 42 ) };
-    EXPECT_EQ( *it2, 42 );
-    EXPECT_EQ( s.size(), 2 );
-}
-
-TEST( flat_multiset, erase_all_matching )
-{
-    FMS s{ 1, 2, 2, 2, 3 };
-    EXPECT_EQ( s.erase( 2 ), 3 );
-    EXPECT_EQ( s.size(), 2 );
-    EXPECT_EQ( s.count( 2 ), 0 );
-}
-
-TEST( flat_multiset, equal_range )
-{
-    FMS s{ 1, 2, 2, 2, 3, 4 };
-    auto [lo, hi]{ s.equal_range( 2 ) };
-    EXPECT_EQ( hi - lo, 3 );
-    for ( auto it{ lo }; it != hi; ++it )
-        EXPECT_EQ( *it, 2 );
-}
-
-TEST( flat_multiset, sorted_equivalent_construction )
-{
-    std::vector<int> v{ 1, 2, 2, 3, 3, 3 };
-    FMS s( psi::vm::sorted_equivalent, std::move( v ) );
-    EXPECT_EQ( s.size(), 6 );
-    EXPECT_EQ( s.count( 3 ), 3 );
-}
-
-TEST( flat_multiset, merge_transfers_all )
-{
-    FMS a{ 1, 2 };
-    FMS b{ 2, 3 };
-    a.merge( b );
-    EXPECT_EQ( a.size(), 4 ); // 1, 2, 2, 3 — no dedup
-    EXPECT_EQ( a.count( 2 ), 2 );
-    EXPECT_TRUE( b.empty() );
-}
-
-TEST( flat_multiset, bulk_insert_keeps_duplicates )
-{
-    FMS s{ 1, 2 };
-    std::vector<int> more{ 2, 3, 3 };
-    s.insert( more.begin(), more.end() );
-    EXPECT_EQ( s.size(), 5 ); // 1, 2, 2, 3, 3
-}
-
-TEST( flat_multiset, comparison )
-{
-    FMS a{ 1, 2, 2 };
-    FMS b{ 1, 2, 2 };
-    FMS c{ 1, 2, 3 };
-    EXPECT_EQ( a, b );
-    EXPECT_NE( a, c );
-    EXPECT_LT( a, c );
-}
-
-TEST( flat_multiset, erase_if )
-{
-    FMS s{ 1, 2, 2, 3, 3, 3 };
-    auto erased{ erase_if( s, []( int x ) { return x == 2; } ) };
-    EXPECT_EQ( erased, 2 );
-    EXPECT_EQ( s.size(), 4 );
+    std::vector<int> src{ 5, 3, 1, 3 };
+    flat_set s( src.begin(), src.end() );
+    static_assert( std::is_same_v<typename decltype( s )::key_type, int> );
+    EXPECT_EQ( s.size(), 3u );
 }
 
 //==============================================================================
-// flat_multiset — Deduction guides
-//==============================================================================
-
-TEST( flat_multiset, deduction_guide_sorted_equivalent )
-{
-    psi::vm::flat_multiset s( psi::vm::sorted_equivalent, std::vector<int>{ 1, 2, 2, 3 } );
-    EXPECT_EQ( s.size(), 4 );
-    EXPECT_EQ( s.count( 2 ), 2 );
-}
-
-//==============================================================================
-// flat_set — insert_range
-//==============================================================================
-
-TEST( flat_set, insert_range_basic )
-{
-    FS s{ 1, 3 };
-    std::vector<int> rg{ 2, 4, 5 };
-    s.insert_range( rg );
-    EXPECT_EQ( s.size(), 5 );
-}
-
-TEST( flat_set, insert_range_sorted )
-{
-    FS s{ 1, 5 };
-    std::vector<int> rg{ 2, 3, 4 };
-    s.insert_range( psi::vm::sorted_unique, rg );
-    EXPECT_EQ( s.size(), 5 );
-}
-
-//==============================================================================
-// flat_set — key_comp_mutable
+// key_comp_mutable
 //==============================================================================
 
 TEST( flat_set, key_comp_mutable_accessible )
@@ -641,14 +566,14 @@ TEST( flat_set, key_comp_mutable_accessible )
 }
 
 //==============================================================================
-// flat_set — Forwarding correctness
+// Forwarding correctness
 //==============================================================================
 
 TEST( flat_set, forwarding_lvalue_copies )
 {
     std::vector<std::string> src{ "hello", "world" };
-    psi::vm::flat_set<std::string> s( src.begin(), src.end() );
-    EXPECT_EQ( s.size(), 2 );
+    flat_set<std::string> s( src.begin(), src.end() );
+    EXPECT_EQ( s.size(), 2u );
     // Source should still have values (copied, not moved)
     EXPECT_FALSE( src[ 0 ].empty() );
     EXPECT_FALSE( src[ 1 ].empty() );
@@ -657,8 +582,8 @@ TEST( flat_set, forwarding_lvalue_copies )
 TEST( flat_set, forwarding_move_iterator_moves )
 {
     std::vector<std::string> src{ "alpha", "beta", "gamma" };
-    psi::vm::flat_set<std::string> s( std::make_move_iterator( src.begin() ), std::make_move_iterator( src.end() ) );
-    EXPECT_EQ( s.size(), 3 );
+    flat_set<std::string> s( std::make_move_iterator( src.begin() ), std::make_move_iterator( src.end() ) );
+    EXPECT_EQ( s.size(), 3u );
     // Source strings should be moved-from
     for ( auto const & str : src )
         EXPECT_TRUE( str.empty() );
@@ -671,15 +596,15 @@ TEST( flat_set, forwarding_move_iterator_moves )
 TEST( flat_set, pass_in_reg_trivial_by_value )
 {
     // Trivial small types should be stored by value (not by reference)
-    using PIR_int = psi::vm::pass_in_reg<int>;
+    using PIR_int = pass_in_reg<int>;
     static_assert( PIR_int::pass_by_val );
     static_assert( std::is_same_v<PIR_int::stored_type, int> );
 
-    using PIR_u32 = psi::vm::pass_in_reg<std::uint32_t>;
+    using PIR_u32 = pass_in_reg<std::uint32_t>;
     static_assert( PIR_u32::pass_by_val );
     static_assert( std::is_same_v<PIR_u32::stored_type, std::uint32_t> );
 
-    using PIR_ptr = psi::vm::pass_in_reg<void const *>;
+    using PIR_ptr = pass_in_reg<void const *>;
     static_assert( PIR_ptr::pass_by_val );
     static_assert( std::is_same_v<PIR_ptr::stored_type, void const *> );
 }
@@ -687,7 +612,7 @@ TEST( flat_set, pass_in_reg_trivial_by_value )
 TEST( flat_set, pass_in_reg_string_becomes_string_view )
 {
     // std::string is non-trivial — pass_in_reg should convert to string_view
-    using PIR_str = psi::vm::pass_in_reg<std::string>;
+    using PIR_str = pass_in_reg<std::string>;
     static_assert( !PIR_str::pass_by_val );
     static_assert( std::is_same_v<PIR_str::stored_type, std::string_view> );
 }
@@ -697,7 +622,7 @@ TEST( flat_set, pass_in_reg_preserves_heterogeneous_type )
     // When used with a different type (e.g. char const * for a string set),
     // CTAD should produce pass_in_reg<char const *> with by-value storage
     char const * cstr{ "hello" };
-    auto pir{ psi::vm::pass_in_reg{ cstr } };
+    auto pir{ pass_in_reg{ cstr } };
     static_assert( std::is_same_v<decltype( pir )::value_type, char const * > );
     static_assert( std::is_same_v<decltype( pir )::stored_type, char const * > );
     static_assert( decltype( pir )::pass_by_val );
@@ -710,30 +635,30 @@ TEST( flat_set, pass_in_reg_preserves_heterogeneous_type )
 TEST( flat_set, lookup_type_concept_same_type_always_accepted )
 {
     // key_type itself is always accepted regardless of transparency
-    static_assert(  psi::vm::LookupType<int, true,  int> );
-    static_assert(  psi::vm::LookupType<int, false, int> );
-    static_assert(  psi::vm::LookupType<std::string, true,  std::string> );
-    static_assert(  psi::vm::LookupType<std::string, false, std::string> );
+    static_assert(  LookupType<int, true,  int> );
+    static_assert(  LookupType<int, false, int> );
+    static_assert(  LookupType<std::string, true,  std::string> );
+    static_assert(  LookupType<std::string, false, std::string> );
 }
 
 TEST( flat_set, lookup_type_concept_transparent_accepts_any )
 {
     // With transparent comparator, any type is accepted
-    static_assert(  psi::vm::LookupType<long,         true, int> );
-    static_assert(  psi::vm::LookupType<char const *, true, std::string> );
-    static_assert(  psi::vm::LookupType<std::string_view, true, std::string> );
+    static_assert(  LookupType<long,         true, int> );
+    static_assert(  LookupType<char const *, true, std::string> );
+    static_assert(  LookupType<std::string_view, true, std::string> );
 }
 
 TEST( flat_set, lookup_type_concept_non_transparent_requires_convertible )
 {
     // Without transparency, type must be convertible to key_type
-    static_assert(  psi::vm::LookupType<char const *, false, std::string> ); // char const * → string
-    static_assert(  psi::vm::LookupType<long,         false, int> );         // long → int
+    static_assert(  LookupType<char const *, false, std::string> ); // char const * -> string
+    static_assert(  LookupType<long,         false, int> );         // long -> int
 
     // A type not convertible to key_type should be rejected
     struct Unconvertible {};
-    static_assert( !psi::vm::LookupType<Unconvertible, false, int> );
-    static_assert( !psi::vm::LookupType<Unconvertible, false, std::string> );
+    static_assert( !LookupType<Unconvertible, false, int> );
+    static_assert( !LookupType<Unconvertible, false, std::string> );
 }
 
 //==============================================================================
@@ -766,7 +691,7 @@ namespace
 TEST( flat_set, transparent_lookup_zero_string_constructions )
 {
     // Build a transparent set of CountingString
-    psi::vm::flat_set<CountingString, CountingStringLess> s;
+    flat_set<CountingString, CountingStringLess> s;
     s.insert( CountingString{ "alpha" } );
     s.insert( CountingString{ "beta"  } );
     s.insert( CountingString{ "gamma" } );
@@ -804,7 +729,7 @@ TEST( flat_set, transparent_lookup_zero_string_constructions )
 
 TEST( flat_set, exact_key_type_lookup_zero_conversions )
 {
-    psi::vm::flat_set<CountingString, CountingStringLess> s;
+    flat_set<CountingString, CountingStringLess> s;
     s.insert( CountingString{ "alpha" } );
     s.insert( CountingString{ "beta"  } );
     s.insert( CountingString{ "gamma" } );
@@ -823,7 +748,7 @@ TEST( flat_set, exact_key_type_lookup_zero_conversions )
 TEST( flat_set, transparent_string_set_lookup_with_string_view )
 {
     // Standard transparent string set with std::less<>
-    psi::vm::flat_set<std::string, std::less<>> s{ "alpha", "beta", "gamma", "delta" };
+    flat_set<std::string, std::less<>> s{ "alpha", "beta", "gamma", "delta" };
 
     std::string_view sv{ "beta" };
     EXPECT_TRUE( s.contains( sv ) );
@@ -838,7 +763,7 @@ TEST( flat_set, transparent_string_set_lookup_with_string_view )
 
 TEST( flat_set, transparent_int_set_lookup_with_long )
 {
-    psi::vm::flat_set<int, std::less<>> s{ 10, 20, 30, 40, 50 };
+    flat_set<int, std::less<>> s{ 10, 20, 30, 40, 50 };
 
     // Lookup with long — heterogeneous, no conversion needed (transparent)
     EXPECT_TRUE( s.contains( 30L ) );
@@ -849,3 +774,110 @@ TEST( flat_set, transparent_int_set_lookup_with_long )
     // Lookup with unsigned
     EXPECT_TRUE( s.contains( 40u ) );
 }
+
+//==============================================================================
+// flat_multiset — Basic operations
+//==============================================================================
+
+TEST( flat_multiset, allows_duplicates )
+{
+    FMS s{ 3, 1, 4, 1, 5, 1 };
+    EXPECT_EQ( s.size(), 6u );
+    EXPECT_EQ( s.count( 1 ), 3u );
+}
+
+TEST( flat_multiset, insert_returns_iterator )
+{
+    FMS s;
+    auto it{ s.insert( 10 ) };
+    EXPECT_EQ( *it, 10 );
+    auto it2{ s.insert( 10 ) };
+    EXPECT_EQ( *it2, 10 );
+    EXPECT_EQ( s.size(), 2u );
+}
+
+TEST( flat_multiset, emplace )
+{
+    FMS s;
+    auto it{ s.emplace( 42 ) };
+    EXPECT_EQ( *it, 42 );
+    auto it2{ s.emplace( 42 ) };
+    EXPECT_EQ( *it2, 42 );
+    EXPECT_EQ( s.size(), 2u );
+}
+
+TEST( flat_multiset, erase_all_matching )
+{
+    FMS s{ 1, 2, 2, 2, 3 };
+    EXPECT_EQ( s.erase( 2 ), 3u );
+    EXPECT_EQ( s.size(), 2u );
+    EXPECT_EQ( s.count( 2 ), 0u );
+}
+
+TEST( flat_multiset, equal_range )
+{
+    FMS s{ 1, 2, 2, 2, 3, 4 };
+    auto [lo, hi]{ s.equal_range( 2 ) };
+    EXPECT_EQ( hi - lo, 3 );
+    for ( auto it{ lo }; it != hi; ++it )
+        EXPECT_EQ( *it, 2 );
+}
+
+TEST( flat_multiset, sorted_equivalent_construction )
+{
+    std::vector<int> v{ 1, 2, 2, 3, 3, 3 };
+    FMS s( sorted_equivalent, std::move( v ) );
+    EXPECT_EQ( s.size(), 6u );
+    EXPECT_EQ( s.count( 3 ), 3u );
+}
+
+TEST( flat_multiset, merge_transfers_all )
+{
+    FMS a{ 1, 2 };
+    FMS b{ 2, 3 };
+    a.merge( b );
+    EXPECT_EQ( a.size(), 4u ); // 1, 2, 2, 3 — no dedup
+    EXPECT_EQ( a.count( 2 ), 2u );
+    EXPECT_TRUE( b.empty() );
+}
+
+TEST( flat_multiset, bulk_insert_keeps_duplicates )
+{
+    FMS s{ 1, 2 };
+    std::vector<int> more{ 2, 3, 3 };
+    s.insert( more.begin(), more.end() );
+    EXPECT_EQ( s.size(), 5u ); // 1, 2, 2, 3, 3
+}
+
+TEST( flat_multiset, comparison )
+{
+    FMS a{ 1, 2, 2 };
+    FMS b{ 1, 2, 2 };
+    FMS c{ 1, 2, 3 };
+    EXPECT_EQ( a, b );
+    EXPECT_NE( a, c );
+    EXPECT_LT( a, c );
+}
+
+TEST( flat_multiset, erase_if )
+{
+    FMS s{ 1, 2, 2, 3, 3, 3 };
+    auto erased{ erase_if( s, []( int x ) { return x == 2; } ) };
+    EXPECT_EQ( erased, 2u );
+    EXPECT_EQ( s.size(), 4u );
+}
+
+//==============================================================================
+// flat_multiset — Deduction guides
+//==============================================================================
+
+TEST( flat_multiset, deduction_guide_sorted_equivalent )
+{
+    flat_multiset s( sorted_equivalent, std::vector<int>{ 1, 2, 2, 3 } );
+    EXPECT_EQ( s.size(), 4u );
+    EXPECT_EQ( s.count( 2 ), 2u );
+}
+
+//------------------------------------------------------------------------------
+} // namespace psi::vm
+//------------------------------------------------------------------------------

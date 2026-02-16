@@ -8,328 +8,890 @@
 
 #include <gtest/gtest.h>
 
+#include <deque>
 #include <string>
+#include <string_view>
 #include <vector>
 //------------------------------------------------------------------------------
 namespace psi::vm {
 //------------------------------------------------------------------------------
 
-//==============================================================================
+////////////////////////////////////////////////////////////////////////////////
+// Typed test infrastructure
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename KC, typename MC>
+struct map_config
+{
+    using key_container    = KC;
+    using mapped_container = MC;
+    using key_type         = typename KC::value_type;
+    using mapped_type      = typename MC::value_type;
+    using map_type         = flat_map<key_type, mapped_type, std::less<key_type>, KC, MC>;
+};
+
+template <typename C>
+class flat_map_typed : public ::testing::Test {};
+
+using map_configs = ::testing::Types<
+    map_config< std::vector<int>,              std::vector<std::string_view> >,
+    map_config< tr_vector<int>,                tr_vector<std::string_view>   >,
+    map_config< std::deque<int>,               std::deque<std::string_view>  >,
+    map_config< tr_vector<int, std::uint32_t>, std::deque<std::string_view>  >,
+    map_config< std::deque<int>,               std::vector<std::string_view> >
+>;
+
+TYPED_TEST_SUITE( flat_map_typed, map_configs );
+
+////////////////////////////////////////////////////////////////////////////////
 // Construction
-//==============================================================================
+////////////////////////////////////////////////////////////////////////////////
 
-TEST( flat_map, default_construction )
+TYPED_TEST( flat_map_typed, default_construction )
 {
-    flat_map<int, std::string> m;
-    EXPECT_TRUE ( m.empty() );
-    EXPECT_EQ   ( m.size(), 0 );
-    EXPECT_EQ   ( m.begin(), m.end() );
+    using map_t = typename TypeParam::map_type;
+    map_t m;
+    EXPECT_TRUE( m.empty() );
+    EXPECT_EQ( m.size(), 0u );
+    EXPECT_EQ( m.begin(), m.end() );
 }
 
-TEST( flat_map, sorted_unique_construction )
+TYPED_TEST( flat_map_typed, initializer_list_construction )
 {
-    std::vector<int>         keys  { 1, 3, 5, 7 };
-    std::vector<std::string> values{ "a", "b", "c", "d" };
-    flat_map<int, std::string> m( sorted_unique, std::move( keys ), std::move( values ) );
-
-    EXPECT_EQ( m.size(), 4 );
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 3, "c" }, { 1, "a" }, { 2, "b" } };
+    EXPECT_EQ( m.size(), 3u );
     EXPECT_EQ( m.at( 1 ), "a" );
-    EXPECT_EQ( m.at( 3 ), "b" );
-    EXPECT_EQ( m.at( 5 ), "c" );
-    EXPECT_EQ( m.at( 7 ), "d" );
+    EXPECT_EQ( m.at( 2 ), "b" );
+    EXPECT_EQ( m.at( 3 ), "c" );
+    // Verify sorted
+    auto const & keys{ m.keys() };
+    EXPECT_TRUE( std::is_sorted( keys.begin(), keys.end() ) );
 }
 
-TEST( flat_map, range_construction )
+TYPED_TEST( flat_map_typed, range_construction )
 {
-    std::vector<std::pair<int, std::string>> pairs{
+    using map_t = typename TypeParam::map_type;
+    using KT    = typename TypeParam::key_type;
+    using MT    = typename TypeParam::mapped_type;
+    std::vector<std::pair<KT, MT>> pairs{
         { 5, "e" }, { 1, "a" }, { 3, "c" }, { 1, "dup" }
     };
-    flat_map<int, std::string> m( pairs.begin(), pairs.end() );
-
-    EXPECT_EQ( m.size(), 3 );
+    map_t m( pairs.begin(), pairs.end() );
+    EXPECT_EQ( m.size(), 3u );
     EXPECT_EQ( m.at( 1 ), "a" ); // first wins
     EXPECT_EQ( m.at( 3 ), "c" );
     EXPECT_EQ( m.at( 5 ), "e" );
 }
 
-TEST( flat_map, initializer_list_construction )
+TYPED_TEST( flat_map_typed, copy_construction )
 {
-    flat_map<int, int> m{ { 3, 30 }, { 1, 10 }, { 2, 20 } };
-    EXPECT_EQ( m.size(), 3 );
-    EXPECT_EQ( m.at( 1 ), 10 );
-    EXPECT_EQ( m.at( 2 ), 20 );
-    EXPECT_EQ( m.at( 3 ), 30 );
-}
-
-TEST( flat_map, copy_construction )
-{
-    flat_map<int, int> src{ { 1, 10 }, { 2, 20 } };
-    flat_map<int, int> dst{ src };
-    EXPECT_EQ( dst.size(), 2 );
-    EXPECT_EQ( dst.at( 1 ), 10 );
-    EXPECT_EQ( dst.at( 2 ), 20 );
+    using map_t = typename TypeParam::map_type;
+    map_t src{ { 1, "a" }, { 2, "b" } };
+    map_t dst{ src };
+    EXPECT_EQ( dst.size(), 2u );
+    EXPECT_EQ( dst.at( 1 ), "a" );
+    EXPECT_EQ( dst.at( 2 ), "b" );
     // Verify independence
-    src[ 1 ] = 99;
-    EXPECT_EQ( dst.at( 1 ), 10 );
+    src[ 1 ] = "Z";
+    EXPECT_EQ( dst.at( 1 ), "a" );
 }
 
-TEST( flat_map, move_construction )
+TYPED_TEST( flat_map_typed, move_construction )
 {
-    flat_map<int, int> src{ { 1, 10 }, { 2, 20 } };
-    flat_map<int, int> dst{ std::move( src ) };
-    EXPECT_EQ( dst.size(), 2 );
-    EXPECT_EQ( dst.at( 1 ), 10 );
+    using map_t = typename TypeParam::map_type;
+    map_t src{ { 1, "a" }, { 2, "b" } };
+    map_t dst{ std::move( src ) };
+    EXPECT_EQ( dst.size(), 2u );
+    EXPECT_EQ( dst.at( 1 ), "a" );
 }
 
-//==============================================================================
+TYPED_TEST( flat_map_typed, sorted_unique_container_construction )
+{
+    using map_t = typename TypeParam::map_type;
+    using KC    = typename TypeParam::key_container;
+    using MC    = typename TypeParam::mapped_container;
+    using MT    = typename TypeParam::mapped_type;
+    KC keys;
+    keys.push_back( 1 ); keys.push_back( 3 ); keys.push_back( 5 );
+    MC vals;
+    vals.push_back( MT{ "a" } ); vals.push_back( MT{ "c" } ); vals.push_back( MT{ "e" } );
+    map_t m( sorted_unique, std::move( keys ), std::move( vals ) );
+    EXPECT_EQ( m.size(), 3u );
+    EXPECT_EQ( m.at( 1 ), "a" );
+    EXPECT_EQ( m.at( 3 ), "c" );
+    EXPECT_EQ( m.at( 5 ), "e" );
+}
+
+TYPED_TEST( flat_map_typed, unsorted_container_construction )
+{
+    using map_t = typename TypeParam::map_type;
+    using KC    = typename TypeParam::key_container;
+    using MC    = typename TypeParam::mapped_container;
+    using MT    = typename TypeParam::mapped_type;
+    KC keys;
+    keys.push_back( 3 ); keys.push_back( 1 ); keys.push_back( 2 );
+    MC vals;
+    vals.push_back( MT{ "c" } ); vals.push_back( MT{ "a" } ); vals.push_back( MT{ "b" } );
+    map_t m( std::move( keys ), std::move( vals ) );
+    EXPECT_EQ( m.size(), 3u );
+    EXPECT_EQ( m.at( 1 ), "a" );
+    EXPECT_EQ( m.at( 2 ), "b" );
+    EXPECT_EQ( m.at( 3 ), "c" );
+}
+
+TYPED_TEST( flat_map_typed, unsorted_container_with_duplicates )
+{
+    using map_t = typename TypeParam::map_type;
+    using KC    = typename TypeParam::key_container;
+    using MC    = typename TypeParam::mapped_container;
+    using MT    = typename TypeParam::mapped_type;
+    KC keys;
+    keys.push_back( 3 ); keys.push_back( 1 ); keys.push_back( 3 ); keys.push_back( 2 );
+    MC vals;
+    vals.push_back( MT{ "c" } ); vals.push_back( MT{ "a" } ); vals.push_back( MT{ "X" } ); vals.push_back( MT{ "b" } );
+    map_t m( std::move( keys ), std::move( vals ) );
+    EXPECT_EQ( m.size(), 3u );
+    EXPECT_EQ( m.at( 3 ), "c" ); // first wins after sort
+}
+
+TYPED_TEST( flat_map_typed, from_range_construction )
+{
+    using map_t = typename TypeParam::map_type;
+    using KT    = typename TypeParam::key_type;
+    using MT    = typename TypeParam::mapped_type;
+    std::vector<std::pair<KT, MT>> src{ { 3, "c" }, { 1, "a" }, { 2, "b" } };
+    map_t m( std::from_range, src );
+    EXPECT_EQ( m.size(), 3u );
+    EXPECT_TRUE( std::is_sorted( m.keys().begin(), m.keys().end() ) );
+    EXPECT_EQ( m.at( 1 ), "a" );
+    EXPECT_EQ( m.at( 2 ), "b" );
+    EXPECT_EQ( m.at( 3 ), "c" );
+}
+
+TYPED_TEST( flat_map_typed, from_range_with_duplicates )
+{
+    using map_t = typename TypeParam::map_type;
+    using KT    = typename TypeParam::key_type;
+    using MT    = typename TypeParam::mapped_type;
+    std::vector<std::pair<KT, MT>> src{ { 1, "a" }, { 1, "X" }, { 2, "b" } };
+    map_t m( std::from_range, src );
+    EXPECT_EQ( m.size(), 2u );
+    EXPECT_EQ( m.at( 1 ), "a" ); // first occurrence wins
+}
+
+////////////////////////////////////////////////////////////////////////////////
 // Element access
-//==============================================================================
+////////////////////////////////////////////////////////////////////////////////
 
-TEST( flat_map, operator_bracket_insert_and_access )
+TYPED_TEST( flat_map_typed, operator_bracket )
 {
-    flat_map<int, int> m;
-    m[ 3 ] = 30;
-    m[ 1 ] = 10;
-    m[ 2 ] = 20;
-    EXPECT_EQ( m.size(), 3 );
-    EXPECT_EQ( m[ 1 ], 10 );
-    EXPECT_EQ( m[ 2 ], 20 );
-    EXPECT_EQ( m[ 3 ], 30 );
-
-    // operator[] on existing key doesn't insert
-    m[ 1 ] = 99;
-    EXPECT_EQ( m.size(), 3 );
-    EXPECT_EQ( m[ 1 ], 99 );
+    using map_t = typename TypeParam::map_type;
+    map_t m;
+    m[ 3 ] = "c";
+    m[ 1 ] = "a";
+    m[ 2 ] = "b";
+    EXPECT_EQ( m.size(), 3u );
+    EXPECT_EQ( m[ 1 ], "a" );
+    EXPECT_EQ( m[ 2 ], "b" );
+    EXPECT_EQ( m[ 3 ], "c" );
+    // Overwrite existing — size unchanged
+    m[ 1 ] = "A";
+    EXPECT_EQ( m.size(), 3u );
+    EXPECT_EQ( m[ 1 ], "A" );
 }
 
-TEST( flat_map, at_throws_on_missing )
+TYPED_TEST( flat_map_typed, at_throws_on_missing )
 {
-    flat_map<int, int> m{ { 1, 10 } };
-    EXPECT_EQ( m.at( 1 ), 10 );
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" } };
+    EXPECT_EQ( m.at( 1 ), "a" );
     EXPECT_THROW( m.at( 2 ), std::out_of_range );
 }
 
-TEST( flat_map, const_at )
+TYPED_TEST( flat_map_typed, const_at )
 {
-    flat_map<int, int> const m{ { 1, 10 }, { 2, 20 } };
-    EXPECT_EQ( m.at( 1 ), 10 );
+    using map_t = typename TypeParam::map_type;
+    map_t const m{ { 1, "a" }, { 2, "b" } };
+    EXPECT_EQ( m.at( 1 ), "a" );
     EXPECT_THROW( m.at( 99 ), std::out_of_range );
 }
 
-//==============================================================================
-// Insertion
-//==============================================================================
-
-TEST( flat_map, try_emplace )
+TYPED_TEST( flat_map_typed, try_emplace )
 {
-    flat_map<int, std::string> m;
-    auto [it1, ok1] = m.try_emplace( 2, "two" );
+    using map_t = typename TypeParam::map_type;
+    map_t m;
+    auto [it1, ok1]{ m.try_emplace( 2, "two" ) };
     EXPECT_TRUE ( ok1 );
     EXPECT_EQ   ( it1->first, 2 );
     EXPECT_EQ   ( it1->second, "two" );
 
-    auto [it2, ok2] = m.try_emplace( 2, "TWO" );
+    auto [it2, ok2]{ m.try_emplace( 2, "TWO" ) };
     EXPECT_FALSE( ok2 );
     EXPECT_EQ   ( it2->second, "two" ); // not overwritten
 }
 
-TEST( flat_map, insert )
+////////////////////////////////////////////////////////////////////////////////
+// Insertion
+////////////////////////////////////////////////////////////////////////////////
+
+TYPED_TEST( flat_map_typed, insert_single )
 {
-    flat_map<int, int> m;
-    auto [it, ok] = m.insert( { 5, 50 } );
+    using map_t = typename TypeParam::map_type;
+    using KT    = typename TypeParam::key_type;
+    using MT    = typename TypeParam::mapped_type;
+    map_t m;
+    auto [it, ok]{ m.insert( std::pair<KT, MT>{ 5, "e" } ) };
     EXPECT_TRUE( ok );
     EXPECT_EQ  ( it->first, 5 );
-    EXPECT_EQ  ( it->second, 50 );
+    EXPECT_EQ  ( it->second, "e" );
 
-    auto [it2, ok2] = m.insert( { 5, 99 } );
+    auto [it2, ok2]{ m.insert( std::pair<KT, MT>{ 5, "X" } ) };
     EXPECT_FALSE( ok2 );
-    EXPECT_EQ   ( it2->second, 50 );
+    EXPECT_EQ   ( it2->second, "e" );
 }
 
-TEST( flat_map, insert_or_assign )
+TYPED_TEST( flat_map_typed, insert_or_assign )
 {
-    flat_map<int, int> m;
-    auto [it1, ok1] = m.insert_or_assign( 1, 10 );
+    using map_t = typename TypeParam::map_type;
+    map_t m;
+    auto [it1, ok1]{ m.insert_or_assign( 1, std::string_view{ "a" } ) };
     EXPECT_TRUE( ok1 );
-    EXPECT_EQ  ( it1->second, 10 );
+    EXPECT_EQ  ( it1->second, "a" );
 
-    auto [it2, ok2] = m.insert_or_assign( 1, 99 );
+    auto [it2, ok2]{ m.insert_or_assign( 1, std::string_view{ "A" } ) };
     EXPECT_FALSE( ok2 );
-    EXPECT_EQ   ( it2->second, 99 ); // overwritten
+    EXPECT_EQ   ( it2->second, "A" ); // overwritten
 }
 
-TEST( flat_map, emplace )
+TYPED_TEST( flat_map_typed, emplace )
 {
-    flat_map<int, std::string> m;
-    auto [it, ok] = m.emplace( 3, "three" );
+    using map_t = typename TypeParam::map_type;
+    map_t m;
+    auto [it, ok]{ m.emplace( 3, "c" ) };
     EXPECT_TRUE( ok );
     EXPECT_EQ  ( it->first, 3 );
 }
 
-TEST( flat_map, emplace_hint_sorted_input )
+TYPED_TEST( flat_map_typed, emplace_hint )
 {
-    flat_map<int, int> m;
-    // Insert in sorted order with end() hint — should be O(1) each
-    for ( int i{ 0 }; i < 100; ++i ) {
-        m.emplace_hint( m.end(), i, i * 10 );
-    }
-    EXPECT_EQ( m.size(), 100 );
-    for ( int i{ 0 }; i < 100; ++i ) {
-        EXPECT_EQ( m.at( i ), i * 10 );
-    }
-}
-
-TEST( flat_map, emplace_hint_wrong_hint )
-{
-    flat_map<int, int> m{ { 1, 10 }, { 5, 50 }, { 9, 90 } };
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 5, "e" }, { 9, "i" } };
     // Wrong hint: insert 3 with hint at begin (should be between 1 and 5)
-    auto it = m.emplace_hint( m.begin(), 3, 30 );
+    auto it{ m.emplace_hint( m.begin(), 3, "c" ) };
     EXPECT_EQ( it->first, 3 );
-    EXPECT_EQ( it->second, 30 );
-    EXPECT_EQ( m.size(), 4 );
-    // Verify sorted order
-    auto const & keys = m.keys();
+    EXPECT_EQ( it->second, "c" );
+    EXPECT_EQ( m.size(), 4u );
+    // Existing key hint
+    auto it2{ m.emplace_hint( m.begin() + 1, 5, "X" ) };
+    EXPECT_EQ( it2->second, "e" ); // not overwritten
+    EXPECT_EQ( m.size(), 4u );
+    // Verify sorted
+    auto const & keys{ m.keys() };
     EXPECT_TRUE( std::is_sorted( keys.begin(), keys.end() ) );
 }
 
-TEST( flat_map, emplace_hint_existing_key )
+TYPED_TEST( flat_map_typed, insert_hint )
 {
-    flat_map<int, int> m{ { 1, 10 }, { 5, 50 } };
-    auto it = m.emplace_hint( m.begin() + 1, 5, 99 );
-    EXPECT_EQ( it->first , 5 );
-    EXPECT_EQ( it->second, 50 ); // not overwritten
-    EXPECT_EQ( m.size(), 2 );
+    using map_t = typename TypeParam::map_type;
+    using KT    = typename TypeParam::key_type;
+    using MT    = typename TypeParam::mapped_type;
+    map_t m{ { 1, "a" }, { 5, "e" } };
+    auto it{ m.insert( m.begin() + 1, std::pair<KT, MT>{ 3, "c" } ) };
+    EXPECT_EQ( it->first, 3 );
+    EXPECT_EQ( it->second, "c" );
+    EXPECT_EQ( m.size(), 3u );
 }
 
-//==============================================================================
-// Lookup
-//==============================================================================
-
-TEST( flat_map, find_hit_and_miss )
+TYPED_TEST( flat_map_typed, insert_or_assign_hinted )
 {
-    flat_map<int, int> m{ { 1, 10 }, { 3, 30 }, { 5, 50 } };
-    auto it = m.find( 3 );
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 3, "c" }, { 5, "e" } };
+    // Hit: update existing
+    auto it{ m.insert_or_assign( m.begin() + 1, 3, std::string_view{ "C" } ) };
+    EXPECT_EQ( it->second, "C" );
+    EXPECT_EQ( m.size(), 3u );
+    // Miss: insert new
+    auto it2{ m.insert_or_assign( m.begin(), 4, std::string_view{ "d" } ) };
+    EXPECT_EQ( it2->second, "d" );
+    EXPECT_EQ( m.size(), 4u );
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Lookup
+////////////////////////////////////////////////////////////////////////////////
+
+TYPED_TEST( flat_map_typed, find_hit_and_miss )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 3, "c" }, { 5, "e" } };
+    auto it{ m.find( 3 ) };
     ASSERT_NE( it, m.end() );
-    EXPECT_EQ( it->second, 30 );
+    EXPECT_EQ( it->second, "c" );
 
     EXPECT_EQ( m.find( 2 ), m.end() );
     EXPECT_EQ( m.find( 0 ), m.end() );
     EXPECT_EQ( m.find( 99 ), m.end() );
 }
 
-TEST( flat_map, lower_upper_bound )
+TYPED_TEST( flat_map_typed, lower_upper_bound )
 {
-    flat_map<int, int> m{ { 1, 10 }, { 3, 30 }, { 5, 50 } };
-    auto lb = m.lower_bound( 3 );
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 3, "c" }, { 5, "e" } };
+    auto lb{ m.lower_bound( 3 ) };
     EXPECT_EQ( lb->first, 3 );
-    auto ub = m.upper_bound( 3 );
+    auto ub{ m.upper_bound( 3 ) };
     EXPECT_EQ( ub->first, 5 );
 
-    auto lb2 = m.lower_bound( 2 );
+    auto lb2{ m.lower_bound( 2 ) };
     EXPECT_EQ( lb2->first, 3 ); // first element >= 2
 }
 
-TEST( flat_map, equal_range )
+TYPED_TEST( flat_map_typed, equal_range )
 {
-    flat_map<int, int> m{ { 1, 10 }, { 3, 30 }, { 5, 50 } };
-    auto [lo, hi] = m.equal_range( 3 );
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 3, "c" }, { 5, "e" } };
+    auto [lo, hi]{ m.equal_range( 3 ) };
     EXPECT_EQ( lo->first, 3 );
     EXPECT_EQ( hi->first, 5 );
     EXPECT_EQ( hi - lo, 1 );
 }
 
-TEST( flat_map, contains_and_count )
+TYPED_TEST( flat_map_typed, contains_and_count )
 {
-    flat_map<int, int> m{ { 1, 10 }, { 3, 30 } };
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 3, "c" } };
     EXPECT_TRUE ( m.contains( 1 ) );
     EXPECT_FALSE( m.contains( 2 ) );
-    EXPECT_EQ   ( m.count( 1 ), 1 );
-    EXPECT_EQ   ( m.count( 2 ), 0 );
+    EXPECT_EQ   ( m.count( 1 ), 1u );
+    EXPECT_EQ   ( m.count( 2 ), 0u );
 }
 
-TEST( flat_map, transparent_comparison )
-{
-    // std::less<> has is_transparent
-    flat_map<int, std::string, std::less<>> m{ { 1, "a" }, { 3, "c" } };
-    // Should compile and work with different key types (e.g. long)
-    EXPECT_TRUE( m.contains( 1L ) );
-    EXPECT_NE  ( m.find( 3L ), m.end() );
-    auto lb = m.lower_bound( 2L );
-    EXPECT_EQ( lb->first, 3 );
-}
-
-//==============================================================================
+////////////////////////////////////////////////////////////////////////////////
 // Erasure
-//==============================================================================
+////////////////////////////////////////////////////////////////////////////////
 
-TEST( flat_map, erase_by_key )
+TYPED_TEST( flat_map_typed, erase_by_key )
 {
-    flat_map<int, int> m{ { 1, 10 }, { 2, 20 }, { 3, 30 } };
-    EXPECT_EQ( m.erase( 2 ), 1 );
-    EXPECT_EQ( m.size(), 2 );
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 2, "b" }, { 3, "c" } };
+    EXPECT_EQ( m.erase( 2 ), 1u );
+    EXPECT_EQ( m.size(), 2u );
     EXPECT_FALSE( m.contains( 2 ) );
 
-    EXPECT_EQ( m.erase( 99 ), 0 );
-    EXPECT_EQ( m.size(), 2 );
+    EXPECT_EQ( m.erase( 99 ), 0u );
+    EXPECT_EQ( m.size(), 2u );
 }
 
-TEST( flat_map, erase_by_iterator )
+TYPED_TEST( flat_map_typed, erase_by_iterator )
 {
-    flat_map<int, int> m{ { 1, 10 }, { 2, 20 }, { 3, 30 } };
-    auto it = m.find( 2 );
-    auto next = m.erase( it );
-    EXPECT_EQ( m.size(), 2 );
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 2, "b" }, { 3, "c" } };
+    auto it{ m.find( 2 ) };
+    auto next{ m.erase( it ) };
+    EXPECT_EQ( m.size(), 2u );
     EXPECT_EQ( next->first, 3 );
 }
 
-TEST( flat_map, erase_range )
+TYPED_TEST( flat_map_typed, erase_range )
 {
-    flat_map<int, int> m{ { 1, 10 }, { 2, 20 }, { 3, 30 }, { 4, 40 } };
-    auto first = m.find( 2 );
-    auto last  = m.find( 4 );
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 2, "b" }, { 3, "c" }, { 4, "d" } };
+    auto first{ m.find( 2 ) };
+    auto last { m.find( 4 ) };
     m.erase( first, last );
-    EXPECT_EQ( m.size(), 2 );
+    EXPECT_EQ( m.size(), 2u );
     EXPECT_TRUE ( m.contains( 1 ) );
     EXPECT_FALSE( m.contains( 2 ) );
     EXPECT_FALSE( m.contains( 3 ) );
     EXPECT_TRUE ( m.contains( 4 ) );
 }
 
-//==============================================================================
-// Extract and Replace
-//==============================================================================
+////////////////////////////////////////////////////////////////////////////////
+// Extract/Replace
+////////////////////////////////////////////////////////////////////////////////
 
-TEST( flat_map, extract_and_replace )
+TYPED_TEST( flat_map_typed, extract_and_replace )
 {
-    flat_map<int, int> m{ { 1, 10 }, { 2, 20 }, { 3, 30 } };
-    auto c = m.extract();
+    using map_t = typename TypeParam::map_type;
+    using MT    = typename TypeParam::mapped_type;
+    map_t m{ { 1, "a" }, { 2, "b" }, { 3, "c" } };
+    auto c{ m.extract() };
     EXPECT_TRUE( m.empty() );
-    EXPECT_EQ( c.keys.size(), 3 );
-    EXPECT_EQ( c.values.size(), 3 );
+    EXPECT_EQ( c.keys.size(), 3u );
+    EXPECT_EQ( c.values.size(), 3u );
 
     // Modify extracted containers
     c.keys.push_back( 4 );
-    c.values.push_back( 40 );
+    c.values.push_back( MT{ "d" } );
 
     m.replace( std::move( c.keys ), std::move( c.values ) );
-    EXPECT_EQ( m.size(), 4 );
-    EXPECT_EQ( m.at( 4 ), 40 );
+    EXPECT_EQ( m.size(), 4u );
+    EXPECT_EQ( m.at( 4 ), "d" );
 }
 
-//==============================================================================
-// Keys and Values accessors
-//==============================================================================
+////////////////////////////////////////////////////////////////////////////////
+// Merge
+////////////////////////////////////////////////////////////////////////////////
+
+TYPED_TEST( flat_map_typed, merge_non_overlapping )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t a{ { 1, "a" }, { 3, "c" } };
+    map_t b{ { 2, "b" }, { 4, "d" } };
+    a.merge( b );
+    EXPECT_EQ( a.size(), 4u );
+    EXPECT_TRUE( b.empty() );
+    EXPECT_EQ( a.at( 2 ), "b" );
+    EXPECT_EQ( a.at( 4 ), "d" );
+}
+
+TYPED_TEST( flat_map_typed, merge_overlapping )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t a{ { 1, "a" }, { 3, "c" } };
+    map_t b{ { 2, "b" }, { 3, "C" } };
+    a.merge( b );
+    EXPECT_EQ( a.size(), 3u );
+    EXPECT_EQ( a.at( 3 ), "c" ); // original kept
+    EXPECT_EQ( b.size(), 1u );   // conflicting element remains
+    EXPECT_EQ( b.at( 3 ), "C" );
+}
+
+TYPED_TEST( flat_map_typed, merge_rvalue )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t target{ { 1, "a" }, { 3, "c" } };
+    map_t source{ { 2, "b" }, { 3, "C" }, { 4, "d" } };
+    target.merge( std::move( source ) );
+    EXPECT_EQ( target.size(), 4u );
+    EXPECT_EQ( target.at( 3 ), "c" ); // existing wins
+    EXPECT_EQ( target.at( 2 ), "b" );
+    EXPECT_EQ( target.at( 4 ), "d" );
+    // source is cleared after rvalue merge
+    EXPECT_TRUE( source.empty() );
+}
+
+TYPED_TEST( flat_map_typed, merge_empty_source )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t target{ { 1, "a" } };
+    map_t source;
+    target.merge( source );
+    EXPECT_EQ( target.size(), 1u );
+}
+
+TYPED_TEST( flat_map_typed, merge_empty_target )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t target;
+    map_t source{ { 1, "a" }, { 2, "b" } };
+    target.merge( source );
+    EXPECT_EQ( target.size(), 2u );
+    EXPECT_TRUE( source.empty() );
+}
+
+TYPED_TEST( flat_map_typed, merge_self )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 2, "b" } };
+    m.merge( m );
+    EXPECT_EQ( m.size(), 2u ); // no change
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Bulk/Range operations
+////////////////////////////////////////////////////////////////////////////////
+
+TYPED_TEST( flat_map_typed, insert_range )
+{
+    using map_t = typename TypeParam::map_type;
+    using KT    = typename TypeParam::key_type;
+    using MT    = typename TypeParam::mapped_type;
+    map_t m{ { 1, "a" }, { 3, "c" }, { 5, "e" } };
+    std::vector<std::pair<KT, MT>> src{ { 2, "b" }, { 4, "d" }, { 6, "f" } };
+    m.insert_range( src );
+    EXPECT_EQ( m.size(), 6u );
+    for ( int i{ 1 }; i <= 6; ++i )
+    {
+        std::string_view expected{ &"abcdef"[ i - 1 ], 1 };
+        EXPECT_EQ( m.at( i ), expected );
+    }
+}
+
+TYPED_TEST( flat_map_typed, insert_range_with_duplicates )
+{
+    using map_t = typename TypeParam::map_type;
+    using KT    = typename TypeParam::key_type;
+    using MT    = typename TypeParam::mapped_type;
+    map_t m{ { 1, "a" }, { 3, "c" }, { 5, "e" } };
+    std::vector<std::pair<KT, MT>> src{ { 3, "X" }, { 5, "Y" }, { 7, "g" } };
+    m.insert_range( src );
+    EXPECT_EQ( m.size(), 4u );
+    // Existing values win
+    EXPECT_EQ( m.at( 3 ), "c" );
+    EXPECT_EQ( m.at( 5 ), "e" );
+    EXPECT_EQ( m.at( 7 ), "g" );
+}
+
+TYPED_TEST( flat_map_typed, insert_range_into_empty )
+{
+    using map_t = typename TypeParam::map_type;
+    using KT    = typename TypeParam::key_type;
+    using MT    = typename TypeParam::mapped_type;
+    map_t m;
+    std::vector<std::pair<KT, MT>> src{ { 5, "e" }, { 1, "a" }, { 3, "c" } };
+    m.insert_range( src );
+    EXPECT_EQ( m.size(), 3u );
+    EXPECT_TRUE( std::is_sorted( m.keys().begin(), m.keys().end() ) );
+    EXPECT_EQ( m.at( 1 ), "a" );
+    EXPECT_EQ( m.at( 3 ), "c" );
+    EXPECT_EQ( m.at( 5 ), "e" );
+}
+
+TYPED_TEST( flat_map_typed, insert_range_sorted_unique )
+{
+    using map_t = typename TypeParam::map_type;
+    using KT    = typename TypeParam::key_type;
+    using MT    = typename TypeParam::mapped_type;
+    map_t m{ { 2, "b" }, { 4, "d" } };
+    std::vector<std::pair<KT, MT>> src{ { 1, "a" }, { 3, "c" }, { 5, "e" } };
+    m.insert_range( psi::vm::sorted_unique, src );
+    EXPECT_EQ( m.size(), 5u );
+    EXPECT_EQ( m.at( 1 ), "a" );
+    EXPECT_EQ( m.at( 3 ), "c" );
+    EXPECT_EQ( m.at( 5 ), "e" );
+}
+
+TYPED_TEST( flat_map_typed, insert_range_empty )
+{
+    using map_t = typename TypeParam::map_type;
+    using KT    = typename TypeParam::key_type;
+    using MT    = typename TypeParam::mapped_type;
+    map_t m{ { 1, "a" } };
+    std::vector<std::pair<KT, MT>> empty;
+    m.insert_range( empty );
+    EXPECT_EQ( m.size(), 1u );
+}
+
+TYPED_TEST( flat_map_typed, bulk_insert_iterator )
+{
+    using map_t = typename TypeParam::map_type;
+    using KT    = typename TypeParam::key_type;
+    using MT    = typename TypeParam::mapped_type;
+    map_t m{ { 1, "a" }, { 5, "e" } };
+    std::vector<std::pair<KT, MT>> src{ { 3, "c" }, { 2, "b" }, { 4, "d" }, { 1, "X" } };
+    m.insert( src.begin(), src.end() );
+    EXPECT_EQ( m.size(), 5u );
+    EXPECT_EQ( m.at( 1 ), "a" ); // existing wins
+    EXPECT_EQ( m.at( 2 ), "b" );
+    EXPECT_EQ( m.at( 3 ), "c" );
+}
+
+TYPED_TEST( flat_map_typed, insert_sorted_unique_iterator )
+{
+    using map_t = typename TypeParam::map_type;
+    using KT    = typename TypeParam::key_type;
+    using MT    = typename TypeParam::mapped_type;
+    map_t m{ { 2, "b" }, { 6, "f" } };
+    std::vector<std::pair<KT, MT>> src{ { 1, "a" }, { 4, "d" }, { 8, "h" } };
+    m.insert( psi::vm::sorted_unique, src.begin(), src.end() );
+    EXPECT_EQ( m.size(), 5u );
+    EXPECT_TRUE( std::is_sorted( m.keys().begin(), m.keys().end() ) );
+}
+
+TYPED_TEST( flat_map_typed, insert_sorted_unique_initializer_list )
+{
+    using map_t = typename TypeParam::map_type;
+    using KT    = typename TypeParam::key_type;
+    using MT    = typename TypeParam::mapped_type;
+    map_t m{ { 2, "b" } };
+    m.insert( psi::vm::sorted_unique, { std::pair<KT, MT>{ 1, "a" }, std::pair<KT, MT>{ 3, "c" } } );
+    EXPECT_EQ( m.size(), 3u );
+    EXPECT_EQ( m.at( 1 ), "a" );
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// erase_if
+////////////////////////////////////////////////////////////////////////////////
+
+TYPED_TEST( flat_map_typed, erase_if_basic )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 2, "b" }, { 3, "c" }, { 4, "d" }, { 5, "e" } };
+    auto const erased{ erase_if( m, []( auto const & kv ) { return kv.first % 2 == 0; } ) };
+    EXPECT_EQ( erased, 2u );
+    EXPECT_EQ( m.size(), 3u );
+    EXPECT_TRUE ( m.contains( 1 ) );
+    EXPECT_FALSE( m.contains( 2 ) );
+    EXPECT_TRUE ( m.contains( 3 ) );
+    EXPECT_FALSE( m.contains( 4 ) );
+    EXPECT_TRUE ( m.contains( 5 ) );
+}
+
+TYPED_TEST( flat_map_typed, erase_if_all )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 2, "b" } };
+    auto const erased{ erase_if( m, []( auto const & ) { return true; } ) };
+    EXPECT_EQ( erased, 2u );
+    EXPECT_TRUE( m.empty() );
+}
+
+TYPED_TEST( flat_map_typed, erase_if_none )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 2, "b" } };
+    auto const erased{ erase_if( m, []( auto const & ) { return false; } ) };
+    EXPECT_EQ( erased, 0u );
+    EXPECT_EQ( m.size(), 2u );
+}
+
+TYPED_TEST( flat_map_typed, erase_if_preserves_order )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 2, "b" }, { 3, "c" }, { 4, "d" }, { 5, "e" } };
+    erase_if( m, []( auto const & kv ) { return kv.second == "c"; } );
+    EXPECT_TRUE( std::is_sorted( m.keys().begin(), m.keys().end() ) );
+    auto const & k{ m.keys() };
+    ASSERT_EQ( k.size(), 4u );
+    EXPECT_EQ( k[ 0 ], 1 );
+    EXPECT_EQ( k[ 1 ], 2 );
+    EXPECT_EQ( k[ 2 ], 4 );
+    EXPECT_EQ( k[ 3 ], 5 );
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Iterators
+////////////////////////////////////////////////////////////////////////////////
+
+TYPED_TEST( flat_map_typed, iterator_random_access )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 2, "b" }, { 3, "c" } };
+    auto it{ m.begin() };
+    EXPECT_EQ( ( it + 2 )->first, 3 );
+    EXPECT_EQ( it[ 1 ].first, 2 );
+    EXPECT_EQ( m.end() - m.begin(), 3 );
+    EXPECT_LT( m.begin(), m.end() );
+}
+
+TYPED_TEST( flat_map_typed, iterator_structured_bindings )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 2, "b" }, { 3, "c" } };
+    int expectedKeys[]{ 1, 2, 3 };
+    std::string_view expectedVals[]{ "a", "b", "c" };
+    std::size_t i{ 0 };
+    for ( auto [k, v] : m ) {
+        EXPECT_EQ( k, expectedKeys[ i ] );
+        EXPECT_EQ( v, expectedVals[ i ] );
+        ++i;
+    }
+    EXPECT_EQ( i, 3u );
+}
+
+TYPED_TEST( flat_map_typed, iterator_mutable_value )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 2, "b" } };
+    auto it{ m.find( 1 ) };
+    it->second = "X";
+    EXPECT_EQ( m.at( 1 ), "X" );
+}
+
+TYPED_TEST( flat_map_typed, iterator_address_stability )
+{
+    using map_t = typename TypeParam::map_type;
+    using MT    = typename TypeParam::mapped_type;
+    map_t m{ { 1, "a" }, { 2, "b" }, { 3, "c" } };
+    auto it{ m.find( 2 ) };
+    MT * addr{ &( it->second ) };
+    EXPECT_EQ( *addr, "b" );
+    *addr = "X";
+    EXPECT_EQ( m.at( 2 ), "X" );
+}
+
+TYPED_TEST( flat_map_typed, const_iterator )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t const m{ { 1, "a" }, { 2, "b" } };
+    auto it{ m.begin() };
+    EXPECT_EQ( it->first, 1 );
+    EXPECT_EQ( it->second, "a" );
+}
+
+TYPED_TEST( flat_map_typed, reverse_iterator )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 2, "b" }, { 3, "c" } };
+    auto rit{ m.rbegin() };
+    EXPECT_EQ( rit->first, 3 );
+    ++rit;
+    EXPECT_EQ( rit->first, 2 );
+}
+
+// values() returns std::span — only works with contiguous containers (not deque)
+// Kept as standalone test below (values_in_key_order)
+
+////////////////////////////////////////////////////////////////////////////////
+// Edge cases
+////////////////////////////////////////////////////////////////////////////////
+
+TYPED_TEST( flat_map_typed, empty_map_operations )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t m;
+    EXPECT_EQ( m.find( 1 ), m.end() );
+    EXPECT_FALSE( m.contains( 1 ) );
+    EXPECT_EQ( m.count( 1 ), 0u );
+    EXPECT_EQ( m.erase( 1 ), 0u );
+    EXPECT_EQ( m.lower_bound( 1 ), m.end() );
+    EXPECT_EQ( m.upper_bound( 1 ), m.end() );
+}
+
+TYPED_TEST( flat_map_typed, single_element )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 42, "x" } };
+    EXPECT_EQ( m.size(), 1u );
+    EXPECT_EQ( m.at( 42 ), "x" );
+    EXPECT_EQ( m.begin()->first, 42 );
+    EXPECT_EQ( m.end() - m.begin(), 1 );
+    m.erase( m.begin() );
+    EXPECT_TRUE( m.empty() );
+}
+
+TYPED_TEST( flat_map_typed, duplicate_key_insertion )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t m;
+    m.try_emplace( 1, "a" );
+    m.try_emplace( 1, "b" );
+    m.try_emplace( 1, "c" );
+    EXPECT_EQ( m.size(), 1u );
+    EXPECT_EQ( m.at( 1 ), "a" ); // first insertion wins
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Misc
+////////////////////////////////////////////////////////////////////////////////
+
+TYPED_TEST( flat_map_typed, swap )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t a{ { 1, "a" } };
+    map_t b{ { 2, "b" }, { 3, "c" } };
+    a.swap( b );
+    EXPECT_EQ( a.size(), 2u );
+    EXPECT_EQ( b.size(), 1u );
+    EXPECT_EQ( a.at( 2 ), "b" );
+    EXPECT_EQ( b.at( 1 ), "a" );
+}
+
+TYPED_TEST( flat_map_typed, clear )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 2, "b" } };
+    m.clear();
+    EXPECT_TRUE( m.empty() );
+    EXPECT_EQ( m.size(), 0u );
+    // Should be usable again
+    m[ 3 ] = "c";
+    EXPECT_EQ( m.at( 3 ), "c" );
+}
+
+TYPED_TEST( flat_map_typed, comparison )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t a{ { 1, "a" }, { 2, "b" } };
+    map_t b{ { 1, "a" }, { 2, "b" } };
+    map_t c{ { 1, "a" }, { 3, "c" } };
+    EXPECT_EQ( a, b );
+    EXPECT_NE( a, c );
+}
+
+TYPED_TEST( flat_map_typed, initializer_list_assignment )
+{
+    using map_t = typename TypeParam::map_type;
+    using KT    = typename TypeParam::key_type;
+    using MT    = typename TypeParam::mapped_type;
+    map_t m{ { 1, "a" } };
+    m = { std::pair<KT, MT>{ 2, "b" }, std::pair<KT, MT>{ 3, "c" } };
+    EXPECT_EQ( m.size(), 2u );
+    EXPECT_FALSE( m.contains( 1 ) );
+    EXPECT_EQ( m.at( 2 ), "b" );
+}
+
+
+////////////////////////////////////////////////////////////////////////////////
+// Standalone type aliases
+////////////////////////////////////////////////////////////////////////////////
+
+using FM             = flat_map<int, int>;
+using tr_flat_map_ii = flat_map<int, int, std::less<int>, tr_vector<int>, tr_vector<int>>;
+using tr_vec_map     = flat_map<int, int, std::less<int>, tr_vector<int, std::uint32_t>, tr_vector<int, std::uint32_t>>;
+using tr_less_map     = flat_map<int, int, std::less<>>;
+using tr_vec_less_map = flat_map<int, int, std::less<>, tr_vector<int>, tr_vector<int>>;
+
+
+////////////////////////////////////////////////////////////////////////////////
+// Numeric/large tests (need <int,int> for arithmetic)
+////////////////////////////////////////////////////////////////////////////////
+
+TEST( flat_map, emplace_hint_sorted_input )
+{
+    FM m;
+    for ( int i{ 0 }; i < 100; ++i ) {
+        m.emplace_hint( m.end(), i, i * 10 );
+    }
+    EXPECT_EQ( m.size(), 100u );
+    for ( int i{ 0 }; i < 100; ++i ) {
+        EXPECT_EQ( m.at( i ), i * 10 );
+    }
+}
+
+TEST( flat_map, large_insert_range )
+{
+    FM m;
+    std::vector<std::pair<int, int>> src;
+    src.reserve( 1000 );
+    for ( int i{ 999 }; i >= 0; --i )
+        src.emplace_back( i, i * 10 );
+    m.insert_range( src );
+    EXPECT_EQ( m.size(), 1000u );
+    EXPECT_TRUE( std::is_sorted( m.keys().begin(), m.keys().end() ) );
+    EXPECT_EQ( m.at( 0 ), 0 );
+    EXPECT_EQ( m.at( 999 ), 9990 );
+}
+
+TEST( flat_map, large_merge_bulk )
+{
+    FM target;
+    for ( int i{ 0 }; i < 500; i += 2 )
+        target.try_emplace( i, i );
+    FM source;
+    for ( int i{ 1 }; i < 500; i += 2 )
+        source.try_emplace( i, i );
+    target.merge( source );
+    EXPECT_EQ( target.size(), 500u );
+    EXPECT_TRUE( source.empty() );
+    EXPECT_TRUE( std::is_sorted( target.keys().begin(), target.keys().end() ) );
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Container-specific (use .data()/.reserve())
+////////////////////////////////////////////////////////////////////////////////
 
 TEST( flat_map, keys_returns_sorted_contiguous )
 {
-    flat_map<int, int> m{ { 5, 50 }, { 1, 10 }, { 3, 30 } };
-    auto const & keys = m.keys();
-    ASSERT_EQ( keys.size(), 3 );
+    FM m{ { 5, 50 }, { 1, 10 }, { 3, 30 } };
+    auto const & keys{ m.keys() };
+    ASSERT_EQ( keys.size(), 3u );
     EXPECT_EQ( keys[ 0 ], 1 );
     EXPECT_EQ( keys[ 1 ], 3 );
     EXPECT_EQ( keys[ 2 ], 5 );
     EXPECT_TRUE( std::is_sorted( keys.begin(), keys.end() ) );
-
     // Verify contiguous (can form span)
     std::span<int const> keySpan{ keys.data(), keys.size() };
     EXPECT_EQ( keySpan[ 1 ], 3 );
@@ -338,233 +900,10 @@ TEST( flat_map, keys_returns_sorted_contiguous )
 TEST( flat_map, values_in_key_order )
 {
     flat_map<int, std::string> m{ { 3, "c" }, { 1, "a" }, { 2, "b" } };
-    auto const & vals = m.values();
+    auto const & vals{ m.values() };
     EXPECT_EQ( vals[ 0 ], "a" ); // key=1
     EXPECT_EQ( vals[ 1 ], "b" ); // key=2
     EXPECT_EQ( vals[ 2 ], "c" ); // key=3
-}
-
-//==============================================================================
-// Merge
-//==============================================================================
-
-TEST( flat_map, merge_non_overlapping )
-{
-    flat_map<int, int> a{ { 1, 10 }, { 3, 30 } };
-    flat_map<int, int> b{ { 2, 20 }, { 4, 40 } };
-    a.merge( b );
-    EXPECT_EQ( a.size(), 4 );
-    EXPECT_TRUE( b.empty() );
-    EXPECT_EQ( a.at( 2 ), 20 );
-    EXPECT_EQ( a.at( 4 ), 40 );
-}
-
-TEST( flat_map, merge_overlapping )
-{
-    flat_map<int, int> a{ { 1, 10 }, { 3, 30 } };
-    flat_map<int, int> b{ { 2, 20 }, { 3, 99 } };
-    a.merge( b );
-    EXPECT_EQ( a.size(), 3 );
-    EXPECT_EQ( a.at( 3 ), 30 ); // original kept
-    EXPECT_EQ( b.size(), 1 );   // conflicting element remains in source
-    EXPECT_EQ( b.at( 3 ), 99 );
-}
-
-//==============================================================================
-// Iterator
-//==============================================================================
-
-TEST( flat_map, iterator_random_access )
-{
-    flat_map<int, int> m{ { 1, 10 }, { 2, 20 }, { 3, 30 } };
-    auto it = m.begin();
-    EXPECT_EQ( ( it + 2 )->first, 3 );
-    EXPECT_EQ( it[ 1 ].first, 2 );
-    EXPECT_EQ( m.end() - m.begin(), 3 );
-    EXPECT_LT( m.begin(), m.end() );
-}
-
-TEST( flat_map, iterator_structured_bindings )
-{
-    flat_map<int, int> m{ { 1, 10 }, { 2, 20 } };
-    for ( auto [key, val] : m ) {
-        EXPECT_EQ( val, key * 10 );
-    }
-}
-
-TEST( flat_map, iterator_mutable_value )
-{
-    flat_map<int, int> m{ { 1, 10 }, { 2, 20 } };
-    auto it = m.find( 1 );
-    it->second = 99;
-    EXPECT_EQ( m.at( 1 ), 99 );
-}
-
-TEST( flat_map, iterator_arrow_proxy_address_stability )
-{
-    // Verify that &(it->second) yields a stable address into the values container
-    flat_map<int, int> m{ { 1, 10 }, { 2, 20 }, { 3, 30 } };
-    auto it = m.find( 2 );
-    int * addr = &( it->second );
-    EXPECT_EQ( *addr, 20 );
-    *addr = 99;
-    EXPECT_EQ( m.at( 2 ), 99 );
-}
-
-TEST( flat_map, const_iterator )
-{
-    flat_map<int, int> const m{ { 1, 10 }, { 2, 20 } };
-    auto it = m.begin();
-    EXPECT_EQ( it->first, 1 );
-    EXPECT_EQ( it->second, 10 );
-    // Should NOT compile: it->second = 99;
-}
-
-TEST( flat_map, reverse_iterator )
-{
-    flat_map<int, int> m{ { 1, 10 }, { 2, 20 }, { 3, 30 } };
-    auto rit = m.rbegin();
-    EXPECT_EQ( rit->first, 3 );
-    ++rit;
-    EXPECT_EQ( rit->first, 2 );
-}
-
-//==============================================================================
-// Edge cases
-//==============================================================================
-
-TEST( flat_map, empty_map_operations )
-{
-    flat_map<int, int> m;
-    EXPECT_EQ( m.find( 1 ), m.end() );
-    EXPECT_FALSE( m.contains( 1 ) );
-    EXPECT_EQ( m.count( 1 ), 0 );
-    EXPECT_EQ( m.erase( 1 ), 0 );
-    EXPECT_EQ( m.lower_bound( 1 ), m.end() );
-    EXPECT_EQ( m.upper_bound( 1 ), m.end() );
-}
-
-TEST( flat_map, single_element )
-{
-    flat_map<int, int> m{ { 42, 420 } };
-    EXPECT_EQ( m.size(), 1 );
-    EXPECT_EQ( m.at( 42 ), 420 );
-    EXPECT_EQ( m.begin()->first, 42 );
-    EXPECT_EQ( m.end() - m.begin(), 1 );
-    m.erase( m.begin() );
-    EXPECT_TRUE( m.empty() );
-}
-
-TEST( flat_map, duplicate_key_insertion )
-{
-    flat_map<int, int> m;
-    m.try_emplace( 1, 10 );
-    m.try_emplace( 1, 20 );
-    m.try_emplace( 1, 30 );
-    EXPECT_EQ( m.size(), 1 );
-    EXPECT_EQ( m.at( 1 ), 10 ); // first insertion wins
-}
-
-TEST( flat_map, swap )
-{
-    flat_map<int, int> a{ { 1, 10 } };
-    flat_map<int, int> b{ { 2, 20 }, { 3, 30 } };
-    a.swap( b );
-    EXPECT_EQ( a.size(), 2 );
-    EXPECT_EQ( b.size(), 1 );
-    EXPECT_EQ( a.at( 2 ), 20 );
-    EXPECT_EQ( b.at( 1 ), 10 );
-}
-
-TEST( flat_map, clear )
-{
-    flat_map<int, int> m{ { 1, 10 }, { 2, 20 } };
-    m.clear();
-    EXPECT_TRUE( m.empty() );
-    EXPECT_EQ( m.size(), 0 );
-    // Should be usable again
-    m[ 3 ] = 30;
-    EXPECT_EQ( m.at( 3 ), 30 );
-}
-
-TEST( flat_map, comparison )
-{
-    flat_map<int, int> a{ { 1, 10 }, { 2, 20 } };
-    flat_map<int, int> b{ { 1, 10 }, { 2, 20 } };
-    flat_map<int, int> c{ { 1, 10 }, { 3, 30 } };
-    EXPECT_EQ( a, b );
-    EXPECT_NE( a, c );
-}
-
-TEST( flat_map, reserve_and_shrink )
-{
-    flat_map<int, int> m;
-    m.reserve( 100 );
-    for ( int i{ 0 }; i < 50; ++i ) {
-        m.emplace_hint( m.end(), i, i * 10 );
-    }
-    EXPECT_EQ( m.size(), 50 );
-    m.shrink_to_fit();
-    EXPECT_EQ( m.size(), 50 );
-}
-
-//==============================================================================
-// tr_vector containers
-//==============================================================================
-
-// flat_map using psi::vm::tr_vector as underlying storage
-using tr_flat_map_ii = flat_map<int, int, std::less<int>, tr_vector<int>, tr_vector<int>>;
-
-TEST( flat_map, tr_vector_basic )
-{
-    tr_flat_map_ii m;
-    m[ 3 ] = 30;
-    m[ 1 ] = 10;
-    m[ 2 ] = 20;
-    EXPECT_EQ( m.size(), 3 );
-    EXPECT_EQ( m.at( 1 ), 10 );
-    EXPECT_EQ( m.at( 2 ), 20 );
-    EXPECT_EQ( m.at( 3 ), 30 );
-}
-
-TEST( flat_map, tr_vector_sorted_unique_construction )
-{
-    tr_vector<int> keys;
-    keys.push_back( 1 ); keys.push_back( 3 ); keys.push_back( 5 );
-    tr_vector<int> vals;
-    vals.push_back( 10 ); vals.push_back( 30 ); vals.push_back( 50 );
-    tr_flat_map_ii m( sorted_unique, std::move( keys ), std::move( vals ) );
-
-    EXPECT_EQ( m.size(), 3 );
-    EXPECT_EQ( m.at( 1 ), 10 );
-    EXPECT_EQ( m.at( 3 ), 30 );
-    EXPECT_EQ( m.at( 5 ), 50 );
-}
-
-TEST( flat_map, tr_vector_emplace_hint_sorted )
-{
-    tr_flat_map_ii m;
-    for ( int i{ 0 }; i < 100; ++i ) {
-        m.emplace_hint( m.end(), i, i * 10 );
-    }
-    EXPECT_EQ( m.size(), 100 );
-    auto const & keys{ m.keys() };
-    EXPECT_TRUE( std::is_sorted( keys.begin(), keys.end() ) );
-    EXPECT_EQ( m.at( 42 ), 420 );
-}
-
-TEST( flat_map, tr_vector_extract_replace )
-{
-    tr_flat_map_ii m;
-    m[ 1 ] = 10; m[ 2 ] = 20;
-    auto c{ m.extract() };
-    EXPECT_TRUE( m.empty() );
-    EXPECT_EQ( c.keys.size(), 2 );
-    c.keys.push_back( 3 );
-    c.values.push_back( 30 );
-    m.replace( std::move( c.keys ), std::move( c.values ) );
-    EXPECT_EQ( m.size(), 3 );
-    EXPECT_EQ( m.at( 3 ), 30 );
 }
 
 TEST( flat_map, tr_vector_keys_span )
@@ -574,33 +913,22 @@ TEST( flat_map, tr_vector_keys_span )
     auto const & keys{ m.keys() };
     // tr_vector is contiguous — can form a span for cache-friendly key-only iteration
     std::span<int const> keySpan{ keys.data(), keys.size() };
-    EXPECT_EQ( keySpan.size(), 3 );
+    EXPECT_EQ( keySpan.size(), 3u );
     EXPECT_EQ( keySpan[ 0 ], 1 );
     EXPECT_EQ( keySpan[ 1 ], 3 );
     EXPECT_EQ( keySpan[ 2 ], 5 );
 }
 
-TEST( flat_map, tr_vector_erase_and_find )
+TEST( flat_map, reserve_and_shrink )
 {
-    tr_flat_map_ii m;
-    m[ 1 ] = 10; m[ 2 ] = 20; m[ 3 ] = 30;
-    EXPECT_EQ( m.erase( 2 ), 1 );
-    EXPECT_EQ( m.size(), 2 );
-    EXPECT_EQ( m.find( 2 ), m.end() );
-    EXPECT_NE( m.find( 1 ), m.end() );
-    EXPECT_NE( m.find( 3 ), m.end() );
-}
-
-TEST( flat_map, tr_vector_merge )
-{
-    tr_flat_map_ii a;
-    a[ 1 ] = 10; a[ 3 ] = 30;
-    tr_flat_map_ii b;
-    b[ 2 ] = 20; b[ 4 ] = 40;
-    a.merge( b );
-    EXPECT_EQ( a.size(), 4 );
-    EXPECT_TRUE( b.empty() );
-    EXPECT_EQ( a.at( 2 ), 20 );
+    FM m;
+    m.reserve( 100 );
+    for ( int i{ 0 }; i < 50; ++i ) {
+        m.emplace_hint( m.end(), i, i * 10 );
+    }
+    EXPECT_EQ( m.size(), 50u );
+    m.shrink_to_fit();
+    EXPECT_EQ( m.size(), 50u );
 }
 
 TEST( flat_map, tr_vector_reserve_and_shrink )
@@ -610,18 +938,24 @@ TEST( flat_map, tr_vector_reserve_and_shrink )
     for ( int i{ 0 }; i < 50; ++i ) {
         m.emplace_hint( m.end(), i, i * 10 );
     }
-    EXPECT_EQ( m.size(), 50 );
+    EXPECT_EQ( m.size(), 50u );
     m.shrink_to_fit();
-    EXPECT_EQ( m.size(), 50 );
+    EXPECT_EQ( m.size(), 50u );
     EXPECT_EQ( m.at( 25 ), 250 );
 }
 
-//==============================================================================
+////////////////////////////////////////////////////////////////////////////////
 // Transparent comparator (std::less<>)
-//==============================================================================
+////////////////////////////////////////////////////////////////////////////////
 
-// flat_map with std::less<> and std::vector — exercises heterogeneous lookup
-using tr_less_map = flat_map<int, int, std::less<>>;
+TEST( flat_map, transparent_comparison )
+{
+    flat_map<int, std::string, std::less<>> m{ { 1, "a" }, { 3, "c" } };
+    EXPECT_TRUE( m.contains( 1L ) );
+    EXPECT_NE  ( m.find( 3L ), m.end() );
+    auto lb{ m.lower_bound( 2L ) };
+    EXPECT_EQ( lb->first, 3 );
+}
 
 TEST( flat_map, transparent_find_with_various_types )
 {
@@ -667,12 +1001,9 @@ TEST( flat_map, transparent_contains_count )
     EXPECT_TRUE ( m.contains( 1L  ) );
     EXPECT_TRUE ( m.contains( 3U  ) );
     EXPECT_FALSE( m.contains( 2L  ) );
-    EXPECT_EQ   ( m.count( 1L  ), 1 );
-    EXPECT_EQ   ( m.count( 99U ), 0 );
+    EXPECT_EQ   ( m.count( 1L  ), 1u );
+    EXPECT_EQ   ( m.count( 99U ), 0u );
 }
-
-// flat_map with std::less<> and tr_vector — the combination used in rama
-using tr_vec_less_map = flat_map<int, int, std::less<>, tr_vector<int>, tr_vector<int>>;
 
 TEST( flat_map, tr_vector_transparent_combined )
 {
@@ -680,9 +1011,9 @@ TEST( flat_map, tr_vector_transparent_combined )
     m[ 5 ] = 50; m[ 1 ] = 10; m[ 3 ] = 30;
 
     // Heterogeneous lookup
-    EXPECT_TRUE( m.contains( 3L  ) );
-    EXPECT_TRUE( m.contains( 5U  ) );
-    EXPECT_FALSE( m.contains( 2L ) );
+    EXPECT_TRUE ( m.contains( 3L  ) );
+    EXPECT_TRUE ( m.contains( 5U  ) );
+    EXPECT_FALSE( m.contains( 2L  ) );
 
     auto it{ m.find( 1L ) };
     ASSERT_NE( it, m.end() );
@@ -705,243 +1036,18 @@ TEST( flat_map, tr_vector_transparent_emplace_hint_and_erase )
     for ( int i{ 0 }; i < 50; ++i ) {
         m.emplace_hint( m.end(), i, i * 10 );
     }
-    EXPECT_EQ( m.size(), 50 );
+    EXPECT_EQ( m.size(), 50u );
 
     // Heterogeneous find + erase
     auto it{ m.find( 25L ) };
     ASSERT_NE( it, m.end() );
     m.erase( it );
-    EXPECT_EQ( m.size(), 49 );
+    EXPECT_EQ( m.size(), 49u );
     EXPECT_FALSE( m.contains( 25U ) );
 
     // Verify sorted invariant
     auto const & keys{ m.keys() };
     EXPECT_TRUE( std::is_sorted( keys.begin(), keys.end() ) );
-}
-
-// Type aliases for new tests
-using FM          = flat_map<int, int>;
-using tr_vec_map  = flat_map<int, int, std::less<int>, tr_vector<int, std::uint32_t>, tr_vector<int, std::uint32_t>>;
-
-//==============================================================================
-// New feature tests: insert_range, bulk insert, merge rewrite, erase_if,
-// from_range_t, deduction guides, transparent at/operator[], sorted_unique inserts
-//==============================================================================
-
-TEST( flat_map, insert_range_basic )
-{
-    FM m{ { 1, 10 }, { 3, 30 }, { 5, 50 } };
-    std::vector<std::pair<int, int>> src{ { 2, 20 }, { 4, 40 }, { 6, 60 } };
-    m.insert_range( src );
-    EXPECT_EQ( m.size(), 6 );
-    for ( int i{ 1 }; i <= 6; ++i )
-        EXPECT_EQ( m.at( i ), i * 10 );
-}
-
-TEST( flat_map, insert_range_with_duplicates )
-{
-    FM m{ { 1, 10 }, { 3, 30 }, { 5, 50 } };
-    std::vector<std::pair<int, int>> src{ { 3, 999 }, { 5, 888 }, { 7, 70 } };
-    m.insert_range( src );
-    EXPECT_EQ( m.size(), 4 );
-    // Existing values win
-    EXPECT_EQ( m.at( 3 ), 30 );
-    EXPECT_EQ( m.at( 5 ), 50 );
-    EXPECT_EQ( m.at( 7 ), 70 );
-}
-
-TEST( flat_map, insert_range_into_empty )
-{
-    FM m;
-    std::vector<std::pair<int, int>> src{ { 5, 50 }, { 1, 10 }, { 3, 30 } };
-    m.insert_range( src );
-    EXPECT_EQ( m.size(), 3 );
-    EXPECT_TRUE( std::is_sorted( m.keys().begin(), m.keys().end() ) );
-    EXPECT_EQ( m.at( 1 ), 10 );
-    EXPECT_EQ( m.at( 3 ), 30 );
-    EXPECT_EQ( m.at( 5 ), 50 );
-}
-
-TEST( flat_map, insert_range_sorted_unique )
-{
-    FM m{ { 2, 20 }, { 4, 40 } };
-    std::vector<std::pair<int, int>> src{ { 1, 10 }, { 3, 30 }, { 5, 50 } };
-    m.insert_range( psi::vm::sorted_unique, src );
-    EXPECT_EQ( m.size(), 5 );
-    for ( int i{ 1 }; i <= 5; ++i )
-        EXPECT_EQ( m.at( i ), i * 10 );
-}
-
-TEST( flat_map, insert_range_empty_range )
-{
-    FM m{ { 1, 10 } };
-    std::vector<std::pair<int, int>> empty;
-    m.insert_range( empty );
-    EXPECT_EQ( m.size(), 1 );
-}
-
-TEST( flat_map, bulk_insert_range_iterator )
-{
-    // insert(InputIt, InputIt) now uses bulk algorithm
-    FM m{ { 1, 10 }, { 5, 50 } };
-    std::vector<std::pair<int, int>> src{ { 3, 30 }, { 2, 20 }, { 4, 40 }, { 1, 999 } };
-    m.insert( src.begin(), src.end() );
-    EXPECT_EQ( m.size(), 5 );
-    EXPECT_EQ( m.at( 1 ), 10 ); // existing wins
-    EXPECT_EQ( m.at( 2 ), 20 );
-    EXPECT_EQ( m.at( 3 ), 30 );
-}
-
-TEST( flat_map, insert_sorted_unique_range )
-{
-    FM m{ { 2, 20 }, { 6, 60 } };
-    std::vector<std::pair<int, int>> src{ { 1, 10 }, { 4, 40 }, { 8, 80 } };
-    m.insert( psi::vm::sorted_unique, src.begin(), src.end() );
-    EXPECT_EQ( m.size(), 5 );
-    EXPECT_TRUE( std::is_sorted( m.keys().begin(), m.keys().end() ) );
-}
-
-TEST( flat_map, insert_sorted_unique_initializer_list )
-{
-    FM m{ { 2, 20 } };
-    m.insert( psi::vm::sorted_unique, { { 1, 10 }, { 3, 30 } } );
-    EXPECT_EQ( m.size(), 3 );
-    EXPECT_EQ( m.at( 1 ), 10 );
-}
-
-TEST( flat_map, merge_lvalue_bulk )
-{
-    FM target{ { 1, 10 }, { 3, 30 }, { 5, 50 } };
-    FM source{ { 2, 20 }, { 3, 999 }, { 4, 40 } };
-    target.merge( source );
-    // target gets 2 and 4, not 3 (already exists)
-    EXPECT_EQ( target.size(), 5 );
-    EXPECT_EQ( target.at( 1 ), 10 );
-    EXPECT_EQ( target.at( 2 ), 20 );
-    EXPECT_EQ( target.at( 3 ), 30 ); // original wins
-    EXPECT_EQ( target.at( 4 ), 40 );
-    EXPECT_EQ( target.at( 5 ), 50 );
-    // source retains only the duplicate
-    EXPECT_EQ( source.size(), 1 );
-    EXPECT_TRUE( source.contains( 3 ) );
-}
-
-TEST( flat_map, merge_rvalue_bulk )
-{
-    FM target{ { 1, 10 }, { 3, 30 } };
-    FM source{ { 2, 20 }, { 3, 999 }, { 4, 40 } };
-    target.merge( std::move( source ) );
-    EXPECT_EQ( target.size(), 4 );
-    EXPECT_EQ( target.at( 3 ), 30 ); // existing wins
-    EXPECT_EQ( target.at( 2 ), 20 );
-    EXPECT_EQ( target.at( 4 ), 40 );
-    // source is cleared
-    EXPECT_TRUE( source.empty() );
-}
-
-TEST( flat_map, merge_empty_source )
-{
-    FM target{ { 1, 10 } };
-    FM source;
-    target.merge( source );
-    EXPECT_EQ( target.size(), 1 );
-}
-
-TEST( flat_map, merge_empty_target )
-{
-    FM target;
-    FM source{ { 1, 10 }, { 2, 20 } };
-    target.merge( source );
-    EXPECT_EQ( target.size(), 2 );
-    EXPECT_TRUE( source.empty() );
-}
-
-TEST( flat_map, merge_self )
-{
-    FM m{ { 1, 10 }, { 2, 20 } };
-    m.merge( m );
-    EXPECT_EQ( m.size(), 2 ); // no change
-}
-
-TEST( flat_map, erase_if_basic )
-{
-    FM m{ { 1, 10 }, { 2, 20 }, { 3, 30 }, { 4, 40 }, { 5, 50 } };
-    auto const erased{ erase_if( m, []( auto const & kv ) { return kv.first % 2 == 0; } ) };
-    EXPECT_EQ( erased, 2 );
-    EXPECT_EQ( m.size(), 3 );
-    EXPECT_TRUE( m.contains( 1 ) );
-    EXPECT_FALSE( m.contains( 2 ) );
-    EXPECT_TRUE( m.contains( 3 ) );
-    EXPECT_FALSE( m.contains( 4 ) );
-    EXPECT_TRUE( m.contains( 5 ) );
-}
-
-TEST( flat_map, erase_if_all )
-{
-    FM m{ { 1, 10 }, { 2, 20 } };
-    auto const erased{ erase_if( m, []( auto const & ) { return true; } ) };
-    EXPECT_EQ( erased, 2 );
-    EXPECT_TRUE( m.empty() );
-}
-
-TEST( flat_map, erase_if_none )
-{
-    FM m{ { 1, 10 }, { 2, 20 } };
-    auto const erased{ erase_if( m, []( auto const & ) { return false; } ) };
-    EXPECT_EQ( erased, 0 );
-    EXPECT_EQ( m.size(), 2 );
-}
-
-TEST( flat_map, erase_if_preserves_order )
-{
-    FM m{ { 1, 10 }, { 2, 20 }, { 3, 30 }, { 4, 40 }, { 5, 50 } };
-    erase_if( m, []( auto const & kv ) { return kv.second == 30; } );
-    EXPECT_TRUE( std::is_sorted( m.keys().begin(), m.keys().end() ) );
-    auto const & k{ m.keys() };
-    ASSERT_EQ( k.size(), 4 );
-    EXPECT_EQ( k[ 0 ], 1 );
-    EXPECT_EQ( k[ 1 ], 2 );
-    EXPECT_EQ( k[ 2 ], 4 );
-    EXPECT_EQ( k[ 3 ], 5 );
-}
-
-TEST( flat_map, from_range_t_construction )
-{
-    std::vector<std::pair<int, int>> src{ { 3, 30 }, { 1, 10 }, { 2, 20 } };
-    FM m( std::from_range, src );
-    EXPECT_EQ( m.size(), 3 );
-    EXPECT_TRUE( std::is_sorted( m.keys().begin(), m.keys().end() ) );
-    EXPECT_EQ( m.at( 1 ), 10 );
-    EXPECT_EQ( m.at( 2 ), 20 );
-    EXPECT_EQ( m.at( 3 ), 30 );
-}
-
-TEST( flat_map, from_range_t_with_duplicates )
-{
-    std::vector<std::pair<int, int>> src{ { 1, 10 }, { 1, 99 }, { 2, 20 } };
-    FM m( std::from_range, src );
-    EXPECT_EQ( m.size(), 2 );
-    EXPECT_EQ( m.at( 1 ), 10 ); // first occurrence wins
-}
-
-TEST( flat_map, unsorted_container_construction )
-{
-    std::vector<int> keys{ 3, 1, 2 };
-    std::vector<int> vals{ 30, 10, 20 };
-    FM m( std::move( keys ), std::move( vals ) );
-    EXPECT_EQ( m.size(), 3 );
-    EXPECT_EQ( m.at( 1 ), 10 );
-    EXPECT_EQ( m.at( 2 ), 20 );
-    EXPECT_EQ( m.at( 3 ), 30 );
-}
-
-TEST( flat_map, unsorted_container_with_duplicates )
-{
-    std::vector<int> keys{ 3, 1, 3, 2 };
-    std::vector<int> vals{ 30, 10, 99, 20 };
-    FM m( std::move( keys ), std::move( vals ) );
-    EXPECT_EQ( m.size(), 3 );
-    EXPECT_EQ( m.at( 3 ), 30 ); // first occurrence wins after sort
 }
 
 TEST( flat_map, transparent_at )
@@ -985,61 +1091,30 @@ TEST( flat_map, transparent_erase )
     m.try_emplace( "c", 3 );
 
     auto const erased{ m.erase( std::string_view{ "b" } ) };
-    EXPECT_EQ( erased, 1 );
-    EXPECT_EQ( m.size(), 2 );
+    EXPECT_EQ( erased, 1u );
+    EXPECT_EQ( m.size(), 2u );
     EXPECT_FALSE( m.contains( std::string_view{ "b" } ) );
 }
 
-TEST( flat_map, insert_hint_value )
-{
-    FM m{ { 1, 10 }, { 5, 50 } };
-    auto it{ m.insert( m.begin() + 1, std::pair{ 3, 30 } ) };
-    EXPECT_EQ( it->first, 3 );
-    EXPECT_EQ( it->second, 30 );
-    EXPECT_EQ( m.size(), 3 );
-}
-
-TEST( flat_map, insert_or_assign_hinted )
-{
-    FM m{ { 1, 10 }, { 3, 30 }, { 5, 50 } };
-    // Hit: update existing
-    auto it{ m.insert_or_assign( m.begin() + 1, 3, 999 ) };
-    EXPECT_EQ( it->second, 999 );
-    EXPECT_EQ( m.size(), 3 );
-    // Miss: fallback to non-hinted
-    auto it2{ m.insert_or_assign( m.begin(), 4, 40 ) };
-    EXPECT_EQ( it2->second, 40 );
-    EXPECT_EQ( m.size(), 4 );
-}
-
-TEST( flat_map, initializer_list_assignment )
-{
-    FM m{ { 1, 10 } };
-    m = { { 2, 20 }, { 3, 30 } };
-    EXPECT_EQ( m.size(), 2 );
-    EXPECT_FALSE( m.contains( 1 ) );
-    EXPECT_EQ( m.at( 2 ), 20 );
-}
+////////////////////////////////////////////////////////////////////////////////
+// CTAD
+////////////////////////////////////////////////////////////////////////////////
 
 TEST( flat_map, deduction_guide_initializer_list )
 {
     psi::vm::flat_map m{ std::pair{ 1, 2 }, std::pair{ 3, 4 } };
     static_assert( std::is_same_v<typename decltype( m )::key_type, int> );
     static_assert( std::is_same_v<typename decltype( m )::mapped_type, int> );
-    EXPECT_EQ( m.size(), 2 );
+    EXPECT_EQ( m.size(), 2u );
 }
 
 TEST( flat_map, deduction_guide_sorted_unique_initializer_list )
 {
     psi::vm::flat_map m( psi::vm::sorted_unique, { std::pair{ 1, 10 }, std::pair{ 2, 20 } } );
-    EXPECT_EQ( m.size(), 2 );
+    EXPECT_EQ( m.size(), 2u );
     EXPECT_EQ( m.at( 1 ), 10 );
 }
 
-// Alias CTAD for container-pair and iterator-range doesn't work because Key/T
-// aren't deducible from alias template params via container::value_type.
-// These tests verify CTAD on flat_map directly (where the explicit
-// deduction guides live).
 TEST( flat_map, deduction_guide_container_pair )
 {
     std::vector<int> k{ 3, 1, 2 };
@@ -1047,7 +1122,7 @@ TEST( flat_map, deduction_guide_container_pair )
     psi::vm::flat_map m( std::move( k ), std::move( v ) );
     static_assert( std::is_same_v<typename decltype( m )::key_type, int> );
     static_assert( std::is_same_v<typename decltype( m )::mapped_type, double> );
-    EXPECT_EQ( m.size(), 3 );
+    EXPECT_EQ( m.size(), 3u );
     EXPECT_DOUBLE_EQ( m.at( 1 ), 1.0 );
 }
 
@@ -1057,16 +1132,23 @@ TEST( flat_map, deduction_guide_iterator_range )
     psi::vm::flat_map m( src.begin(), src.end() );
     static_assert( std::is_same_v<typename decltype( m )::key_type, int> );
     static_assert( std::is_same_v<typename decltype( m )::mapped_type, double> );
-    EXPECT_EQ( m.size(), 2 );
+    EXPECT_EQ( m.size(), 2u );
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// Size type
+////////////////////////////////////////////////////////////////////////////////
 
 TEST( flat_map, size_type_matches_smaller_container )
 {
-    // With std::vector, size_type should be size_t
     static_assert( std::is_same_v<FM::size_type, std::size_t> );
 }
 
-// Test with tr_vector which has uint32_t size_type
+TEST( flat_map, tr_vector_size_type_is_uint32 )
+{
+    static_assert( std::is_same_v<tr_vec_map::size_type, std::uint32_t> );
+}
+
 TEST( flat_map, tr_vector_insert_range )
 {
     tr_vec_map m;
@@ -1074,7 +1156,7 @@ TEST( flat_map, tr_vector_insert_range )
     m.try_emplace( 5, 50 );
     std::vector<std::pair<int, int>> src{ { 3, 30 }, { 2, 20 }, { 4, 40 } };
     m.insert_range( src );
-    EXPECT_EQ( m.size(), 5 );
+    EXPECT_EQ( m.size(), 5u );
     for ( int i{ 1 }; i <= 5; ++i )
         EXPECT_EQ( m.at( i ), i * 10 );
 }
@@ -1085,8 +1167,8 @@ TEST( flat_map, tr_vector_erase_if )
     for ( int i{ 0 }; i < 10; ++i )
         m.try_emplace( i, i * 10 );
     auto const erased{ erase_if( m, []( auto const & kv ) { return kv.first >= 5; } ) };
-    EXPECT_EQ( erased, 5 );
-    EXPECT_EQ( m.size(), 5 );
+    EXPECT_EQ( erased, 5u );
+    EXPECT_EQ( m.size(), 5u );
 }
 
 TEST( flat_map, tr_vector_bulk_merge )
@@ -1098,43 +1180,14 @@ TEST( flat_map, tr_vector_bulk_merge )
     source.try_emplace( 2, 20 );
     source.try_emplace( 3, 999 );
     target.merge( source );
-    EXPECT_EQ( target.size(), 3 );
+    EXPECT_EQ( target.size(), 3u );
     EXPECT_EQ( target.at( 3 ), 30 ); // existing wins
-    EXPECT_EQ( source.size(), 1 );    // duplicate stays in source
+    EXPECT_EQ( source.size(), 1u );   // duplicate stays in source
 }
 
-TEST( flat_map, tr_vector_size_type_is_uint32 )
-{
-    static_assert( std::is_same_v<tr_vec_map::size_type, std::uint32_t> );
-}
-
-TEST( flat_map, large_insert_range )
-{
-    FM m;
-    std::vector<std::pair<int, int>> src;
-    src.reserve( 1000 );
-    for ( int i{ 999 }; i >= 0; --i )
-        src.emplace_back( i, i * 10 );
-    m.insert_range( src );
-    EXPECT_EQ( m.size(), 1000 );
-    EXPECT_TRUE( std::is_sorted( m.keys().begin(), m.keys().end() ) );
-    EXPECT_EQ( m.at( 0 ), 0 );
-    EXPECT_EQ( m.at( 999 ), 9990 );
-}
-
-TEST( flat_map, large_merge_bulk )
-{
-    FM target;
-    for ( int i{ 0 }; i < 500; i += 2 )
-        target.try_emplace( i, i );
-    FM source;
-    for ( int i{ 1 }; i < 500; i += 2 )
-        source.try_emplace( i, i );
-    target.merge( source );
-    EXPECT_EQ( target.size(), 500 );
-    EXPECT_TRUE( source.empty() );
-    EXPECT_TRUE( std::is_sorted( target.keys().begin(), target.keys().end() ) );
-}
+////////////////////////////////////////////////////////////////////////////////
+// Forwarding/copy-tracking
+////////////////////////////////////////////////////////////////////////////////
 
 // Move/copy tracking type for forwarding correctness tests
 struct tracked
@@ -1158,7 +1211,7 @@ struct tracked
 
 TEST( flat_map, forwarding_lvalue_insert_copies_not_moves )
 {
-    // append_from with lvalue iterators: std::get<N>(forward<pair<T,T>&>(elem)) → copy
+    // append_from with lvalue iterators: std::get<N>(forward<pair<T,T>&>(elem)) -> copy
     std::vector<std::pair<tracked, tracked>> src{
         { tracked{ 3 }, tracked{ 30 } },
         { tracked{ 1 }, tracked{ 10 } },
@@ -1168,7 +1221,7 @@ TEST( flat_map, forwarding_lvalue_insert_copies_not_moves )
     for ( auto & [k, v] : src ) { k.copies = k.moves = v.copies = v.moves = 0; }
 
     flat_map<tracked, tracked> m;
-    m.insert( src.begin(), src.end() ); // lvalue iterators → append_from
+    m.insert( src.begin(), src.end() ); // lvalue iterators -> append_from
 
     EXPECT_EQ( m.size(), 3u );
     // Source must be intact (copied, not moved)
@@ -1176,23 +1229,23 @@ TEST( flat_map, forwarding_lvalue_insert_copies_not_moves )
         EXPECT_NE( k.value, -1 ) << "key was moved from";
         EXPECT_NE( v.value, -1 ) << "value was moved from";
     }
-    // Each element in the map should have been copied (≥1) and never moved from source
+    // Each element in the map should have been copied (>=1) and never moved from source
     for ( auto it{ m.begin() }; it != m.end(); ++it ) {
         EXPECT_GT( it->first.copies, 0 ) << "key should have been copied";
         EXPECT_GT( it->second.copies, 0 ) << "value should have been copied";
     }
 }
 
-// libstdc++ bug: ranges::sort on zip_view delegates to std::sort which creates
-// value_type temporaries via "value_type __val = std::move(*it)". For zip_view,
-// std::get<I> on rvalue tuple of lvalue refs returns lvalue refs (T& && → T&),
-// triggering copies. libstdc++'s own std::flat_map has the same bug (confirmed
-// GCC 15.2.1). Disable copy-count assertions on GCC; sort correctness is still
-// tested by the remaining flat_map tests.
+// libstdc++ bug: ranges::sort on zip_view delegates to std::sort which uses
+// std::move(*it) for temporaries. For proxy references (zip_view tuples of
+// lvalue refs), reference collapsing (T& && -> T&) causes copies instead of moves.
+// libc++ correctly uses ranges::iter_move via _RangeAlgPolicy, which dispatches
+// through ADL to the proxy iterator's custom iter_move -- no copies.
+// Confirmed: libc++ passes these tests, libstdc++ (GCC 15.2.1) does not.
 #ifndef __GLIBCXX__
 TEST( flat_map, forwarding_move_iterator_insert_moves_not_copies )
 {
-    // append_from with move iterators: std::get<N>(forward<pair<T,T>&&>(elem)) → move
+    // append_from with move iterators: std::get<N>(forward<pair<T,T>&&>(elem)) -> move
     std::vector<std::pair<tracked, tracked>> src{
         { tracked{ 2 }, tracked{ 20 } },
         { tracked{ 1 }, tracked{ 10 } }
@@ -1220,7 +1273,7 @@ TEST( flat_map, forwarding_move_iterator_insert_moves_not_copies )
 
 TEST( flat_map, forwarding_insert_range_lvalue_copies )
 {
-    // insert_range from lvalue range → common view → lvalue iterators → copies
+    // insert_range from lvalue range -> common view -> lvalue iterators -> copies
     std::vector<std::pair<tracked, tracked>> src{
         { tracked{ 1 }, tracked{ 10 } },
         { tracked{ 2 }, tracked{ 20 } }
@@ -1239,7 +1292,7 @@ TEST( flat_map, forwarding_insert_range_lvalue_copies )
 
 TEST( flat_map, forwarding_constructor_lvalue_copies )
 {
-    // Range constructor with lvalue iterators → append_from → copies
+    // Range constructor with lvalue iterators -> append_from -> copies
     std::vector<std::pair<tracked, tracked>> src{
         { tracked{ 2 }, tracked{ 20 } },
         { tracked{ 1 }, tracked{ 10 } }
@@ -1258,7 +1311,7 @@ TEST( flat_map, forwarding_constructor_lvalue_copies )
 #ifndef __GLIBCXX__ // see comment above forwarding_move_iterator_insert_moves_not_copies
 TEST( flat_map, forwarding_constructor_move_iterator_moves )
 {
-    // Range constructor with move iterators → append_from → moves
+    // Range constructor with move iterators -> append_from -> moves
     std::vector<std::pair<tracked, tracked>> src{
         { tracked{ 2 }, tracked{ 20 } },
         { tracked{ 1 }, tracked{ 10 } }
@@ -1281,7 +1334,7 @@ TEST( flat_map, forwarding_constructor_move_iterator_moves )
 
 TEST( flat_map, forwarding_sorted_unique_insert_lvalue_copies )
 {
-    // insert(sorted_unique, ...) with lvalue iterators → append_from → copies
+    // insert(sorted_unique, ...) with lvalue iterators -> append_from -> copies
     std::vector<std::pair<tracked, tracked>> src{
         { tracked{ 1 }, tracked{ 10 } },
         { tracked{ 2 }, tracked{ 20 } },
@@ -1301,7 +1354,7 @@ TEST( flat_map, forwarding_sorted_unique_insert_lvalue_copies )
 
 TEST( flat_map, forwarding_merge_rvalue_moves )
 {
-    // merge(flat_map&&) → append_move_containers → moves
+    // merge(flat_map&&) -> append_move_containers -> moves
     flat_map<tracked, tracked> target;
     target.insert( { tracked{ 1 }, tracked{ 10 } } );
     target.insert( { tracked{ 3 }, tracked{ 30 } } );

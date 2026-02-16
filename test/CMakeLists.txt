@@ -20,6 +20,9 @@ set( vm_test_sources
 
 add_executable( vm_unit_tests EXCLUDE_FROM_ALL ${vm_test_sources} )
 target_link_libraries( vm_unit_tests PRIVATE GTest::gtest_main psi::vm )
+if ( MSVC AND NOT CLANG_CL )
+    target_compile_options( vm_unit_tests PRIVATE /bigobj )
+endif()
 if ( NOT MSVC OR CLANG_CL ) #:wat: msvc fails to find the pch file in release builds!?
 	target_precompile_headers( vm_unit_tests REUSE_FROM psi_vm )
 endif()
