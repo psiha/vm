@@ -69,11 +69,16 @@ add_compile_definitions( BOOST_ALL_NO_LIB )
 
 if ( ${CMAKE_SYSTEM_NAME} MATCHES "Linux" )
     PSI_add_link_options( Release -flto ) # lld does not seem to be enough
-    add_compile_options( -stdlib=libc++ )
-    # Needed under WSL for some reason?
-    PSI_add_link_options( Debug      -lc++ -lc++abi -lm -lubsan )
-    PSI_add_link_options( DevRelease -lc++ -lc++abi -lm -lubsan )
-    PSI_add_link_options( Release    -lc++ -lc++abi -lm         )
+    if ( CMAKE_CXX_COMPILER_ID MATCHES "Clang" )
+        add_compile_options( -stdlib=libc++ )
+        # Needed under WSL for some reason?
+        PSI_add_link_options( Debug      -lc++ -lc++abi -lm -lubsan )
+        PSI_add_link_options( DevRelease -lc++ -lc++abi -lm -lubsan )
+        PSI_add_link_options( Release    -lc++ -lc++abi -lm         )
+    else() # GCC: uses libstdc++ by default
+        PSI_add_link_options( Debug      -lubsan )
+        PSI_add_link_options( DevRelease -lubsan )
+    endif()
 else()
     set( CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE true )
     PSI_add_link_options( Release ${PSI_linker_LTO} )

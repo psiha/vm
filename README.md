@@ -63,13 +63,13 @@ Highlights:
 
 ## Compiler & platform support
 
-| Compiler | Platform | CI | Notes |
-|----------|----------|:--:|-------|
-| Clang 21+ | Linux | :white_check_mark: | `-std=gnu++2c`, libc++ |
-| Clang-CL 20+ | Windows | :white_check_mark: | MSVC ABI, Clang frontend |
-| Apple Clang | macOS (ARM64) | :white_check_mark: | Latest Xcode |
-| GCC 14+ | Linux | :white_check_mark: | `-std=gnu++2c`, libstdc++ |
-| MSVC 19.x+ | Windows | :white_check_mark: | `/std:c++latest` |
+| Compiler | Platform | Standard library | CI | Notes |
+|----------|----------|------------------:|:--:|-------|
+| Clang 21+ | Linux | libc++ | :white_check_mark: | `-std=gnu++2c` |
+| Clang-CL 20+ | Windows | MS STL | :white_check_mark: | MSVC ABI, Clang frontend |
+| Apple Clang | macOS (ARM64) | libc++ | :white_check_mark: | Latest Xcode |
+| GCC 14+ | Linux | libstdc++ | :white_check_mark: | `-std=gnu++2c` |
+| MSVC 19.x+ | Windows | MS STL | :white_check_mark: | `/std:c++latest` |
 
 All configurations are tested in both **Debug** and **Release** builds.
 
