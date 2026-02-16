@@ -24,6 +24,7 @@
 
 #include "komparator.hpp"
 #include "lookup.hpp"
+#include "tr_vector.hpp"
 
 #include <boost/assert.hpp>
 
@@ -40,7 +41,6 @@
 #include <ranges>
 #include <type_traits>
 #include <utility>
-#include <vector>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -549,7 +549,7 @@ public:
         if ( &self == &source )
             return;
         if constexpr ( is_unique<decltype( self )> ) {
-            std::vector<size_type> transferIndices;
+            tr_vector<size_type> transferIndices;
             transferIndices.reserve( source.size() );
             {
                 auto const & srcKeys{ keys_of( source.storage_ ) };
