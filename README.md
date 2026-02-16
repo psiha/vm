@@ -67,7 +67,7 @@ Highlights:
 | Clang 21+ | Linux | :white_check_mark: | `-std=gnu++2c`, libc++ |
 | Clang-CL 20+ | Windows | :white_check_mark: | MSVC ABI, Clang frontend |
 | Apple Clang | macOS (ARM64) | :white_check_mark: | Latest Xcode |
-| GCC 15+ | Linux | :white_check_mark: | `-std=gnu++2c`, libstdc++ |
+| GCC 14+ | Linux | :white_check_mark: | `-std=gnu++2c`, libstdc++ |
 | MSVC 19.x+ | Windows | :white_check_mark: | `/std:c++latest` |
 
 All configurations are tested in both **Debug** and **Release** builds.
