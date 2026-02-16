@@ -250,7 +250,7 @@ namespace detail {
         auto const wrappedComp{ make_trivially_copyable_predicate( comp ) };
         auto const middle{ keys.begin() + static_cast<std::ptrdiff_t>( oldSize ) };
     #if PSI_VM_HAS_ADAPTIVE_MERGE
-        if constexpr ( use_adaptive_merge )
+        if constexpr ( use_adaptive_merge && requires { keys.data(); keys.capacity(); } )
         {
             // Use spare capacity past size() as uninitialized scratch buffer
             auto * const buffer { keys.data() + keys.size() };
@@ -385,6 +385,14 @@ namespace detail {
     template <typename KC>
     constexpr void storage_move_element( KC & c, typename KC::size_type const dst, typename KC::size_type const src ) noexcept {
         c[ dst ] = std::move( c[ src ] );
+    }
+
+    // storage_erase_if — dispatch erase_if on the underlying storage via ADL.
+    // Resolves to std::erase_if for std containers (vector, deque) and
+    // psi::vm::erase_if for tr_vector / paired_storage.
+    template <typename S, typename Pred>
+    constexpr auto storage_erase_if( S & s, Pred pred ) {
+        return erase_if( s, std::move( pred ) );
     }
 
 //==============================================================================
@@ -686,13 +694,13 @@ protected:
     //--------------------------------------------------------------------------
     // erase_if (friend, found via ADL from any derived class)
     //
-    // Delegates to erase_if(storage, pred):
-    //   set path  → std::erase_if on the underlying container (via ADL)
-    //   map path  → erase_if(paired_storage, pred) in flat_map.hpp
+    // Delegates to storage_erase_if (namespace-scope helper) which dispatches
+    // via ADL: std::erase_if for std containers, psi::vm::erase_if for
+    // tr_vector / paired_storage.
     //--------------------------------------------------------------------------
     template <typename Pred>
     friend constexpr size_type erase_if( flat_impl & c, Pred pred ) {
-        return static_cast<size_type>( erase_if( c.storage_, std::move( pred ) ) );
+        return static_cast<size_type>( storage_erase_if( c.storage_, std::move( pred ) ) );
     }
 
 
