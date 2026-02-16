@@ -77,15 +77,15 @@ err::fallible_result<void, error> set_size( file_handle::reference const file_ha
 
 std::uint64_t get_size( file_handle::const_reference const file_handle ) noexcept
 {
-#ifdef __clang__
-#   pragma clang diagnostic push
-#   pragma clang diagnostic ignored "-Wmissing-field-initializers"
+#if defined( __clang__ ) || defined( __GNUC__ )
+#   pragma GCC diagnostic push
+#   pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #endif
     struct stat file_info{ .st_size = 0 }; // ensure zero is returned for invalid handles (in unchecked/release builds)
     BOOST_VERIFY( ( ::fstat( file_handle.value, &file_info ) == 0 ) || ( file_handle == handle_traits::invalid_value ) );
     return static_cast<std::uint64_t>( file_info.st_size );
-#ifdef __clang__
-#   pragma clang diagnostic pop
+#if defined( __clang__ ) || defined( __GNUC__ )
+#   pragma GCC diagnostic pop
 #endif
 }
 
