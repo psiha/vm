@@ -63,7 +63,7 @@ constexpr bool use_linear_search_for_sorted_array
 // utility to help avoid having to write custom move ctors/assignments when having
 // non-owning unique pointers as members
 template <typename T>
-struct [[ clang::trivial_abi]] unique_nonowned_ptr {
+struct [[ clang::trivial_abi ]] unique_nonowned_ptr {
     constexpr unique_nonowned_ptr() noexcept = default;
     constexpr unique_nonowned_ptr( T * const p ) noexcept : ptr{ p } {}
     constexpr ~unique_nonowned_ptr() noexcept = default;
@@ -385,8 +385,6 @@ protected:
 
     void set_first_leaf( header &, node_slot ) noexcept;
     void set_last_leaf ( header &, node_slot ) noexcept;
-
-    void explicit_update_cached_pointers_wrkrnd() const noexcept;
 
 private:
     auto header_data() noexcept { return vm::header_data<header>( nodes_.user_header_data() ); }
@@ -3441,6 +3439,40 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
         return 0;
 
     auto const total_size{ other.size() };
+
+    if ( this->empty() ) [[ unlikely ]]
+    {
+        // Mirror the rvalue-merge's swap-when-empty optimization but for const
+        // sources: copy other's leaf chain into freshly allocated nodes and
+        // build the tree structure via bulk_insert_into_empty (same pattern as
+        // insert_presorted's empty-tree fast path).
+        bptree_base::reserve( other.used_number_of_nodes() );
+
+        node_slot first_leaf_slot;
+        node_slot prev_leaf_slot;
+
+        for ( auto src_slot{ other.first_leaf() }; src_slot; )
+        {
+            auto const & src{ other.leaf( src_slot ) };
+            auto & new_leaf{ this->template new_node<leaf_node>() };
+            auto const leaf_slot{ slot_of( new_leaf ) };
+
+            std::copy_n( src.keys, src.num_vals, new_leaf.keys );
+            new_leaf.num_vals = src.num_vals;
+
+            if ( !first_leaf_slot ) [[ unlikely ]] {
+                first_leaf_slot = leaf_slot;
+            } else {
+                base::link( leaf( prev_leaf_slot ), new_leaf );
+            }
+            prev_leaf_slot = leaf_slot;
+            src_slot = src.right;
+        }
+
+        base::bulk_insert_into_empty( first_leaf_slot, { prev_leaf_slot, leaf( prev_leaf_slot ).num_vals }, total_size );
+        return total_size;
+    }
+
     // We do not know the state (i.e. the fill factor) of the nodes from 'other'
     // and since we, for simplicity, copy them as-is in the tail-bulk phase we
     // cannot rely on the optimistic occupancy logic in reserve_additional to
@@ -3452,7 +3484,6 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
     //this->reserve_additional( total_size );
     bptree_base::reserve( this->used_number_of_nodes() + other.used_number_of_nodes() * 3 / 2 );
 
-    other.explicit_update_cached_pointers_wrkrnd();
     auto const p_new_nodes_begin{ other.ra_begin() };
     auto const p_new_nodes_end  { other.ra_end  () };
 
@@ -3605,7 +3636,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
 
     // does not actually move-out values - makes no difference currently (with
     // only trivial types support) - TODO
-    auto const inserted{ merge( static_cast<bp_tree_impl const &>( other ), unique ) };
+    auto const inserted{ merge( std::as_const( other ), unique ) };
     // TODO significant modifications will be required here when adding support
     // for non trivial types: avoid redundant destruction of moved out values -
     // make sure all are moved out or in-situ reset/destroyed (in case of
