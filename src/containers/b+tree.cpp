@@ -455,9 +455,9 @@ bptree_base::base_random_access_iterator::at_offset( difference_type const n ) c
 void bptree_base::swap( bptree_base & other ) noexcept
 {
     using std::swap;
-    swap( this->nodes_, other.nodes_ );
-#ifndef NDEBUG
+    swap( this->nodes_ , other.nodes_  );
     swap( this->p_hdr_ , other.p_hdr_  );
+#ifndef NDEBUG
     swap( this->nodes__, other.nodes__ );
 #endif
 }
@@ -599,12 +599,6 @@ void bptree_base::update_cached_pointers() noexcept {
 void bptree_base::update_dbg_helpers() noexcept {
 #ifndef NDEBUG
     nodes__ = nodes_;
-#endif
-}
-
-void bptree_base::explicit_update_cached_pointers_wrkrnd() const noexcept {
-#if __clang_major__ >= 21 // quick-workaround for Clang 21 badcoden/crashes in bp_tree_impl<>::merge
-    const_cast<bptree_base *>( this )->update_cached_pointers();
 #endif
 }
 
