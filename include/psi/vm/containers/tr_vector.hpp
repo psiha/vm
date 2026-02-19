@@ -418,7 +418,7 @@ public:
     {
         // Swap contents: other's destructor frees our old allocation.
         // (but first clear - to avoid surprising callers with leaving
-        // 'something' in other, i.e. leave only capacity)
+        // 'something' in other, i.e. leave only the capacity)
         this->clear();
         this->p_array_  = std::exchange( other.p_array_ , this->p_array_  );
         this->size_     = std::exchange( other.size_    , this->size_     );
@@ -430,9 +430,7 @@ public:
     constexpr tr_vector & operator=( std::initializer_list<value_type> const data ) { this->assign( data ); return *this; }
     constexpr ~tr_vector() noexcept
     {
-        // for non trivial types have/generate one check for both the destroy
-        // loop and call to free
-        if ( std::is_trivially_destructible_v<T> || p_array_ )
+        if ( p_array_ )
         {
             std::destroy_n( data(), size() );
             storage_free();
