@@ -94,7 +94,9 @@ private:
 public:
     using base::base;
     constexpr fc_vector() noexcept : size_{ 0 } {}
+#ifdef NDEBUG
     [[ gnu::warning( "copying fc_vector" ) ]]
+#endif
     constexpr fc_vector( fc_vector const & other ) noexcept( std::is_nothrow_copy_constructible_v<T> ) : base{}
     {
         if constexpr ( fixed_sized_copy ) {
