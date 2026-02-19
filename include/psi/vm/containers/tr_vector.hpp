@@ -377,9 +377,9 @@ private:
 
 struct tr_vector_options
 {
-    std::uint8_t alignment                { 0    }; // 0 -> default
-    bool         cache_capacity           { true }; // if your crt_alloc_size is slow (MSVC)
-    bool         explicit_geometric_growth{ true }; // if your realloc impl is slow (yes MSVC we are looking at you again)
+    std::uint8_t     alignment     { 0    }; // 0 -> default
+    bool             cache_capacity{ true }; // if your crt_alloc_size is slow (MSVC)
+    geometric_growth growth        {};       // geometric growth factor (3/2 = 1.5x default, num == den → disabled)
 }; // struct tr_vector_options
 
 template <typename T, typename sz_t = std::size_t, tr_vector_options options = {}>
@@ -418,7 +418,7 @@ public:
     {
         // Swap contents: other's destructor frees our old allocation.
         // (but first clear - to avoid surprising callers with leaving
-        // 'something' in other, i.e. leave only capacity)
+        // 'something' in other, i.e. leave only the capacity)
         this->clear();
         this->p_array_  = std::exchange( other.p_array_ , this->p_array_  );
         this->size_     = std::exchange( other.size_    , this->size_     );
@@ -430,9 +430,7 @@ public:
     constexpr tr_vector & operator=( std::initializer_list<value_type> const data ) { this->assign( data ); return *this; }
     constexpr ~tr_vector() noexcept
     {
-        // for non trivial types have/generate one check for both the destroy
-        // loop and call to free
-        if ( std::is_trivially_destructible_v<T> || p_array_ )
+        if ( p_array_ )
         {
             std::destroy_n( data(), size() );
             storage_free();
@@ -556,8 +554,8 @@ private:
         BOOST_ASSUME( cached_current_capacity == capacity() );
         auto const new_capacity
         {
-            options.explicit_geometric_growth
-                ? std::max( target_size, cached_current_capacity * 3U / 2U )
+            options.growth
+                ? options.growth( target_size, cached_current_capacity )
                 : target_size
         };
         p_array_ = al::grow_to( p_array_, cached_current_capacity, new_capacity );

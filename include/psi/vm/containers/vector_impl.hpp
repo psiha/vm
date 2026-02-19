@@ -56,6 +56,18 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
+struct geometric_growth
+{
+    std::uint8_t num{ 3 }; // numerator   (3/2 = 1.5x default)
+    std::uint8_t den{ 2 }; // denominator (num == den → no geometric growth)
+
+    /// Returns max(target_size, current_capacity * num / den).
+    template <std::unsigned_integral T>
+    [[ nodiscard ]] constexpr T operator()( T const target_size, T const current_capacity ) const noexcept { return std::max( target_size, static_cast<T>( current_capacity * num / den ) ); }
+
+    [[ nodiscard ]] explicit constexpr operator bool() const noexcept { return num != den; }
+};
+
 PSI_WARNING_DISABLE_PUSH()
 PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
 

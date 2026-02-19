@@ -14,6 +14,7 @@ set( vm_test_sources
     "${CMAKE_CURRENT_SOURCE_DIR}/b+tree.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/flat_map.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/flat_set.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/small_vector.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/vector.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/vm_vector.cpp"
 )
@@ -35,3 +36,12 @@ set_target_properties(
 PSI_target_fix_debug_symbols_for_osx_lto( vm_unit_tests )
 
 add_test( "vm_unit_tests" vm_unit_tests )
+
+# Codegen comparison for small_vector layouts (not a test — for disassembly inspection)
+add_library( small_vector_codegen OBJECT EXCLUDE_FROM_ALL
+    "${CMAKE_CURRENT_SOURCE_DIR}/small_vector_codegen.cpp"
+)
+target_link_libraries( small_vector_codegen PRIVATE psi::vm )
+if ( NOT MSVC OR CLANG_CL )
+    target_precompile_headers( small_vector_codegen REUSE_FROM psi_vm )
+endif()
