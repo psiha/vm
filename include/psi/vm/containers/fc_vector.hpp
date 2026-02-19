@@ -30,6 +30,7 @@
 //------------------------------------------------------------------------------
 #pragma once
 
+#include <psi/vm/containers/noninitialized_array.hpp>
 #include <psi/vm/containers/vector_impl.hpp>
 
 #include <boost/assert.hpp>
@@ -40,15 +41,6 @@
 namespace psi::vm
 {
 //------------------------------------------------------------------------------
-
-template <typename T, std::uint32_t size>
-union [[ clang::trivial_abi ]] noninitialized_array // utility for easier debugging: no need for special 'visualizers' over type-erased byte arrays
-{
-    constexpr  noninitialized_array() noexcept {}
-    constexpr ~noninitialized_array() noexcept {}
-
-    T data[ size ];
-}; // noninitialized_array
 
 struct assert_on_overflow {
     [[ noreturn ]] static void operator()() noexcept {

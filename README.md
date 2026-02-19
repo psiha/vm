@@ -25,6 +25,7 @@ Cross-platform abstractions over OS virtual memory and memory-mapped I/O:
 
 | Container | Description |
 |-----------|-------------|
+| `small_vector<T, N>` | **Small Vector** — inline (stack) buffer with heap spill. Three layout modes: *compact* (MSB tag, trivially relocatable, `[[clang::trivial_abi]]`), *compact_lsb* (LSB tag, optimal LE addressing), *pointer_based* (LLVM/Boost style, type-erasable via `small_vector_base<T>`). Configurable `geometric_growth` factor, `sz_t`, and alignment |
 | `tr_vector<T>` | **Trivially Relocatable Vector** — exploits trivial relocatability for move/realloc without element-wise copy |
 | `vm_vector<T>` | **VM-backed Vector** — persistent storage via memory-mapped files or shared memory, with configurable headers and allocation granularity |
 | `fc_vector<T, N>` | **Fixed Capacity Vector** — inline (stack) storage with compile-time capacity bound (`inplace_vector`-like) |

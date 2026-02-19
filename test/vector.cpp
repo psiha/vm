@@ -1,6 +1,7 @@
 // Comprehensive std::vector-like compliance tests for tr_vector and fc_vector
 // using Google Test typed tests to cover both implementations uniformly.
 #include <psi/vm/containers/fc_vector.hpp>
+#include <psi/vm/containers/small_vector.hpp>
 #include <psi/vm/containers/tr_vector.hpp>
 
 #include <gtest/gtest.h>
@@ -20,10 +21,18 @@ namespace psi::vm
 // Typed test suite — runs every test against all vector types
 ////////////////////////////////////////////////////////////////////////////////
 
+inline constexpr small_vector_options pointer_based_opts{ .layout = small_vector_layout::pointer_based };
+inline constexpr small_vector_options compact_lsb_opts  { .layout = small_vector_layout::compact_lsb   };
+
 using VectorTestTypes = ::testing::Types<
     tr_vector<int>,
     tr_vector<int, std::uint32_t>,
-    fc_vector<int, 256>
+    fc_vector<int, 256>,
+    small_vector<int, 16>,
+    small_vector<int, 4, std::uint32_t>,
+    small_vector<int, 8, std::size_t, pointer_based_opts>,
+    small_vector<int, 16, std::size_t, compact_lsb_opts>,
+    small_vector<int, 4, std::uint32_t, compact_lsb_opts>
 >;
 
 template <typename VecType>
