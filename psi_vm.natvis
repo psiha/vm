@@ -254,18 +254,56 @@
     <!-- ================================================================== -->
     <!-- psi::vm::small_vector                                              -->
     <!--                                                                     -->
-    <!-- Three layouts: compact (MSB flag), compact_lsb (LSB flag), and     -->
-    <!-- pointer_based. Natvis can't distinguish compact from compact_lsb   -->
-    <!-- (both have storage_ + size_ members). The default compact (MSB)    -->
-    <!-- entries are active below. For compact_lsb, uncomment that block    -->
-    <!-- and comment out the compact entries.                                -->
+    <!-- Four layouts resolved at compile time:                              -->
+    <!--   auto_select (default) → embedded or compact_lsb                  -->
+    <!--   embedded:     storage_.heap_.sz_ (LSB flag), no separate size_   -->
+    <!--   compact_lsb:  size_ (LSB flag) + storage_                        -->
+    <!--   compact:      size_ (MSB flag) + storage_                        -->
+    <!--   pointer_based: data_/size_/capacity_ from small_vector_base      -->
     <!--                                                                     -->
-    <!-- pointer_based layout has data_/size_/capacity_ (no storage_), so   -->
-    <!-- compact entries fail and fall through to the pointer_based entry.   -->
+    <!-- Disambiguation by member existence:                                -->
+    <!--   embedded has storage_.heap_.sz_ (unique — no size_ member)       -->
+    <!--   compact/compact_lsb have size_ + storage_.heap_.capacity_        -->
+    <!--   pointer_based has data_/size_/capacity_ (no storage_)            -->
+    <!--                                                                     -->
+    <!-- compact and compact_lsb can't coexist (same members, different     -->
+    <!-- flag logic). compact_lsb is active by default (matches             -->
+    <!-- auto_select). For explicit compact layout, swap the comments.      -->
     <!-- ================================================================== -->
 
-    <!-- compact layout (MSB flag, sz_t = unsigned __int64) -->
-    <Type Name="psi::vm::small_vector&lt;*,*,unsigned __int64,*&gt;" Priority="MediumHigh">
+    <!-- embedded layout (size inside union, LSB flag) -->
+    <!-- storage_.heap_.sz_ only exists in embedded — fails for compact/compact_lsb -->
+    <Type Name="psi::vm::small_vector&lt;*,*,*,*&gt;" Priority="MediumHigh">
+        <DisplayString Condition="(storage_.heap_.sz_ &amp; 1) != 0">{{ size={storage_.heap_.sz_ >> 1}, heap }}</DisplayString>
+        <DisplayString>{{ size={storage_.heap_.sz_ >> 1}, inline }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">storage_.heap_.sz_ >> 1</Item>
+            <Item Name="[capacity]" Condition="(storage_.heap_.sz_ &amp; 1) != 0" ExcludeView="simple">storage_.heap_.cap_</Item>
+            <Item Name="[heap]" ExcludeView="simple">(storage_.heap_.sz_ &amp; 1) != 0</Item>
+            <ArrayItems>
+                <Size>storage_.heap_.sz_ >> 1</Size>
+                <ValuePointer>((storage_.heap_.sz_ &amp; 1) != 0) ? storage_.heap_.data_ : storage_.inline_.elements_.data</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+
+    <!-- compact_lsb layout (LSB flag, any sz_t) — active by default (matches auto_select) -->
+    <Type Name="psi::vm::small_vector&lt;*,*,*,*&gt;" Priority="MediumLow">
+        <DisplayString Condition="(size_ &amp; 1) != 0">{{ size={size_ >> 1}, heap }}</DisplayString>
+        <DisplayString>{{ size={size_ >> 1}, inline }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">size_ >> 1</Item>
+            <Item Name="[capacity]" Condition="(size_ &amp; 1) != 0" ExcludeView="simple">storage_.heap_.capacity_</Item>
+            <Item Name="[heap]" ExcludeView="simple">(size_ &amp; 1) != 0</Item>
+            <ArrayItems>
+                <Size>size_ >> 1</Size>
+                <ValuePointer>((size_ &amp; 1) != 0) ? storage_.heap_.data_ : storage_.buffer_.data</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+
+    <!-- compact layout (MSB flag) — uncomment if using explicit compact layout:
+    <Type Name="psi::vm::small_vector&lt;*,*,unsigned __int64,*&gt;" Priority="MediumLow">
         <DisplayString Condition="(size_ &amp; 0x8000000000000000) != 0">{{ size={size_ &amp; 0x7FFFFFFFFFFFFFFF}, heap }}</DisplayString>
         <DisplayString>{{ size={size_}, inline }}</DisplayString>
         <Expand>
@@ -278,9 +316,7 @@
             </ArrayItems>
         </Expand>
     </Type>
-
-    <!-- compact layout (MSB flag, sz_t = unsigned int) -->
-    <Type Name="psi::vm::small_vector&lt;*,*,unsigned int,*&gt;" Priority="MediumHigh">
+    <Type Name="psi::vm::small_vector&lt;*,*,unsigned int,*&gt;" Priority="MediumLow">
         <DisplayString Condition="(size_ &amp; 0x80000000) != 0">{{ size={size_ &amp; 0x7FFFFFFF}, heap }}</DisplayString>
         <DisplayString>{{ size={size_}, inline }}</DisplayString>
         <Expand>
@@ -290,21 +326,6 @@
             <ArrayItems>
                 <Size>size_ &amp; 0x7FFFFFFF</Size>
                 <ValuePointer>((size_ &amp; 0x80000000) != 0) ? storage_.heap_.data_ : storage_.buffer_.data</ValuePointer>
-            </ArrayItems>
-        </Expand>
-    </Type>
-
-    <!-- compact_lsb layout (LSB flag, any sz_t) — uncomment if using compact_lsb:
-    <Type Name="psi::vm::small_vector&lt;*,*,*,*&gt;" Priority="MediumHigh">
-        <DisplayString Condition="(size_ &amp; 1) != 0">{{ size={size_ >> 1}, heap }}</DisplayString>
-        <DisplayString>{{ size={size_ >> 1}, inline }}</DisplayString>
-        <Expand>
-            <Item Name="[size]" ExcludeView="simple">size_ >> 1</Item>
-            <Item Name="[capacity]" Condition="(size_ &amp; 1) != 0" ExcludeView="simple">storage_.heap_.capacity_</Item>
-            <Item Name="[heap]" ExcludeView="simple">(size_ &amp; 1) != 0</Item>
-            <ArrayItems>
-                <Size>size_ >> 1</Size>
-                <ValuePointer>((size_ &amp; 1) != 0) ? storage_.heap_.data_ : storage_.buffer_.data</ValuePointer>
             </ArrayItems>
         </Expand>
     </Type>

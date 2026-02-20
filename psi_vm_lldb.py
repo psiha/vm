@@ -313,6 +313,137 @@ def bptree_summary(valobj, internal_dict):
 
 
 # ==============================================================================
+# small_vector
+# ==============================================================================
+
+class SmallVectorSynthProvider:
+    """Synthetic provider for psi::vm::small_vector across all 4 layout modes.
+
+    Layout detection via member probing:
+      embedded:      storage_.heap_.sz_ exists (CIS field inside union)
+      compact_lsb:   external size_ before storage_ (lower address), LSB flag
+      compact:       external size_ after storage_ (higher address), MSB flag
+      pointer_based: data_ in base class, no storage_ union
+    """
+
+    def __init__(self, valobj, internal_dict):
+        self.valobj = valobj
+        self.size = 0
+        self.is_heap = False
+        self.data_ref = None
+        self.layout = None
+
+    def update(self):
+        self.size = 0
+        self.is_heap = False
+        self.data_ref = None
+        self.layout = None
+
+        storage = get_child_by_name(self.valobj, 'storage_')
+        if storage.IsValid():
+            heap = storage.GetChildMemberWithName('heap_')
+            if heap.IsValid() and heap.GetChildMemberWithName('sz_').IsValid():
+                self._update_embedded(storage, heap)
+            elif heap.IsValid() and heap.GetChildMemberWithName('capacity_').IsValid():
+                self._update_compact(storage, heap)
+            return
+
+        data = get_child_by_name(self.valobj, 'data_')
+        if data.IsValid():
+            self._update_pointer_based()
+
+    def _update_embedded(self, storage, heap):
+        self.layout = 'embedded'
+        raw_sz = heap.GetChildMemberWithName('sz_').GetValueAsUnsigned(0)
+        self.is_heap = (raw_sz & 1) != 0
+        self.size = raw_sz >> 1
+        if self.is_heap:
+            self.data_ref = heap.GetChildMemberWithName('data_')
+        else:
+            inline = storage.GetChildMemberWithName('inline_')
+            if inline.IsValid():
+                elements = inline.GetChildMemberWithName('elements_')
+                if elements.IsValid():
+                    self.data_ref = elements.GetChildMemberWithName('data')
+
+    def _update_compact(self, storage, heap):
+        size_member = get_child_by_name(self.valobj, 'size_')
+        raw_sz = size_member.GetValueAsUnsigned(0)
+
+        size_addr = size_member.GetLoadAddress()
+        storage_addr = storage.GetLoadAddress()
+
+        if size_addr < storage_addr:
+            self.layout = 'compact_lsb'
+            self.is_heap = (raw_sz & 1) != 0
+            self.size = raw_sz >> 1
+        else:
+            self.layout = 'compact'
+            sz_bits = size_member.GetType().GetByteSize() * 8
+            msb = 1 << (sz_bits - 1)
+            self.is_heap = (raw_sz & msb) != 0
+            self.size = raw_sz & ~msb
+
+        if self.is_heap:
+            self.data_ref = heap.GetChildMemberWithName('data_')
+        else:
+            buf = storage.GetChildMemberWithName('buffer_')
+            if buf.IsValid():
+                self.data_ref = buf.GetChildMemberWithName('data')
+
+    def _update_pointer_based(self):
+        self.layout = 'pointer_based'
+        self.size = get_child_by_name(self.valobj, 'size_').GetValueAsUnsigned(0)
+        self.data_ref = get_child_by_name(self.valobj, 'data_')
+        self.is_heap = None
+
+    def num_children(self):
+        return self.size
+
+    def get_child_index(self, name):
+        try:
+            return int(name.lstrip('[').rstrip(']'))
+        except ValueError:
+            return -1
+
+    def get_child_at_index(self, index):
+        if index < 0 or index >= self.size or self.data_ref is None:
+            return None
+        if self.data_ref.GetType().IsPointerType():
+            elem_type = self.data_ref.GetType().GetPointeeType()
+            offset = index * elem_type.GetByteSize()
+            return self.data_ref.CreateChildAtOffset(f'[{index}]', offset, elem_type)
+        else:
+            return self.data_ref.GetChildAtIndex(index, lldb.eNoDynamicValues, True)
+
+
+def small_vector_summary(valobj, internal_dict):
+    storage = get_child_by_name(valobj, 'storage_')
+    if storage.IsValid():
+        heap = storage.GetChildMemberWithName('heap_')
+        if heap.IsValid():
+            sz_field = heap.GetChildMemberWithName('sz_')
+            if sz_field.IsValid():
+                raw = sz_field.GetValueAsUnsigned(0)
+                return f'size={raw >> 1}, {"heap" if raw & 1 else "inline"}'
+            if heap.GetChildMemberWithName('capacity_').IsValid():
+                size_member = get_child_by_name(valobj, 'size_')
+                raw = size_member.GetValueAsUnsigned(0)
+                if size_member.GetLoadAddress() < storage.GetLoadAddress():
+                    size = raw >> 1
+                    is_heap = (raw & 1) != 0
+                else:
+                    sz_bits = size_member.GetType().GetByteSize() * 8
+                    msb = 1 << (sz_bits - 1)
+                    size = raw & ~msb
+                    is_heap = (raw & msb) != 0
+                return f'size={size}, {"heap" if is_heap else "inline"}'
+
+    size = get_child_by_name(valobj, 'size_').GetValueAsUnsigned(0)
+    return f'size={size}'
+
+
+# ==============================================================================
 # pass_in_reg / pass_rv_in_reg
 # ==============================================================================
 
@@ -379,6 +510,10 @@ def __lldb_init_module(debugger, internal_dict):
     # bptree
     debugger.HandleCommand(f'type summary add -F psi_vm_lldb.bptree_summary -x "^{prefix}bptree_base$" -w psi_vm')
     debugger.HandleCommand(f'type summary add -F psi_vm_lldb.bptree_summary -x "^{prefix}bp_tree_impl<" -w psi_vm')
+
+    # small_vector
+    debugger.HandleCommand(f'type summary add -F psi_vm_lldb.small_vector_summary -x "^{prefix}small_vector<" -w psi_vm')
+    debugger.HandleCommand(f'type synthetic add -l psi_vm_lldb.SmallVectorSynthProvider -x "^{prefix}small_vector<" -w psi_vm')
 
     # pass_in_reg / pass_rv_in_reg
     debugger.HandleCommand(f'type summary add -F psi_vm_lldb.pass_in_reg_summary -x "^{prefix}pass_in_reg<" -w psi_vm')
