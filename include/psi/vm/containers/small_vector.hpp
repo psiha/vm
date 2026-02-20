@@ -1,12 +1,14 @@
 ////////////////////////////////////////////////////////////////////////////////
 /// Small vector — inline (stack) buffer with heap spill
 ///
-/// Three layout modes selectable via NTTP options:
-///  - compact (default): union-based, MSB-of-size flag, trivially relocatable,
-///    [[clang::trivial_abi]]. No self-referential pointer.
-///  - compact_lsb: like compact but size_ comes first (before the union) and
-///    LSB of size_ is the heap flag. On LE systems the flag is in byte 0 of the
-///    struct for optimal addressing (test byte [ptr], 1).
+/// Four layout modes selectable via NTTP options:
+///  - auto_select (default): picks the best layout based on T and sz_t.
+///    Resolves to compact_lsb when sizeof(sz_t) > alignof(T), else embedded.
+///  - compact: union-based, MSB-of-size flag, trivially relocatable.
+///  - compact_lsb: union-based, size-first with LSB flag, trivially relocatable.
+///  - embedded: union-based, size inside union (LSB flag, common initial
+///    sequence), trivially relocatable. No external size field — sometimes
+///    smaller sizeof than compact_lsb, never larger.
 ///  - pointer_based: Boost/LLVM SmallVector style — type-erasable across N
 ///    values via small_vector_base<T>, trivial data() getter, but NOT trivially
 ///    relocatable (data_ points to inline buffer when small).
@@ -42,9 +44,11 @@ namespace psi::vm
 //------------------------------------------------------------------------------
 
 enum class small_vector_layout : std::uint8_t {
-    compact_lsb,   // union-based, size-first with LSB flag, trivially relocatable
+    auto_select,   // default — resolved to best layout based on T and sz_t
     compact,       // union-based, MSB-of-size flag, trivially relocatable
-    pointer_based  // LLVM/Boost style, type-erasable
+    compact_lsb,   // union-based, size-first with LSB flag, trivially relocatable
+    embedded,      // union-based, size inside union (LSB flag), trivially relocatable
+    pointer_based, // LLVM/Boost style, type-erasable, NOT trivially relocatable
 };
 
 struct small_vector_options
@@ -56,10 +60,28 @@ struct small_vector_options
 
 
 ////////////////////////////////////////////////////////////////////////////////
+// auto_select resolution
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename T, typename sz_t>
+consteval small_vector_layout resolve_layout( small_vector_layout const l ) noexcept
+{
+    if ( l != small_vector_layout::auto_select )
+        return l;
+    return ( sizeof( sz_t ) > alignof( T ) )
+        ? small_vector_layout::compact_lsb
+        : small_vector_layout::embedded;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////
 // Forward declarations
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename T, std::uint32_t N, typename sz_t = std::size_t, small_vector_options options = {}>
+template <typename T, std::uint32_t N, typename sz_t, small_vector_options options>
+class sv_union_base;
+
+template <typename T, std::uint32_t N, typename sz_t = std::uint32_t, small_vector_options options = {}>
 class small_vector;
 
 // pointer_based layout base (N-independent)
@@ -69,12 +91,32 @@ class small_vector_base;
 
 
 ////////////////////////////////////////////////////////////////////////////////
-// Layout A: Compact (union-based) — trivially relocatable
+// sv_union_base — deducing-this mixin for all union-based layouts
+//
+// Sits between vector_impl and the final layout class. Contains all logic
+// shared across compact, compact_lsb, and embedded layouts. Uses C++23
+// deducing this (P0847) to access the final layout class — no Derived
+// template parameter needed.
+//
+// Required interface from the final layout class:
+//   bool is_heap() const noexcept
+//   sz_t size() const noexcept
+//   void set_inline_size( sz_t ) noexcept
+//   void set_heap_state( T*, sz_t cap, sz_t sz ) noexcept
+//   void set_size_preserving_flag( sz_t ) noexcept
+//   void do_dec_size() noexcept
+//   void do_inc_size() noexcept
+//   T*       buffer_data()       noexcept
+//   T const* buffer_data() const noexcept
+//   T* __restrict&       heap_data_ref()       noexcept
+//   T* __restrict const& heap_data_ref() const noexcept
+//   sz_t&       heap_cap_ref()       noexcept
+//   sz_t const& heap_cap_ref() const noexcept
+//   static constexpr sz_t max_size_val
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename T, std::uint32_t N, typename sz_t, small_vector_options options>
-requires( options.layout == small_vector_layout::compact && is_trivially_moveable<T> )
-class [[ nodiscard, clang::trivial_abi ]] small_vector<T, N, sz_t, options>
+class sv_union_base
     :
     public vector_impl<small_vector<T, N, sz_t, options>, T, sz_t>
 {
@@ -90,15 +132,200 @@ public:
     using allocator_type = crt_aligned_allocator<T, sz_t, alignment>;
 
 private:
-    using al   = allocator_type;
-    using base = vector_impl<small_vector, T, sz_t>;
+    using al      = allocator_type;
+    using vi_base = vector_impl<small_vector<T, N, sz_t, options>, T, sz_t>;
+    friend vi_base;
+
+public:
+    using vi_base::vi_base;
+
+    [[ nodiscard, gnu::pure ]] sz_t capacity( this auto const & self ) noexcept
+    {
+        return self.is_heap() ? self.heap_cap_ref() : sz_t{ N };
+    }
+
+    [[ nodiscard, gnu::pure ]] auto data( this auto & self ) noexcept { return self.is_heap() ? self.heap_data_ref() : self.buffer_data(); }
+
+    void reserve( this auto & self, size_type const new_capacity )
+    {
+        if ( new_capacity > self.capacity() )
+            self.grow_heap( new_capacity );
+    }
+
+protected:
+    // Helper bodies for derived-class copy/move/dtor one-liners.
+
+    void copy_init_from( this auto & self, auto const & other )
+    {
+        auto const sz { other.size() };
+        auto const dst{ self.storage_init( sz ) };
+        try { std::uninitialized_copy_n( other.data(), sz, dst ); }
+        catch( ... ) { self.storage_free(); throw; }
+    }
+
+    void move_init_from( this auto & self, auto && other ) noexcept
+    {
+        auto const sz{ other.size() };
+        if ( other.is_heap() )
+        {
+            self.set_heap_state( other.heap_data_ref(), other.heap_cap_ref(), sz );
+        }
+        else
+        {
+            std::memcpy( static_cast<void *>( self.buffer_data() ), other.buffer_data(), sz * sizeof( T ) );
+            self.set_inline_size( sz );
+        }
+        other.set_inline_size( 0 );
+    }
+
+    void move_assign_from( this auto & self, auto && other ) noexcept
+    {
+        self.clear();
+        if ( self.is_heap() )
+            al::deallocate( self.heap_data_ref(), self.heap_cap_ref() );
+        auto const sz{ other.size() };
+        if ( other.is_heap() )
+        {
+            self.set_heap_state( other.heap_data_ref(), other.heap_cap_ref(), sz );
+        }
+        else
+        {
+            std::memcpy( static_cast<void *>( self.buffer_data() ), other.buffer_data(), sz * sizeof( T ) );
+            self.set_inline_size( sz );
+        }
+        other.set_inline_size( 0 );
+    }
+
+    void destroy_and_free( this auto & self ) noexcept
+    {
+        std::destroy_n( self.data(), self.size() );
+        if ( self.is_heap() )
+            al::deallocate( self.heap_data_ref(), self.heap_cap_ref() );
+    }
+
+private:
+    // vector_impl storage interface
+
+    [[ gnu::cold ]]
+#ifdef _MSC_VER
+    __declspec( noalias )
+#endif
+    constexpr value_type * storage_init( this auto & self, size_type const initial_size )
+    {
+        if ( initial_size > N )
+        {
+            auto const p{ al::allocate( initial_size ) };
+            self.set_heap_state( p, initial_size, initial_size );
+            return p;
+        }
+        self.set_inline_size( initial_size );
+        return self.buffer_data();
+    }
+
+    [[ gnu::returns_nonnull ]]
+    constexpr value_type * storage_grow_to( this auto & self, size_type const target_size )
+    {
+        auto const current_cap{ self.capacity() };
+        BOOST_ASSUME( target_size >= self.size() );
+        if ( target_size > current_cap ) [[ unlikely ]]
+        {
+            self.grow_heap( options.growth( target_size, current_cap ) );
+        }
+        self.set_size_preserving_flag( target_size );
+        return self.data();
+    }
+
+    constexpr value_type * storage_shrink_to( this auto & self, size_type const target_size ) noexcept
+    {
+        BOOST_ASSUME( target_size <= self.size() );
+        if ( self.is_heap() )
+        {
+            self.heap_data_ref() = al::shrink_to( self.heap_data_ref(), self.size(), target_size );
+            self.heap_cap_ref()  = target_size;
+            BOOST_ASSUME( self.heap_data_ref() || !target_size );
+        }
+        self.set_size_preserving_flag( target_size );
+        return self.data();
+    }
+
+    constexpr void storage_shrink_size_to( this auto & self, size_type const target_size ) noexcept
+    {
+        BOOST_ASSUME( self.size() >= target_size );
+        self.set_size_preserving_flag( target_size );
+    }
+
+    // storage_dec_size and storage_inc_size are layout-specific — forwarded.
+    // Named do_* in layout classes to avoid hiding this mixin's methods
+    // (vector_impl calls self.storage_dec_size() → finds this method,
+    //  which then calls self.do_dec_size() → finds the layout's version).
+    void storage_dec_size( this auto & self ) noexcept { self.do_dec_size(); }
+    void storage_inc_size( this auto & self ) noexcept { self.do_inc_size(); }
+
+#ifdef _MSC_VER
+    bool storage_try_expand_capacity( this auto & self, size_type const target_capacity ) noexcept
+    requires( alignment <= detail::guaranteed_alignment )
+    {
+        if ( !self.is_heap() )
+            return false;
+        namespace bc = boost::container;
+        auto recv_size{ target_capacity };
+        auto reuse    { self.heap_data_ref() };
+        auto const result{ al::allocation_command(
+            bc::expand_fwd | bc::nothrow_allocation,
+            target_capacity, recv_size, reuse
+        ) };
+        if ( result )
+        {
+            self.heap_cap_ref() = recv_size;
+            return true;
+        }
+        return false;
+    }
+#endif
+
+    void storage_free( this auto & self ) noexcept
+    {
+        if ( self.is_heap() )
+            al::deallocate( self.heap_data_ref(), self.heap_cap_ref() );
+        self.set_inline_size( 0 );
+    }
+
+    [[ gnu::cold, gnu::noinline, clang::preserve_most ]]
+    void grow_heap( this auto & self, size_type const new_capacity )
+    {
+        BOOST_ASSUME( new_capacity > self.capacity() );
+        if ( self.is_heap() )
+        {
+            self.heap_data_ref() = al::grow_to( self.heap_data_ref(), self.heap_cap_ref(), new_capacity );
+            self.heap_cap_ref()  = new_capacity;
+        }
+        else
+        {
+            auto const sz{ self.size() };
+            auto const p { al::allocate( new_capacity ) };
+            std::memcpy( static_cast<void *>( p ), self.buffer_data(), sz * sizeof( T ) );
+            self.set_heap_state( p, new_capacity, sz );
+        }
+    }
+}; // class sv_union_base
+
+
+////////////////////////////////////////////////////////////////////////////////
+// Layout A: Compact (union-based, MSB flag) — trivially relocatable
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename T, std::uint32_t N, typename sz_t, small_vector_options options>
+requires( resolve_layout<T, sz_t>( options.layout ) == small_vector_layout::compact && is_trivially_moveable<T> )
+class [[ nodiscard, clang::trivial_abi ]] small_vector<T, N, sz_t, options>
+    :
+    public sv_union_base<T, N, sz_t, options>
+{
+    using mixin = sv_union_base<T, N, sz_t, options>;
+    friend mixin;
 
     static sz_t constexpr heap_flag   { sz_t{ 1 } << ( sizeof( sz_t ) * CHAR_BIT - 1 ) };
     static sz_t constexpr size_mask   { ~heap_flag };
-    static sz_t constexpr max_size_val{ size_mask  };
 
-    // Named union with explicit ctor/dtor so that the noninitialized_array
-    // variant member does not delete the enclosing type's default constructor.
     union data_t {
         constexpr  data_t() noexcept : buffer_{} {}
         constexpr ~data_t() noexcept {}
@@ -110,6 +337,7 @@ private:
         noninitialized_array<T, N> buffer_;
     };
 
+    // --- policy interface ---
     [[ nodiscard, gnu::pure ]] bool is_heap() const noexcept { return ( size_ & heap_flag ) != 0; }
 
     void set_inline_size( sz_t const sz ) noexcept
@@ -131,193 +359,37 @@ private:
         size_ = sz | ( size_ & heap_flag );
     }
 
+    void do_dec_size() noexcept { BOOST_ASSUME( size() >= 1 ); --size_; }
+    void do_inc_size() noexcept { BOOST_ASSUME( size() < this->capacity() ); ++size_; }
+
+    [[ nodiscard, gnu::pure ]] T       * buffer_data()       noexcept { return storage_.buffer_.data; }
+    [[ nodiscard, gnu::pure ]] T const * buffer_data() const noexcept { return storage_.buffer_.data; }
+
+    [[ nodiscard, gnu::pure ]] T * __restrict & heap_data_ref()       noexcept { return storage_.heap_.data_; }
+    [[ nodiscard, gnu::pure ]] T * __restrict const & heap_data_ref() const noexcept { return storage_.heap_.data_; }
+
+    [[ nodiscard, gnu::pure ]] sz_t       & heap_cap_ref()       noexcept { return storage_.heap_.capacity_; }
+    [[ nodiscard, gnu::pure ]] sz_t const & heap_cap_ref() const noexcept { return storage_.heap_.capacity_; }
+
+    static sz_t constexpr max_size_val{ size_mask };
+
 public:
-    using base::base;
+    using mixin::mixin;
 
     constexpr small_vector() noexcept : size_{ 0 } {}
 
-    constexpr small_vector( small_vector const & other ) : base{}
-    {
-        auto const sz{ other.size() };
-        auto const dst{ storage_init( sz ) };
-        try { std::uninitialized_copy_n( other.data(), sz, dst ); }
-        catch( ... ) { storage_free(); throw; }
-    }
-
-    constexpr small_vector( small_vector && other ) noexcept : base{}
-    {
-        auto const sz{ other.size() };
-        if ( other.is_heap() )
-        {
-            set_heap_state( other.storage_.heap_.data_, other.storage_.heap_.capacity_, sz );
-        }
-        else
-        {
-            std::memcpy( static_cast<void *>( storage_.buffer_.data ), other.storage_.buffer_.data, sz * sizeof( T ) );
-            set_inline_size( sz );
-        }
-        other.set_inline_size( 0 );
-    }
-
-    constexpr small_vector & operator=( small_vector const & other )
-    {
-        return ( *this = small_vector( other ) );
-    }
-
-    constexpr small_vector & operator=( small_vector && other ) noexcept
-    {
-        this->clear();
-        if ( is_heap() )
-            al::deallocate( storage_.heap_.data_, storage_.heap_.capacity_ );
-        auto const sz{ other.size() };
-        if ( other.is_heap() )
-        {
-            set_heap_state( other.storage_.heap_.data_, other.storage_.heap_.capacity_, sz );
-        }
-        else
-        {
-            std::memcpy( static_cast<void *>( storage_.buffer_.data ), other.storage_.buffer_.data, sz * sizeof( T ) );
-            set_inline_size( sz );
-        }
-        other.set_inline_size( 0 );
-        return *this;
-    }
-
-    constexpr small_vector & operator=( std::initializer_list<value_type> const data ) { this->assign( data ); return *this; }
-
-    constexpr ~small_vector() noexcept
-    {
-        std::destroy_n( data(), size() );
-        if ( is_heap() )
-            al::deallocate( storage_.heap_.data_, storage_.heap_.capacity_ );
-    }
+    constexpr small_vector( small_vector const & other ) : mixin{} { this->copy_init_from( other ); }
+    constexpr small_vector( small_vector && other ) noexcept : mixin{} { this->move_init_from( std::move( other ) ); }
+    constexpr small_vector & operator=( small_vector const & other ) { return ( *this = small_vector( other ) ); }
+    constexpr small_vector & operator=( small_vector && other ) noexcept { this->move_assign_from( std::move( other ) ); return *this; }
+    constexpr small_vector & operator=( std::initializer_list<T> const data ) { this->assign( data ); return *this; }
+    constexpr ~small_vector() noexcept { this->destroy_and_free(); }
 
     [[ nodiscard, gnu::pure ]] sz_t size() const noexcept
     {
         auto const sz{ size_ & size_mask };
         BOOST_ASSUME( sz <= max_size_val );
         return sz;
-    }
-    [[ nodiscard, gnu::pure ]] sz_t capacity() const noexcept
-    {
-        return is_heap() ? storage_.heap_.capacity_ : sz_t{ N };
-    }
-
-    [[ nodiscard, gnu::pure ]] value_type       * data()       noexcept { return is_heap() ? storage_.heap_.data_ : storage_.buffer_.data; }
-    [[ nodiscard, gnu::pure ]] value_type const * data() const noexcept { return is_heap() ? storage_.heap_.data_ : storage_.buffer_.data; }
-
-    void reserve( size_type const new_capacity )
-    {
-        if ( new_capacity > capacity() )
-            grow_heap( new_capacity );
-    }
-
-private: friend base;
-    [[ gnu::cold ]]
-#ifdef _MSC_VER
-    __declspec( noalias )
-#endif
-    constexpr value_type * storage_init( size_type const initial_size )
-    {
-        if ( initial_size > N )
-        {
-            auto const p{ al::allocate( initial_size ) };
-            set_heap_state( p, initial_size, initial_size );
-            return p;
-        }
-        set_inline_size( initial_size );
-        return storage_.buffer_.data;
-    }
-
-    [[ gnu::returns_nonnull ]]
-    constexpr value_type * storage_grow_to( size_type const target_size )
-    {
-        auto const current_cap{ capacity() };
-        BOOST_ASSUME( target_size >= size() );
-        if ( target_size > current_cap ) [[ unlikely ]]
-        {
-            grow_heap( options.growth( target_size, current_cap ) );
-        }
-        set_size_preserving_flag( target_size );
-        return data();
-    }
-
-    constexpr value_type * storage_shrink_to( size_type const target_size ) noexcept
-    {
-        BOOST_ASSUME( target_size <= size() );
-        if ( is_heap() )
-        {
-            storage_.heap_.data_     = al::shrink_to( storage_.heap_.data_, size(), target_size );
-            storage_.heap_.capacity_ = target_size;
-            BOOST_ASSUME( storage_.heap_.data_ || !target_size );
-        }
-        set_size_preserving_flag( target_size );
-        return data();
-    }
-
-    constexpr void storage_shrink_size_to( size_type const target_size ) noexcept
-    {
-        BOOST_ASSUME( size() >= target_size );
-        set_size_preserving_flag( target_size );
-    }
-
-    void storage_dec_size() noexcept
-    {
-        BOOST_ASSUME( size() >= 1 );
-        --size_;
-    }
-    void storage_inc_size() noexcept
-    {
-        BOOST_ASSUME( size() < capacity() );
-        ++size_;
-    }
-
-#ifdef _MSC_VER
-    bool storage_try_expand_capacity( size_type const target_capacity ) noexcept
-    requires( alignment <= detail::guaranteed_alignment )
-    {
-        if ( !is_heap() )
-            return false;
-        namespace bc = boost::container;
-        auto recv_size{ target_capacity };
-        auto reuse    { storage_.heap_.data_ };
-        auto const result{ al::allocation_command(
-            bc::expand_fwd | bc::nothrow_allocation,
-            target_capacity, recv_size, reuse
-        ) };
-        if ( result )
-        {
-            storage_.heap_.capacity_ = recv_size;
-            return true;
-        }
-        return false;
-    }
-#endif
-
-    void storage_free() noexcept
-    {
-        if ( is_heap() )
-            al::deallocate( storage_.heap_.data_, storage_.heap_.capacity_ );
-        set_inline_size( 0 );
-    }
-
-private:
-    [[ gnu::cold, gnu::noinline, clang::preserve_most ]]
-    void grow_heap( size_type const new_capacity )
-    {
-        BOOST_ASSUME( new_capacity > capacity() );
-        if ( is_heap() )
-        {
-            storage_.heap_.data_     = al::grow_to( storage_.heap_.data_, storage_.heap_.capacity_, new_capacity );
-            storage_.heap_.capacity_ = new_capacity;
-        }
-        else
-        {
-            auto const sz{ size() };
-            auto const p { al::allocate( new_capacity ) };
-            std::memcpy( static_cast<void *>( p ), storage_.buffer_.data, sz * sizeof( T ) );
-            set_heap_state( p, new_capacity, sz );
-        }
     }
 
 private:
@@ -620,32 +692,19 @@ private:
 ////////////////////////////////////////////////////////////////////////////////
 // Layout C: Compact LSB (size-first, LSB flag) — trivially relocatable
 //
-// Like compact, but size_ comes first (before the union) and the LSB of size_
-// is the heap discriminant. On little-endian, this places the flag in byte 0
-// of the struct for optimal addressing (test byte [ptr], 1).
+// size_ comes first (before the union), LSB of size_ is the heap discriminant.
+// On LE systems the flag is in byte 0 for optimal addressing.
 // size() = size_ >> 1, is_heap() = size_ & 1.
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename T, std::uint32_t N, typename sz_t, small_vector_options options>
-requires( options.layout == small_vector_layout::compact_lsb && is_trivially_moveable<T> )
+requires( resolve_layout<T, sz_t>( options.layout ) == small_vector_layout::compact_lsb && is_trivially_moveable<T> )
 class [[ nodiscard, clang::trivial_abi ]] small_vector<T, N, sz_t, options>
     :
-    public vector_impl<small_vector<T, N, sz_t, options>, T, sz_t>
+    public sv_union_base<T, N, sz_t, options>
 {
-    static_assert( N > 0, "Use tr_vector for N=0" );
-
-public:
-    static std::uint8_t constexpr alignment{ options.alignment ? options.alignment : std::uint8_t{ alignof( std::conditional_t<complete<T>, T, std::max_align_t> ) } };
-
-    static bool constexpr storage_zero_initialized{ false };
-
-    using size_type      = sz_t;
-    using value_type     = T;
-    using allocator_type = crt_aligned_allocator<T, sz_t, alignment>;
-
-private:
-    using al   = allocator_type;
-    using base = vector_impl<small_vector, T, sz_t>;
+    using mixin = sv_union_base<T, N, sz_t, options>;
+    friend mixin;
 
     static sz_t constexpr max_size_val{ std::numeric_limits<sz_t>::max() >> 1 };
 
@@ -660,6 +719,7 @@ private:
         noninitialized_array<T, N> buffer_;
     };
 
+    // --- policy interface ---
     [[ nodiscard, gnu::pure ]] bool is_heap() const noexcept { return ( size_ & 1 ) != 0; }
 
     void set_inline_size( sz_t const sz ) noexcept
@@ -680,66 +740,29 @@ private:
         size_ = ( sz << 1 ) | ( size_ & 1 );
     }
 
+    void do_dec_size() noexcept { BOOST_ASSUME( size() >= 1 ); size_ -= 2; }
+    void do_inc_size() noexcept { BOOST_ASSUME( size() < this->capacity() ); size_ += 2; }
+
+    [[ nodiscard, gnu::pure ]] T       * buffer_data()       noexcept { return storage_.buffer_.data; }
+    [[ nodiscard, gnu::pure ]] T const * buffer_data() const noexcept { return storage_.buffer_.data; }
+
+    [[ nodiscard, gnu::pure ]] T * __restrict & heap_data_ref()       noexcept { return storage_.heap_.data_; }
+    [[ nodiscard, gnu::pure ]] T * __restrict const & heap_data_ref() const noexcept { return storage_.heap_.data_; }
+
+    [[ nodiscard, gnu::pure ]] sz_t       & heap_cap_ref()       noexcept { return storage_.heap_.capacity_; }
+    [[ nodiscard, gnu::pure ]] sz_t const & heap_cap_ref() const noexcept { return storage_.heap_.capacity_; }
+
 public:
-    using base::base;
+    using mixin::mixin;
 
     constexpr small_vector() noexcept : size_{ 0 } {}
 
-    constexpr small_vector( small_vector const & other ) : base{}
-    {
-        auto const sz{ other.size() };
-        auto const dst{ storage_init( sz ) };
-        try { std::uninitialized_copy_n( other.data(), sz, dst ); }
-        catch( ... ) { storage_free(); throw; }
-    }
-
-    constexpr small_vector( small_vector && other ) noexcept : base{}
-    {
-        auto const sz{ other.size() };
-        if ( other.is_heap() )
-        {
-            set_heap_state( other.storage_.heap_.data_, other.storage_.heap_.capacity_, sz );
-        }
-        else
-        {
-            std::memcpy( static_cast<void *>( storage_.buffer_.data ), other.storage_.buffer_.data, sz * sizeof( T ) );
-            set_inline_size( sz );
-        }
-        other.set_inline_size( 0 );
-    }
-
-    constexpr small_vector & operator=( small_vector const & other )
-    {
-        return ( *this = small_vector( other ) );
-    }
-
-    constexpr small_vector & operator=( small_vector && other ) noexcept
-    {
-        this->clear();
-        if ( is_heap() )
-            al::deallocate( storage_.heap_.data_, storage_.heap_.capacity_ );
-        auto const sz{ other.size() };
-        if ( other.is_heap() )
-        {
-            set_heap_state( other.storage_.heap_.data_, other.storage_.heap_.capacity_, sz );
-        }
-        else
-        {
-            std::memcpy( static_cast<void *>( storage_.buffer_.data ), other.storage_.buffer_.data, sz * sizeof( T ) );
-            set_inline_size( sz );
-        }
-        other.set_inline_size( 0 );
-        return *this;
-    }
-
-    constexpr small_vector & operator=( std::initializer_list<value_type> const data ) { this->assign( data ); return *this; }
-
-    constexpr ~small_vector() noexcept
-    {
-        std::destroy_n( data(), size() );
-        if ( is_heap() )
-            al::deallocate( storage_.heap_.data_, storage_.heap_.capacity_ );
-    }
+    constexpr small_vector( small_vector const & other ) : mixin{} { this->copy_init_from( other ); }
+    constexpr small_vector( small_vector && other ) noexcept : mixin{} { this->move_init_from( std::move( other ) ); }
+    constexpr small_vector & operator=( small_vector const & other ) { return ( *this = small_vector( other ) ); }
+    constexpr small_vector & operator=( small_vector && other ) noexcept { this->move_assign_from( std::move( other ) ); return *this; }
+    constexpr small_vector & operator=( std::initializer_list<T> const data ) { this->assign( data ); return *this; }
+    constexpr ~small_vector() noexcept { this->destroy_and_free(); }
 
     [[ nodiscard, gnu::pure ]] sz_t size() const noexcept
     {
@@ -747,148 +770,127 @@ public:
         BOOST_ASSUME( sz <= max_size_val );
         return sz;
     }
-    [[ nodiscard, gnu::pure ]] sz_t capacity() const noexcept
-    {
-        return is_heap() ? storage_.heap_.capacity_ : sz_t{ N };
-    }
-
-    [[ nodiscard, gnu::pure ]] value_type       * data()       noexcept { return is_heap() ? storage_.heap_.data_ : storage_.buffer_.data; }
-    [[ nodiscard, gnu::pure ]] value_type const * data() const noexcept { return is_heap() ? storage_.heap_.data_ : storage_.buffer_.data; }
-
-    void reserve( size_type const new_capacity )
-    {
-        if ( new_capacity > capacity() )
-            grow_heap( new_capacity );
-    }
-
-private: friend base;
-    [[ gnu::cold ]]
-#ifdef _MSC_VER
-    __declspec( noalias )
-#endif
-    constexpr value_type * storage_init( size_type const initial_size )
-    {
-        if ( initial_size > N )
-        {
-            auto const p{ al::allocate( initial_size ) };
-            set_heap_state( p, initial_size, initial_size );
-            return p;
-        }
-        set_inline_size( initial_size );
-        return storage_.buffer_.data;
-    }
-
-    [[ gnu::returns_nonnull ]]
-    constexpr value_type * storage_grow_to( size_type const target_size )
-    {
-        auto const current_cap{ capacity() };
-        BOOST_ASSUME( target_size >= size() );
-        if ( target_size > current_cap ) [[ unlikely ]]
-        {
-            grow_heap( options.growth( target_size, current_cap ) );
-        }
-        set_size_preserving_flag( target_size );
-        return data();
-    }
-
-    constexpr value_type * storage_shrink_to( size_type const target_size ) noexcept
-    {
-        BOOST_ASSUME( target_size <= size() );
-        if ( is_heap() )
-        {
-            storage_.heap_.data_     = al::shrink_to( storage_.heap_.data_, size(), target_size );
-            storage_.heap_.capacity_ = target_size;
-            BOOST_ASSUME( storage_.heap_.data_ || !target_size );
-        }
-        set_size_preserving_flag( target_size );
-        return data();
-    }
-
-    constexpr void storage_shrink_size_to( size_type const target_size ) noexcept
-    {
-        BOOST_ASSUME( size() >= target_size );
-        set_size_preserving_flag( target_size );
-    }
-
-    void storage_dec_size() noexcept
-    {
-        BOOST_ASSUME( size() >= 1 );
-        size_ -= 2; // size is stored << 1, so decrement by 2
-    }
-    void storage_inc_size() noexcept
-    {
-        BOOST_ASSUME( size() < capacity() );
-        size_ += 2; // size is stored << 1, so increment by 2
-    }
-
-#ifdef _MSC_VER
-    bool storage_try_expand_capacity( size_type const target_capacity ) noexcept
-    requires( alignment <= detail::guaranteed_alignment )
-    {
-        if ( !is_heap() )
-            return false;
-        namespace bc = boost::container;
-        auto recv_size{ target_capacity };
-        auto reuse    { storage_.heap_.data_ };
-        auto const result{ al::allocation_command(
-            bc::expand_fwd | bc::nothrow_allocation,
-            target_capacity, recv_size, reuse
-        ) };
-        if ( result )
-        {
-            storage_.heap_.capacity_ = recv_size;
-            return true;
-        }
-        return false;
-    }
-#endif
-
-    void storage_free() noexcept
-    {
-        if ( is_heap() )
-            al::deallocate( storage_.heap_.data_, storage_.heap_.capacity_ );
-        set_inline_size( 0 );
-    }
 
 private:
-    [[ gnu::cold, gnu::noinline, clang::preserve_most ]]
-    void grow_heap( size_type const new_capacity )
-    {
-        BOOST_ASSUME( new_capacity > capacity() );
-        if ( is_heap() )
-        {
-            storage_.heap_.data_     = al::grow_to( storage_.heap_.data_, storage_.heap_.capacity_, new_capacity );
-            storage_.heap_.capacity_ = new_capacity;
-        }
-        else
-        {
-            auto const sz{ size() };
-            auto const p { al::allocate( new_capacity ) };
-            std::memcpy( static_cast<void *>( p ), storage_.buffer_.data, sz * sizeof( T ) );
-            set_heap_state( p, new_capacity, sz );
-        }
-    }
-
-private:
-    sz_t   size_;    // LSB = heap flag, actual size = size_ >> 1 (at offset 0 → first byte on LE)
+    sz_t   size_;    // LSB = heap flag, actual size = size_ >> 1
     data_t storage_;
 }; // class small_vector (compact_lsb)
+
+
+////////////////////////////////////////////////////////////////////////////////
+// Layout D: Embedded (size inside union, LSB flag) — trivially relocatable
+//
+// Both union variants start with sz_t at offset 0 (common initial sequence).
+// size() = sz_ >> 1, is_heap() = sz_ & 1. Branch-free regardless of T/sz_t.
+// No external size_ field — saves sizeof(sz_t) + padding vs compact_lsb when
+// the inline side has alignment slack.
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename T, std::uint32_t N, typename sz_t, small_vector_options options>
+requires( resolve_layout<T, sz_t>( options.layout ) == small_vector_layout::embedded && is_trivially_moveable<T> )
+class [[ nodiscard, clang::trivial_abi ]] small_vector<T, N, sz_t, options>
+    :
+    public sv_union_base<T, N, sz_t, options>
+{
+    using mixin = sv_union_base<T, N, sz_t, options>;
+    friend mixin;
+
+    static sz_t constexpr max_size_val{ std::numeric_limits<sz_t>::max() >> 1 };
+
+    union data_t {
+        // Named struct with no-op ctor — avoids overwriting heap state when
+        // inherited constructors re-default-initialize data members after the
+        // base-class body.
+        struct inline_t {
+            sz_t                       sz_;       // LSB=0, actual size = sz_ >> 1
+            noninitialized_array<T, N> elements_;
+            constexpr  inline_t() noexcept {}     // no-op: leaves sz_ uninitialized
+            constexpr ~inline_t() noexcept {}
+        } inline_;
+        struct {
+            sz_t           sz_;       // LSB=1, actual size = sz_ >> 1
+            sz_t           cap_;
+            T * __restrict data_;
+        } heap_;
+
+        constexpr  data_t() noexcept : inline_{} {} // no-op
+        constexpr ~data_t() noexcept {}
+    };
+
+    // --- policy interface ---
+    // Common initial sequence: heap_.sz_ is always valid to read regardless of
+    // active member ([class.union]/7, [class.mem]/25).
+    [[ nodiscard, gnu::pure ]] bool is_heap() const noexcept { return ( storage_.heap_.sz_ & 1 ) != 0; }
+
+    void set_inline_size( sz_t const sz ) noexcept
+    {
+        BOOST_ASSUME( sz <= N );
+        storage_.inline_.sz_ = sz << 1; // LSB = 0 → inline
+    }
+    void set_heap_state( T * __restrict const p, sz_t const cap, sz_t const sz ) noexcept
+    {
+        BOOST_ASSUME( sz <= max_size_val );
+        storage_.heap_.sz_   = ( sz << 1 ) | 1; // LSB = 1 → heap
+        storage_.heap_.cap_  = cap;
+        storage_.heap_.data_ = p;
+    }
+    void set_size_preserving_flag( sz_t const sz ) noexcept
+    {
+        BOOST_ASSUME( sz <= max_size_val );
+        storage_.heap_.sz_ = ( sz << 1 ) | ( storage_.heap_.sz_ & 1 );
+    }
+
+    void do_dec_size() noexcept { BOOST_ASSUME( size() >= 1 ); storage_.heap_.sz_ -= 2; }
+    void do_inc_size() noexcept { BOOST_ASSUME( size() < this->capacity() ); storage_.heap_.sz_ += 2; }
+
+    [[ nodiscard, gnu::pure ]] T       * buffer_data()       noexcept { return storage_.inline_.elements_.data; }
+    [[ nodiscard, gnu::pure ]] T const * buffer_data() const noexcept { return storage_.inline_.elements_.data; }
+
+    [[ nodiscard, gnu::pure ]] T * __restrict & heap_data_ref()       noexcept { return storage_.heap_.data_; }
+    [[ nodiscard, gnu::pure ]] T * __restrict const & heap_data_ref() const noexcept { return storage_.heap_.data_; }
+
+    [[ nodiscard, gnu::pure ]] sz_t       & heap_cap_ref()       noexcept { return storage_.heap_.cap_; }
+    [[ nodiscard, gnu::pure ]] sz_t const & heap_cap_ref() const noexcept { return storage_.heap_.cap_; }
+
+public:
+    using mixin::mixin;
+
+    constexpr small_vector() noexcept { storage_.inline_.sz_ = 0; }
+
+    constexpr small_vector( small_vector const & other ) : mixin{} { this->copy_init_from( other ); }
+    constexpr small_vector( small_vector && other ) noexcept : mixin{} { this->move_init_from( std::move( other ) ); }
+    constexpr small_vector & operator=( small_vector const & other ) { return ( *this = small_vector( other ) ); }
+    constexpr small_vector & operator=( small_vector && other ) noexcept { this->move_assign_from( std::move( other ) ); return *this; }
+    constexpr small_vector & operator=( std::initializer_list<T> const data ) { this->assign( data ); return *this; }
+    constexpr ~small_vector() noexcept { this->destroy_and_free(); }
+
+    // Branch-free: common initial sequence guarantees heap_.sz_ is always the
+    // correct sz_t regardless of active union member.
+    [[ nodiscard, gnu::pure ]] sz_t size() const noexcept
+    {
+        auto const sz{ storage_.heap_.sz_ >> 1 };
+        BOOST_ASSUME( sz <= max_size_val );
+        return sz;
+    }
+
+private:
+    data_t storage_; // sole data member — no external size_
+}; // class small_vector (embedded)
 
 
 ////////////////////////////////////////////////////////////////////////////////
 // is_trivially_moveable specializations
 ////////////////////////////////////////////////////////////////////////////////
 
+// All union-based layouts (compact, compact_lsb, embedded) — trivially
+// relocatable iff T is.
 template <typename T, std::uint32_t N, typename sz_t, small_vector_options opts>
-requires( opts.layout == small_vector_layout::compact )
+requires( resolve_layout<T, sz_t>( opts.layout ) != small_vector_layout::pointer_based )
 bool constexpr is_trivially_moveable<small_vector<T, N, sz_t, opts>>{ is_trivially_moveable<T> };
 
+// pointer_based is never trivially relocatable (self-referential data_ pointer).
 template <typename T, std::uint32_t N, typename sz_t, small_vector_options opts>
-requires( opts.layout == small_vector_layout::compact_lsb )
-bool constexpr is_trivially_moveable<small_vector<T, N, sz_t, opts>>{ is_trivially_moveable<T> };
-
-template <typename T, std::uint32_t N, typename sz_t, small_vector_options opts>
-requires( opts.layout == small_vector_layout::pointer_based )
+requires( resolve_layout<T, sz_t>( opts.layout ) == small_vector_layout::pointer_based )
 bool constexpr is_trivially_moveable<small_vector<T, N, sz_t, opts>>{ false };
 
 
