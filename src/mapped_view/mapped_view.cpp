@@ -1,6 +1,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// Copyright (c) Domagoj Saric 2010 - 2024.
+/// Copyright (c) Domagoj Saric 2010 - 2026.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -15,6 +15,12 @@
 
 #include <psi/vm/align.hpp>
 #include <psi/vm/mapped_view/mapped_view.hpp>
+
+#if defined( __APPLE__ )
+#include <mach/mach_init.h>
+#include <mach/mach_vm.h>
+#include <mach/vm_statistics.h>
+#endif // __APPLE__
 
 #include <cstring> // memcpy
 //------------------------------------------------------------------------------
@@ -223,7 +229,38 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
     // memfd_create...
     // https://github.com/lassik/shm_open_anon
     if ( !original_mapping.is_file_based() )
+    {
+#   if defined( __APPLE__ )
+        // Use mach_vm_remap to move old pages into the new mapping (zero-copy)
+        auto new_addr{ reinterpret_cast<mach_vm_address_t>( const_cast<std::byte *>( remapped_span->data() ) ) };
+        vm_prot_t cur_prot;
+        vm_prot_t max_prot;
+        auto const kr
+        {
+            ::mach_vm_remap
+            (
+                ::mach_task_self(),
+                &new_addr,
+                current_size,
+                0,
+                VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
+                ::mach_task_self(),
+                reinterpret_cast<mach_vm_address_t>( current_address ),
+                FALSE,
+                &cur_prot,
+                &max_prot,
+                VM_INHERIT_NONE
+            )
+        };
+        if ( kr != KERN_SUCCESS ) [[ unlikely ]]
+        {
+            // mach_vm_remap failed: fall back to memcpy
+            std::memcpy( const_cast<std::byte *>( remapped_span->data() ), this->data(), this->size() );
+        }
+#   else
         std::memcpy( const_cast<std::byte *>( remapped_span->data() ), this->data(), this->size() );
+#   endif
+    }
     else
 #endif
         BOOST_ASSERT_MSG( std::memcmp( remapped_span->data(), this->data(), this->size() ) == 0, "View expansion garbled data." );

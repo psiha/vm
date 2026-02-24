@@ -3,7 +3,7 @@
 /// \file detail/nt.hpp
 /// -------------------
 ///
-/// Copyright (c) Domagoj Saric 2015 - 2024.
+/// Copyright (c) Domagoj Saric 2015 - 2026.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -68,12 +68,22 @@ namespace detail
     BOOST_ATTRIBUTES( BOOST_COLD, BOOST_RESTRICTED_FUNCTION_L3, BOOST_RESTRICTED_FUNCTION_RETURN )
     ::PROC get_nt_proc( char const * proc_name ) noexcept;
 
+    // Like get_nt_proc but returns nullptr if the function is not found (for
+    // optional APIs that may not exist on older Windows versions).
+    BOOST_ATTRIBUTES( BOOST_COLD )
+    ::PROC try_get_nt_proc( char const * proc_name ) noexcept;
+
     PSI_WARNING_DISABLE_PUSH()
     PSI_WARNING_CLANG_DISABLE( -Wcast-function-type-mismatch )
     template <typename ProcPtr>
     ProcPtr get_nt_proc( char const * const proc_name )
     {
         return reinterpret_cast<ProcPtr>( detail::get_nt_proc( proc_name ) );
+    }
+    template <typename ProcPtr>
+    ProcPtr try_get_nt_proc( char const * const proc_name )
+    {
+        return reinterpret_cast<ProcPtr>( detail::try_get_nt_proc( proc_name ) );
     }
     PSI_WARNING_DISABLE_POP()
 } // namespace detail
@@ -176,6 +186,64 @@ using NtProtectVirtualMemory_t  = NTSTATUS (NTAPI*)( IN HANDLE ProcessHandle, IN
 
 inline auto const NtAllocateVirtualMemory{ detail::get_nt_proc<NtAllocateVirtualMemory_t>( "NtAllocateVirtualMemory" ) };
 inline auto const NtFreeVirtualMemory    { detail::get_nt_proc<NtFreeVirtualMemory_t    >( "NtFreeVirtualMemory"     ) };
+
+////////////////////////////////////////////////////////////////////////////////
+// Windows 10 RS5 (1809+) placeholder virtual memory APIs
+// https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc2
+// https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-mapviewoffile3
+////////////////////////////////////////////////////////////////////////////////
+
+#ifndef MEM_RESERVE_PLACEHOLDER
+auto constexpr MEM_RESERVE_PLACEHOLDER  { ULONG( 0x00040000 ) };
+#endif
+#ifndef MEM_REPLACE_PLACEHOLDER
+auto constexpr MEM_REPLACE_PLACEHOLDER  { ULONG( 0x00004000 ) };
+#endif
+#ifndef MEM_PRESERVE_PLACEHOLDER
+auto constexpr MEM_PRESERVE_PLACEHOLDER { ULONG( 0x00000002 ) };
+#endif
+#ifndef MEM_COALESCE_PLACEHOLDERS
+auto constexpr MEM_COALESCE_PLACEHOLDERS{ ULONG( 0x00000001 ) };
+#endif
+
+// NtAllocateVirtualMemoryEx - extended version supporting MEM_RESERVE_PLACEHOLDER
+using NtAllocateVirtualMemoryEx_t = NTSTATUS (NTAPI*)
+(
+    IN     HANDLE                  ProcessHandle,
+    IN OUT PVOID                  *BaseAddress,
+    IN OUT PSIZE_T                 RegionSize,
+    IN     ULONG                   AllocationType,
+    IN     ULONG                   PageProtection,
+    IN OUT PMEM_EXTENDED_PARAMETER ExtendedParameters OPTIONAL,
+    IN     ULONG                   ExtendedParameterCount
+) noexcept;
+
+// NtMapViewOfSectionEx - extended version supporting MEM_REPLACE_PLACEHOLDER
+using NtMapViewOfSectionEx_t = NTSTATUS (NTAPI*)
+(
+    IN     HANDLE                  SectionHandle,
+    IN     HANDLE                  ProcessHandle,
+    IN OUT PVOID                  *BaseAddress,
+    IN OUT PLARGE_INTEGER          SectionOffset OPTIONAL,
+    IN OUT PSIZE_T                 ViewSize,
+    IN     ULONG                   AllocationType,
+    IN     ULONG                   PageProtection,
+    IN OUT PMEM_EXTENDED_PARAMETER ExtendedParameters OPTIONAL,
+    IN     ULONG                   ExtendedParameterCount
+) noexcept;
+
+// NtUnmapViewOfSectionEx - extended version supporting MEM_PRESERVE_PLACEHOLDER
+using NtUnmapViewOfSectionEx_t = NTSTATUS (NTAPI*)
+(
+    IN HANDLE ProcessHandle,
+    IN PVOID  BaseAddress,
+    IN ULONG  Flags
+) noexcept;
+
+// Placeholder VM APIs — unconditionally available (Win11+ minimum).
+inline auto const NtAllocateVirtualMemoryEx{ detail::get_nt_proc<NtAllocateVirtualMemoryEx_t>( "NtAllocateVirtualMemoryEx" ) };
+inline auto const NtMapViewOfSectionEx     { detail::get_nt_proc<NtMapViewOfSectionEx_t     >( "NtMapViewOfSectionEx"      ) };
+inline auto const NtUnmapViewOfSectionEx   { detail::get_nt_proc<NtUnmapViewOfSectionEx_t   >( "NtUnmapViewOfSectionEx"    ) };
 
 //------------------------------------------------------------------------------
 } // psi::vm::nt
