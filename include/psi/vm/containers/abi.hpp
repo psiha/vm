@@ -177,7 +177,7 @@ template <typename T> [[nodiscard]] constexpr T &              unwrap( T &      
 // utility for passing non trivial predicates to algorithms which pass them around by-val
 template <typename Pred>
 constexpr decltype( auto ) make_trivially_copyable_predicate( Pred && __restrict pred ) noexcept {
-    if constexpr ( can_be_passed_in_reg<std::remove_cvref<Pred>> ) {
+    if constexpr ( can_be_passed_in_reg<std::remove_cvref_t<Pred>> ) {
         return std::forward<Pred>( pred );
     } else {
         return [&pred]( auto const & ... args ) noexcept( noexcept( pred( args... ) ) ) {
