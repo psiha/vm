@@ -1,6 +1,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// Copyright (c) Domagoj Saric 2015 - 2024.
+/// Copyright (c) Domagoj Saric 2015 - 2026.
 ///
 /// Use, modification and distribution is subject to the
 /// Boost Software License, Version 1.0.
@@ -47,11 +47,17 @@ namespace detail
 #endif
 
     BOOST_ATTRIBUTES( BOOST_COLD, BOOST_RESTRICTED_FUNCTION_L3, BOOST_RESTRICTED_FUNCTION_RETURN )
-    ::PROC get_nt_proc( char const * const proc_name ) noexcept
+    ::PROC try_get_nt_proc( char const * const proc_name ) noexcept
     {
         BOOST_ASSERT( current_process == ::GetCurrentProcess() ); // for lack of a better place for this sanity check
         BOOST_ASSUME( ntdll );
-        auto const result{ ::GetProcAddress( ntdll, proc_name ) };
+        return ::GetProcAddress( ntdll, proc_name );
+    }
+
+    BOOST_ATTRIBUTES( BOOST_COLD, BOOST_RESTRICTED_FUNCTION_L3, BOOST_RESTRICTED_FUNCTION_RETURN )
+    ::PROC get_nt_proc( char const * const proc_name ) noexcept
+    {
+        auto const result{ try_get_nt_proc( proc_name ) };
         BOOST_ASSUME( result );
         return result;
     }
