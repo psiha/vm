@@ -112,10 +112,18 @@ public:
     bool has_attached_storage() const noexcept { return nodes_.has_attached_storage(); }
 
 protected:
-#if PSI_VM_BT_PAGE_SIZED_NODES // TODO make this properly configurable (a template parameter)
-    static constexpr std::uint16_t node_size{ page_size }; // favoring TLB and disk access related issues
-#else
-    static constexpr std::uint16_t node_size{ 256 }; // favoring CPU cache & branch prediction (linear scans w/ trivial data and comparators)
+    // TODO make this properly configurable (a template parameter)
+#if PSI_VM_BT_PAGE_SIZED_NODES // favoring TLB and disk access related issues
+    static constexpr std::uint16_t node_size
+    {
+#   if ( defined( __APPLE__ ) && defined( __aarch64__ ) ) // Quickfix: CPU and especially RSS memory spike regressions with full Apple Silicon 16kB node sizes, TODO investigate properly
+        4096
+#   else
+        page_size
+#   endif
+    };
+#else // favoring CPU cache & branch prediction (linear scans w/ trivial data and comparators)
+    static constexpr std::uint16_t node_size{ 256 };
 #endif
 
     using depth_t = std::uint8_t;
