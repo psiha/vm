@@ -20,6 +20,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 #include <psi/vm/detail/nt.hpp>
+#include <psi/vm/handles/handle.hpp> // handle_traits::copy() definition
 
 #include <psi/build/disable_warnings.hpp>
 
@@ -65,4 +66,25 @@ namespace detail
 
 //------------------------------------------------------------------------------
 } // psi::vm::nt
+
+//------------------------------------------------------------------------------
+// win32::handle_traits::copy() -- needs <windows.h> which nt.hpp provides
+//------------------------------------------------------------------------------
+
+[[ gnu::cold, gnu::nothrow ]]
+psi::vm::win32::handle_traits::native_t
+psi::vm::win32::handle_traits::copy( native_t const native_handle )
+{
+    if ( !native_handle || native_handle == boost::winapi::INVALID_HANDLE_VALUE_ )
+        return invalid_value;
+    native_t dup{ nullptr };
+    BOOST_VERIFY( ::DuplicateHandle
+    (
+        nt::current_process, native_handle,
+        nt::current_process, &dup,
+        0, FALSE, DUPLICATE_SAME_ACCESS
+    ) );
+    return dup;
+}
+
 //------------------------------------------------------------------------------

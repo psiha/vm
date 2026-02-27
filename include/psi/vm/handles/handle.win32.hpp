@@ -57,7 +57,8 @@ struct handle_traits
         );
     }
 
-    static native_t copy( native_t native_handle ); // TODO
+    [[ gnu::cold, gnu::nothrow, msvc::noalias, msvc::nothrow, clang::nouwtable ]]
+    static native_t copy( native_t native_handle ); // implemented in nt.cpp (needs <windows.h>)
 }; // handle_traits
 
 PSI_WARNING_DISABLE_POP()

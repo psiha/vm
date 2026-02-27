@@ -77,7 +77,15 @@ struct handle_traits
         );
     }
 
-    static native_t copy( native_t native_handle ); // TODO
+    [[ gnu::cold, gnu::nothrow, msvc::noalias, msvc::nothrow, clang::nouwtable ]]
+    static native_t copy( native_t const native_handle )
+    {
+        if ( native_handle == invalid_value )
+            return invalid_value;
+        auto const result{ ::dup( native_handle ) };
+        BOOST_ASSERT( result != invalid_value );
+        return result;
+    }
 }; // handle_traits
 
 PSI_WARNING_DISABLE_POP()

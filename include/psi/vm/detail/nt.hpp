@@ -179,6 +179,27 @@ using NtQueryVirtualMemory_t = NTSTATUS (NTAPI *)
 ) noexcept;
 inline auto const NtQueryVirtualMemory{ detail::get_nt_proc<NtQueryVirtualMemory_t>( "NtQueryVirtualMemory" ) };
 
+// MEMORY_WORKING_SET_EX_INFORMATION — used by NtQueryVirtualMemory with
+// MemoryWorkingSetExInformation to query per-page COW / shared status.
+struct MEMORY_WORKING_SET_EX_BLOCK
+{
+    ULONG_PTR Valid            : 1;
+    ULONG_PTR ShareCount       : 3;
+    ULONG_PTR Win32Protection  : 11;
+    ULONG_PTR Shared           : 1;
+    ULONG_PTR Node             : 6;
+    ULONG_PTR Locked           : 1;
+    ULONG_PTR LargePage        : 1;
+    ULONG_PTR Priority         : 3;
+    ULONG_PTR Reserved         : sizeof( ULONG_PTR ) * 8 - 27;
+};
+
+struct MEMORY_WORKING_SET_EX_INFORMATION
+{
+    PVOID                          VirtualAddress;
+    MEMORY_WORKING_SET_EX_BLOCK    VirtualAttributes;
+};
+
 
 using NtAllocateVirtualMemory_t = NTSTATUS (NTAPI*)( IN HANDLE ProcessHandle, IN OUT PVOID * BaseAddress, ULONG_PTR ZeroBits, PSIZE_T RegionSize, ULONG allocation_type, ULONG Protect ) noexcept;
 using NtFreeVirtualMemory_t     = NTSTATUS (NTAPI*)( IN HANDLE ProcessHandle, IN     PVOID * BaseAddress, PSIZE_T RegionSize, ULONG FreeType ) noexcept;
@@ -240,7 +261,7 @@ using NtUnmapViewOfSectionEx_t = NTSTATUS (NTAPI*)
     IN ULONG  Flags
 ) noexcept;
 
-// Placeholder VM APIs — unconditionally available (Win11+ minimum).
+// Placeholder VM APIs -- unconditionally available (Win11+ minimum).
 inline auto const NtAllocateVirtualMemoryEx{ detail::get_nt_proc<NtAllocateVirtualMemoryEx_t>( "NtAllocateVirtualMemoryEx" ) };
 inline auto const NtMapViewOfSectionEx     { detail::get_nt_proc<NtMapViewOfSectionEx_t     >( "NtMapViewOfSectionEx"      ) };
 inline auto const NtUnmapViewOfSectionEx   { detail::get_nt_proc<NtUnmapViewOfSectionEx_t   >( "NtUnmapViewOfSectionEx"    ) };

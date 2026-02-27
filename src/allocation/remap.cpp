@@ -162,7 +162,7 @@ expand_result expand
 
                 // If the placeholder is larger than needed, split it first.
                 // NtFreeVirtualMemory(MEM_PRESERVE_PLACEHOLDER) only succeeds on
-                // actual placeholders — acts as an implicit type check.
+                // actual placeholders -- acts as an implicit type check.
                 if ( placeholder_size > additional_end_size )
                 {
                     PVOID  split_addr{ adj };
@@ -198,7 +198,7 @@ expand_result expand
                     {
                         return { { address, required_size_for_end_expansion }, expand_result::back_extended };
                     }
-                    // Replace failed (OOM?) — the split placeholder is orphaned (VA-only cost).
+                    // Replace failed (OOM?) -- the split placeholder is orphaned (VA-only cost).
                 }
             }
         }
@@ -231,7 +231,7 @@ expand_result expand
 #   ifdef _WIN32
         // Windows: over-reserve with trailing placeholder.
         // The headroom placeholder enables future expand() calls to extend
-        // in-place via the split+replace path above — avoiding memcpy on
+        // in-place via the split+replace path above -- avoiding memcpy on
         // subsequent growths (analogous to Linux mremap).
         if ( required_size_for_end_expansion )
         {
@@ -291,7 +291,7 @@ expand_result expand
                         return { { base, required_size_for_end_expansion }, expand_result::moved };
                     }
 
-                    // Replace failed — free the split placeholder
+                    // Replace failed -- free the split placeholder
                     PVOID  free_addr{ base };
                     SIZE_T free_sz  { 0 };
                     nt::NtFreeVirtualMemory( nt::current_process, &free_addr, &free_sz, MEM_RELEASE );

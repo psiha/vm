@@ -200,7 +200,7 @@ access_privileges::system::~system() noexcept
         BOOST_ASSUME( p_sd != unrestricted   .p_sd );
         auto & sd( get_dynamic_sd() );
         if ( sd.release() == 0 ) [[ unlikely ]]
-#       if __SANITIZE_ADDRESS__ || __has_extension( address_sanitizer )
+#       if 0 // ASan workaround, currently disabled
             delete static_cast<void const *>( &sd ); // delete through void to silence new-delete-(size-)mismatch sanitizers
 #       else
             delete &sd;

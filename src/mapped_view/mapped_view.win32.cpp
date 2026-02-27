@@ -82,7 +82,7 @@ windows_mmap
         view_start ? desired_size : 0
     };
 #else
-    auto const writable{ ( flags.page_protection & ( PAGE_READWRITE | PAGE_EXECUTE_READWRITE ) ) != 0 }; //...mrmlj...simplify all these hacks (for read only file mappings the 'reserve and have NtExtendSection auto-commit' logic does not seem to work)
+    auto const writable{ ( flags.page_protection & ( PAGE_READWRITE | PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY ) ) != 0 }; // WRITECOPY views are writable (writes go to private copies) and need the same MEM_RESERVE allocation type as READWRITE views
     auto const allocation_aligned_size{ align_up( desired_size, reserve_granularity ) };
     auto const actual_size{ writable ? allocation_aligned_size : align_up( desired_size, commit_granularity ) };
     auto          sz         { writable ? allocation_aligned_size : desired_size };
@@ -193,7 +193,7 @@ void flush_async( mapped_span const range ) noexcept
     if ( !::FlushViewOfFile( range.data(), range.size() ) ) [[ unlikely ]]
     {
 #   ifndef NDEBUG //...mrmlj...catching ghosts
-        std::fputs( err::make_exception( err::last_win32_error{} ).what(), stderr );
+        //std::fputs( err::make_exception( err::last_win32_error{} ).what(), stderr );
 #   endif
     }
 }

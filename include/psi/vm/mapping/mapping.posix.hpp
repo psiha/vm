@@ -58,9 +58,18 @@ struct [[ clang::trivial_abi ]] mapping
         ) == 0;
     }
 
-    bool is_file_based() const noexcept { return posix::handle::operator bool(); }
+    // is_file_based: true only for persistent on-disk files.
+    // Excludes ephemeral fds (memfd_create for COW backing).
+    bool is_file_based() const noexcept { return has_fd() && !ephemeral_; }
+
+    // has_fd: true for any valid fd (including memfd). Used internally by
+    // COW clone routing — dup + MAP_PRIVATE works for all fd-backed mappings.
+    bool has_fd() const noexcept { return posix::handle::operator bool(); }
 
     bool is_anonymous() const noexcept { return view_mapping_flags.flags & MAP_ANONYMOUS; }
+
+    // Mark this mapping as backed by an ephemeral (non-persistent) fd (e.g. memfd).
+    void set_ephemeral() noexcept { ephemeral_ = true; }
 
     posix::handle::      reference underlying_file()       noexcept { return *this; }
     posix::handle::const_reference underlying_file() const noexcept { return *this; }
@@ -70,8 +79,10 @@ struct [[ clang::trivial_abi ]] mapping
         vm::handle::operator=( std::move( source ) );
         view_mapping_flags = source.view_mapping_flags;
         maximum_size       = source.maximum_size;
+        ephemeral_         = source.ephemeral_;
         source.view_mapping_flags = {};
         source.maximum_size       = {};
+        source.ephemeral_         = {};
         return *this;
     }
 
@@ -80,6 +91,7 @@ struct [[ clang::trivial_abi ]] mapping
 
     flags::viewing view_mapping_flags{};
     std  ::size_t  maximum_size      {};
+    bool           ephemeral_        {}; // memfd or other non-persistent fd (fits in size_t padding)
 }; // struct mapping
 
 // fwd declarations for file_handle functions which work for mappings as well ('everything is a file')
