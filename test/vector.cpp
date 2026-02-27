@@ -11,6 +11,7 @@
 #include <numeric>
 #include <ranges>
 #include <span>
+#include <string>
 #include <vector>
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -18,12 +19,11 @@ namespace psi::vm
 //------------------------------------------------------------------------------
 
 ////////////////////////////////////////////////////////////////////////////////
-// Typed test suite — runs every test against all vector types
+// Typed test suite -- runs every test against all vector types
 ////////////////////////////////////////////////////////////////////////////////
 
-inline constexpr small_vector_options pointer_based_opts{ .layout = small_vector_layout::pointer_based };
-inline constexpr small_vector_options compact_lsb_opts  { .layout = small_vector_layout::compact_lsb   };
-inline constexpr small_vector_options embedded_opts     { .layout = small_vector_layout::embedded      };
+inline constexpr small_vector_options compact_lsb_opts{ .layout = small_vector_layout::compact_lsb };
+inline constexpr small_vector_options embedded_opts   { .layout = small_vector_layout::embedded    };
 
 using VectorTestTypes = ::testing::Types<
     tr_vector<int>,
@@ -31,7 +31,6 @@ using VectorTestTypes = ::testing::Types<
     fc_vector<int, 256>,
     small_vector<int, 16>,
     small_vector<int,  4, std::uint32_t>,
-    small_vector<int,  8, std::size_t   , pointer_based_opts>,
     small_vector<int, 16, std::size_t   , compact_lsb_opts>,
     small_vector<int,  4, std::uint32_t , compact_lsb_opts>,
     small_vector<int, 16, std::size_t   , embedded_opts>,
@@ -932,25 +931,25 @@ TEST( fc_vector_specific, reserve_is_noop )
 // class are misoptimized by GCC's dead store elimination in Release (with
 // inlining/LTO). The writes through the union member pointer are incorrectly
 // treated as dead stores and eliminated.
-// This test verifies the gcc_dse_workaround in vector_impl::initialized_impl.
+// This test verifies the gcc_dse_workaround in vector::initialized_impl.
 // Without the workaround, value-initialized elements contain garbage in Release.
 // libstdc++'s std::inplace_vector (which uses the same union pattern) may have
 // the same latent bug.
 TEST( fc_vector_specific, gcc_inherited_ctor_union_dse_bug )
 {
-    // value_init through inherited constructor — triggers the bug path
+    // value_init through inherited constructor -- triggers the bug path
     fc_vector<int, 256> v( 10, value_init );
     EXPECT_EQ( v.size(), 10 );
     for ( std::uint16_t i{ 0 }; i < v.size(); ++i )
         EXPECT_EQ( v[ i ], 0 ) << "element " << i << " not zero-initialized";
 
-    // fill constructor through inherited constructor — same bug path
+    // fill constructor through inherited constructor -- same bug path
     fc_vector<int, 256> v2( 10, 42 );
     EXPECT_EQ( v2.size(), 10 );
     for ( std::uint16_t i{ 0 }; i < v2.size(); ++i )
         EXPECT_EQ( v2[ i ], 42 ) << "element " << i << " not fill-initialized";
 
-    // default_init through inherited constructor — int is trivial, so
+    // default_init through inherited constructor -- int is trivial, so
     // default-init leaves values indeterminate; just verify size
     fc_vector<int, 256> v3( 10, default_init );
     EXPECT_EQ( v3.size(), 10 );
@@ -963,10 +962,10 @@ TEST( fc_vector_specific, gcc_inherited_ctor_union_dse_bug )
         EXPECT_EQ( v4[ i ], src[ i ] ) << "element " << i << " mismatch";
 }
 
-// Standalone minimal reproducer for the GCC 15.2.1 DSE bug above — does not
+// Standalone minimal reproducer for the GCC 15.2.1 DSE bug above -- does not
 // depend on fc_vector or psi::vm at all. Demonstrates: inherited constructor
 // (`using base::base`) + CRTP static_cast<Derived&>(*this) + writes to a union
-// member → GCC optimizes away the writes in Release (inlining + DSE).
+// member -> GCC optimizes away the writes in Release (inlining + DSE).
 namespace gcc_dse_bug_reproducer {
     template <typename T, unsigned N>
     union uninit_storage {
@@ -989,7 +988,7 @@ namespace gcc_dse_bug_reproducer {
     template <typename T, unsigned N>
     struct derived : crtp_base<derived<T, N>, T> {
         using base = crtp_base<derived<T, N>, T>;
-        using base::base; // inherited constructors — triggers the bug
+        using base::base; // inherited constructors -- triggers the bug
         constexpr derived() noexcept : size_{ 0 } {}
 
         unsigned char          size_;   // NO default member initializer (matching fc_vector)
@@ -1000,10 +999,10 @@ namespace gcc_dse_bug_reproducer {
     };
 } // namespace gcc_dse_bug_reproducer
 
-// This test reproduces the raw GCC bug — the standalone types above do NOT have
+// This test reproduces the raw GCC bug -- the standalone types above do NOT have
 // the gcc_dse_workaround, so on GCC 15 Release this test demonstrates the
 // miscompilation. Disabled on GCC Release because the failure is expected (the
-// workaround lives in vector_impl.hpp, not here).
+// workaround lives in vector.hpp, not here).
 #if defined( __GNUC__ ) && !defined( __clang__ ) && defined( NDEBUG )
 TEST( fc_vector_specific, DISABLED_gcc_dse_bug_standalone_reproducer )
 #else
@@ -1076,9 +1075,9 @@ TYPED_TEST( vector_compliance, stable_emplace_back_with_capacity )
 TEST( fc_vector_specific, stable_reserve )
 {
     fc_vector<int, 16> v{ 1, 2, 3 };
-    // Within static capacity — succeeds
+    // Within static capacity -- succeeds
     EXPECT_TRUE( v.stable_reserve( 16 ) );
-    // Beyond static capacity — fails
+    // Beyond static capacity -- fails
     EXPECT_FALSE( v.stable_reserve( 17 ) );
     EXPECT_EQ( v.size(), 3 ); // unchanged
 }
@@ -1089,7 +1088,7 @@ TEST( fc_vector_specific, stable_emplace_back )
     EXPECT_TRUE( v.stable_emplace_back( 4 ) );
     EXPECT_EQ( v.size(), 4 );
     EXPECT_EQ( v[ 3 ], 4 );
-    // Now full — should fail
+    // Now full -- should fail
     EXPECT_FALSE( v.stable_emplace_back( 5 ) );
     EXPECT_EQ( v.size(), 4 ); // unchanged
 }
@@ -1098,7 +1097,7 @@ TEST( tr_vector_move, stable_reserve_beyond_capacity )
 {
     tr_vector<int> v{ 1, 2, 3 };
     auto const cap{ v.capacity() };
-    // Beyond current capacity — may or may not succeed depending on allocator
+    // Beyond current capacity -- may or may not succeed depending on allocator
     auto const result{ v.stable_reserve( cap + 100 ) };
     // Either way, size is unchanged and data is valid
     EXPECT_EQ( v.size(), 3 );
@@ -1162,6 +1161,206 @@ TYPED_TEST( vector_compliance, insert_range_non_sized_empty )
     EXPECT_EQ( v[ 2 ], 3 );
 }
 
+
+////////////////////////////////////////////////////////////////////////////////
+// Non-trivially-moveable type tests for tr_vector
+// Verifies that tr_vector correctly uses move+destroy (not bitwise realloc)
+// when growing vectors of types that are NOT trivially relocatable.
+////////////////////////////////////////////////////////////////////////////////
+
+namespace
+{
+    // A type that tracks its own address to detect invalid bitwise relocation.
+    // If moved via memcpy/realloc instead of move ctor, self_ptr_ won't match.
+    struct address_tracker
+    {
+        int                    value;
+        address_tracker const* self_ptr_;
+
+        explicit address_tracker( int v = 0 ) : value{ v }, self_ptr_{ this } {}
+
+        address_tracker( address_tracker const & other ) : value{ other.value }, self_ptr_{ this } {}
+        address_tracker( address_tracker &&      other ) noexcept : value{ other.value }, self_ptr_{ this } { other.value = -1; }
+
+        address_tracker & operator=( address_tracker const & other ) { value = other.value; self_ptr_ = this; return *this; }
+        address_tracker & operator=( address_tracker &&      other ) noexcept { value = other.value; self_ptr_ = this; other.value = -1; return *this; }
+
+        ~address_tracker() = default;
+
+        bool valid() const { return self_ptr_ == this; }
+    };
+
+    static_assert( !is_trivially_moveable<address_tracker> );
+
+    // A type with a non-trivial destructor that increments a counter.
+    struct move_counter
+    {
+        int  value;
+        int* move_count;
+        int* destroy_count;
+
+        explicit move_counter( int v, int & mc, int & dc ) : value{ v }, move_count{ &mc }, destroy_count{ &dc } {}
+        move_counter( move_counter const & other ) : value{ other.value }, move_count{ other.move_count }, destroy_count{ other.destroy_count } {}
+        move_counter( move_counter && other ) noexcept : value{ other.value }, move_count{ other.move_count }, destroy_count{ other.destroy_count } { ++(*move_count); other.value = -1; }
+        move_counter & operator=( move_counter && other ) noexcept { value = other.value; move_count = other.move_count; destroy_count = other.destroy_count; ++(*move_count); other.value = -1; return *this; }
+        ~move_counter() { if ( destroy_count ) ++(*destroy_count); }
+
+        move_counter & operator=( move_counter const & ) = default;
+    };
+
+    static_assert( !is_trivially_moveable<move_counter> );
+} // anon
+
+TEST( tr_vector_nontrivial, push_back_triggers_move_not_memcpy )
+{
+    tr_vector<address_tracker> v;
+    // Push enough elements to trigger multiple reallocations
+    for ( int i{ 0 }; i < 100; ++i )
+    {
+        v.emplace_back( i );
+        // After each push, ALL existing elements must have valid self-pointers
+        for ( std::uint32_t j{ 0 }; j <= static_cast<std::uint32_t>( i ); ++j )
+            ASSERT_TRUE( v[ j ].valid() ) << "Element " << j << " was bitwise-relocated instead of move-constructed (after push " << i << ")";
+    }
+    EXPECT_EQ( v.size(), 100 );
+    EXPECT_EQ( v[ 0 ].value, 0 );
+    EXPECT_EQ( v[ 99 ].value, 99 );
+}
+
+TEST( tr_vector_nontrivial, reserve_triggers_move_not_memcpy )
+{
+    tr_vector<address_tracker> v;
+    for ( int i{ 0 }; i < 10; ++i )
+        v.emplace_back( i );
+
+    // Force a large reserve that definitely reallocates
+    v.reserve( 10000 );
+
+    for ( std::uint32_t i{ 0 }; i < 10; ++i )
+    {
+        ASSERT_TRUE( v[ i ].valid() ) << "Element " << i << " was bitwise-relocated by reserve()";
+        EXPECT_EQ( v[ i ].value, static_cast<int>( i ) );
+    }
+}
+
+TEST( tr_vector_nontrivial, growth_calls_move_ctor_and_destroys_old )
+{
+    int move_count   { 0 };
+    int destroy_count{ 0 };
+
+    {
+        tr_vector<move_counter> v;
+        // Push elements one by one, forcing reallocations
+        for ( int i{ 0 }; i < 50; ++i )
+            v.emplace_back( i, move_count, destroy_count );
+
+        // Move count should be > 0 (reallocations happened)
+        EXPECT_GT( move_count, 0 ) << "No move constructors called -- growth used bitwise realloc";
+
+        // Destroy count should match move count (old copies destroyed after move)
+        // Plus destructor calls for the temporary move_counter objects
+        // Just verify it's non-zero (old elements were properly destroyed)
+        EXPECT_GT( destroy_count, 0 ) << "No destructors called for old elements after reallocation";
+
+        // All elements should have correct values
+        for ( std::uint32_t i{ 0 }; i < 50; ++i )
+            EXPECT_EQ( v[ i ].value, static_cast<int>( i ) );
+    }
+
+    // After vector destruction, all remaining elements should be destroyed too
+    EXPECT_GE( destroy_count, 50 );
+}
+
+TEST( tr_vector_nontrivial, copy_constructor )
+{
+    tr_vector<address_tracker> src;
+    for ( int i{ 0 }; i < 20; ++i )
+        src.emplace_back( i );
+
+    auto copy{ src };
+    ASSERT_EQ( copy.size(), 20 );
+    for ( std::uint32_t i{ 0 }; i < 20; ++i )
+    {
+        EXPECT_TRUE( copy[ i ].valid() );
+        EXPECT_EQ( copy[ i ].value, static_cast<int>( i ) );
+        // Copy and source must be distinct objects
+        EXPECT_NE( &copy[ i ], &src[ i ] );
+    }
+}
+
+TEST( tr_vector_nontrivial, move_constructor )
+{
+    tr_vector<address_tracker> src;
+    for ( int i{ 0 }; i < 20; ++i )
+        src.emplace_back( i );
+
+    auto moved{ std::move( src ) };
+    EXPECT_TRUE( src.empty() );
+    ASSERT_EQ( moved.size(), 20 );
+    for ( std::uint32_t i{ 0 }; i < 20; ++i )
+    {
+        EXPECT_TRUE( moved[ i ].valid() );
+        EXPECT_EQ( moved[ i ].value, static_cast<int>( i ) );
+    }
+}
+
+TEST( tr_vector_nontrivial, move_assignment )
+{
+    tr_vector<address_tracker> src;
+    for ( int i{ 0 }; i < 20; ++i )
+        src.emplace_back( i );
+
+    tr_vector<address_tracker> dst;
+    dst.emplace_back( 999 );
+
+    dst = std::move( src );
+    EXPECT_TRUE( src.empty() );
+    ASSERT_EQ( dst.size(), 20 );
+    for ( std::uint32_t i{ 0 }; i < 20; ++i )
+    {
+        EXPECT_TRUE( dst[ i ].valid() );
+        EXPECT_EQ( dst[ i ].value, static_cast<int>( i ) );
+    }
+}
+
+TEST( tr_vector_nontrivial, erase_and_shrink )
+{
+    tr_vector<address_tracker> v;
+    for ( int i{ 0 }; i < 10; ++i )
+        v.emplace_back( i );
+
+    v.erase( v.nth( 3 ) ); // erase element 3
+    ASSERT_EQ( v.size(), 9 );
+
+    // Verify remaining elements are valid and in correct order
+    int expected[]{ 0, 1, 2, 4, 5, 6, 7, 8, 9 };
+    for ( std::uint32_t i{ 0 }; i < 9; ++i )
+    {
+        EXPECT_TRUE( v[ i ].valid() ) << "Element " << i << " invalid after erase";
+        EXPECT_EQ( v[ i ].value, expected[ i ] );
+    }
+}
+
+TEST( tr_vector_nontrivial, with_string )
+{
+    // std::string is a real-world non-trivially-moveable type
+    tr_vector<std::string> v;
+    for ( int i{ 0 }; i < 100; ++i )
+        v.emplace_back( "string_" + std::to_string( i ) );
+
+    ASSERT_EQ( v.size(), 100 );
+    EXPECT_EQ( v[ 0  ], "string_0"  );
+    EXPECT_EQ( v[ 99 ], "string_99" );
+
+    // Copy
+    auto copy{ v };
+    EXPECT_EQ( copy[ 50 ], "string_50" );
+
+    // Mutate copy
+    copy[ 0 ] = "modified";
+    EXPECT_EQ( v[ 0 ], "string_0" ); // original unchanged
+    EXPECT_EQ( copy[ 0 ], "modified" );
+}
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm
