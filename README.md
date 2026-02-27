@@ -23,13 +23,37 @@ Cross-platform abstractions over OS virtual memory and memory-mapped I/O:
 
 ## Vectors
 
-| Container | Description |
-|-----------|-------------|
-| `small_vector<T, N>` | **Small Vector** — inline (stack) buffer with heap spill. Three layout modes: *compact* (MSB tag, trivially relocatable, `[[clang::trivial_abi]]`), *compact_lsb* (LSB tag, optimal LE addressing), *pointer_based* (LLVM/Boost style, type-erasable via `small_vector_base<T>`). Configurable `geometric_growth` factor, `sz_t`, and alignment |
-| `tr_vector<T>` | **Trivially Relocatable Vector** — exploits trivial relocatability for move/realloc without element-wise copy |
-| `vm_vector<T>` | **VM-backed Vector** — persistent storage via memory-mapped files or shared memory, with configurable headers and allocation granularity |
-| `fc_vector<T, N>` | **Fixed Capacity Vector** — inline (stack) storage with compile-time capacity bound (`inplace_vector`-like) |
-| `vector_impl<D>` | **CRTP Base** — reusable deducing-this mixin implementing the standard vector interface boilerplate over a concrete storage backend |
+The vector system is built on a **`vector<Storage>`** class template parameterized by a storage backend. This design cleanly separates the standard vector interface (push_back, insert, erase, ...) from the memory management strategy.
+
+### Storage backends
+
+| Storage | Description |
+|---------|-------------|
+| `heap_storage<T>` | Heap-allocated array with pluggable allocator (default: `mimalloc` on Windows/macOS, `crt` on Linux). Supports `tr_vector_options` for capacity caching, geometric growth, and alignment |
+| `fixed_storage<T, N>` | Inline (stack) array with compile-time capacity bound. Configurable overflow handler |
+| `vm_storage<T>` | Persistent storage via memory-mapped files or shared memory, with configurable headers and allocation granularity |
+
+### Vector types
+
+| Container | Definition | Description |
+|-----------|-----------|-------------|
+| `vector<Storage>` | Primary template | Standard vector interface over any storage backend |
+| `tr_vector<T>` | `= vector<heap_storage<T>>` | Trivially relocatable heap vector — exploits trivial relocatability for move/realloc without element-wise copy |
+| `fc_vector<T, N>` | `= vector<fixed_storage<T, N>>` | Fixed-capacity inline vector (`inplace_vector`-like) |
+| `vm_vector<T>` | `= vector<vm_storage<T>>` | VM-backed persistent vector |
+| `small_vector<T, N>` | Standalone | Inline (stack) buffer with heap spill. Three layout modes: *compact* (MSB tag, trivially relocatable, `[[clang::trivial_abi]]`), *compact_lsb* (LSB tag, optimal LE addressing), *pointer_based* (LLVM/Boost style, type-erasable via `small_vector_base<T>`). Configurable `geometric_growth` factor, `sz_t`, and alignment |
+
+### Allocators
+
+All heap-based storage uses allocators derived from the `allocator_base<Derived, T, sz_t>` CRTP base, which provides the [N2045](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2006/n2045.html) "Version 2" allocator interface (`allocation_command`, `allocate_at_least`, single-node allocation, and generic resize dispatch).
+
+| Allocator | Backend | In-place expand | Notes |
+|-----------|---------|:-:|-------|
+| `crt_allocator` | `malloc`/`realloc` | MSVC `_expand` | Default on Linux (glibc). MSVC `_expand` enables in-place growth & shrink |
+| `mimalloc_allocator` | [mimalloc](https://github.com/microsoft/mimalloc) | `mi_expand` | Default on Windows & macOS. Best overall throughput |
+| `dlmalloc_allocator` | Boost.Container alloc_lib | `boost_cont_grow` | Good in-place growth, guaranteed in-place shrink |
+| `jemalloc_allocator` | [jemalloc](https://github.com/jemalloc/jemalloc) | `je_xallocx` | Optional |
+| `tcmalloc_allocator` | [tcmalloc](https://github.com/google/tcmalloc) | `tc_realloc` | Optional |
 
 ---
 
@@ -138,20 +162,37 @@ target_link_libraries(your_target PRIVATE psi::vm)
 
 ```
 include/psi/vm/
-├── containers/         Flat containers, B+ tree, vector variants
-├── mapped_view/        RAII memory-mapped view wrappers
-├── mapping/            File & memory mapping primitives
-├── mappable_objects/   File handles, shared memory objects
-├── handles/            Cross-platform OS handle abstractions
-├── flags/              Access, protection, construction policy flags
-├── allocation.hpp      Reserve/commit allocation
-├── align.hpp           Alignment utilities
-├── protection.hpp      Memory protection flags
-└── span.hpp            Strongly-typed memory spans
+├── allocators/             Allocator backends
+│   ├── allocator_base.hpp  N2045 V2 CRTP base (allocation_command, allocate_at_least, resize)
+│   ├── crt.hpp             CRT malloc/realloc allocator
+│   ├── mimalloc.hpp        Microsoft mimalloc allocator
+│   ├── dlmalloc.hpp        Boost.Container dlmalloc allocator
+│   ├── jemalloc.hpp        jemalloc allocator
+│   └── tcmalloc.hpp        Google tcmalloc allocator
+├── containers/
+│   ├── storage/            Storage backends for vector<Storage>
+│   │   ├── heap.hpp        heap_storage (heap-allocated, pluggable allocator)
+│   │   └── fixed.hpp       fixed_storage (inline, compile-time capacity)
+│   ├── vector.hpp          vector<Storage> template + vector_impl CRTP mixin
+│   ├── tr_vector.hpp       tr_vector<T> type alias (= vector<heap_storage<T>>)
+│   ├── fc_vector.hpp       fc_vector<T,N> type alias (= vector<fixed_storage<T,N>>)
+│   ├── vm_vector.hpp       vm_vector<T> (memory-mapped storage)
+│   ├── small_vector.hpp    small_vector<T,N> (inline buffer + heap spill)
+│   ├── b_plus_tree.hpp     B+ tree
+│   └── flat_*.hpp          Flat associative containers (set, map, multi*)
+├── mapped_view/            RAII memory-mapped view wrappers
+├── mapping/                File & memory mapping primitives
+├── mappable_objects/       File handles, shared memory objects
+├── handles/                Cross-platform OS handle abstractions
+├── flags/                  Access, protection, construction policy flags
+├── allocation.hpp          Reserve/commit allocation
+├── align.hpp               Alignment utilities
+├── protection.hpp          Memory protection flags
+└── span.hpp                Strongly-typed memory spans
 
-src/                    Platform-specific implementations (win32/posix)
-test/                   Google Test suite
-doc/                    Technical documentation & analyses
+src/                        Platform-specific implementations (win32/posix)
+test/                       Google Test suite
+doc/                        Technical documentation & analyses
 ```
 
 ---
@@ -168,6 +209,9 @@ Fetched automatically at configure time via CPM.cmake:
 | [psiha/err](https://github.com/psiha/err) | master | Error handling |
 | [psiha/build](https://github.com/psiha/build) | master | Build infrastructure |
 | [Google Test](https://github.com/google/googletest) | 1.15.2 | Testing (test target only) |
+| [mimalloc](https://github.com/microsoft/mimalloc) | latest | Allocator backend (ON by default, CMake: `PSI_VM_MIMALLOC`) |
+| [jemalloc](https://github.com/jemalloc/jemalloc) | — | Allocator backend (OFF by default, CMake: `PSI_VM_JEMALLOC`) |
+| [tcmalloc](https://github.com/google/tcmalloc) | — | Allocator backend (OFF by default, CMake: `PSI_VM_TCMALLOC`) |
 
 ---
 

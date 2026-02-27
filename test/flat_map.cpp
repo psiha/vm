@@ -195,7 +195,7 @@ TYPED_TEST( flat_map_typed, operator_bracket )
     EXPECT_EQ( m[ 1 ], "a" );
     EXPECT_EQ( m[ 2 ], "b" );
     EXPECT_EQ( m[ 3 ], "c" );
-    // Overwrite existing — size unchanged
+    // Overwrite existing -- size unchanged
     m[ 1 ] = "A";
     EXPECT_EQ( m.size(), 3u );
     EXPECT_EQ( m[ 1 ], "A" );
@@ -731,7 +731,7 @@ TYPED_TEST( flat_map_typed, reverse_iterator )
     EXPECT_EQ( rit->first, 2 );
 }
 
-// values() returns std::span — only works with contiguous containers (not deque)
+// values() returns std::span -- only works with contiguous containers (not deque)
 // Kept as standalone test below (values_in_key_order)
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -911,7 +911,7 @@ TEST( flat_map, tr_vector_keys_span )
     tr_flat_map_ii m;
     m[ 5 ] = 50; m[ 1 ] = 10; m[ 3 ] = 30;
     auto const & keys{ m.keys() };
-    // tr_vector is contiguous — can form a span for cache-friendly key-only iteration
+    // tr_vector is contiguous -- can form a span for cache-friendly key-only iteration
     std::span<int const> keySpan{ keys.data(), keys.size() };
     EXPECT_EQ( keySpan.size(), 3u );
     EXPECT_EQ( keySpan[ 0 ], 1 );
@@ -1022,7 +1022,7 @@ TEST( flat_map, tr_vector_transparent_combined )
     auto lb{ m.lower_bound( 2U ) };
     EXPECT_EQ( lb->first, 3 );
 
-    // Keys span — the actual use case for DimMembersSpan
+    // Keys span -- the actual use case for DimMembersSpan
     auto const & keys{ m.keys() };
     std::span<int const> keySpan{ keys.data(), keys.size() };
     EXPECT_EQ( keySpan[ 0 ], 1 );

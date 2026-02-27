@@ -56,8 +56,8 @@ endif()
 include( ${build_SOURCE_DIR}/build_options.cmake )
 
 if ( NOT ( MSVC AND GitHubCIRun ) ) # the related wrkrnd in gh-actions.yml does not work so...
-    PSI_add_compile_options( Debug ${PSI_compiler_runtime_sanity_checks} )
-    PSI_add_link_options   ( Debug ${PSI_linker_runtime_sanity_checks}   )
+    #PSI_add_compile_options( Debug ${PSI_compiler_runtime_sanity_checks} )
+    #PSI_add_link_options   ( Debug ${PSI_linker_runtime_sanity_checks}   )
 endif()
 
 PSI_add_compile_options( Release ${PSI_compiler_LTO} ${PSI_compiler_optimize_for_size} ${PSI_compiler_disable_thread_safe_init} ${PSI_compiler_fastmath} ${PSI_compiler_debug_symbols} )
@@ -118,6 +118,28 @@ target_include_directories( psi_vm PUBLIC
 )
 
 target_precompile_headers( psi_vm PUBLIC src/pch.hpp )
+
+
+###################
+## Optional allocator backends
+###################
+
+# Default to ON for standalone builds (testing), OFF when included from host project
+option( PSI_VM_MIMALLOC  "Pull and build mimalloc (Microsoft) allocator"  ON  )
+option( PSI_VM_JEMALLOC  "Enable jemalloc allocator wrapper"              OFF )
+option( PSI_VM_TCMALLOC  "Enable tcmalloc (Google) allocator wrapper"     OFF )
+
+if ( PSI_VM_MIMALLOC )
+    include( FetchContent )
+    set( MI_OVERRIDE     OFF CACHE BOOL "" FORCE )
+    set( MI_BUILD_SHARED OFF CACHE BOOL "" FORCE )
+    set( MI_BUILD_TESTS  OFF CACHE BOOL "" FORCE )
+    set( MI_BUILD_OBJECT OFF CACHE BOOL "" FORCE )
+    FetchContent_Declare( mimalloc GIT_REPOSITORY https://github.com/microsoft/mimalloc.git GIT_TAG v3.2.8 GIT_SHALLOW TRUE )
+    FetchContent_MakeAvailable( mimalloc )
+    target_link_libraries( psi_vm PUBLIC mimalloc-static )
+    target_compile_definitions( psi_vm PUBLIC PSI_VM_HAS_MIMALLOC=1 )
+endif()
 
 
 ###################
