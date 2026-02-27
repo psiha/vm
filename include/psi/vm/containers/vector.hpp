@@ -1,17 +1,17 @@
 ////////////////////////////////////////////////////////////////////////////////
-/// Base CRTP-like implementation of shared, standard C++latest functionality
-/// for vector-like containers. Also provides extensions like default vs value
-/// initialization and explicit grow and shrink (noexcept) vs resize methods,
-/// stable/try-expansion (TODO), checked iterators, configurable size_type,
-/// pass-by-value pass-in-reg ABI for supported trivial types...
-/// w/ special emphasis on code reuse and bloat reduction.
-/// (requires deducing this, P0847 support)
-/// TODO extract the entire container subdirectory into a separate library or
-/// merge with prior art
-///  https://github.com/arturbac/small_vectors
-///  https://github.com/AmadeusITGroup/amc
-///  https://github.com/Quuxplusone/SG14/?tab=readme-ov-file#allocator-aware-in-place-vector-future--c20
-////////////////////////////////////////////////////////////////////////////////
+///
+/// \file vector.hpp
+/// ----------------
+///
+/// Unified vector header: provides the vector<Storage, Growth> template that
+/// combines any storage backend with the standard container interface
+/// (push_back, iterators, etc.) directly in one class.
+///
+/// Usage:
+///   vector<vm_storage<T>>                                → vm_vector<T>
+///   vector<heap_storage<T, crt_allocator<T>>>             → tr_vector<T>
+///   vector<fixed_storage<T, N>>                          → fc_vector<T, N>
+///   vector<sbo_hybrid<T, N>>                             → small_vector<T, N>
 ///
 /// Copyright (c) Domagoj Saric.
 ///
@@ -47,6 +47,8 @@
 #include <type_traits>
 #include <std_fix/const_iterator.hpp>
 //------------------------------------------------------------------------------
+#include <initializer_list>
+#include <utility>
 #ifdef _MSC_VER
 namespace std { template <class T, class A> class list; }
 #endif
@@ -59,7 +61,7 @@ namespace psi::vm
 struct geometric_growth
 {
     std::uint8_t num{ 3 }; // numerator   (3/2 = 1.5x default)
-    std::uint8_t den{ 2 }; // denominator (num == den → no geometric growth)
+    std::uint8_t den{ 2 }; // denominator (num == den -> no geometric growth)
 
     /// Returns max(target_size, current_capacity * num / den).
     template <std::unsigned_integral T>
@@ -74,15 +76,6 @@ PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
 namespace detail
 {
     // throw_out_of_range declared in abi.hpp, defined in vm_vector.cpp
-#if PSI_MALLOC_OVERCOMMIT != PSI_OVERCOMMIT_Full
-    [[ noreturn, gnu::cold ]] void throw_bad_alloc();
-#else
-    [[ gnu::cold ]] inline void throw_bad_alloc() noexcept
-    {
-        BOOST_ASSERT_MSG( false, "Unexpected allocation failure" );
-        std::unreachable();
-    }
-#endif
 
     template <typename T>
     constexpr T * mutable_iter( T const * const ptr ) noexcept { return const_cast<T *>( ptr ); }
@@ -155,17 +148,51 @@ template <typename E, typename T, typename A>
 bool constexpr trivially_destructible_after_move_assignment<std::basic_string<E, T, A>>{ false };
 #endif
 
-/// Concept matching types derived from vector_impl (carry the psi_vm_vector_tag).
+/// Concept matching types that carry the psi_vm_vector_tag.
 template <typename T>
 concept psi_vm_vector = requires { typename std::remove_cvref_t<T>::psi_vm_vector_tag; };
 
-// see the note for up() on why the Impl parameter is used/required (even with deducing this support)
-template <typename Impl, typename T, typename sz_t>
-class [[ nodiscard, clang::trivial_abi ]] vector_impl
+
+////////////////////////////////////////////////////////////////////////////////
+/// \class vector
+///
+/// \brief Storage-parameterized vector. The Storage class provides the
+///        backing memory (allocation, growth, shrinkage) while vector<>
+///        provides the standard container interface (push_back, iterators,
+///        copy/move, etc.) directly.
+///
+/// The Storage class must satisfy the VectorStorage contract:
+///   Required types: value_type, size_type
+///   Required static: storage_zero_initialized (bool constexpr)
+///   Required methods:
+///     T* data() noexcept / T const* data() const noexcept
+///     size_type size() const noexcept
+///     size_type capacity() const noexcept
+///     bool empty() const noexcept
+///     T* storage_init(size_type)
+///     T* storage_grow_to(size_type)
+///     T* storage_shrink_to(size_type) noexcept
+///     void storage_shrink_size_to(size_type) noexcept
+///     void storage_dec_size() noexcept
+///     void storage_inc_size() noexcept
+///     void storage_free() noexcept
+///   Optional methods:
+///     bool storage_try_expand_capacity(size_type) noexcept
+///     void swap(Storage &) noexcept
+///
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename Storage, geometric_growth Growth = geometric_growth{}>
+class [[ nodiscard, clang::trivial_abi ]] vector
+    :
+    public Storage
 {
+    using storage_t = Storage;
+
 public:
     using psi_vm_vector_tag      = void; // tag for constraining free comparison operators
-    using value_type             = T;
+    using value_type             = typename storage_t::value_type;
+    using size_type              = typename storage_t::size_type;
     using       pointer          = value_type       *;
     using const_pointer          = value_type const *;
     using       reference        = value_type       &;
@@ -175,7 +202,6 @@ public:
 #else
     using param_const_ref        = pass_in_reg<value_type>;
 #endif
-    using       size_type        = sz_t;
     using difference_type        = std::make_signed_t<size_type>;
 #if defined( _LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR )
     using       iterator         = std::__bounded_iter<pointer>;
@@ -192,36 +218,9 @@ public:
     using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 
 private:
-    // Workaround for a deducing this defect WRT to private inheritance: the
-    // problem&solution described in the paper do not cover this case - where
-    //  * the base class is empty
-    //  * the implementation details are in an immediately derived class D0
-    //  * there is a class Dx which then privately inherits from D0 and calls
-    //    vector_impl methods
-    // - then the type of the self argument gets deduced as Dx (const &) -
-    // through which members of D0 cannot be accessed due to private
-    // inheritance. Moreover in that case we (the base class) do not know of the
-    // D0 (implementation) type and cannot cast self to it - therefore in order
-    // to support this use case we have to require that the 'actual
-    // implementation' derived type be explicitly specified as template
-    // parameter (just like in the classic CRTP).
-    // Explicitly using the Impl type for self then has the added benefit of
-    // eliminating the extra compile-time and binary size hit of instantiating
-    // base/vector_impl methods for/with all the possible derived types.
-    // It also has the negative effect of compilation errors when invoking non-
-    // const methods on rvalues - as rvalue references cannot bind to a an
-    // 'Impl &'...in search of a solution (other than having two overloads
-    // everywhere or using yet-another ref-proxy; those using 'auto & self' can
-    // at least simply be modified to use 'auto && self').
-    // https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2021/p0847r7.html#the-shadowing-mitigation-private-inheritance-problem
-    // https://stackoverflow.com/questions/844816/c-style-upcast-and-downcast-involving-private-inheritance (tunneling magic of C-style casts)
-    template <typename U> [[ gnu::const ]] static constexpr Impl       & up( U       & self ) noexcept { static_assert( std::is_base_of_v<Impl, U> ); return (Impl &)self; }
-    template <typename U> [[ gnu::const ]] static constexpr Impl const & up( U const & self ) noexcept { return up( const_cast<U &>( self ) ); }
-
-private:
     constexpr auto begin_ptr( this auto & self ) noexcept { return self.data(); }
     constexpr auto   end_ptr( this auto & self ) noexcept { return self.data() + self.size(); }
-    constexpr iterator make_iterator( [[ maybe_unused ]] this Impl & self, value_type * const ptr ) noexcept
+    constexpr iterator make_iterator( [[ maybe_unused ]] this vector & self, value_type * const ptr ) noexcept
     {
         return
 #   if defined( _LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR )
@@ -232,25 +231,21 @@ private:
             ptr;
 #   endif
     }
-    constexpr iterator make_iterator( this Impl & self, size_type const offset ) noexcept
+    constexpr iterator make_iterator( this vector & self, size_type const offset ) noexcept
     {
         auto const begin{ self.data() };
         return self.make_iterator( begin + offset );
     }
-    constexpr const_iterator make_iterator( this Impl const & self, size_type const offset ) noexcept
+    constexpr const_iterator make_iterator( this vector const & self, size_type const offset ) noexcept
     {
-        return { const_cast<Impl &>( self ).make_iterator( offset ) };
+        return { const_cast<vector &>( self ).make_iterator( offset ) };
     }
 
-    // constructor helpers - for initializing the derived Impl class
-    // (simplifying or minimizing the need to write specialized Impl
-    // constructors) - to be used only in vector_impl constructors!
-    constexpr Impl & initialized_impl( size_type const initial_size, no_init_t ) noexcept
+    // constructor helpers - for initializing the vector during construction
+    constexpr void initialized_impl( size_type const initial_size, no_init_t ) noexcept
     {
-        auto & impl{ static_cast<Impl &>( *this ) };
-        impl.storage_init( initial_size );
-        BOOST_ASSUME( impl.size() == initial_size );
-        return impl;
+        storage_t::storage_init( initial_size );
+        BOOST_ASSUME( this->size() == initial_size );
     }
 
     // GCC 15.2.1 bug: when a base-class constructor inherited via
@@ -268,95 +263,68 @@ private:
     static constexpr value_type * gcc_dse_workaround( value_type * p ) noexcept { return p; }
 #endif
 
-    constexpr Impl & initialized_impl( size_type const initial_size, default_init_t ) noexcept
+    constexpr void initialized_impl( size_type const initial_size, default_init_t ) noexcept
     {
-        auto & impl{ initialized_impl( initial_size, no_init ) };
-        std::uninitialized_default_construct_n( gcc_dse_workaround( impl.data() ), impl.size() );
-        return impl;
+        initialized_impl( initial_size, no_init );
+        std::uninitialized_default_construct_n( gcc_dse_workaround( this->data() ), this->size() );
     }
-    constexpr Impl & initialized_impl( size_type const initial_size, value_init_t ) noexcept
+    constexpr void initialized_impl( size_type const initial_size, value_init_t ) noexcept
     {
-        auto & impl{ initialized_impl( initial_size, no_init ) };
-        if constexpr ( std::is_trivially_constructible_v<value_type> && Impl::storage_zero_initialized )
+        initialized_impl( initial_size, no_init );
+        if constexpr ( std::is_trivially_constructible_v<value_type> && storage_t::storage_zero_initialized )
         {
             BOOST_ASSERT_MSG
             (
-                !initial_size || ( *std::max_element( impl.data(), impl.size() ) == 0 ),
+                !initial_size || ( *std::max_element( this->data(), this->size() ) == 0 ),
                 "Broken storage promise to zero-init"
             );
         }
         else
         {
-            std::uninitialized_value_construct_n( gcc_dse_workaround( impl.data() ), impl.size() );
+            std::uninitialized_value_construct_n( gcc_dse_workaround( this->data() ), this->size() );
         }
-        return impl;
     }
-
-    constexpr vector_impl( Impl & self, Impl const & other ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
-    {
-        BOOST_ASSUME( self.empty() );
-        auto const sz{ other.size() };
-        auto const self_data{ self.grow_to( sz, no_init ) };
-        std::uninitialized_copy_n( other.begin(), sz, gcc_dse_workaround( self_data ) );
-    }
-
-protected:
-    constexpr  vector_impl(                      ) noexcept = default;
-    constexpr  vector_impl( vector_impl const &  ) noexcept = default;
-    constexpr  vector_impl( vector_impl       && ) noexcept = default;
-    constexpr ~vector_impl(                      ) noexcept = default;
 
 public:
     // MSVC (VS 17.12.3) fails compilation if this is a variable
-    static bool consteval noexcept_storage() { return noexcept( std::declval<Impl &>().storage_grow_to( size_type( 123 ) ) ); };
+    static bool consteval noexcept_storage() { return noexcept( std::declval<vector &>().storage_grow_to( size_type( 123 ) ) ); };
 
     // non standard default: default-initialization
-    constexpr explicit vector_impl( size_type const initial_size ) noexcept( noexcept_storage() && std::is_nothrow_default_constructible_v<T> ) : vector_impl( initial_size, default_init ) {}
-    constexpr vector_impl( size_type const initial_size, init_policy auto const policy ) noexcept( noexcept_storage() && std::is_nothrow_default_constructible_v<T> )
+    constexpr explicit vector( size_type const initial_size ) noexcept( noexcept_storage() && std::is_nothrow_default_constructible_v<value_type> ) : vector( initial_size, default_init ) {}
+    constexpr vector( size_type const initial_size, init_policy auto const policy ) noexcept( noexcept_storage() && std::is_nothrow_default_constructible_v<value_type> )
+        : storage_t{}
     {
         initialized_impl( initial_size, policy );
     }
 
-    constexpr vector_impl( size_type const count, param_const_ref const value ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
+    constexpr vector( size_type const count, param_const_ref const value ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
+        : storage_t{}
     {
-        auto & impl{ initialized_impl( count, no_init ) };
-        std::uninitialized_fill_n( gcc_dse_workaround( impl.data() ), count, value );
-        BOOST_ASSUME( impl.size() == count );
+        initialized_impl( count, no_init );
+        std::uninitialized_fill_n( gcc_dse_workaround( this->data() ), count, value );
+        BOOST_ASSUME( this->size() == count );
     }
 
     template <std::input_iterator It>
-    constexpr vector_impl( It const first, It const last ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
+    constexpr vector( It const first, It const last ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
+        : storage_t{}
     {
         if constexpr ( std::random_access_iterator<It> )
         {
             auto const sz{ static_cast<size_type>( std::distance( first, last ) ) };
-            auto & impl{ initialized_impl( sz, no_init ) };
-            // STL utility functions handle EH safety - no need to catch to
-            // reset size as Impl/the derived class should not attempt cleanup
-            // if this (its base constructor) fails.
-            std::uninitialized_copy_n( first, sz, gcc_dse_workaround( impl.data() ) );
+            initialized_impl( sz, no_init );
+            std::uninitialized_copy_n( first, sz, gcc_dse_workaround( this->data() ) );
         }
         else
         {
-            auto & impl{ initialized_impl( 0, no_init ) };
-            std::copy( first, last, std::back_inserter( impl ) );
+            initialized_impl( 0, no_init );
+            std::copy( first, last, std::back_inserter( *this ) );
         }
     }
 
-    constexpr vector_impl( std::initializer_list<value_type> const initial_values ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
-        : vector_impl( initial_values.begin(), initial_values.end() )
+    constexpr vector( std::initializer_list<value_type> const initial_values ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
+        : vector( initial_values.begin(), initial_values.end() )
     {}
-
-
-    constexpr vector_impl & operator=( vector_impl && ) noexcept = default;
-    constexpr vector_impl & operator=( this Impl & self, Impl const & other ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
-    {
-        BOOST_ASSUME( &self != &other ); // not going to support self assignment
-        self.assign( other );
-        return self;
-    }
-
-   constexpr vector_impl & operator=( this Impl & self, std::initializer_list<value_type> const data ) { self.assign( data ); return self; }
 
     //! <b>Effects</b>: Assigns the the range [first, last) to *this.
     //!
@@ -365,13 +333,13 @@ public:
     //!
     //! <b>Complexity</b>: Linear to n.
     template <std::input_iterator It>
-    void assign( this Impl & self, It first, It const last )
+    void assign( this vector & self, It first, It const last )
     {
         // Overwrite all elements we can from [first, last)
         auto       cur   { self.begin() };
         auto const end_it{ self.end  () };
         if constexpr ( std::random_access_iterator<It> ) {
-            auto const overwrite_size{ std::min( self.size(), static_cast<typename Impl::size_type>( std::distance( first, last ) ) ) };
+            auto const overwrite_size{ std::min( self.size(), static_cast<typename vector::size_type>( std::distance( first, last ) ) ) };
             auto const next_iters{ std::ranges::copy_n( first, overwrite_size, cur ) };
             first = next_iters.in;
             cur   = next_iters.out;
@@ -397,7 +365,7 @@ public:
     }
 
     template <std::random_access_iterator It>
-    void assign( this Impl & self, It const first, It const last )
+    void assign( this vector & self, It const first, It const last )
     requires( std::is_trivially_destructible_v<value_type> )
     {
         auto const input_size{ static_cast<size_type>( std::distance( first, last ) ) };
@@ -405,7 +373,7 @@ public:
         std::uninitialized_copy_n( first, input_size, self.begin() );
     }
     template <std::ranges::range Rng>
-    void assign( this Impl & self, Rng && data )
+    void assign( this vector & self, Rng && data )
     {
         if constexpr ( requires{ std::size( data ); } )
         {
@@ -418,12 +386,12 @@ public:
         else
             self.assign( begin, end );
     }
-    void assign( this Impl & self, Impl && other ) noexcept( std::is_nothrow_move_assignable_v<Impl> )
+    void assign( this vector & self, vector && other ) noexcept( std::is_nothrow_move_assignable_v<vector> )
     {
         self = std::move( other );
     }
     template <std::ranges::range Rng>
-    void assign_range( this Impl & self, Rng && data ) { self.assign( std::forward<Rng>( data ) ); }
+    void assign_range( this vector & self, Rng && data ) { self.assign( std::forward<Rng>( data ) ); }
 
     //! <b>Effects</b>: Assigns the n copies of val to *this.
     //!
@@ -431,7 +399,7 @@ public:
     //!   T's copy/move constructor/assignment throws.
     //!
     //! <b>Complexity</b>: Linear to n.
-    void assign( this Impl & self, size_type const n, param_const_ref val )
+    void assign( this vector & self, size_type const n, param_const_ref val )
     {
         if constexpr ( std::is_trivially_destructible_v<value_type> )
         {
@@ -465,30 +433,30 @@ public:
     //! <b>Effects</b>: Returns an iterator to the first element contained in the vector.
     //! <b>Throws</b>: Nothing.
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto            begin( this auto       && self ) noexcept { return up( self ).make_iterator( size_type{ 0 } ); }
-    [[ nodiscard ]] const_iterator cbegin( this Impl const &  self ) noexcept { return self.begin(); }
+    [[ nodiscard ]] auto            begin( this auto       && self ) noexcept { return const_cast<vector &>( self ).make_iterator( size_type{ 0 } ); }
+    [[ nodiscard ]] const_iterator cbegin( this vector const &  self ) noexcept { return self.begin(); }
 
     //! <b>Effects</b>: Returns an iterator to the end of the vector.
     //!
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto            end( this auto       && self ) noexcept { return up( self ).make_iterator( self.size() ); }
-    [[ nodiscard ]] const_iterator cend( this Impl const &  self ) noexcept { return self.end(); }
+    [[ nodiscard ]] auto            end( this auto       && self ) noexcept { return const_cast<vector &>( self ).make_iterator( self.size() ); }
+    [[ nodiscard ]] const_iterator cend( this vector const &  self ) noexcept { return self.end(); }
 
     //! <b>Effects</b>: Returns a reverse_iterator pointing to the beginning
     //! of the reversed vector.
     //! <b>Throws</b>: Nothing.
     //! <b>Complexity</b>: Constant.
     [[ nodiscard ]] auto                    rbegin( this auto       && self ) noexcept { return std::make_reverse_iterator( self.end() ); }
-    [[ nodiscard ]] const_reverse_iterator crbegin( this Impl const &  self ) noexcept { return self.rbegin(); }
+    [[ nodiscard ]] const_reverse_iterator crbegin( this vector const &  self ) noexcept { return self.rbegin(); }
 
     //! <b>Effects</b>: Returns a reverse_iterator pointing to the end
     //! of the reversed vector.
     //! <b>Throws</b>: Nothing.
     //! <b>Complexity</b>: Constant.
     [[ nodiscard ]] auto                    rend( this auto       && self ) noexcept { return std::make_reverse_iterator( self.begin() ); }
-    [[ nodiscard ]] const_reverse_iterator crend( this Impl const &  self ) noexcept { return self.rend(); }
+    [[ nodiscard ]] const_reverse_iterator crend( this vector const &  self ) noexcept { return self.rend(); }
 
     //////////////////////////////////////////////
     //
@@ -499,7 +467,7 @@ public:
     //! <b>Effects</b>: Returns true if the vector contains no elements.
     //! <b>Throws</b>: Nothing.
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard, gnu::pure ]] bool empty( this Impl const & self ) noexcept { return BOOST_UNLIKELY( self.size() == 0 ); }
+    [[ nodiscard, gnu::pure ]] bool empty( this vector const & self ) noexcept { return BOOST_UNLIKELY( self.size() == 0 ); }
 
     //! <b>Effects</b>: Returns the largest possible size of the vector.
     //!
@@ -509,7 +477,7 @@ public:
     [[ nodiscard ]] static constexpr size_type max_size() noexcept { return static_cast<size_type>( std::numeric_limits<size_type>::max() / sizeof( value_type ) ); }
 
     // intentional non-standard behaviour: default_init by default
-    void resize( this Impl & self, size_type const new_size ) { self.resize( new_size, default_init ); }
+    void resize( this vector & self, size_type const new_size ) { self.resize( new_size, default_init ); }
 
     //! <b>Effects</b>: Inserts or erases elements at the end such that
     //!   the size becomes n. New elements are copy constructed from x.
@@ -518,13 +486,13 @@ public:
     //!
     //! <b>Complexity</b>: Linear to the difference between size() and new_size.
     template <typename Initializer>
-    void resize( this Impl & self, size_type const new_size, Initializer && initializer )
+    void resize( this vector & self, size_type const new_size, Initializer && initializer )
     {
         if ( new_size > self.size() ) self.  grow_to( new_size, std::forward<Initializer>( initializer ) );
         else                          self.shrink_to( new_size                                           );
     }
 
-    void shrink_to_fit( this Impl & self ) noexcept { self.storage_shrink_to( self.size() ); }
+    void shrink_to_fit( this vector & self ) noexcept { self.storage_shrink_to( self.size() ); }
 
     //////////////////////////////////////////////
     //
@@ -540,7 +508,7 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto & front( this auto && self ) noexcept { return up( self ).span().front(); }
+    [[ nodiscard ]] auto & front( this auto && self ) noexcept { return self.span().front(); }
 
     //! <b>Requires</b>: !empty()
     //!
@@ -550,7 +518,7 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto & back( this auto && self ) noexcept { return up( self ).span().back(); }
+    [[ nodiscard ]] auto & back( this auto && self ) noexcept { return self.span().back(); }
 
     //! <b>Requires</b>: size() > n.
     //!
@@ -560,7 +528,7 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto & operator[]( this auto && self, size_type const n ) noexcept { return up( self ).span()[ n ]; }
+    [[ nodiscard ]] auto & operator[]( this auto && self, size_type const n ) noexcept { return self.span()[ n ]; }
 
     //! <b>Requires</b>: size() >= n.
     //!
@@ -589,7 +557,7 @@ public:
     //! <b>Complexity</b>: Constant.
     //!
     //! <b>Note</b>: Non-standard extension
-    [[ nodiscard ]] size_type index_of( this Impl const & self, const_iterator const p ) noexcept
+    [[ nodiscard ]] size_type index_of( this vector const & self, const_iterator const p ) noexcept
     {
         self.verify_iterator( p );
         return static_cast<size_type>( p - self.begin() );
@@ -620,6 +588,7 @@ public:
     //
     //////////////////////////////////////////////
 
+    using storage_t::data; // make non-const data() from storage visible alongside the const overload below
     template <typename Self>
     [[ nodiscard, gnu::pure ]] const_pointer data( this Self const & self ) noexcept { return const_cast<Self &>( self ).Self::data(); }
 
@@ -661,7 +630,7 @@ public:
     }
 
     template <class ...Args>
-    reference emplace_back( this Impl & self, Args &&...args )
+    reference emplace_back( this vector & self, Args &&...args )
     {
         auto const current_size{ self.size() };
         if constexpr ( sizeof...( Args ) || true ) // grow_by( 1, default_init ) would call uninitialized_default_construct (i.e. a loop) - TODO grow_by_one and shrink_by_one methods for push&pop-back operations
@@ -692,7 +661,7 @@ public:
     //!
     //! <b>Note</b>: Non-standard extension.
     template <typename... Args>
-    bool stable_emplace_back( this Impl & self, Args &&... args )
+    bool stable_emplace_back( this vector & self, Args &&... args )
     {
         if ( !self.stable_reserve( self.size() + 1 ) )
             return false;
@@ -711,10 +680,10 @@ public:
     //! <b>Complexity</b>: If position is end(), amortized constant time
     //!   Linear time otherwise.
     template <typename... Args>
-    iterator emplace( this Impl & self, const_iterator const position, Args &&... args )
+    iterator emplace( this vector & self, const_iterator const position, Args &&... args )
     {
         auto const iter{ self.make_space_for_insert( position, 1 ) };
-        if constexpr ( trivially_destructible_after_move_assignment<T> )
+        if constexpr ( trivially_destructible_after_move_assignment<value_type> )
             construct_at( *iter, std::forward<Args>( args )... );
         else
             *iter = { std::forward<Args>( args )... };
@@ -727,7 +696,7 @@ public:
     //!   T's copy/move constructor throws.
     //!
     //! <b>Complexity</b>: Amortized constant time.
-    void push_back( this Impl & self, param_const_ref x ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
+    void push_back( this vector & self, param_const_ref x ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
     {
         self.emplace_back( x );
     }
@@ -739,7 +708,7 @@ public:
     //!   T's copy/move constructor throws.
     //!
     //! <b>Complexity</b>: Amortized constant time.
-    void push_back( this Impl & self, value_type && x ) noexcept( noexcept_storage() && std::is_nothrow_move_constructible_v<value_type> )
+    void push_back( this vector & self, value_type && x ) noexcept( noexcept_storage() && std::is_nothrow_move_constructible_v<value_type> )
     requires( !std::is_trivial_v<value_type> ) // otherwise better to go through the pass-in-reg overload
     {
         self.emplace_back( std::move( x ) );
@@ -753,7 +722,7 @@ public:
     //!
     //! <b>Complexity</b>: If position is end(), amortized constant time
     //!   Linear time otherwise.
-    iterator insert( this Impl & self, const_iterator const position, param_const_ref x ) { return self.emplace( position, x ); }
+    iterator insert( this vector & self, const_iterator const position, param_const_ref x ) { return self.emplace( position, x ); }
 
     //! <b>Requires</b>: position must be a valid iterator of *this.
     //!
@@ -763,7 +732,7 @@ public:
     //!
     //! <b>Complexity</b>: If position is end(), amortized constant time
     //!   Linear time otherwise.
-    iterator insert( this Impl & self, const_iterator const position, value_type && x ) requires( !std::is_trivially_move_constructible_v<value_type> ) { return self.emplace( position, std::move( x ) ); }
+    iterator insert( this vector & self, const_iterator const position, value_type && x ) requires( !std::is_trivially_move_constructible_v<value_type> ) { return self.emplace( position, std::move( x ) ); }
 
     //! <b>Requires</b>: position must be a valid iterator of *this.
     //!
@@ -774,10 +743,10 @@ public:
     //! <b>Throws</b>: If memory allocation throws or T's copy/move constructor throws.
     //!
     //! <b>Complexity</b>: Linear to n.
-    iterator insert( this Impl & self, const_iterator const position, size_type const n, param_const_ref x )
+    iterator insert( this vector & self, const_iterator const position, size_type const n, param_const_ref x )
     {
         auto const iter{ self.make_space_for_insert( position, n ) };
-        if constexpr ( trivially_destructible_after_move_assignment<T> )
+        if constexpr ( trivially_destructible_after_move_assignment<value_type> )
             std::uninitialized_fill_n( iter, n, x );
         else
             std::fill_n( iter, n, x );
@@ -795,11 +764,11 @@ public:
     //!
     //! <b>Complexity</b>: Linear to boost::container::iterator_distance [first, last).
     template <std::input_iterator InIt>
-    iterator insert( this Impl & self, const_iterator const position, InIt const first, InIt const last )
+    iterator insert( this vector & self, const_iterator const position, InIt const first, InIt const last )
     {
         auto const n{ static_cast<size_type>( std::distance( first, last ) ) };
         auto const iter{ self.make_space_for_insert( position, n ) };
-        if constexpr ( trivially_destructible_after_move_assignment<T> )
+        if constexpr ( trivially_destructible_after_move_assignment<value_type> )
             std::uninitialized_copy_n( first, n, iter );
         else
             std::copy_n( first, n, iter );
@@ -813,13 +782,13 @@ public:
     //! <b>Returns</b>: an iterator to the first inserted element or position if first == last.
     //!
     //! <b>Complexity</b>: Linear to the range [il.begin(), il.end()).
-    iterator insert( this Impl & self, const_iterator const position, std::initializer_list<value_type> const il )
+    iterator insert( this vector & self, const_iterator const position, std::initializer_list<value_type> const il )
     {
         return self.insert( position, il.begin(), il.end() );
     }
 
     template <std::ranges::input_range Rng>
-    iterator insert_range( this Impl & self, const_iterator const position, Rng && rng )
+    iterator insert_range( this vector & self, const_iterator const position, Rng && rng )
     {
         if constexpr ( std::ranges::sized_range<Rng> )
         {
@@ -827,14 +796,14 @@ public:
             auto const iter{ self.make_space_for_insert( position, n ) };
             if constexpr ( std::is_rvalue_reference_v<Rng &&> )
             {
-                if constexpr ( trivially_destructible_after_move_assignment<T> )
+                if constexpr ( trivially_destructible_after_move_assignment<value_type> )
                     std::uninitialized_move( std::ranges::begin( rng ), std::ranges::end( rng ), iter );
                 else
                     std::ranges::move( rng, iter );
             }
             else
             {
-                if constexpr ( trivially_destructible_after_move_assignment<T> )
+                if constexpr ( trivially_destructible_after_move_assignment<value_type> )
                     std::uninitialized_copy( std::ranges::begin( rng ), std::ranges::end( rng ), iter );
                 else
                     std::ranges::copy( rng, iter );
@@ -844,7 +813,7 @@ public:
         else
         {
             // Non-sized input ranges: append at end, then rotate into position.
-            // This avoids materializing into a temporary vector (à la libc++).
+            // This avoids materializing into a temporary vector (a la libc++).
             auto const pos_index{ self.index_of( position ) };
             auto const old_size { self.size() };
             for ( auto it{ std::ranges::begin( rng ) }; it != std::ranges::end( rng ); ++it )
@@ -855,7 +824,7 @@ public:
     }
 
     template <std::ranges::range Rng>
-    void append_range( this Impl & self, Rng && __restrict rng )
+    void append_range( this vector & self, Rng && __restrict rng )
     {
         auto const current_size{ self.size() };
         if constexpr ( requires{ std::size( rng ); } )
@@ -893,7 +862,7 @@ public:
         }
     }
 #ifndef __cpp_lib_span_initializer_list
-    void append_range( this Impl & self, std::initializer_list<value_type> const rng ) { self.append_range( std::span{ rng.begin(), rng.end() } ); }
+    void append_range( this vector & self, std::initializer_list<value_type> const rng ) { self.append_range( std::span{ rng.begin(), rng.end() } ); }
 #endif
 
     //! <b>Effects</b>: Removes the last element from the container.
@@ -901,7 +870,7 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant time.
-    void pop_back( this Impl & self ) noexcept
+    void pop_back( this vector & self ) noexcept
     {
         BOOST_ASSUME( !self.empty() );
         std::destroy_at( &self.back() );
@@ -914,13 +883,13 @@ public:
     //!
     //! <b>Complexity</b>: Linear to the elements between pos and the
     //!   last element. Constant if pos is the last element.
-    iterator erase( this Impl & self, const_iterator const position ) noexcept
+    iterator erase( this vector & self, const_iterator const position ) noexcept
     {
         self.verify_iterator( position );
         auto const pos_index{ self.index_of( position ) };
         auto const mutable_pos{ self.nth( pos_index ) };
         std::shift_left( mutable_pos, self.end(), 1 );
-        if constexpr ( trivially_destructible_after_move_assignment<T> )
+        if constexpr ( trivially_destructible_after_move_assignment<value_type> )
             self.storage_dec_size();
         else
             self.pop_back();
@@ -933,7 +902,7 @@ public:
     //!
     //! <b>Complexity</b>: Linear to the distance between first and last
     //!   plus linear to the elements between pos and the last element.
-    iterator erase( this Impl & self, const_iterator const first, const_iterator const last ) noexcept
+    iterator erase( this vector & self, const_iterator const first, const_iterator const last ) noexcept
     {
         self.verify_iterator( first );
         self.verify_iterator( last  );
@@ -943,7 +912,7 @@ public:
         auto const mutable_end  { detail::mutable_iter( last  ) };
         auto const new_end      { std::move( mutable_end, self.end(), mutable_start ) };
         auto const new_size     { static_cast<size_type>( new_end - self.begin() ) };
-        if constexpr ( trivially_destructible_after_move_assignment<T> )
+        if constexpr ( trivially_destructible_after_move_assignment<value_type> )
             self.storage_shrink_size_to( new_size );
         else
             self.shrink_to( new_size );
@@ -955,7 +924,7 @@ public:
     //!
     //! <b>Complexity</b>: Linear to the number of elements in the container.
     [[ gnu::cold ]]
-    void clear( this Impl & self ) noexcept
+    void clear( this vector & self ) noexcept
     {
         std::destroy( self.begin(), self.end() );
 #   if 0 // default to STL behaviour (keep capacity) - TODO make this configurable?
@@ -964,9 +933,6 @@ public:
         self.storage_shrink_size_to( 0 );
 #   endif
     }
-
-    void swap( this auto && self, auto & other ) noexcept { std::swap( self, other ); }
-
 
     ///////////////////////////////////////////////////////////////////////////
     // Extensions
@@ -982,7 +948,7 @@ public:
     //!   already was, or in-place expansion succeeded), false otherwise.
     //!
     //! <b>Note</b>: Non-standard extension.
-    bool stable_reserve( this Impl & self, size_type const new_cap )
+    bool stable_reserve( this vector & self, size_type const new_cap )
     {
         if ( new_cap <= self.capacity() )
             return true;
@@ -993,8 +959,8 @@ public:
         return false;
     }
 
-    value_type * grow_to( this Impl & self, size_type const target_size, no_init_t ) { return self.storage_grow_to( target_size ); }
-    value_type * grow_to( this Impl & self, size_type const target_size, default_init_t )
+    value_type * grow_to( this vector & self, size_type const target_size, no_init_t ) { return self.storage_grow_to( target_size ); }
+    value_type * grow_to( this vector & self, size_type const target_size, default_init_t )
     {
         auto const current_size{ self.size() };
         if ( target_size <= current_size ) [[ unlikely ]] { // meh, already/also handled by storage_grow_to()
@@ -1012,7 +978,7 @@ public:
         return data;
     }
 
-    value_type * grow_to( this Impl & self, size_type const target_size, value_init_t )
+    value_type * grow_to( this vector & self, size_type const target_size, value_init_t )
     {
         auto const current_size{ self.size() };
         if ( target_size <= current_size ) [[ unlikely ]] {
@@ -1025,7 +991,7 @@ public:
         {
             auto const new_space_bytes    { reinterpret_cast<std::uint8_t *>( data + current_size ) };
             auto const new_space_byte_size{ static_cast<std::size_t>( uninitialized_space_size ) * sizeof( value_type ) };
-            if constexpr ( Impl::storage_zero_initialized )
+            if constexpr ( storage_t::storage_zero_initialized )
             {
                 BOOST_ASSERT_MSG
                 (
@@ -1050,8 +1016,8 @@ public:
         return data;
     }
     template <typename U>
-    value_type * grow_to( this Impl & self, size_type const target_size, U && default_value )
-    requires std::constructible_from<T, U>
+    value_type * grow_to( this vector & self, size_type const target_size, U && default_value )
+    requires std::constructible_from<value_type, U>
     {
         auto const current_size{ self.size() };
         if ( target_size <= current_size ) [[ unlikely ]] {
@@ -1069,27 +1035,27 @@ public:
         return data;
     }
 
-    value_type * grow_by( this Impl & self, size_type const delta, auto const init_policy )
+    value_type * grow_by( this vector & self, size_type const delta, auto const init_policy )
     {
         return self.grow_to( self.size() + delta, init_policy );
     }
 
-    void shrink_to( this Impl & self, size_type const target_size ) noexcept
+    void shrink_to( this vector & self, size_type const target_size ) noexcept
     {
         BOOST_ASSUME( target_size <= self.size() );
         std::destroy( self.nth( target_size ), self.end() );
         self.storage_shrink_size_to( target_size ); // std::vector behaviour: never release/shrink capacity
     }
-    void shrink_by( this Impl & self, size_type const delta ) noexcept { self.shrink_to( self.size() - delta ); }
+    void shrink_by( this vector & self, size_type const delta ) noexcept { self.shrink_to( self.size() - delta ); }
 
 private:
-    void verify_iterator( [[ maybe_unused ]] this Impl const & self, [[ maybe_unused ]] const_iterator const iter ) noexcept
+    void verify_iterator( [[ maybe_unused ]] this vector const & self, [[ maybe_unused ]] const_iterator const iter ) noexcept
     {
         BOOST_ASSERT( iter >= self.begin() );
         BOOST_ASSERT( iter <= self.end  () );
     }
 
-    iterator make_space_for_insert( this Impl & self, const_iterator const position, size_type const n )
+    iterator make_space_for_insert( this vector & self, const_iterator const position, size_type const n )
     {
         self.verify_iterator( position );
         auto const position_index{ self.index_of( position ) };
@@ -1111,24 +1077,155 @@ private:
         }
         else
         {
-            auto const elements_to_move_to_uninitialized_space{ n };
-            auto const elements_to_move_to_the_current_end    { static_cast<size_type>( elements_to_move - elements_to_move_to_uninitialized_space ) };
-            std::uninitialized_move
-            (
-                &data[ current_size - elements_to_move_to_uninitialized_space ],
-                &data[ current_size ],
-                &data[ current_size ]
-            );
-            std::move_backward
-            (
-                &data[ position_index ],
-                &data[ position_index + elements_to_move_to_the_current_end ],
-                &data[ position_index + elements_to_move_to_the_current_end + n ]
-            );
+            if ( n <= elements_to_move )
+            {
+                // Case 1: enough elements after position to fill the gap.
+                // Phase 1: move last n elements into uninitialized space past old end.
+                std::uninitialized_move
+                (
+                    &data[ current_size - n ],
+                    &data[ current_size ],
+                    &data[ current_size ]
+                );
+                // Phase 2: shift remaining elements backward within initialized space.
+                auto const remaining{ static_cast<size_type>( elements_to_move - n ) };
+                std::move_backward
+                (
+                    &data[ position_index ],
+                    &data[ position_index + remaining ],
+                    &data[ position_index + remaining + n ]
+                );
+            }
+            else
+            {
+                // Case 2: fewer elements after position than being inserted (includes
+                // the common end-insert case where elements_to_move == 0).
+                // All destination slots are past old end -> uninitialized.
+                std::uninitialized_move
+                (
+                    &data[ position_index ],
+                    &data[ current_size ],
+                    &data[ position_index + n ]
+                );
+            }
         }
         return self.make_iterator( &data[ position_index ] );
     }
-}; // class vector_impl
+
+public:
+    // --- growth policy ---
+    // Geometric growth is applied here at the vector level (not inside storage).
+    // Storage does exact-size allocation; vector over-allocates for amortization.
+    // Shadows storage_t::storage_grow_to() so that calls route through here.
+    value_type * storage_grow_to( size_type const target_size )
+    {
+        if constexpr ( static_cast<bool>( Growth ) )
+        {
+            auto const current_cap{ storage_t::capacity() };
+            if ( target_size > current_cap ) [[ unlikely ]]
+                storage_t::reserve( Growth( target_size, current_cap ) );
+        }
+        return storage_t::storage_grow_to( target_size );
+    }
+
+    // --- default constructor ---
+    constexpr vector() noexcept = default;
+
+    // --- construct from pre-configured storage (for stateful allocators) ---
+    constexpr explicit vector( storage_t && init ) noexcept( std::is_nothrow_move_constructible_v<storage_t> )
+        : storage_t{ std::move( init ) }
+    {}
+
+    // --- destructor ---
+    constexpr ~vector() noexcept
+    {
+        if constexpr ( !std::is_trivially_destructible_v<value_type> )
+            std::destroy_n( this->data(), this->size() );
+        if ( this->data() )
+            storage_t::storage_free();
+    }
+
+    // --- copy constructor ---
+    // Two overloads depending on whether the storage manages its own copy:
+    //
+    // (A) Copy-constructible storage (e.g. vm_storage COW clone): delegate
+    //     entirely to storage's copy constructor — no element-level copy.
+    constexpr vector( vector const & other ) noexcept( std::is_nothrow_copy_constructible_v<storage_t> )
+        requires std::is_copy_constructible_v<storage_t>
+        : storage_t{ static_cast<storage_t const &>( other ) }
+    {}
+
+    // (B) Non-copyable storage (heap_storage, fixed_storage, sbo_hybrid):
+    //     element-level copy semantics live here at the vector level.
+    constexpr vector( vector const & other )
+        requires ( !std::is_copy_constructible_v<storage_t> )
+        : storage_t{}
+    {
+        // Optimization for small trivially-copyable fixed-capacity vectors:
+        // memcpy the entire object (size + inline array) with a handful of
+        // register-width instructions instead of a dynamic memcpy call.
+        if constexpr ( storage_t::fixed_sized_copy )
+        {
+            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        }
+        else if ( other.size() )
+        {
+            auto * dst{ storage_t::storage_init( other.size() ) };
+            try { std::uninitialized_copy_n( other.data(), other.size(), dst ); }
+            catch( ... ) { storage_t::storage_free(); throw; }
+        }
+    }
+
+    // --- move constructor ---
+    // Delegate to storage's move ctor (heap_storage: steal pointer;
+    // fixed_storage: memcpy or element-wise move)
+    constexpr vector( vector && other ) noexcept( std::is_nothrow_move_constructible_v<storage_t> )
+        : storage_t{ std::move( static_cast<storage_t &>( other ) ) }
+    {}
+
+    // --- copy assignment (copy-and-swap) ---
+    constexpr vector & operator=( vector const & other )
+    {
+        if ( this != &other )
+        {
+            auto tmp{ other }; // copy
+            swap( tmp );       // swap
+        } // tmp dtor frees old
+        return *this;
+    }
+
+    // --- move assignment ---
+    constexpr vector & operator=( vector && other ) noexcept( std::is_nothrow_move_constructible_v<storage_t> )
+    {
+        if ( this != &other )
+        {
+            // Destroy current elements
+            if constexpr ( !std::is_trivially_destructible_v<value_type> )
+                std::destroy_n( this->data(), this->size() );
+            if ( this->data() )
+                storage_t::storage_free();
+
+            // Move storage from other
+            static_cast<storage_t &>( *this ) = std::move( static_cast<storage_t &>( other ) );
+        }
+        return *this;
+    }
+
+    // --- initializer_list assignment ---
+    constexpr vector & operator=( std::initializer_list<value_type> const data )
+    {
+        this->assign( data );
+        return *this;
+    }
+
+    void swap( vector & other ) noexcept
+    {
+        if constexpr ( requires( storage_t & s ) { s.swap( s ); } )
+            storage_t::swap( static_cast<storage_t &>( other ) );
+        else
+            std::swap( static_cast<storage_t &>( *this ), static_cast<storage_t &>( other ) );
+    }
+}; // class vector
 
 
 //! <b>Effects</b>: Returns the result of std::lexicographical_compare_three_way
@@ -1140,6 +1237,33 @@ template <std::ranges::range L, std::ranges::range R> requires( psi_vm_vector<L>
 [[ nodiscard ]] constexpr auto operator== ( L const & left, R const & right ) noexcept { return std::equal                            ( left.begin(), left.end(), right.begin(), right.end() ); }
 
 PSI_WARNING_DISABLE_POP()
+
+//------------------------------------------------------------------------------
+
+// is_trivially_moveable: heap_storage is always trivially moveable (just pointer+sizes);
+// fixed_storage delegates to element type.
+template <typename Storage, geometric_growth Growth>
+requires( is_trivially_moveable<Storage> )
+bool constexpr is_trivially_moveable<vector<Storage, Growth>>{ true };
+
+//------------------------------------------------------------------------------
+
+// Generic erase_if / erase for any psi_vm_vector (tr_vector, vm_vector,
+// small_vector, fc_vector, etc.).
+template <psi_vm_vector Vec, typename Pred>
+constexpr typename Vec::size_type erase_if( Vec & c, Pred pred )
+{
+    auto const it{ std::remove_if( c.begin(), c.end(), std::move( pred ) ) };
+    auto const n { static_cast<typename Vec::size_type>( c.end() - it ) };
+    c.shrink_by( n );
+    return n;
+}
+
+template <psi_vm_vector Vec, typename U>
+constexpr typename Vec::size_type erase( Vec & c, U const & value )
+{
+    return erase_if( c, [&value]( auto const & elem ) { return elem == value; } );
+}
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm

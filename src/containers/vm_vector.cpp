@@ -17,6 +17,20 @@
 
 #include <boost/assert.hpp>
 
+#include "cow_clone_impl.hpp"
+
+#ifdef __linux__
+#   include <sys/mman.h>
+#   if __has_include( <sys/memfd.h> )
+#       include <sys/memfd.h>
+#   endif
+#   ifndef MFD_CLOEXEC
+#       define MFD_CLOEXEC 0x0001U
+        extern "C" int memfd_create( char const *, unsigned int ) noexcept;
+#   endif
+#   include <unistd.h> // ftruncate, close
+#endif
+
 #include <stdexcept>
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -282,6 +296,36 @@ err::result_or_error<void, error> contiguous_storage::map_memory( size_type cons
     return err::success;
 }
 
+[[ gnu::cold ]]
+err::result_or_error<void, error> contiguous_storage::map_cow_memory( size_type const data_size, header_info const hdr_info ) noexcept
+{
+#ifdef __linux__
+    // On Linux, create a memfd-backed mapping so that future COW copies (via
+    // the copy constructor) are zero-copy: dup(fd) + MAP_PRIVATE, instead of
+    // requiring an initial memcpy into a memfd. The memfd is anonymous but
+    // fd-backed, so it participates in the regular file-backed COW path.
+    auto const total_size{ unpack( hdr_info ).total_hdr_size() + data_size };
+    auto const mfd{ ::memfd_create( "psi_vm_cow_src", MFD_CLOEXEC ) };
+    if ( mfd != -1 )
+    {
+        if ( ::ftruncate( mfd, static_cast<off_t>( total_size ) ) == 0 )
+        {
+            auto hdr{ unpack( hdr_info ) };
+            auto map_success{ map( file_handle{ mfd }, total_size ) };
+            if ( !map_success )
+                return map_success.error();
+            mapping_.set_ephemeral(); // memfd: fd-backed but not on-disk
+            hdr.data_size = data_size;
+            get_sizes() = hdr;
+            return err::success;
+        }
+        ::close( mfd );
+    }
+    // memfd_create or ftruncate failed -- fall back to regular anonymous
+#endif // __linux__
+    return map_memory( data_size, hdr_info );
+}
+
 err::result_or_error<void, error>
 contiguous_storage::map( file_handle file, std::size_t const mapping_size ) noexcept
 {
@@ -319,6 +363,34 @@ contiguous_storage::map( file_handle file, std::size_t const mapping_size ) noex
     }
 
     return err::success;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// contiguous_storage copy constructor (COW clone)
+//
+// Creates a copy-on-write clone: physical pages are shared with the source
+// until either side writes, at which point the kernel creates private copies.
+// Platform-specific logic lives in cow_clone.{win32,posix}.cpp.
+////////////////////////////////////////////////////////////////////////////////
+
+[[ gnu::cold ]]
+contiguous_storage::contiguous_storage( contiguous_storage const & source )
+    :
+    contiguous_storage{}
+{
+    if ( !source.has_attached_storage() )
+        return;
+
+    auto const total_mapped{ source.mapped_size() };
+    if ( !total_mapped )
+        return;
+
+    auto clone{ detail::cow_clone( source.mapping_, source.view_, total_mapped ) };
+    if ( !clone ) [[ unlikely ]]
+        return;
+
+    mapping_ = std::move( clone.mapping_ );
+    view_    = std::move( clone.view_ );
 }
 
 //------------------------------------------------------------------------------

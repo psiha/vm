@@ -98,7 +98,16 @@ public:
 
     static bool constexpr all_bulk_erase_keys_must_exist{ false };
 
-    bptree_base() noexcept;
+    bptree_base(                      ) noexcept;
+    bptree_base( bptree_base const &  );  // COW copy
+    bptree_base( bptree_base       && ) noexcept = default;
+    bptree_base & operator=( bptree_base && ) noexcept = default;
+
+    // Commit dirty pages from this (COW) tree to the target.
+    // Selective dirty-node copy: only nodes marked dirty (via mark_dirty() on
+    // every mutation) are written into the target.  For memory-backed targets
+    // the target's node pool is pre-grown first if the clone allocated new nodes.
+    void commit_to( bptree_base & target ) const noexcept;
 
     [[ gnu::pure ]] bool empty() const noexcept { return BOOST_UNLIKELY( size() == 0 ); }
 
@@ -159,16 +168,37 @@ protected:
         // * while at the same time being a negligible overhead considering we
         //   are targeting much larger (page or at least n*cacheline-size sized)
         //   nodes.
-        node_slot parent          {};
-        node_slot left            {};
-        node_slot right           {};
-        size_type num_vals        {};
-        size_type parent_child_idx{};
+        node_slot parent  {};
+        node_slot left    {};
+        node_slot right   {};
+        size_type num_vals{};
+
+        // Compute whether a plain bool for 'dirty' fits in the struct's tail
+        // alignment padding without increasing sizeof(node_header). This holds
+        // when the raw layout leaves ≥1 byte of slack before the next alignment
+        // boundary — e.g. 256B nodes: size_type=uint8_t, 3*4+2*1=14B raw →
+        // 16B padded (4B align) → 2B slack → bool fits. 4096B nodes: uint16_t,
+        // 3*4+2*2=16B raw → 16B padded → 0B slack → bitfield required.
+        static constexpr auto raw_bf_size_  { 3 * sizeof( node_slot ) + 2 * sizeof( size_type ) };
+        static constexpr auto padded_size_  { ( raw_bf_size_ + alignof( node_slot ) - 1 ) / alignof( node_slot ) * alignof( node_slot ) };
+        static constexpr bool dirty_is_bool { padded_size_ - raw_bf_size_ >= sizeof( bool ) };
+
+        // Conditional tail: full-width parent_child_idx + bool dirty when there
+        // is alignment padding to spare (simpler codegen — no bit extract/insert);
+        // otherwise pack both into one size_type via bitfields to preserve node
+        // key/value capacity.
+        struct bitfield_tail { size_type parent_child_idx : sizeof( size_type ) * CHAR_BIT - 1; size_type dirty : 1; };
+        struct bool_tail     { size_type parent_child_idx;                                      bool      dirty;     };
+        using tail_t = std::conditional_t<dirty_is_bool, bool_tail, bitfield_tail>;
+        tail_t tail{};
+
       /* TODO
         size_type start; // make keys and children arrays function as devectors: allow empty space at the beginning to avoid moves for smaller borrowings
       */
 
         [[ gnu::pure ]] bool is_root() const noexcept { return !parent; }
+
+        void mark_dirty() noexcept { tail.dirty = true; }
 
 #   ifndef __clang__ // https://github.com/llvm/llvm-project/issues/36032
         // merely to prevent slicing (in return-node-by-ref cases)
@@ -330,13 +360,13 @@ protected:
     void rshift_chldrn( N & parent, auto... args ) noexcept {
         auto const shifted_children{ rshift<&N::children>( parent, static_cast<node_size_type>( args )... ) };
         for ( auto ch_slot : shifted_children )
-            node( ch_slot ).parent_child_idx++;
+            node( ch_slot ).tail.parent_child_idx++;
     }
     template <typename N>
     void lshift_chldrn( N & parent, auto... args ) noexcept {
         auto const shifted_children{ lshift<&N::children>( parent, static_cast<node_size_type>( args )... ) };
         for ( auto ch_slot : shifted_children )
-            node( ch_slot ).parent_child_idx--;
+            node( ch_slot ).tail.parent_child_idx--;
     }
 
     void rshift_sibling_parent_pos( node_header & node ) noexcept;
@@ -613,6 +643,11 @@ public:
 
     // support for non trivial types (for which move and pass-by-ref matters) is WiP, nowhere near complete
     static_assert( std::is_trivial_v<Key> );
+
+    bptree_base_wkey(                                 ) noexcept = default;
+    bptree_base_wkey( bptree_base_wkey const & source ) : bptree_base{ source } {}
+    bptree_base_wkey( bptree_base_wkey &&             ) noexcept = default;
+    bptree_base_wkey & operator=( bptree_base_wkey && ) noexcept = default;
 
     using key_rv_arg    = std::conditional_t<can_be_passed_in_reg<Key>, Key const, pass_rv_in_reg<Key>>;
     using key_const_arg = std::conditional_t<can_be_passed_in_reg<Key>, Key const, pass_in_reg   <Key>>;
@@ -897,7 +932,7 @@ protected: // split_to_insert and its helpers
         BOOST_ASSUME( p_node->num_vals == max );
         BOOST_ASSERT
         (
-            !p_node->parent || ( inner( p_node->parent ).children[ p_node->parent_child_idx ] == split_slot )
+            !p_node->parent || ( inner( p_node->parent ).children[ p_node->tail.parent_child_idx ] == split_slot )
         );
 
         auto const new_insert_pos         { insert_pos - mid };
@@ -919,7 +954,7 @@ protected: // split_to_insert and its helpers
         if ( p_node->is_root() ) [[ unlikely ]] {
             new_root( split_slot, new_slot, std::move( key_to_propagate ) );
         } else {
-            auto const key_pos{ static_cast<node_size_type>( p_new_node->parent_child_idx /*it is the _right_ child*/ - 1 ) };
+            auto const key_pos{ static_cast<node_size_type>( p_new_node->tail.parent_child_idx /*it is the _right_ child*/ - 1 ) };
             insert( parent( *p_node ), key_pos, std::move( key_to_propagate ), new_slot );
         }
         return insertion_into_new_node
@@ -1116,7 +1151,7 @@ protected: // 'other'
     }
     void remove_from_parent( node_header const & node ) noexcept
     {
-        remove_from_parent( inner( node.parent ), node.parent_child_idx );
+        remove_from_parent( inner( node.parent ), node.tail.parent_child_idx );
     }
 
 
@@ -1235,7 +1270,7 @@ protected: // 'other'
         }
         auto const & first_root_left { leaf ( begin_leaf      ) };
         auto       & first_root_right{ right( first_root_left ) };
-        first_root_right.parent_child_idx = 1;
+        first_root_right.tail.parent_child_idx = 1;
         hdr->depth_                       = 1;
         // if ( !first_unconnected_node ) then first_root_right is the last leaf
         // and it might be incomplete - we could perform this check&fix in an
@@ -1374,7 +1409,7 @@ protected: // 'other'
         else
         {
             auto const rightmost_parent_slot{ tgt_leaf.parent };
-            auto const parent_pos           { tgt_leaf.parent_child_idx }; // key idx = child idx - 1 & this is the 'next' key
+            auto const parent_pos           { tgt_leaf.tail.parent_child_idx }; // key idx = child idx - 1 & this is the 'next' key
             bulk_append_tail( &src_leaf, { rightmost_parent_slot, parent_pos } );
             this->hdr().size_ += total_insertion_size;
         }
@@ -1397,7 +1432,7 @@ protected: // 'other'
         // the leftmost leaf does not have a separator key (at all)
         if ( !leaf.left ) [[ unlikely ]]
         {
-            BOOST_ASSUME( leaf.parent_child_idx == 0 );
+            BOOST_ASSUME( leaf.tail.parent_child_idx == 0 );
             BOOST_ASSUME( hdr().first_leaf_ == slot_of( leaf ) );
             return;
         }
@@ -1405,11 +1440,11 @@ protected: // 'other'
         // (because a left child is strictly less-than its separator key - for
         // the leftmost child there is no key further left that could be
         // greater-or-equal to it) so we have to search further up the ancestors
-        auto   parent_child_idx{ leaf.parent_child_idx };
+        auto   parent_child_idx{ leaf.tail.parent_child_idx };
         auto * parent          { &this->parent( leaf ) };
         while ( parent_child_idx == 0 )
         {
-            parent_child_idx = parent->parent_child_idx;
+            parent_child_idx = parent->tail.parent_child_idx;
             parent           = &this->parent( *parent );
         }
         // can be zero only for the leftmost leaf which was checked for in the
@@ -1460,7 +1495,7 @@ protected: // 'other'
         // Therefore this case can be ignored/can never happen in
         // handle_overflow for leaves (IOW WRT this leaves do not require
         // different handling compared to inner nodes).
-        auto const parent_child_idx   { node.parent_child_idx };
+        auto const parent_child_idx   { node.tail.parent_child_idx };
         bool const parent_has_key_copy{ leaf_node_type && ( parent_child_idx > 0 ) };
         auto const parent_key_idx     { parent_child_idx - parent_has_key_copy };
         BOOST_ASSUME( !parent_has_key_copy || parent.keys[ parent_key_idx ] == node.keys[ 0 ] );
@@ -1610,7 +1645,7 @@ protected: // 'other'
         auto & child{ node( child_slot ) };
         children( target )[ pos ] = child_slot;
         child.parent              = cached_target_slot;
-        child.parent_child_idx    = pos;
+        child.tail.parent_child_idx    = pos;
     }
     void insrt_child( inner_node & target, node_size_type const pos, node_slot const child_slot ) noexcept
     {
@@ -1646,7 +1681,7 @@ protected: // 'other'
 #   endif
         BOOST_ASSUME( left .right == slot_of( right ) );
         BOOST_ASSUME( right.left  == slot_of( left  ) );
-        auto const parent_child_idx{ right.parent_child_idx };
+        auto const parent_child_idx{ right.tail.parent_child_idx };
         append_and_free( left, right );
         remove_from_parent( parent, parent_child_idx );
     }
@@ -1662,7 +1697,7 @@ protected: // 'other'
         BOOST_ASSUME( left .num_vals >= min - 1 ); BOOST_ASSUME( left .num_vals <= min );
 
         move_chldrn( right, 0, num_chldrn( right ), left, num_chldrn( left ) );
-        auto const parent_key_idx{ right.parent_child_idx - 1 };
+        auto const parent_key_idx{ right.tail.parent_child_idx - 1 };
         auto & separator_key{ parent.keys[ parent_key_idx ] };
         left.num_vals += 1;
         auto & last_left_key{ keys( left ).back() };
@@ -1672,7 +1707,7 @@ protected: // 'other'
         BOOST_ASSUME( left.num_vals >= left.max_values - 1 ); BOOST_ASSUME( left.num_vals <= left.max_values );
 
         verify_min_max( left );
-        remove_from_parent( parent, right.parent_child_idx );
+        remove_from_parent( parent, right.tail.parent_child_idx );
         unlink_and_free_node( right, left );
     }
 
@@ -2055,7 +2090,7 @@ void bptree_base_wkey<Key>::move_chldrn
         auto & child  { node( ch_slot ) };
         target.children[ tgt_begin + ch_idx ] = std::move( ch_slot );
         child.parent                          = target_slot;
-        child.parent_child_idx                = tgt_begin + ch_idx;
+        child.tail.parent_child_idx                = tgt_begin + ch_idx;
     }
 }
 
@@ -2134,8 +2169,11 @@ public:
     using base::size;
     using base::clear;
 
-    bp_tree_impl() noexcept = default;
-    bp_tree_impl( Comparator const & comp ) noexcept : Komp{ comp } {}
+    bp_tree_impl(                             ) noexcept = default;
+    bp_tree_impl( Comparator const & comp     ) noexcept : Komp{ comp } {}
+    bp_tree_impl( bp_tree_impl const & source ) : base{ source }, Komp{ static_cast<Komp const &>( source ) } {}
+    bp_tree_impl( bp_tree_impl &&             ) noexcept = default;
+    bp_tree_impl & operator=( bp_tree_impl && ) noexcept = default;
 
     [[ gnu::pure ]] const_iterator begin() const noexcept { return static_cast<iterator &&>( mutable_this().base::begin() ); }
     [[ gnu::pure ]] const_iterator   end() const noexcept { return static_cast<iterator &&>( mutable_this().base::  end() ); }
@@ -2505,7 +2543,7 @@ private:
 
         // Key in tree but not in starting leaf - go up the tree:
         auto const * prnt{ &parent( starting_leaf ) };
-        auto         parent_offset{ starting_leaf.parent_child_idx };
+        auto         parent_offset{ starting_leaf.tail.parent_child_idx };
         // Children are right shifted (WRT the keys array which has one less
         // element) - those which have a key on the same/corresponding index
         // should have a strictily less-than starting key value than the parent
@@ -2530,7 +2568,7 @@ private:
                 parent_offset = std::min( parent_offset, node_size_type( prnt->num_vals - 1 ) );
                 break;
             }
-            parent_offset = prnt->parent_child_idx;
+            parent_offset = prnt->tail.parent_child_idx;
             prnt          = &parent( *prnt );
             --level;
         }
@@ -3582,7 +3620,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
                     this->link( this->leaf( prev_src_copy_node ), src_leaf_copy );
                 }
                 BOOST_ASSUME( !src_leaf_copy.parent );
-                BOOST_ASSUME( !src_leaf_copy.parent_child_idx );
+                BOOST_ASSUME( !src_leaf_copy.tail.parent_child_idx );
                     
                 if ( !src_leaf->right )
                     break;
@@ -3667,6 +3705,8 @@ private:
     using impl_base::make_iter;
 
 public:
+    using impl_base::impl_base; // inherit constructors (default, Comparator, COW)
+
     static constexpr auto transparent_comparator{ impl_base::transparent_comparator };
 
     using const_iterator  = impl_base::const_iterator;
