@@ -114,7 +114,6 @@ void dirty_tracker::snapshot() noexcept
     for ( std::size_t i{ 0 }; i < num_pages_; ++i )
     {
         info[ i ].VirtualAddress = base_ + i * ::psi::vm::page_size;
-        std::memset( &info[ i ].VirtualAttributes, 0, sizeof( info[ i ].VirtualAttributes ) );
     }
 
     // Single NT API call to query all pages
@@ -127,7 +126,7 @@ void dirty_tracker::snapshot() noexcept
         nullptr
     ) };
 
-    if ( status < 0 ) // NTSTATUS: negative = error
+    if ( status < 0 ) [[ unlikely ]] // NTSTATUS: negative = error
     {
         // Query failed -- mark all as dirty (conservative)
         for ( std::size_t i{ 0 }; i < num_pages_; ++i )

@@ -183,21 +183,21 @@ inline auto const NtQueryVirtualMemory{ detail::get_nt_proc<NtQueryVirtualMemory
 // MemoryWorkingSetExInformation to query per-page COW / shared status.
 struct MEMORY_WORKING_SET_EX_BLOCK
 {
-    ULONG_PTR Valid            : 1;
-    ULONG_PTR ShareCount       : 3;
-    ULONG_PTR Win32Protection  : 11;
-    ULONG_PTR Shared           : 1;
-    ULONG_PTR Node             : 6;
-    ULONG_PTR Locked           : 1;
-    ULONG_PTR LargePage        : 1;
-    ULONG_PTR Priority         : 3;
-    ULONG_PTR Reserved         : sizeof( ULONG_PTR ) * 8 - 27;
+    ULONG_PTR Valid           : 1;
+    ULONG_PTR ShareCount      : 3;
+    ULONG_PTR Win32Protection : 11;
+    ULONG_PTR Shared          : 1;
+    ULONG_PTR Node            : 6;
+    ULONG_PTR Locked          : 1;
+    ULONG_PTR LargePage       : 1;
+    ULONG_PTR Priority        : 3;
+    ULONG_PTR Reserved        : sizeof( ULONG_PTR ) * 8 - 27;
 };
 
 struct MEMORY_WORKING_SET_EX_INFORMATION
 {
-    PVOID                          VirtualAddress;
-    MEMORY_WORKING_SET_EX_BLOCK    VirtualAttributes;
+    PVOID                       VirtualAddress;
+    MEMORY_WORKING_SET_EX_BLOCK VirtualAttributes;
 };
 
 

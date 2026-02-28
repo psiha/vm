@@ -125,7 +125,7 @@ struct allocator_base
     [[ nodiscard ]] pointer resize( this auto & self, pointer const current_address, size_type const current_size, size_type const target_size )
     {
         if ( target_size >= current_size )
-            return self.grow_to( current_address, current_size, target_size );
+            return self.grow_to  ( current_address, current_size, target_size );
         else
             return self.shrink_to( current_address, current_size, target_size );
     }
@@ -165,12 +165,12 @@ struct allocator_base
     [[ nodiscard ]]
     pointer allocation_command
     (
-        this auto &                 self,
-        allocation_commands const   command,
+        this auto &               self,
+        allocation_commands const command,
         [[ maybe_unused ]]
-        size_type           const   limit_size,
-        size_type &                 prefer_in_recvd_out_size,
-        pointer   &                 reuse
+        size_type           const limit_size,
+        size_type &               prefer_in_recvd_out_size,
+        pointer   &               reuse
     )
     {
         namespace bc = boost::container;
@@ -238,10 +238,10 @@ struct allocator_base
     std::pair<pointer, bool> allocation_command
     (
         this auto &                 self,
-        allocation_commands const   command,
-        size_type           const   limit_size,
-        size_type           const   preferred_size,
-        size_type         &         received_size,
+        allocation_commands   const command,
+        size_type             const limit_size,
+        size_type             const preferred_size,
+        size_type           &       received_size,
         pointer                     reuse_ptr = nullptr
     )
     {
