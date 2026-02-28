@@ -17,9 +17,9 @@
 namespace psi::vm::codegen
 {
 
-inline constexpr small_vector_options msb_opts{ .layout = small_vector_layout::compact       };
-inline constexpr small_vector_options lsb_opts{ .layout = small_vector_layout::compact_lsb   };
-inline constexpr small_vector_options emb_opts{ .layout = small_vector_layout::embedded      };
+inline constexpr sbo_options msb_opts{ .layout = sbo_layout::compact       };
+inline constexpr sbo_options lsb_opts{ .layout = sbo_layout::compact_lsb   };
+inline constexpr sbo_options emb_opts{ .layout = sbo_layout::embedded      };
 
 using sv_compact  = small_vector<int, 8, std::uint32_t, msb_opts>;
 using sv_lsb      = small_vector<int, 8, std::size_t  , lsb_opts>;

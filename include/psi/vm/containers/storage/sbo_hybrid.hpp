@@ -1,13 +1,13 @@
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file small.hpp
-/// ---------------
+/// \file sbo_hybrid.hpp
+/// --------------------
 ///
 /// Storage backend for small_vector: inline (stack) buffer with heap spill.
 /// Provides the VectorStorage contract consumed by vector<sbo_hybrid<T,N>>.
 ///
 /// Three union-based layout modes, selected at compile time via
-/// small_vector_options.layout:
+/// sbo_options.layout:
 ///   compact     - separate size_ field, MSB = heap flag
 ///   compact_lsb - size_ field first (LSB = heap flag), size = size_ >> 1
 ///   embedded    - sz_ packed inside the union (common initial sequence)
@@ -45,32 +45,32 @@ namespace psi::vm
 
 ////////////////////////////////////////////////////////////////////////////////
 // Layout enum, options struct, and compile-time layout resolver.
-// (Defined here so storage/small.hpp is self-contained; small_vector.hpp
+// (Defined here so storage/sbo_hybrid.hpp is self-contained; small_vector.hpp
 //  includes this header and re-exports these names into psi::vm.)
 ////////////////////////////////////////////////////////////////////////////////
 
-enum class small_vector_layout : std::uint8_t {
+enum class sbo_layout : std::uint8_t {
     auto_select,   // default -- resolved to best layout based on T and sz_t
     compact,       // union-based, MSB-of-size flag, trivially relocatable
     compact_lsb,   // union-based, size-first with LSB flag, trivially relocatable
     embedded,      // union-based, size inside union (LSB flag), trivially relocatable
 };
 
-struct small_vector_options
+struct sbo_options
 {
     std::uint8_t        alignment{ 0 };
     geometric_growth    growth   { .num = 5, .den = 4 }; // 1.25x default (conservative for small vectors)
-    small_vector_layout layout   { /*first as default, i.e. auto_select*/ };
-}; // struct small_vector_options
+    sbo_layout layout   { /*first as default, i.e. auto_select*/ };
+}; // struct sbo_options
 
 
 template <typename T, typename sz_t>
-consteval small_vector_layout resolve_layout( small_vector_layout const l ) noexcept
+consteval sbo_layout resolve_layout( sbo_layout const l ) noexcept
 {
-    if ( l == small_vector_layout::auto_select )
+    if ( l == sbo_layout::auto_select )
         return ( sizeof( sz_t ) > alignof( T ) )
-            ? small_vector_layout::compact_lsb
-            : small_vector_layout::embedded;
+            ? sbo_layout::compact_lsb
+            : sbo_layout::embedded;
     return l;
 }
 
@@ -84,24 +84,24 @@ consteval small_vector_layout resolve_layout( small_vector_layout const l ) noex
 ///   friend sbo_mixin<T, N, sz_t, options>;
 ///
 /// Required primitives from the derived class (all private, via friend):
-///   bool is_heap()                                         const noexcept
-///   void set_inline_size( sz_t )                                 noexcept
-///   void set_heap_state ( T*, sz_t cap, sz_t sz )                noexcept
-///   void set_size_preserving_flag( sz_t )                        noexcept
-///   void do_dec_size()                                           noexcept
-///   void do_inc_size()                                           noexcept
-///   T*         buffer_data()                                     noexcept
-///   T const*   buffer_data()                       const         noexcept
-///   T * __restrict       & heap_data_ref()                       noexcept
-///   T * __restrict const & heap_data_ref()         const         noexcept
-///   sz_t       & heap_cap_ref()                                  noexcept
-///   sz_t const & heap_cap_ref()                   const          noexcept
+///   bool is_heap()                                const noexcept
+///   void set_inline_size( sz_t )                        noexcept
+///   void set_heap_state ( T*, sz_t cap, sz_t sz )       noexcept
+///   void set_size_preserving_flag( sz_t )               noexcept
+///   void do_dec_size()                                  noexcept
+///   void do_inc_size()                                  noexcept
+///   T*         buffer_data()                            noexcept
+///   T const*   buffer_data()                      const noexcept
+///   T * __restrict       & heap_data_ref()              noexcept
+///   T * __restrict const & heap_data_ref()        const noexcept
+///   sz_t       & heap_cap_ref()                         noexcept
+///   sz_t const & heap_cap_ref()                   const noexcept
 ///
 /// The derived class must additionally provide (public):
 ///   sz_t size() const noexcept   (layout-specific bit manipulation)
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename T, std::uint32_t N, typename sz_t, small_vector_options options>
+template <typename T, std::uint32_t N, typename sz_t, sbo_options options>
 class sbo_mixin
 {
     static_assert( N > 0, "Use heap_storage for N=0" );
@@ -246,7 +246,7 @@ private:
 // can safely memcpy or realloc the storage object itself.
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename T, std::uint32_t N, typename sz_t = std::uint32_t, small_vector_options options = {}>
+template <typename T, std::uint32_t N, typename sz_t = std::uint32_t, sbo_options options = {}>
 class sbo_hybrid; // forward
 
 
@@ -254,8 +254,8 @@ class sbo_hybrid; // forward
 // Layout A: Compact (separate size_ after union, MSB = heap flag)
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename T, std::uint32_t N, typename sz_t, small_vector_options options>
-requires( resolve_layout<T, sz_t>( options.layout ) == small_vector_layout::compact && is_trivially_moveable<T> )
+template <typename T, std::uint32_t N, typename sz_t, sbo_options options>
+requires( resolve_layout<T, sz_t>( options.layout ) == sbo_layout::compact && is_trivially_moveable<T> )
 class [[ clang::trivial_abi ]] sbo_hybrid<T, N, sz_t, options>
     :
     public sbo_mixin<T, N, sz_t, options>
@@ -353,8 +353,8 @@ private:
 // size() = size_ >> 1, is_heap() = size_ & 1.
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename T, std::uint32_t N, typename sz_t, small_vector_options options>
-requires( resolve_layout<T, sz_t>( options.layout ) == small_vector_layout::compact_lsb && is_trivially_moveable<T> )
+template <typename T, std::uint32_t N, typename sz_t, sbo_options options>
+requires( resolve_layout<T, sz_t>( options.layout ) == sbo_layout::compact_lsb && is_trivially_moveable<T> )
 class [[ clang::trivial_abi ]] sbo_hybrid<T, N, sz_t, options>
     :
     public sbo_mixin<T, N, sz_t, options>
@@ -446,8 +446,8 @@ private:
 // size() = sz_ >> 1, is_heap() = sz_ & 1. No external size_ field.
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename T, std::uint32_t N, typename sz_t, small_vector_options options>
-requires( resolve_layout<T, sz_t>( options.layout ) == small_vector_layout::embedded && is_trivially_moveable<T> )
+template <typename T, std::uint32_t N, typename sz_t, sbo_options options>
+requires( resolve_layout<T, sz_t>( options.layout ) == sbo_layout::embedded && is_trivially_moveable<T> )
 class [[ clang::trivial_abi ]] sbo_hybrid<T, N, sz_t, options>
     :
     public sbo_mixin<T, N, sz_t, options>
@@ -548,7 +548,7 @@ private:
 // is_trivially_moveable: all union-based layouts memcpy-safe when T is.
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename T, std::uint32_t N, typename sz_t, small_vector_options opts>
+template <typename T, std::uint32_t N, typename sz_t, sbo_options opts>
 bool constexpr is_trivially_moveable<sbo_hybrid<T, N, sz_t, opts>>{ is_trivially_moveable<T> };
 
 //------------------------------------------------------------------------------
