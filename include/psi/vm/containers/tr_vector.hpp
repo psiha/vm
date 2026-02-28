@@ -30,7 +30,7 @@ namespace psi::vm
 // tr_vector<T, sz_t, options, growth> = vector<heap_storage<T, sz_t, void, options>, growth>
 // The 'void' Allocator default auto-computes to crt_allocator with correct alignment.
 // Growth policy lives at the vector<> level, not inside storage.
-template <typename T, typename sz_t = std::size_t, tr_vector_options options = {}, geometric_growth growth = {}>
+template <typename T, typename sz_t = std::size_t, heap_options options = {}, geometric_growth growth = {}>
 using tr_vector = vector<heap_storage<T, sz_t, void, options>, growth>;
 
 // Generic erase_if / erase are provided in vector.hpp for all psi_vm_vector types.

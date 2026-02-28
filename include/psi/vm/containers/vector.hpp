@@ -433,30 +433,34 @@ public:
     //! <b>Effects</b>: Returns an iterator to the first element contained in the vector.
     //! <b>Throws</b>: Nothing.
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto            begin( this auto       && self ) noexcept { return const_cast<vector &>( self ).make_iterator( size_type{ 0 } ); }
-    [[ nodiscard ]] const_iterator cbegin( this vector const &  self ) noexcept { return self.begin(); }
+    [[ nodiscard ]]       iterator  begin()       noexcept { return make_iterator( size_type{ 0 } ); }
+    [[ nodiscard ]] const_iterator  begin() const noexcept { return const_cast<vector &>( *this ).begin(); }
+    [[ nodiscard ]] const_iterator cbegin() const noexcept { return begin(); }
 
     //! <b>Effects</b>: Returns an iterator to the end of the vector.
     //!
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto            end( this auto       && self ) noexcept { return const_cast<vector &>( self ).make_iterator( self.size() ); }
-    [[ nodiscard ]] const_iterator cend( this vector const &  self ) noexcept { return self.end(); }
+    [[ nodiscard ]]       iterator  end()       noexcept { return make_iterator( this->size() ); }
+    [[ nodiscard ]] const_iterator  end() const noexcept { return const_cast<vector &>( *this ).end(); }
+    [[ nodiscard ]] const_iterator cend() const noexcept { return end(); }
 
     //! <b>Effects</b>: Returns a reverse_iterator pointing to the beginning
     //! of the reversed vector.
     //! <b>Throws</b>: Nothing.
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto                    rbegin( this auto       && self ) noexcept { return std::make_reverse_iterator( self.end() ); }
-    [[ nodiscard ]] const_reverse_iterator crbegin( this vector const &  self ) noexcept { return self.rbegin(); }
+    [[ nodiscard ]] reverse_iterator        rbegin()       noexcept { return std::make_reverse_iterator( end() ); }
+    [[ nodiscard ]] const_reverse_iterator  rbegin() const noexcept { return std::make_reverse_iterator( end() ); }
+    [[ nodiscard ]] const_reverse_iterator crbegin() const noexcept { return rbegin(); }
 
     //! <b>Effects</b>: Returns a reverse_iterator pointing to the end
     //! of the reversed vector.
     //! <b>Throws</b>: Nothing.
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto                    rend( this auto       && self ) noexcept { return std::make_reverse_iterator( self.begin() ); }
-    [[ nodiscard ]] const_reverse_iterator crend( this vector const &  self ) noexcept { return self.rend(); }
+    [[ nodiscard ]] reverse_iterator        rend()       noexcept { return std::make_reverse_iterator( begin() ); }
+    [[ nodiscard ]] const_reverse_iterator  rend() const noexcept { return std::make_reverse_iterator( begin() ); }
+    [[ nodiscard ]] const_reverse_iterator crend() const noexcept { return rend(); }
 
     //////////////////////////////////////////////
     //
@@ -467,7 +471,7 @@ public:
     //! <b>Effects</b>: Returns true if the vector contains no elements.
     //! <b>Throws</b>: Nothing.
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard, gnu::pure ]] bool empty( this vector const & self ) noexcept { return BOOST_UNLIKELY( self.size() == 0 ); }
+    [[ nodiscard, gnu::pure ]] bool empty() const noexcept { return BOOST_UNLIKELY( this->size() == 0 ); }
 
     //! <b>Effects</b>: Returns the largest possible size of the vector.
     //!
@@ -589,10 +593,9 @@ public:
     //////////////////////////////////////////////
 
     using storage_t::data; // make non-const data() from storage visible alongside the const overload below
-    template <typename Self>
-    [[ nodiscard, gnu::pure ]] const_pointer data( this Self const & self ) noexcept { return const_cast<Self &>( self ).Self::data(); }
+    [[ nodiscard, gnu::pure ]] const_pointer data() const noexcept { return storage_t::data(); }
 
-    [[ nodiscard, gnu::pure ]] auto span( this auto && self ) noexcept { return std::span{ self.data(), self.size() }; }
+    [[ nodiscard, gnu::pure ]] auto span( this auto && self ) noexcept { return std::span( self.data(), self.size() ); }
 
     //////////////////////////////////////////////
     //

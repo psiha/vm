@@ -39,11 +39,11 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
-struct tr_vector_options
+struct heap_options
 {
     std::uint8_t alignment     { 0    }; // 0 -> default
     bool         cache_capacity{ true }; // if your crt_alloc_size is slow (MSVC)
-}; // struct tr_vector_options
+}; // struct heap_options
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -58,7 +58,7 @@ struct tr_vector_options
 // is carried inline.
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename T, typename sz_t = std::size_t, typename Allocator = void, tr_vector_options options = {}>
+template <typename T, typename sz_t = std::size_t, typename Allocator = void, heap_options options = {}>
 class [[ nodiscard, clang::trivial_abi ]] heap_storage
     : private std::conditional_t<
         std::is_void_v<Allocator>,
@@ -115,7 +115,8 @@ public:
 
     constexpr heap_storage & operator=( heap_storage && other ) noexcept
     {
-        if ( p_array_ ) storage_free();
+        if ( p_array_ )
+            storage_free();
         static_cast<allocator_type &>( *this ) = static_cast<allocator_type &&>( other );
         p_array_  = other.p_array_;
         size_     = other.size_;
@@ -218,7 +219,7 @@ public:
         BOOST_ASSUME( p_array_ || !target_size );
         BOOST_ASSUME( is_aligned( p_array_, alignment ) );
         storage_shrink_size_to( target_size );
-        update_capacity( target_size );
+        update_capacity       ( target_size );
         return data();
     }
     constexpr void storage_shrink_size_to( size_type const target_size ) noexcept
@@ -281,30 +282,38 @@ private:
             // Safe to use realloc (bitwise relocation)
             p_array_ = alloc().template grow_to<alignment>( p_array_, cached_current_capacity, new_capacity );
         }
-        else if constexpr ( can_try_expand )
-        {
-            // Try in-place expansion first (no relocation needed)
-            if ( alloc().try_expand( p_array_, new_capacity ) ) {
-                update_capacity( new_capacity );
-                return;
-            }
-            // In-place failed: allocate-move-destroy-free
-            auto * const new_array{ alloc().template allocate<alignment>( new_capacity ) };
-            std::uninitialized_move_n( p_array_, size_, new_array );
-            std::destroy_n( p_array_, size_ );
-            alloc().template deallocate<alignment>( p_array_, cached_current_capacity );
-            p_array_ = new_array;
-        }
         else
         {
-            // No in-place expansion: allocate-move-destroy-free
-            auto * const new_array{ alloc().template allocate<alignment>( new_capacity ) };
-            std::uninitialized_move_n( p_array_, size_, new_array );
-            std::destroy_n( p_array_, size_ );
-            alloc().template deallocate<alignment>( p_array_, cached_current_capacity );
-            p_array_ = new_array;
+            if constexpr ( can_try_expand )
+            {
+                if ( !alloc().try_expand( p_array_, new_capacity ) )
+                    relocate_to( new_capacity, cached_current_capacity );
+            }
+            else
+            {
+                relocate_to( new_capacity, cached_current_capacity );
+            }
         }
         update_capacity( new_capacity );
+    }
+
+    // Relocate all elements to a fresh allocation of new_cap.
+    // Only called for non-trivially-moveable T (realloc is unsafe for them).
+    // Exception-safe: uninitialized_move_n destroys partially-constructed
+    // destination elements on exception; unique_ptr frees the new allocation.
+    void relocate_to( size_type const new_cap, size_type const old_cap )
+    {
+        auto const free_new{ [ this, new_cap ]( value_type * p ) noexcept {
+            alloc().template deallocate<alignment>( p, new_cap );
+        } };
+        std::unique_ptr<value_type, decltype( free_new )> guard{
+            alloc().template allocate<alignment>( new_cap ), free_new
+        };
+        std::uninitialized_move_n( p_array_, size_, guard.get() );
+        auto * const new_ptr{ guard.release() }; // move succeeded, take ownership
+        std::destroy_n( p_array_, size_ );
+        alloc().template deallocate<alignment>( p_array_, options.cache_capacity ? old_cap : size_type{} );
+        p_array_ = new_ptr;
     }
 
     void update_capacity( [[ maybe_unused ]] size_type const requested_capacity ) noexcept
@@ -342,7 +351,7 @@ private:
 
 // heap_storage is trivially moveable when the allocator is trivially copyable
 // (all stateless allocators + allocators holding raw pointers).
-template <typename T, typename sz_t, typename Allocator, tr_vector_options options>
+template <typename T, typename sz_t, typename Allocator, heap_options options>
 bool constexpr is_trivially_moveable<heap_storage<T, sz_t, Allocator, options>>{
     std::is_trivially_copyable_v<typename heap_storage<T, sz_t, Allocator, options>::allocator_type>
 };

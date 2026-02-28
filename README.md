@@ -29,7 +29,7 @@ The vector system is built on a **`vector<Storage>`** class template parameteriz
 
 | Storage | Description |
 |---------|-------------|
-| `heap_storage<T>` | Heap-allocated array with pluggable allocator (default: `mimalloc` on Windows/macOS, `crt` on Linux). Supports `tr_vector_options` for capacity caching, geometric growth, and alignment |
+| `heap_storage<T>` | Heap-allocated array with pluggable allocator (default: `mimalloc` on Windows/macOS, `crt` on Linux). Supports `heap_options` for capacity caching, geometric growth, and alignment |
 | `fixed_storage<T, N>` | Inline (stack) array with compile-time capacity bound. Configurable overflow handler |
 | `vm_storage<T>` | Persistent storage via memory-mapped files or shared memory, with configurable headers and allocation granularity |
 
@@ -172,7 +172,8 @@ include/psi/vm/
 ├── containers/
 │   ├── storage/            Storage backends for vector<Storage>
 │   │   ├── heap.hpp        heap_storage (heap-allocated, pluggable allocator)
-│   │   └── fixed.hpp       fixed_storage (inline, compile-time capacity)
+│   │   ├── fixed.hpp       fixed_storage (inline, compile-time capacity)
+│   │   └── sbo_hybrid.hpp  small_storage (inline buffer + heap spill, used by small_vector)
 │   ├── vector.hpp          vector<Storage> template + vector_impl CRTP mixin
 │   ├── tr_vector.hpp       tr_vector<T> type alias (= vector<heap_storage<T>>)
 │   ├── fc_vector.hpp       fc_vector<T,N> type alias (= vector<fixed_storage<T,N>>)

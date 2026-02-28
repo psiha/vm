@@ -22,8 +22,8 @@ namespace psi::vm
 // Typed test suite -- runs every test against all vector types
 ////////////////////////////////////////////////////////////////////////////////
 
-inline constexpr small_vector_options compact_lsb_opts{ .layout = small_vector_layout::compact_lsb };
-inline constexpr small_vector_options embedded_opts   { .layout = small_vector_layout::embedded    };
+inline constexpr sbo_options compact_lsb_opts{ .layout = sbo_layout::compact_lsb };
+inline constexpr sbo_options embedded_opts   { .layout = sbo_layout::embedded    };
 
 using VectorTestTypes = ::testing::Types<
     tr_vector<int>,
