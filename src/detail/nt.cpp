@@ -71,19 +71,20 @@ namespace detail
 // win32::handle_traits::copy() -- needs <windows.h> which nt.hpp provides
 //------------------------------------------------------------------------------
 
-[[ gnu::cold, gnu::nothrow ]]
-psi::vm::win32::handle_traits::native_t
-psi::vm::win32::handle_traits::copy( native_t const native_handle )
+[[ gnu::cold ]]
+psi::vm::fallible_result<psi::vm::win32::handle_traits::native_t>
+psi::vm::win32::handle_traits::copy( native_t const native_handle ) noexcept
 {
     if ( !native_handle || native_handle == boost::winapi::INVALID_HANDLE_VALUE_ )
         return invalid_value;
     native_t dup{ nullptr };
-    BOOST_VERIFY( ::DuplicateHandle
+    if ( !::DuplicateHandle
     (
         nt::current_process, native_handle,
         nt::current_process, &dup,
         0, FALSE, DUPLICATE_SAME_ACCESS
-    ) );
+    ) ) [[ unlikely ]]
+        return error{};
     return dup;
 }
 

@@ -17,6 +17,8 @@
 #pragma once
 
 #include <psi/vm/handles/handle.hpp>
+#include <psi/err/errno.hpp>
+#include <psi/err/exceptions.hpp>
 
 #include <boost/assert.hpp>
 #include <boost/config_ex.hpp>
@@ -77,13 +79,17 @@ struct handle_traits
         );
     }
 
-    [[ gnu::cold, gnu::nothrow, msvc::noalias, msvc::nothrow, clang::nouwtable ]]
+    // Throws on failure. Cannot use fallible_result<int, last_errno> because
+    // result_or_error's template constructors are ambiguous when both Result
+    // and Error are constructible from int (native_t = int on POSIX).
+    [[ gnu::cold ]]
     static native_t copy( native_t const native_handle )
     {
         if ( native_handle == invalid_value )
             return invalid_value;
         auto const result{ ::dup( native_handle ) };
-        BOOST_ASSERT( result != invalid_value );
+        if ( result == invalid_value ) [[ unlikely ]]
+            err::make_and_throw_exception( err::last_errno{} );
         return result;
     }
 }; // handle_traits

@@ -23,6 +23,7 @@
 namespace psi::vm
 {
 //------------------------------------------------------------------------------
+namespace detail { [[ noreturn, gnu::cold ]] void throw_bad_alloc() PSI_NOEXCEPT_EXCEPT_BADALLOC; }
 inline namespace win32
 {
 //------------------------------------------------------------------------------
@@ -43,14 +44,7 @@ static_assert( access_privileges::all     == ( GENERIC_ALL     | FILE_MAP_ALL_AC
 
 namespace detail
 {
-    [[ noreturn, gnu::cold ]]
-    void throw_bad_alloc()
-    {
-        if constexpr ( requires{ std::_Xbad_alloc(); } )
-            std::_Xbad_alloc();
-        else
-            throw std::bad_alloc{};
-    }
+    using psi::vm::detail::throw_bad_alloc;
 
     // https://msdn.microsoft.com/en-us/library/windows/desktop/aa446595(v=vs.85).aspx Creating a Security Descriptor for a New Object in C++
     // https://msdn.microsoft.com/en-us/library/windows/desktop/aa379602(v=vs.85).aspx SID strings

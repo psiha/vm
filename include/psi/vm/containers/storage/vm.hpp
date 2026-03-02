@@ -1,13 +1,13 @@
 ////////////////////////////////////////////////////////////////////////////////
 /// VM-backed storage
 ///
-/// Provides contiguous_storage (untyped, byte-level VM mapping management) and
-/// vm_storage<T> (typed wrapper with storage_* interface for vector_impl).
+/// Provides mem_mapping (untyped, byte-level VM mapping management) and
+/// vm_storage<T> (typed wrapper with storage_* interface for vector<>).
 ///
-/// contiguous_storage manages memory-mapped (VM) regions with optional file
+/// mem_mapping manages memory-mapped (VM) regions with optional file
 /// backing, COW copy semantics, and header support for persistent containers.
 ///
-/// vm_storage<T> wraps contiguous_storage with T-typed size/pointer conversion
+/// vm_storage<T> wraps mem_mapping with T-typed size/pointer conversion
 /// and provides the storage_* interface that vector<Storage> expects.
 ////////////////////////////////////////////////////////////////////////////////
 ///
@@ -196,14 +196,14 @@ template <typename Header>
 PSI_WARNING_DISABLE_PUSH()
 PSI_WARNING_CLANGCL_DISABLE( -Wignored-attributes )
 
-class [[ clang::trivial_abi ]] contiguous_storage
+class [[ clang::trivial_abi ]] mem_mapping
 {
 public:
     using value_type = std::byte;
     using  size_type = std::size_t;
 
-    contiguous_storage( contiguous_storage && ) = default;
-    contiguous_storage & operator=( contiguous_storage && ) = default;
+    mem_mapping( mem_mapping && ) = default;
+    mem_mapping & operator=( mem_mapping && ) = default;
 
     // COW (copy-on-write) copy construction: creates a new storage sharing
     // physical pages with the source. Writes to the clone trigger private
@@ -212,11 +212,11 @@ public:
     // - Anonymous (Windows): WRITECOPY view of the same pagefile section
     // - Anonymous (macOS): mach_vm_remap(copy=TRUE) + deep-copy fallback
     // - Anonymous (Linux): memfd_create + MAP_PRIVATE (true COW) or deep copy
-    contiguous_storage( contiguous_storage const & );
+    explicit mem_mapping( mem_mapping const & );
 
     [[ gnu::pure ]] size_type header_size() const noexcept { return get_sizes().client_hdr_size(); }
 
-    [[ gnu::pure, nodiscard ]] std::span<std::byte const> header_storage() const noexcept { return const_cast<contiguous_storage &>( *this ).header_storage(); }
+    [[ gnu::pure, nodiscard ]] std::span<std::byte const> header_storage() const noexcept { return const_cast<mem_mapping &>( *this ).header_storage(); }
     [[ gnu::pure, nodiscard ]] std::span<std::byte      > header_storage()       noexcept;
 
     [[ nodiscard, gnu::pure ]] size_type size       () const noexcept { return get_sizes().data_size; }
@@ -296,10 +296,10 @@ protected:
     }; // struct sizes_hdr
     static_assert( sizeof( sizes_hdr ) == 2 * sizeof( void * ) );
 
-    constexpr contiguous_storage() = default;
+    constexpr mem_mapping() = default;
 
     [[ nodiscard, gnu::pure, gnu::assume_aligned( reserve_granularity ) ]] value_type       * mapped_data()       noexcept { BOOST_ASSERT_MSG( mapping_, "Backing storage not attached" ); return std::assume_aligned<commit_granularity>( view_.data() ); }
-    [[ nodiscard, gnu::pure, gnu::assume_aligned( reserve_granularity ) ]] value_type const * mapped_data() const noexcept { return const_cast<contiguous_storage &>( *this ).mapped_data(); }
+    [[ nodiscard, gnu::pure, gnu::assume_aligned( reserve_granularity ) ]] value_type const * mapped_data() const noexcept { return const_cast<mem_mapping &>( *this ).mapped_data(); }
 
     [[ nodiscard, gnu::pure, gnu::assume_aligned( header_info::minimal_data_alignment ) ]]
     auto * data( this auto & self ) noexcept
@@ -315,14 +315,25 @@ protected:
     err::result_or_error<void, error>
     map_file( file_handle file, flags::named_object_construction_policy, header_info ) noexcept;
 
-    void swap( contiguous_storage & other ) noexcept { std::swap( *this, other ); }
+    void swap( mem_mapping & other ) noexcept { std::swap( *this, other ); }
 
     void   reserve              ( size_type new_capacity );
     void * shrink_to_slow       ( size_type target_size ) noexcept( mapping::views_downsizeable );
     void * expand_view          ( size_type target_size );
     void   shrink_mapped_size_to( size_type target_size ) noexcept( mapping::views_downsizeable );
 
-    void * grow_to( size_type target_size );
+    template <geometric_growth G = geometric_growth{1, 1}>
+    void * grow_to( size_type const byte_target )
+    {
+        if ( byte_target > size() ) [[ likely ]]
+        {
+            auto const byte_cap{ vm_capacity() };
+            if ( byte_target > byte_cap ) [[ unlikely ]]
+                reserve( static_cast<bool>( G ) ? G( byte_target, byte_cap ) : byte_target );
+            stored_size() = byte_target;
+        }
+        return data();
+    }
 
     void * shrink_to( size_type target_size ) noexcept;
 
@@ -361,7 +372,7 @@ private:
 private:
     mapped_view view_;
     mapping     mapping_;
-}; // contiguous_storage
+}; // mem_mapping
 
 
 // None of the existing or so far introduced traits give information on whether
@@ -387,15 +398,17 @@ bool constexpr does_not_hold_addresses{ std::is_fundamental_v<T> || std::is_enum
 // \class vm_storage
 //
 // Storage backend for VM-backed (mmap / VirtualAlloc) vectors. Wraps
-// contiguous_storage with T-typed size/pointer conversion and provides the
-// storage_* interface that vector_impl expects.
+// mem_mapping with T-typed size/pointer conversion and provides the
+// storage_* interface that vector<> expects.
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename T, typename sz_t = std::size_t>
-requires is_trivially_moveable<T>
-class [[ clang::trivial_abi ]] vm_storage : public contiguous_storage
+requires is_trivially_moveable<T> // TODO relax for memory mappings (should work, only COW 'may move' remappings would need to be disabled)
+class [[ clang::trivial_abi ]] vm_storage : public mem_mapping
 {
-    using base = contiguous_storage;
+public:
+private:
+    using base = mem_mapping;
 
     PSI_WARNING_DISABLE_PUSH()
     PSI_WARNING_GCC_OR_CLANG_DISABLE( -Wsign-conversion )
@@ -449,24 +462,16 @@ public:
 
     err::fallible_result<void, error>
     map_cow_memory( sz_t const initial_data_size = 0, header_info const hdr_info = {} ) noexcept
+    requires is_trivially_moveable<T>
     {
         return base::map_cow_memory( to_byte_sz( initial_data_size ), hdr_info.with_final_alignment_for<T>() ).as_fallible_result();
     }
-
-    using base::empty;
-    using base::swap;
-    using base::has_attached_storage;
-    using base::file_backed;
-    using base::flush_async;
-    using base::flush_blocking;
-    using base::underlying_file;
-    using base::operator bool;
 
     [[ nodiscard, gnu::pure ]] T       * data()       noexcept { return has_attached_storage() ? to_t_ptr( base::data() ) : nullptr; }
     [[ nodiscard, gnu::pure ]] T const * data() const noexcept { return const_cast<vm_storage &>( *this ).data(); }
 
     [[ nodiscard, gnu::pure ]] sz_t size    () const noexcept { return has_attached_storage() ? to_t_sz( base::size()        ) : sz_t{}; }
-    [[ nodiscard, gnu::pure ]] sz_t capacity() const noexcept { return has_attached_storage() ? to_t_sz( base::vm_capacity() ) : sz_t{}; }
+    [[ nodiscard, gnu::pure ]] sz_t capacity() const noexcept { return has_attached_storage() ? static_cast<sz_t>( base::vm_capacity() / sizeof( T ) ) : sz_t{}; }
 
     void reserve( sz_t const new_capacity ) { base::reserve( to_byte_sz( new_capacity ) ); }
 
@@ -481,15 +486,16 @@ public:
 
     [[ nodiscard, gnu::pure ]] sz_t mapped_size() const noexcept { return static_cast<sz_t>( base::mapped_size() ); }
 
-    // --- storage_* interface for vector_impl ---
-    T * storage_grow_to  ( sz_t const target_size )          { return static_cast<T *>( base::grow_to  ( to_byte_sz( target_size ) ) ); }
-    T * storage_shrink_to( sz_t const target_size ) noexcept { return static_cast<T *>( base::shrink_to( to_byte_sz( target_size ) ) ); }
+    // --- storage_* interface for vector<> ---
+    template <geometric_growth G = geometric_growth{1, 1}>
+    T * storage_grow_to  ( sz_t const target_size )          { return static_cast<T *>( base::template grow_to<G>( to_byte_sz( target_size ) ) ); }
+    T * storage_shrink_to( sz_t const target_size ) noexcept { return static_cast<T *>( base::         shrink_to ( to_byte_sz( target_size ) ) ); }
 
     void storage_shrink_size_to( sz_t const new_size ) noexcept { base::shrink_size_to( to_byte_sz( new_size ) ); }
     void storage_dec_size() noexcept { storage_shrink_size_to( size() - 1 ); }
     void storage_inc_size() noexcept { base::grow_into_available_capacity_by( sizeof( T ) ); }
 
-    void storage_free() noexcept {} // NO-OP: contiguous_storage dtor closes the mapping cleanly
+    void storage_free() noexcept {} // NO-OP: mem_mapping dtor closes the mapping cleanly
 }; // class vm_storage
 
 PSI_WARNING_DISABLE_POP()

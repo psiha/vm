@@ -849,6 +849,62 @@ TEST( bptree_cow, commit_multiset_clone )
     EXPECT_TRUE( std::ranges::is_sorted( src, src.comp() ) );
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// COW expand test: clone a b+tree, grow it (trigger mapped_view::expand on the
+// COW view), verify both source and clone are intact.
+// This exercises the Windows COW-aware expand fallback (memcpy of private pages
+// to new section view) and the Linux/macOS paths (mremap/mach_vm_remap).
+////////////////////////////////////////////////////////////////////////////////
+
+TEST( cow, bptree_cow_expand )
+{
+    bptree_set<int> src;
+    src.map_memory( 1000 );
+
+    // Populate source with 500 elements (fills several leaf nodes)
+    for ( int i{ 0 }; i < 500; ++i )
+        src.insert( i * 2 ); // even numbers 0..998
+
+    ASSERT_EQ( src.size(), 500 );
+
+    // COW clone
+    bptree_set<int> clone{ src };
+    ASSERT_EQ( clone.size(), 500 );
+
+    // Verify clone has the same data
+    EXPECT_TRUE( has( clone, 0   ) );
+    EXPECT_TRUE( has( clone, 498 ) );
+    EXPECT_TRUE( has( clone, 998 ) );
+
+    // Mutate the clone (triggers COW page breaks)
+    clone.insert( 1 );   // odd number between 0 and 2
+    clone.insert( 999 ); // new max
+    clone.erase( 0 );    // remove min
+    EXPECT_EQ( clone.size(), 501 ); // 500 + 2 inserts - 1 erase
+
+    // Now grow the clone significantly — this triggers expand() on the COW view.
+    // The expand must preserve COW-modified pages (insert/erase above).
+    for ( int i{ 1000 }; i < 5000; i += 2 )
+        clone.insert( i );
+
+    EXPECT_EQ( clone.size(), 501 + 2000 ); // 501 + 2000 new elements
+
+    // Verify clone integrity after expand
+    EXPECT_FALSE( has( clone, 0 ) );    // was erased
+    EXPECT_TRUE ( has( clone, 1 ) );     // was inserted
+    EXPECT_TRUE ( has( clone, 999 ) );   // was inserted
+    EXPECT_TRUE ( has( clone, 4998 ) );  // new element after expand
+    EXPECT_TRUE ( std::ranges::is_sorted( clone, clone.comp() ) );
+
+    // Verify source is UNMODIFIED (COW isolation)
+    EXPECT_EQ( src.size(), 500 );
+    EXPECT_TRUE ( has( src, 0 ) );    // still present in source
+    EXPECT_FALSE( has( src, 1 ) );    // not in source
+    EXPECT_FALSE( has( src, 999 ) );  // not in source
+    EXPECT_FALSE( has( src, 4998 ) ); // not in source
+    EXPECT_TRUE ( std::ranges::is_sorted( src, src.comp() ) );
+}
+
 //------------------------------------------------------------------------------
 } // namespace psi::vm
 //------------------------------------------------------------------------------
