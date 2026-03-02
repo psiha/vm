@@ -35,12 +35,19 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
+namespace detail
+{
+    // Thread-local active scoped heap. nullptr = use default mimalloc behavior.
+    // Shared with mi_scoped_heap_allocator (mi_scoped_heap.hpp).
+    inline thread_local mi_heap_t * p_scoped_heap{ nullptr };
+} // namespace detail
+
 template <typename T, typename sz_t = std::size_t>
 struct mimalloc_allocator
     : allocator_base<T, sz_t>
 {
-    using base = allocator_base<T, sz_t>;
-    using version = base::template version_type<mimalloc_allocator>;
+    using base          = allocator_base<T, sz_t>;
+    using version       = base::template version_type<mimalloc_allocator>;
     using value_type    = T;
     using pointer       = T *;
     using const_pointer = T const *;
@@ -54,17 +61,24 @@ struct mimalloc_allocator
     {
         BOOST_ASSUME( count < base::max_size() );
         auto const byte_size{ count * sizeof( T ) };
-        void * new_allocation;
+        void * p;
+        auto * const heap{ detail::p_scoped_heap };
         if constexpr ( alignment > alignof( std::max_align_t ) )
-            new_allocation = ::mi_malloc_aligned( byte_size, alignment );
+        {
+            p = heap ? ::mi_heap_malloc_aligned( heap, byte_size, alignment )
+                     : ::mi_malloc_aligned( byte_size, alignment );
+        }
         else
-            new_allocation = ::mi_malloc( byte_size );
-
-        if ( !new_allocation ) [[ unlikely ]]
+        {
+            p = heap ? ::mi_heap_malloc( heap, byte_size )
+                     : ::mi_malloc( byte_size );
+        }
+        if ( !p ) [[ unlikely ]]
             detail::throw_bad_alloc();
-        return static_cast<pointer>( new_allocation );
+        return static_cast<pointer>( p );
     }
 
+    // mi_free works regardless of which heap the allocation came from.
     template <std::uint8_t alignment = detail::safe_alignof_v<T>>
     static void deallocate( pointer const ptr, size_type const /*size*/ = 0 ) noexcept
     {
@@ -77,15 +91,21 @@ struct mimalloc_allocator
     {
         BOOST_ASSUME( target_size >= current_size );
         auto const byte_size{ target_size * sizeof( T ) };
-        void * result;
+        void * p;
+        auto * const heap{ detail::p_scoped_heap };
         if constexpr ( alignment > alignof( std::max_align_t ) )
-            result = ::mi_realloc_aligned( current_address, byte_size, alignment );
+        {
+            p = heap ? ::mi_heap_realloc_aligned( heap, current_address, byte_size, alignment )
+                     : ::mi_realloc_aligned( current_address, byte_size, alignment );
+        }
         else
-            result = ::mi_realloc( current_address, byte_size );
-
-        if ( !result ) [[ unlikely ]]
+        {
+            p = heap ? ::mi_heap_realloc( heap, current_address, byte_size )
+                     : ::mi_realloc( current_address, byte_size );
+        }
+        if ( !p ) [[ unlikely ]]
             detail::throw_bad_alloc();
-        return static_cast<pointer>( result );
+        return static_cast<pointer>( p );
     }
 
     template <std::uint8_t alignment = detail::safe_alignof_v<T>>
@@ -94,12 +114,19 @@ struct mimalloc_allocator
     {
         BOOST_ASSUME( target_size <= current_size );
         auto const byte_size{ target_size * sizeof( T ) };
-        void * result;
+        void * p;
+        auto * const heap{ detail::p_scoped_heap };
         if constexpr ( alignment > alignof( std::max_align_t ) )
-            result = ::mi_realloc_aligned( current_address, byte_size, alignment );
+        {
+            p = heap ? ::mi_heap_realloc_aligned( heap, current_address, byte_size, alignment )
+                     : ::mi_realloc_aligned( current_address, byte_size, alignment );
+        }
         else
-            result = ::mi_realloc( current_address, byte_size );
-        return static_cast<pointer>( result ? result : current_address );
+        {
+            p = heap ? ::mi_heap_realloc( heap, current_address, byte_size )
+                     : ::mi_realloc( current_address, byte_size );
+        }
+        return static_cast<pointer>( p ? p : current_address );
     }
 
     /// Query the actual usable size of the allocation pointed to by ptr.

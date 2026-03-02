@@ -40,7 +40,7 @@
 //------------------------------------------------------------------------------
 #pragma once
 
-#include <psi/vm/allocators/allocator_base.hpp>
+#include <psi/vm/allocators/mimalloc.hpp> // detail::p_scoped_heap
 
 #include <boost/assert.hpp>
 
@@ -52,12 +52,6 @@
 namespace psi::vm
 {
 //------------------------------------------------------------------------------
-
-namespace detail
-{
-    // Thread-local active scoped heap. nullptr = use default mimalloc behavior.
-    inline thread_local mi_heap_t * active_mi_heap_{ nullptr };
-} // namespace detail
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -76,19 +70,22 @@ namespace detail
 
 struct mi_heap_scope
 {
-    mi_heap_scope() noexcept
-        : heap_{ ::mi_heap_new() }
-        , prev_{ detail::active_mi_heap_ }
+    mi_heap_scope()
+        : previous_heap_{ detail::p_scoped_heap }
     {
-        BOOST_ASSERT( heap_ );
-        detail::active_mi_heap_ = heap_;
+        detail::p_scoped_heap = ::mi_heap_new();
+        if ( !detail::p_scoped_heap ) [[ unlikely ]]
+        {
+            detail::p_scoped_heap = previous_heap_;
+            detail::throw_bad_alloc();
+        }
     }
 
     ~mi_heap_scope() noexcept
     {
-        detail::active_mi_heap_ = prev_;
-        if ( heap_ )
-            ::mi_heap_destroy( heap_ );
+        if ( detail::p_scoped_heap ) // skip if already released
+            ::mi_heap_destroy( detail::p_scoped_heap );
+        detail::p_scoped_heap = previous_heap_;
     }
 
     mi_heap_scope( mi_heap_scope const & ) = delete;
@@ -99,20 +96,16 @@ struct mi_heap_scope
     /// scoped heap need to outlive the scope.
     void release() noexcept
     {
-        detail::active_mi_heap_ = prev_;
-        if ( heap_ )
-        {
-            ::mi_heap_delete( heap_ ); // transfers allocations, frees heap handle
-            heap_ = nullptr;
-        }
+        BOOST_ASSERT_MSG( detail::p_scoped_heap, "Already released" );
+        ::mi_heap_delete( detail::p_scoped_heap ); // transfers allocations, frees heap handle
+        detail::p_scoped_heap = previous_heap_;
     }
 
     /// Access the underlying mi_heap_t (for direct API calls if needed).
-    [[ nodiscard ]] mi_heap_t * heap() const noexcept { return heap_; }
+    [[ nodiscard ]] mi_heap_t * heap() const noexcept { return detail::p_scoped_heap; }
 
 private:
-    mi_heap_t * heap_;
-    mi_heap_t * prev_;
+    mi_heap_t * previous_heap_;
 }; // struct mi_heap_scope
 
 
@@ -147,7 +140,7 @@ struct mi_scoped_heap_allocator
         BOOST_ASSUME( count < base::max_size() );
         auto const byte_size{ count * sizeof( T ) };
         void * p;
-        auto * const heap{ detail::active_mi_heap_ };
+        auto * const heap{ detail::p_scoped_heap };
         if constexpr ( alignment > alignof( std::max_align_t ) )
         {
             p = heap ? ::mi_heap_malloc_aligned( heap, byte_size, alignment )
@@ -176,7 +169,7 @@ struct mi_scoped_heap_allocator
     {
         auto const byte_size{ target_size * sizeof( T ) };
         void * p;
-        auto * const heap{ detail::active_mi_heap_ };
+        auto * const heap{ detail::p_scoped_heap };
         if constexpr ( alignment > alignof( std::max_align_t ) )
         {
             p = heap ? ::mi_heap_realloc_aligned( heap, current_address, byte_size, alignment )
@@ -199,7 +192,7 @@ struct mi_scoped_heap_allocator
         BOOST_ASSUME( target_size <= current_size );
         auto const byte_size{ target_size * sizeof( T ) };
         void * p;
-        auto * const heap{ detail::active_mi_heap_ };
+        auto * const heap{ detail::p_scoped_heap };
         if constexpr ( alignment > alignof( std::max_align_t ) )
         {
             p = heap ? ::mi_heap_realloc_aligned( heap, current_address, byte_size, alignment )
