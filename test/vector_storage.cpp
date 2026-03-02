@@ -434,34 +434,6 @@ TEST( vector_storage, scoped_heap_release )
     // normal deallocation via mi_free
 }
 
-TEST( vector_storage, scoped_heap_nested )
-{
-    using alloc   = mi_scoped_heap_allocator<int>;
-    using storage = heap_storage<int, std::size_t, alloc>;
-
-    mi_heap_scope outer;
-    vector<storage> outer_vec;
-    outer_vec.push_back( 1 );
-    outer_vec.push_back( 2 );
-
-    {
-        mi_heap_scope inner;
-        vector<storage> inner_vec;
-        inner_vec.push_back( 100 );
-        inner_vec.push_back( 200 );
-
-        EXPECT_EQ( inner_vec.size(), 2u );
-        EXPECT_EQ( inner_vec[ 0 ], 100 );
-        // inner scope dtor frees inner_vec's memory
-    }
-
-    // Outer scope's allocations are still valid
-    EXPECT_EQ( outer_vec.size(), 2u );
-    EXPECT_EQ( outer_vec[ 0 ], 1 );
-    EXPECT_EQ( outer_vec[ 1 ], 2 );
-    // outer scope dtor frees outer_vec's memory
-}
-
 TEST( vector_storage, scoped_heap_multiple_vectors )
 {
     using alloc   = mi_scoped_heap_allocator<int>;

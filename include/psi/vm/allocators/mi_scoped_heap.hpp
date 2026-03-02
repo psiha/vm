@@ -58,8 +58,8 @@ namespace psi::vm
 /// \class mi_heap_scope
 ///
 /// RAII guard that creates a mimalloc heap and sets it as the active scoped
-/// heap for the current thread. Scopes can nest (each saves/restores the
-/// previous active heap).
+/// heap for the current thread. Nesting is NOT supported — only one scope
+/// may be active per thread at a time.
 ///
 /// Destruction modes:
 ///   - Default (destructor): mi_heap_destroy -- atomically frees ALL
@@ -71,21 +71,18 @@ namespace psi::vm
 struct mi_heap_scope
 {
     mi_heap_scope()
-        : previous_heap_{ detail::p_scoped_heap }
     {
+        BOOST_ASSERT_MSG( !detail::p_scoped_heap, "Nested mi_heap_scope not supported" );
         detail::p_scoped_heap = ::mi_heap_new();
         if ( !detail::p_scoped_heap ) [[ unlikely ]]
-        {
-            detail::p_scoped_heap = previous_heap_;
             detail::throw_bad_alloc();
-        }
     }
 
     ~mi_heap_scope() noexcept
     {
         if ( detail::p_scoped_heap ) // skip if already released
             ::mi_heap_destroy( detail::p_scoped_heap );
-        detail::p_scoped_heap = previous_heap_;
+        detail::p_scoped_heap = nullptr;
     }
 
     mi_heap_scope( mi_heap_scope const & ) = delete;
@@ -98,14 +95,11 @@ struct mi_heap_scope
     {
         BOOST_ASSERT_MSG( detail::p_scoped_heap, "Already released" );
         ::mi_heap_delete( detail::p_scoped_heap ); // transfers allocations, frees heap handle
-        detail::p_scoped_heap = previous_heap_;
+        detail::p_scoped_heap = nullptr;
     }
 
     /// Access the underlying mi_heap_t (for direct API calls if needed).
     [[ nodiscard ]] mi_heap_t * heap() const noexcept { return detail::p_scoped_heap; }
-
-private:
-    mi_heap_t * previous_heap_;
 }; // struct mi_heap_scope
 
 
