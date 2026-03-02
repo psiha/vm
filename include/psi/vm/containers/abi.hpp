@@ -79,8 +79,19 @@ struct [[ clang::trivial_abi ]] pass_in_reg
 
     using  value_type = T;
     using stored_type = std::conditional_t<pass_by_val, T, typename optimal_const_ref<T>::type>;
+    // Primary: brace-init (handles aggregates, same-type, multi-arg — rejects narrowing)
     BOOST_FORCEINLINE
     constexpr pass_in_reg( auto const &... args ) noexcept requires requires { stored_type{ args... }; } : value{ args... } {}
+    // Fallback: single-arg implicit conversion that brace-init rejects as narrowing.
+    // Matches std::vector::push_back behavior (allows int→uint via implicit conversion).
+    // Only selected when the primary (brace) constructor fails for the given type.
+    template <typename U>
+    BOOST_FORCEINLINE
+    constexpr pass_in_reg( U const & arg ) noexcept
+        requires( !std::same_as<std::remove_cvref_t<U>, pass_in_reg> &&
+                   std::is_convertible_v<U, stored_type> &&
+                  !requires { stored_type{ arg }; } ) // brace-init would reject (narrowing)
+        : value( static_cast<stored_type>( arg ) ) {}
     constexpr pass_in_reg( pass_in_reg const &  ) noexcept = default;
     constexpr pass_in_reg( pass_in_reg       && ) noexcept = default;
 
