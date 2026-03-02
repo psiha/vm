@@ -623,6 +623,14 @@ void bptree_base::update_dbg_helpers() noexcept {
 // write to any page in either the source or the clone triggers a private copy
 // of that page only.
 ////////////////////////////////////////////////////////////////////////////////
+// TODO research: RCU-style generation switching
+//
+// Instead of mutating T1 in place, they:
+// - Build new snapshot(T2)
+// - Atomically publish pointer to new root
+// - Readers pin generation
+// - Old generation reclaimed when readers drain
+////////////////////////////////////////////////////////////////////////////////
 
 [[ gnu::cold ]]
 bptree_base::bptree_base( bptree_base const & source )

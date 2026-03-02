@@ -99,7 +99,7 @@ public:
     static bool constexpr all_bulk_erase_keys_must_exist{ false };
 
     bptree_base(                      ) noexcept;
-    bptree_base( bptree_base const &  );  // COW copy
+    bptree_base( bptree_base const &  );  // COW copy (shares file-mapped pages)
     bptree_base( bptree_base       && ) noexcept = default;
     bptree_base & operator=( bptree_base && ) noexcept = default;
 
@@ -179,9 +179,9 @@ protected:
         // boundary — e.g. 256B nodes: size_type=uint8_t, 3*4+2*1=14B raw →
         // 16B padded (4B align) → 2B slack → bool fits. 4096B nodes: uint16_t,
         // 3*4+2*2=16B raw → 16B padded → 0B slack → bitfield required.
-        static constexpr auto raw_bf_size_  { 3 * sizeof( node_slot ) + 2 * sizeof( size_type ) };
-        static constexpr auto padded_size_  { ( raw_bf_size_ + alignof( node_slot ) - 1 ) / alignof( node_slot ) * alignof( node_slot ) };
-        static constexpr bool dirty_is_bool { padded_size_ - raw_bf_size_ >= sizeof( bool ) };
+        static constexpr auto raw_bf_size_ { 3 * sizeof( node_slot ) + 2 * sizeof( size_type ) };
+        static constexpr auto padded_size_ { ( raw_bf_size_ + alignof( node_slot ) - 1 ) / alignof( node_slot ) * alignof( node_slot ) };
+        static constexpr bool dirty_is_bool{ padded_size_ - raw_bf_size_ >= sizeof( bool ) };
 
         // Conditional tail: full-width parent_child_idx + bool dirty when there
         // is alignment padding to spare (simpler codegen — no bit extract/insert);
@@ -2183,7 +2183,13 @@ public:
     [[ gnu::pure ]] const_ra_iterator ra_end  () const noexcept { return static_cast<ra_iterator &&>( mutable_this().base::ra_end  () ); }
 
     [[ nodiscard ]] bool           contains  ( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return contains_impl( pass_in_reg{ key } ); }
-    [[ nodiscard ]] const_iterator find_after( const_iterator const pos, LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return find_after_impl( pos.base().pos(), pass_in_reg{ key } ); }
+    [[ nodiscard ]] const_iterator find_after      ( const_iterator const pos, LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return find_after_impl      ( pos.base().pos(), pass_in_reg{ key } ); }
+    // Forward-only lower_bound: returns the first element >= key, starting from pos.
+    // Unlike find_after (exact match only → end()), this always returns a valid
+    // position (or end() only when key > all elements). Avoids the costly full-tree
+    // re-search when find_after misses — the cursor can continue from the returned
+    // position instead of falling back to find().
+    [[ nodiscard ]] const_iterator lower_bound_from( const_iterator const pos, LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return lower_bound_from_impl( pos.base().pos(), pass_in_reg{ key } ); }
 
     size_type merge( bp_tree_impl       && other, bool unique );
     size_type merge( bp_tree_impl const &  other, bool unique );
@@ -2223,6 +2229,25 @@ protected: // pass-in-reg public function overloads/impls
         auto const [p_leaf, next_pos]{ find_next( leaf( pos.node ), pos.value_offset, key ) };
         if ( next_pos.exact_find ) [[ likely ]] {
             return base::make_iter( *p_leaf, next_pos.pos );
+        }
+        return end();
+    }
+
+    // Forward-only lower_bound: returns the first element >= key starting from pos.
+    // Reuses find_next() which already computes the insertion point — but instead
+    // of discarding non-exact positions, returns the lower_bound iterator.
+    [[ using gnu: pure, sysv_abi ]]
+    const_iterator lower_bound_from_impl( iter_pos const pos, Reg auto const key ) const noexcept
+    {
+        BOOST_ASSUME( !empty() );
+        auto const [p_leaf, next_pos]{ find_next( leaf( pos.node ), pos.value_offset, key ) };
+        // next_pos.pos is the insertion point (first element >= key) regardless of exact_find
+        if ( next_pos.pos < p_leaf->num_vals ) {
+            return base::make_iter( *p_leaf, next_pos.pos );
+        }
+        // Key is past the end of the found leaf — advance to next leaf
+        if ( p_leaf->right ) {
+            return base::make_iter( base::leaf( p_leaf->right ), 0 );
         }
         return end();
     }
@@ -2666,6 +2691,11 @@ bp_tree_impl<Key, Comparator>::replace_keys_inplace( std::span<Key const> const 
     while ( key_idx < old_keys.size() )
     {
         // Verify and replace the key at current position
+        if ( p_leaf->keys[ offset ] != old_keys[ key_idx ] ) {
+            std::fprintf( stderr, "!!! replace_keys_inplace: mismatch at key_idx=%zu offset=%u: leaf_key=%u old_key=%u new_key=%u (total old=%zu)\n",
+                key_idx, offset, p_leaf->keys[ offset ], old_keys[ key_idx ], new_keys[ key_idx ], old_keys.size() );
+            std::fflush( stderr );
+        }
         BOOST_ASSERT( p_leaf->keys[ offset ] == old_keys[ key_idx ] );
         BOOST_ASSERT_MSG(
             eq( old_keys[ key_idx ], new_keys[ key_idx ] ),
