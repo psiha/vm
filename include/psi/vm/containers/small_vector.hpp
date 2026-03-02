@@ -23,7 +23,6 @@ namespace psi::vm
 // are defined in storage/sbo_hybrid.hpp.
 
 template <typename T, std::uint32_t N, typename sz_t = std::uint32_t, sbo_options options = {}>
-requires( is_trivially_moveable<T> )
 using small_vector = vector<sbo_hybrid<T, N, sz_t, options>, options.growth>;
 
 //------------------------------------------------------------------------------

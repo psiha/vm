@@ -685,6 +685,221 @@ TEST( small_vector_embedded, sizeof_no_worse_than_compact_lsb )
     EXPECT_LE( sizeof( emb_sv ), sizeof( lsb_sv ) );
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// Non-trivially-moveable type tests -- exercises the new generalized paths.
+////////////////////////////////////////////////////////////////////////////////
+
+namespace
+{
+    static std::atomic<int> nontrivial_live_count{ 0 };
+
+    struct nontrivial
+    {
+        int value;
+        explicit nontrivial( int v = 0 ) noexcept : value{ v } { nontrivial_live_count.fetch_add( 1, std::memory_order_relaxed ); }
+        nontrivial( nontrivial const & o ) noexcept : value{ o.value } { nontrivial_live_count.fetch_add( 1, std::memory_order_relaxed ); }
+        nontrivial( nontrivial && o ) noexcept : value{ o.value } { o.value = -1; nontrivial_live_count.fetch_add( 1, std::memory_order_relaxed ); }
+        ~nontrivial() noexcept { nontrivial_live_count.fetch_sub( 1, std::memory_order_relaxed ); }
+        nontrivial & operator=( nontrivial const & o ) noexcept { value = o.value; return *this; }
+        nontrivial & operator=( nontrivial && o ) noexcept { value = o.value; o.value = -1; return *this; }
+    };
+
+    static_assert( !is_trivially_moveable<nontrivial> );
+    static_assert( !is_trivially_moveable<small_vector<nontrivial, 4>> );
+} // anonymous namespace
+
+// Use embedded layout (default for small sz_t) as the canonical non-trivial test
+template <std::uint32_t N>
+using nt_small_vector = small_vector<nontrivial, N>;
+
+TEST( small_vector_nontrivial, push_back_inline )
+{
+    auto const baseline{ nontrivial_live_count.load() };
+    {
+        nt_small_vector<8> v;
+        v.push_back( nontrivial{ 10 } );
+        v.push_back( nontrivial{ 20 } );
+        v.push_back( nontrivial{ 30 } );
+        EXPECT_EQ( v.size(), 3u );
+        EXPECT_EQ( v[ 0 ].value, 10 );
+        EXPECT_EQ( v[ 1 ].value, 20 );
+        EXPECT_EQ( v[ 2 ].value, 30 );
+        EXPECT_EQ( nontrivial_live_count.load() - baseline, 3 );
+    }
+    EXPECT_EQ( nontrivial_live_count.load(), baseline );
+}
+
+TEST( small_vector_nontrivial, inline_to_heap_transition )
+{
+    auto const baseline{ nontrivial_live_count.load() };
+    {
+        nt_small_vector<2> v;
+        v.push_back( nontrivial{ 1 } );
+        v.push_back( nontrivial{ 2 } );
+        EXPECT_EQ( nontrivial_live_count.load() - baseline, 2 );
+
+        // This triggers inline->heap spill
+        v.push_back( nontrivial{ 3 } );
+        EXPECT_EQ( v.size(), 3u );
+        EXPECT_EQ( v[ 0 ].value, 1 );
+        EXPECT_EQ( v[ 1 ].value, 2 );
+        EXPECT_EQ( v[ 2 ].value, 3 );
+        EXPECT_EQ( nontrivial_live_count.load() - baseline, 3 );
+    }
+    EXPECT_EQ( nontrivial_live_count.load(), baseline );
+}
+
+TEST( small_vector_nontrivial, move_from_inline )
+{
+    auto const baseline{ nontrivial_live_count.load() };
+    {
+        nt_small_vector<8> src;
+        src.push_back( nontrivial{ 10 } );
+        src.push_back( nontrivial{ 20 } );
+        EXPECT_EQ( nontrivial_live_count.load() - baseline, 2 );
+
+        nt_small_vector<8> dst{ std::move( src ) };
+        EXPECT_EQ( dst.size(), 2u );
+        EXPECT_EQ( src.size(), 0u );
+        EXPECT_EQ( dst[ 0 ].value, 10 );
+        EXPECT_EQ( dst[ 1 ].value, 20 );
+        EXPECT_EQ( nontrivial_live_count.load() - baseline, 2 );
+    }
+    EXPECT_EQ( nontrivial_live_count.load(), baseline );
+}
+
+TEST( small_vector_nontrivial, move_from_heap )
+{
+    auto const baseline{ nontrivial_live_count.load() };
+    {
+        nt_small_vector<2> src;
+        for ( int i{ 0 }; i < 10; ++i )
+            src.push_back( nontrivial{ i * 100 } );
+        EXPECT_EQ( nontrivial_live_count.load() - baseline, 10 );
+
+        auto const heap_ptr{ src.data() };
+        nt_small_vector<2> dst{ std::move( src ) };
+        EXPECT_EQ( dst.size(), 10u );
+        EXPECT_EQ( src.size(), 0u );
+        EXPECT_EQ( dst.data(), heap_ptr ); // pointer stolen, not elements moved
+        EXPECT_EQ( nontrivial_live_count.load() - baseline, 10 );
+    }
+    EXPECT_EQ( nontrivial_live_count.load(), baseline );
+}
+
+TEST( small_vector_nontrivial, move_assign_inline_to_inline )
+{
+    auto const baseline{ nontrivial_live_count.load() };
+    {
+        nt_small_vector<8> a;
+        a.push_back( nontrivial{ 1 } );
+        a.push_back( nontrivial{ 2 } );
+        a.push_back( nontrivial{ 3 } );
+
+        nt_small_vector<8> b;
+        b.push_back( nontrivial{ 10 } );
+        EXPECT_EQ( nontrivial_live_count.load() - baseline, 4 );
+
+        b = std::move( a );
+        EXPECT_EQ( b.size(), 3u );
+        EXPECT_EQ( a.size(), 0u );
+        EXPECT_EQ( b[ 0 ].value, 1 );
+        EXPECT_EQ( b[ 1 ].value, 2 );
+        EXPECT_EQ( b[ 2 ].value, 3 );
+        EXPECT_EQ( nontrivial_live_count.load() - baseline, 3 );
+    }
+    EXPECT_EQ( nontrivial_live_count.load(), baseline );
+}
+
+TEST( small_vector_nontrivial, move_assign_heap_to_heap )
+{
+    auto const baseline{ nontrivial_live_count.load() };
+    {
+        nt_small_vector<2> a;
+        nt_small_vector<2> b;
+        for ( int i{ 0 }; i < 10; ++i )
+            a.push_back( nontrivial{ i } );
+        for ( int i{ 0 }; i < 5; ++i )
+            b.push_back( nontrivial{ i * 100 } );
+        EXPECT_EQ( nontrivial_live_count.load() - baseline, 15 );
+
+        b = std::move( a );
+        EXPECT_EQ( b.size(), 10u );
+        EXPECT_EQ( a.size(), 0u );
+        EXPECT_EQ( nontrivial_live_count.load() - baseline, 10 );
+    }
+    EXPECT_EQ( nontrivial_live_count.load(), baseline );
+}
+
+TEST( small_vector_nontrivial, copy )
+{
+    auto const baseline{ nontrivial_live_count.load() };
+    {
+        nt_small_vector<4> src;
+        src.push_back( nontrivial{ 1 } );
+        src.push_back( nontrivial{ 2 } );
+        src.push_back( nontrivial{ 3 } );
+
+        nt_small_vector<4> dst{ src };
+        EXPECT_EQ( dst.size(), 3u );
+        EXPECT_EQ( src.size(), 3u );
+        EXPECT_NE( dst.data(), src.data() );
+        EXPECT_EQ( nontrivial_live_count.load() - baseline, 6 );
+    }
+    EXPECT_EQ( nontrivial_live_count.load(), baseline );
+}
+
+TEST( small_vector_nontrivial, heap_grow_relocates_properly )
+{
+    // Verifies that heap-to-heap growth uses move+destroy, not realloc/memcpy
+    auto const baseline{ nontrivial_live_count.load() };
+    {
+        nt_small_vector<2> v;
+        for ( int i{ 0 }; i < 100; ++i )
+            v.push_back( nontrivial{ i } );
+        EXPECT_EQ( v.size(), 100u );
+        EXPECT_EQ( nontrivial_live_count.load() - baseline, 100 );
+        for ( int i{ 0 }; i < 100; ++i )
+            EXPECT_EQ( v[ i ].value, i );
+    }
+    EXPECT_EQ( nontrivial_live_count.load(), baseline );
+}
+
+TEST( small_vector_nontrivial, erase )
+{
+    nt_small_vector<8> v;
+    for ( int i{ 0 }; i < 5; ++i )
+        v.push_back( nontrivial{ i } );
+
+    v.erase( v.begin() + 1, v.begin() + 3 ); // erase [1,3)
+    EXPECT_EQ( v.size(), 3u );
+    EXPECT_EQ( v[ 0 ].value, 0 );
+    EXPECT_EQ( v[ 1 ].value, 3 );
+    EXPECT_EQ( v[ 2 ].value, 4 );
+    // Note: nontrivial is nothrow_move_assignable → trivially_destructible_after_move_assignment
+    // optimization skips dtors on moved-from tail slots. Don't check live counts here.
+}
+
+TEST( small_vector_nontrivial, clear )
+{
+    auto const baseline{ nontrivial_live_count.load() };
+    {
+        nt_small_vector<4> v;
+        for ( int i{ 0 }; i < 3; ++i )
+            v.push_back( nontrivial{ i } );
+        EXPECT_EQ( nontrivial_live_count.load() - baseline, 3 );
+
+        v.clear();
+        EXPECT_EQ( v.size(), 0u );
+        EXPECT_EQ( nontrivial_live_count.load(), baseline );
+
+        // Re-use after clear
+        v.push_back( nontrivial{ 42 } );
+        EXPECT_EQ( v[ 0 ].value, 42 );
+    }
+    EXPECT_EQ( nontrivial_live_count.load(), baseline );
+}
+
 //------------------------------------------------------------------------------
 } // namespace psi::vm
 //------------------------------------------------------------------------------

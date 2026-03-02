@@ -28,15 +28,16 @@
 #pragma once
 
 #include <psi/vm/allocators/crt.hpp>
+#include <psi/vm/containers/growth_policy.hpp>
 #include <psi/vm/containers/is_trivially_moveable.hpp>
 #include <psi/vm/containers/noninitialized_array.hpp>
-#include <psi/vm/containers/vector.hpp> // geometric_growth
 
 #include <boost/assert.hpp>
 
 #include <climits>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <utility>
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -58,9 +59,9 @@ enum class sbo_layout : std::uint8_t {
 
 struct sbo_options
 {
-    std::uint8_t        alignment{ 0 };
-    geometric_growth    growth   { .num = 5, .den = 4 }; // 1.25x default (conservative for small vectors)
-    sbo_layout layout   { /*first as default, i.e. auto_select*/ };
+    std::uint8_t     alignment{ 0 };
+    geometric_growth growth   { .num = 5, .den = 4 }; // 1.25x default (conservative for small vectors)
+    sbo_layout       layout   { /*first as default, i.e. auto_select*/ };
 }; // struct sbo_options
 
 
@@ -120,7 +121,7 @@ private:
     using al = allocator_type;
 
 public:
-    [[ nodiscard, gnu::pure ]] sz_t capacity( this auto const & self ) noexcept { return self.is_heap() ? self.heap_cap_ref() : sz_t{ N }; }
+    [[ nodiscard, gnu::pure ]] sz_t capacity( this auto const & self ) noexcept { return self.is_heap() ? self.heap_cap_ref () : sz_t{ N }; }
     [[ nodiscard, gnu::pure ]] auto data    ( this auto       & self ) noexcept { return self.is_heap() ? self.heap_data_ref() : self.buffer_data(); }
     [[ nodiscard, gnu::pure ]] bool empty   ( this auto const & self ) noexcept { return self.size() == 0; }
 
@@ -138,22 +139,24 @@ public:
 #endif
     value_type * storage_init( this auto & self, size_type const initial_size )
     {
-        if ( initial_size > N )
+        if ( initial_size <= N ) [[ likely ]]
         {
-            auto const p{ al::template allocate<alignment>( initial_size ) };
-            self.set_heap_state( p, initial_size, initial_size );
-            return p;
+            self.set_inline_size( initial_size );
+            return self.buffer_data();
         }
-        self.set_inline_size( initial_size );
-        return self.buffer_data();
+        auto const p{ al::template allocate<alignment>( initial_size ) };
+        self.set_heap_state( p, initial_size, initial_size );
+        return p;
     }
 
+    template <geometric_growth G = {1, 1}>
     [[ gnu::returns_nonnull ]]
     value_type * storage_grow_to( this auto & self, size_type const target_size )
     {
         BOOST_ASSUME( target_size >= self.size() );
-        if ( target_size > self.capacity() ) [[ unlikely ]]
-            self.grow_heap( target_size );
+        auto const current_cap{ self.capacity() };
+        if ( target_size > current_cap ) [[ unlikely ]]
+            self.grow_heap( static_cast<bool>( G ) ? G( target_size, current_cap ) : target_size );
         self.set_size_preserving_flag( target_size );
         return self.data();
     }
@@ -217,14 +220,35 @@ private:
         BOOST_ASSUME( new_capacity > self.capacity() );
         if ( self.is_heap() )
         {
-            self.heap_data_ref() = al::template grow_to<alignment>( self.heap_data_ref(), self.heap_cap_ref(), new_capacity );
-            self.heap_cap_ref()  = new_capacity;
+            if constexpr ( is_trivially_moveable<T> )
+            {
+                self.heap_data_ref() = al::template grow_to<alignment>( self.heap_data_ref(), self.heap_cap_ref(), new_capacity );
+            }
+            else
+            {
+                // realloc is unsafe for non-trivially-moveable T: allocate+move+destroy+free
+                auto * const old_ptr{ self.heap_data_ref() };
+                auto   const old_cap{ self.heap_cap_ref()  };
+                auto   const sz     { self.size()          };
+                auto * const p      { al::template allocate<alignment>( new_capacity ) };
+                std::uninitialized_move_n( old_ptr, sz, p );
+                std::destroy_n( old_ptr, sz );
+                al::template deallocate<alignment>( old_ptr, old_cap );
+                self.heap_data_ref() = p;
+            }
+            self.heap_cap_ref() = new_capacity;
         }
         else
         {
             auto const sz{ self.size() };
             auto const p { al::template allocate<alignment>( new_capacity ) };
-            std::memcpy( static_cast<void *>( p ), self.buffer_data(), sz * sizeof( T ) );
+            if constexpr ( is_trivially_moveable<T> )
+                std::memcpy( static_cast<void *>( p ), self.buffer_data(), sz * sizeof( T ) );
+            else
+            {
+                std::uninitialized_move_n( self.buffer_data(), sz, p );
+                std::destroy_n( self.buffer_data(), sz );
+            }
             self.set_heap_state( p, new_capacity, sz );
         }
     }
@@ -255,8 +279,8 @@ class sbo_hybrid; // forward
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename T, std::uint32_t N, typename sz_t, sbo_options options>
-requires( resolve_layout<T, sz_t>( options.layout ) == sbo_layout::compact && is_trivially_moveable<T> )
-class [[ clang::trivial_abi ]] sbo_hybrid<T, N, sz_t, options>
+requires( resolve_layout<T, sz_t>( options.layout ) == sbo_layout::compact )
+class sbo_hybrid<T, N, sz_t, options>
     :
     public sbo_mixin<T, N, sz_t, options>
 {
@@ -279,7 +303,7 @@ class [[ clang::trivial_abi ]] sbo_hybrid<T, N, sz_t, options>
     };
 
     // --- policy interface (private, accessed via friend mixin) ---
-    [[ nodiscard, gnu::pure ]] bool is_heap() const noexcept { return ( size_ & heap_flag ) != 0; }
+    [[ nodiscard, gnu::pure ]] bool is_heap() const noexcept { return BOOST_UNLIKELY( ( size_ & heap_flag ) != 0 ); }
 
     void set_inline_size( sz_t const sz ) noexcept
     {
@@ -320,21 +344,49 @@ public:
     }
 
     sbo_hybrid() noexcept : storage_{}, size_{ 0 } {}
+   ~sbo_hybrid() noexcept { this->storage_free(); }
 
     sbo_hybrid( sbo_hybrid const & ) = delete;
     sbo_hybrid & operator=( sbo_hybrid const & ) = delete;
 
-    sbo_hybrid( sbo_hybrid && other ) noexcept
+    sbo_hybrid( sbo_hybrid && other ) noexcept( is_trivially_moveable<T> || std::is_nothrow_move_constructible_v<T> )
     {
-        std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        if constexpr ( is_trivially_moveable<T> )
+        {
+            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        }
+        else if ( other.is_heap() )
+        {
+            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        }
+        else
+        {
+            auto const sz{ other.size() };
+            set_inline_size( sz );
+            std::uninitialized_move_n( other.buffer_data(), sz, buffer_data() );
+            std::destroy_n( other.buffer_data(), sz );
+        }
         other.size_ = 0; // inline-0: clear heap flag (heap pointer in other is now owned by *this)
     }
 
-    sbo_hybrid & operator=( sbo_hybrid && other ) noexcept
+    sbo_hybrid & operator=( sbo_hybrid && other ) noexcept( is_trivially_moveable<T> || std::is_nothrow_move_constructible_v<T> )
     {
-        // Called by vector<>::operator=(vector&&) after storage_free() was called on *this;
-        // *this is in inline-0 state (no heap to free here).
-        std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        this->storage_free();
+        if constexpr ( is_trivially_moveable<T> )
+        {
+            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        }
+        else if ( other.is_heap() )
+        {
+            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        }
+        else
+        {
+            auto const sz{ other.size() };
+            set_inline_size( sz );
+            std::uninitialized_move_n( other.buffer_data(), sz, buffer_data() );
+            std::destroy_n( other.buffer_data(), sz );
+        }
         other.size_ = 0;
         return *this;
     }
@@ -354,8 +406,8 @@ private:
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename T, std::uint32_t N, typename sz_t, sbo_options options>
-requires( resolve_layout<T, sz_t>( options.layout ) == sbo_layout::compact_lsb && is_trivially_moveable<T> )
-class [[ clang::trivial_abi ]] sbo_hybrid<T, N, sz_t, options>
+requires( resolve_layout<T, sz_t>( options.layout ) == sbo_layout::compact_lsb )
+class sbo_hybrid<T, N, sz_t, options>
     :
     public sbo_mixin<T, N, sz_t, options>
 {
@@ -376,7 +428,7 @@ class [[ clang::trivial_abi ]] sbo_hybrid<T, N, sz_t, options>
     };
 
     // --- policy interface ---
-    [[ nodiscard, gnu::pure ]] bool is_heap() const noexcept { return ( size_ & 1 ) != 0; }
+    [[ nodiscard, gnu::pure ]] bool is_heap() const noexcept { return BOOST_UNLIKELY( ( size_ & 1 ) != 0 ); }
 
     void set_inline_size( sz_t const sz ) noexcept
     {
@@ -416,19 +468,49 @@ public:
     }
 
     sbo_hybrid() noexcept : size_{ 0 }, storage_{} {}
+   ~sbo_hybrid() noexcept { this->storage_free(); }
 
     sbo_hybrid( sbo_hybrid const & ) = delete;
     sbo_hybrid & operator=( sbo_hybrid const & ) = delete;
 
-    sbo_hybrid( sbo_hybrid && other ) noexcept
+    sbo_hybrid( sbo_hybrid && other ) noexcept( is_trivially_moveable<T> || std::is_nothrow_move_constructible_v<T> )
     {
-        std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        if constexpr ( is_trivially_moveable<T> )
+        {
+            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        }
+        else if ( other.is_heap() )
+        {
+            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        }
+        else
+        {
+            auto const sz{ other.size() };
+            set_inline_size( sz );
+            std::uninitialized_move_n( other.buffer_data(), sz, buffer_data() );
+            std::destroy_n( other.buffer_data(), sz );
+        }
         other.size_ = 0; // LSB=0, sz=0 -> inline-0
     }
 
-    sbo_hybrid & operator=( sbo_hybrid && other ) noexcept
+    sbo_hybrid & operator=( sbo_hybrid && other ) noexcept( is_trivially_moveable<T> || std::is_nothrow_move_constructible_v<T> )
     {
-        std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        this->storage_free();
+        if constexpr ( is_trivially_moveable<T> )
+        {
+            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        }
+        else if ( other.is_heap() )
+        {
+            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        }
+        else
+        {
+            auto const sz{ other.size() };
+            set_inline_size( sz );
+            std::uninitialized_move_n( other.buffer_data(), sz, buffer_data() );
+            std::destroy_n( other.buffer_data(), sz );
+        }
         other.size_ = 0;
         return *this;
     }
@@ -447,8 +529,8 @@ private:
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename T, std::uint32_t N, typename sz_t, sbo_options options>
-requires( resolve_layout<T, sz_t>( options.layout ) == sbo_layout::embedded && is_trivially_moveable<T> )
-class [[ clang::trivial_abi ]] sbo_hybrid<T, N, sz_t, options>
+requires( resolve_layout<T, sz_t>( options.layout ) == sbo_layout::embedded )
+class sbo_hybrid<T, N, sz_t, options>
     :
     public sbo_mixin<T, N, sz_t, options>
 {
@@ -480,7 +562,7 @@ class [[ clang::trivial_abi ]] sbo_hybrid<T, N, sz_t, options>
     // --- policy interface ---
     // Common initial sequence: heap_.sz_ is always valid to read regardless of
     // active member ([class.union]/7, [class.mem]/25).
-    [[ nodiscard, gnu::pure ]] bool is_heap() const noexcept { return ( storage_.heap_.sz_ & 1 ) != 0; }
+    [[ nodiscard, gnu::pure ]] bool is_heap() const noexcept { return BOOST_UNLIKELY( ( storage_.heap_.sz_ & 1 ) != 0 ); }
 
     void set_inline_size( sz_t const sz ) noexcept
     {
@@ -522,19 +604,49 @@ public:
     }
 
     sbo_hybrid() noexcept { storage_.inline_.sz_ = 0; }
+   ~sbo_hybrid() noexcept { this->storage_free(); }
 
     sbo_hybrid( sbo_hybrid const & ) = delete;
     sbo_hybrid & operator=( sbo_hybrid const & ) = delete;
 
-    sbo_hybrid( sbo_hybrid && other ) noexcept
+    sbo_hybrid( sbo_hybrid && other ) noexcept( is_trivially_moveable<T> || std::is_nothrow_move_constructible_v<T> )
     {
-        std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        if constexpr ( is_trivially_moveable<T> )
+        {
+            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        }
+        else if ( other.is_heap() )
+        {
+            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        }
+        else
+        {
+            auto const sz{ other.size() };
+            set_inline_size( sz );
+            std::uninitialized_move_n( other.buffer_data(), sz, buffer_data() );
+            std::destroy_n( other.buffer_data(), sz );
+        }
         other.storage_.inline_.sz_ = 0; // inline-0: clear LSB flag + size
     }
 
-    sbo_hybrid & operator=( sbo_hybrid && other ) noexcept
+    sbo_hybrid & operator=( sbo_hybrid && other ) noexcept( is_trivially_moveable<T> || std::is_nothrow_move_constructible_v<T> )
     {
-        std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        this->storage_free();
+        if constexpr ( is_trivially_moveable<T> )
+        {
+            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        }
+        else if ( other.is_heap() )
+        {
+            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        }
+        else
+        {
+            auto const sz{ other.size() };
+            set_inline_size( sz );
+            std::uninitialized_move_n( other.buffer_data(), sz, buffer_data() );
+            std::destroy_n( other.buffer_data(), sz );
+        }
         other.storage_.inline_.sz_ = 0;
         return *this;
     }
