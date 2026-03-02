@@ -1,11 +1,7 @@
 ////////////////////////////////////////////////////////////////////////////////
-/// Fixed capacity vector
 ///
-/// fc_vector<T, N> is now a type alias for vector<fixed_storage<T, N>>.
-/// The fixed_storage class (in storage/fixed.hpp) provides the raw memory
-/// management; vector<Storage> (in vector.hpp) adds the standard container
-/// interface (push_back, iterators, copy/move, etc.) via vector<> CRTP.
-////////////////////////////////////////////////////////////////////////////////
+/// \file growth_policy.hpp
+/// -----------------------
 ///
 /// Copyright (c) Domagoj Saric.
 ///
@@ -20,16 +16,25 @@
 //------------------------------------------------------------------------------
 #pragma once
 
-#include <psi/vm/containers/storage/fixed.hpp>
-#include <psi/vm/containers/vector.hpp>
+#include <algorithm>
+#include <concepts>
+#include <cstdint>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
-// fc_vector<T, N, overflow_handler> = vector<fixed_storage<T, N, overflow_handler>>
-template <typename T, std::uint32_t capacity_param, auto overflow_handler = assert_on_overflow{}>
-using fc_vector = vector<fixed_storage<T, capacity_param, overflow_handler>>;
+struct geometric_growth
+{
+    std::uint8_t num{ 3 }; // numerator   (3/2 = 1.5x default)
+    std::uint8_t den{ 2 }; // denominator (num == den -> no geometric growth)
+
+    /// Returns max(target_size, current_capacity * num / den).
+    template <std::unsigned_integral T>
+    [[ nodiscard ]] constexpr T operator()( T const target_size, T const current_capacity ) const noexcept { return std::max( target_size, static_cast<T>( current_capacity * num / den ) ); }
+
+    [[ nodiscard ]] explicit constexpr operator bool() const noexcept { return num != den; }
+};
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm

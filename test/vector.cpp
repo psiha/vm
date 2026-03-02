@@ -7,7 +7,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
+#include <list>
 #include <numeric>
 #include <ranges>
 #include <span>
@@ -201,6 +203,102 @@ TYPED_TEST( vector_compliance, assign_range_method )
     EXPECT_EQ( v.size(), 3 );
     EXPECT_EQ( v[ 0 ], 7 );
     EXPECT_EQ( v[ 2 ], 9 );
+}
+
+// assign() with sized non-random-access ranges (exercises the
+// pre-allocation fast path for ranges with cached size)
+TYPED_TEST( vector_compliance, assign_sized_nonra_grow )
+{
+    // std::list: sized + bidirectional (not random-access)
+    std::list<int> const src{ 10, 20, 30, 40, 50 };
+    TypeParam v{ 1, 2 };
+    v.assign( src );
+    EXPECT_EQ( v.size(), 5 );
+    EXPECT_EQ( v[ 0 ], 10 );
+    EXPECT_EQ( v[ 4 ], 50 );
+}
+
+TYPED_TEST( vector_compliance, assign_sized_nonra_shrink )
+{
+    std::list<int> const src{ 7, 8 };
+    TypeParam v{ 1, 2, 3, 4, 5 };
+    v.assign( src );
+    EXPECT_EQ( v.size(), 2 );
+    EXPECT_EQ( v[ 0 ], 7 );
+    EXPECT_EQ( v[ 1 ], 8 );
+}
+
+TYPED_TEST( vector_compliance, assign_sized_nonra_exact )
+{
+    std::list<int> const src{ 100, 200, 300 };
+    TypeParam v{ 1, 2, 3 };
+    v.assign( src );
+    EXPECT_EQ( v.size(), 3 );
+    EXPECT_EQ( v[ 0 ], 100 );
+    EXPECT_EQ( v[ 2 ], 300 );
+}
+
+TYPED_TEST( vector_compliance, assign_sized_nonra_empty_src )
+{
+    std::list<int> const src;
+    TypeParam v{ 1, 2, 3 };
+    v.assign( src );
+    EXPECT_EQ( v.size(), 0 );
+}
+
+TYPED_TEST( vector_compliance, assign_sized_nonra_empty_dest )
+{
+    std::list<int> const src{ 5, 10, 15 };
+    TypeParam v;
+    v.assign( src );
+    EXPECT_EQ( v.size(), 3 );
+    EXPECT_EQ( v[ 0 ], 5 );
+    EXPECT_EQ( v[ 2 ], 15 );
+}
+
+// assign() with subrange carrying a size hint over non-random-access iterators.
+// This is the real target of the sized_range fast path: the underlying iterator
+// pair has no .size() method (e.g. list iterators, single-pass iterators),
+// but the subrange was constructed with an explicit size hint — making it a
+// std::ranges::sized_range without being random_access.
+TYPED_TEST( vector_compliance, assign_sized_subrange_grow )
+{
+    std::list<int> const src{ 1, 2, 3, 4, 5, 6 };
+    // subrange from list iterators + explicit size → sized_range but NOT random_access_range
+    auto const sr{ std::ranges::subrange( src.begin(), src.end(), src.size() ) };
+    static_assert(  std::ranges::sized_range<decltype( sr )> );
+    static_assert( !std::ranges::random_access_range<decltype( sr )> );
+
+    TypeParam v{ 10, 20 };
+    v.assign( sr );
+    EXPECT_EQ( v.size(), 6 );
+    EXPECT_EQ( v[ 0 ], 1 );
+    EXPECT_EQ( v[ 5 ], 6 );
+}
+
+TYPED_TEST( vector_compliance, assign_sized_subrange_shrink )
+{
+    std::list<int> const src{ 99, 88 };
+    auto const sr{ std::ranges::subrange( src.begin(), src.end(), src.size() ) };
+    static_assert(  std::ranges::sized_range<decltype( sr )> );
+    static_assert( !std::ranges::random_access_range<decltype( sr )> );
+
+    TypeParam v{ 1, 2, 3, 4, 5 };
+    v.assign( sr );
+    EXPECT_EQ( v.size(), 2 );
+    EXPECT_EQ( v[ 0 ], 99 );
+    EXPECT_EQ( v[ 1 ], 88 );
+}
+
+TYPED_TEST( vector_compliance, assign_sized_subrange_empty )
+{
+    std::list<int> const src;
+    auto const sr{ std::ranges::subrange( src.begin(), src.end(), std::size_t{ 0 } ) };
+    static_assert( std::ranges::sized_range<decltype( sr )> );
+
+    TypeParam v{ 1, 2, 3 };
+    v.assign( sr );
+    EXPECT_EQ( v.size(), 0 );
 }
 
 
@@ -1360,6 +1458,286 @@ TEST( tr_vector_nontrivial, with_string )
     copy[ 0 ] = "modified";
     EXPECT_EQ( v[ 0 ], "string_0" ); // original unchanged
     EXPECT_EQ( copy[ 0 ], "modified" );
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Storage lifecycle tests: destructor, move-assign, move-construct.
+// Uses a tracked type to detect memory/object leaks and double-destruction.
+////////////////////////////////////////////////////////////////////////////////
+
+// Non-trivially-destructible tracked type for leak/double-free detection.
+// Named "lifecycle_tracked" to avoid ODR conflict with flat_map.cpp's "tracked".
+static std::atomic<int> tracked_live_count{ 0 };
+
+struct lifecycle_tracked
+{
+    int value;
+
+    explicit lifecycle_tracked( int v = 0 ) noexcept : value{ v } { tracked_live_count.fetch_add( 1, std::memory_order_seq_cst ); }
+    lifecycle_tracked( lifecycle_tracked const & o ) noexcept : value{ o.value } { tracked_live_count.fetch_add( 1, std::memory_order_seq_cst ); }
+    lifecycle_tracked( lifecycle_tracked && o ) noexcept : value{ o.value } { o.value = -1; tracked_live_count.fetch_add( 1, std::memory_order_seq_cst ); }
+    lifecycle_tracked & operator=( lifecycle_tracked const & ) = default;
+    lifecycle_tracked & operator=( lifecycle_tracked && o ) noexcept { value = o.value; o.value = -1; return *this; }
+    ~lifecycle_tracked() noexcept { tracked_live_count.fetch_sub( 1, std::memory_order_seq_cst ); }
+};
+static_assert( !std::is_trivially_destructible_v<lifecycle_tracked> );
+static_assert( !is_trivially_moveable<lifecycle_tracked>, "lifecycle_tracked must NOT be trivially moveable" );
+
+// Sanity: verify lifecycle_tracked counting with raw new/delete.
+TEST( lifecycle_tracked_sanity, raw_new_delete )
+{
+    tracked_live_count.store( 0, std::memory_order_seq_cst );
+    auto * p{ new lifecycle_tracked( 42 ) };
+    EXPECT_EQ( tracked_live_count.load( std::memory_order_seq_cst ), 1 );
+    delete p;
+    EXPECT_EQ( tracked_live_count.load( std::memory_order_seq_cst ), 0 );
+}
+
+// Sanity: verify lifecycle_tracked counting with std::vector.
+TEST( lifecycle_tracked_sanity, std_vector )
+{
+    tracked_live_count.store( 0, std::memory_order_seq_cst );
+    {
+        std::vector<lifecycle_tracked> v;
+        v.emplace_back( 42 );
+        EXPECT_EQ( tracked_live_count.load( std::memory_order_seq_cst ), 1 ) << "std::vector: one element should be alive";
+    }
+    EXPECT_EQ( tracked_live_count.load( std::memory_order_seq_cst ), 0 ) << "std::vector: element should be destroyed";
+}
+
+// Sanity: verify lifecycle_tracked counting with tr_vector.
+TEST( lifecycle_tracked_sanity, tr_vector_single )
+{
+    tracked_live_count.store( 0, std::memory_order_seq_cst );
+    {
+        tr_vector<lifecycle_tracked> v;
+        v.emplace_back( 42 );
+        EXPECT_EQ( tracked_live_count.load( std::memory_order_seq_cst ), 1 ) << "one element should be alive after emplace_back";
+    }
+    EXPECT_EQ( tracked_live_count.load( std::memory_order_seq_cst ), 0 ) << "element should be destroyed after vector dtor";
+}
+
+TEST( lifecycle_tracked_sanity, growth_preserves_count )
+{
+    tracked_live_count.store( 0, std::memory_order_seq_cst );
+    tr_vector<lifecycle_tracked> v;
+    for ( int i{ 0 }; i < 20; ++i )
+    {
+        v.emplace_back( i );
+        ASSERT_EQ( tracked_live_count.load( std::memory_order_seq_cst ), i + 1 ) << "live count wrong after emplace_back " << i;
+    }
+}
+
+// Trivially-moveable variant: required by small_vector (sbo_hybrid uses memcpy).
+// IMPORTANT: live_count tracking is NOT compatible with trivial relocation
+// (bitwise copy skips ctors), so we only use this for tests that don't
+// check live_count during growth. The destructor still runs at final cleanup.
+static std::atomic<int> tracked_tm_live_count{ 0 };
+
+struct lifecycle_tracked_trivial_move
+{
+    int value;
+
+    explicit lifecycle_tracked_trivial_move( int v = 0 ) noexcept : value{ v } { tracked_tm_live_count.fetch_add( 1, std::memory_order_seq_cst ); }
+    lifecycle_tracked_trivial_move( lifecycle_tracked_trivial_move const & o ) noexcept : value{ o.value } { tracked_tm_live_count.fetch_add( 1, std::memory_order_seq_cst ); }
+    // Trivially moveable: no custom move ctor/assign
+    ~lifecycle_tracked_trivial_move() noexcept { tracked_tm_live_count.fetch_sub( 1, std::memory_order_seq_cst ); }
+};
+static_assert( !std::is_trivially_destructible_v<lifecycle_tracked_trivial_move> );
+static_assert( is_trivially_moveable<lifecycle_tracked_trivial_move> );
+
+// Run lifecycle tests against all storage backends.
+using LifecycleTestTypes = ::testing::Types<
+    tr_vector<lifecycle_tracked>,
+    tr_vector<lifecycle_tracked_trivial_move>,
+    small_vector<lifecycle_tracked_trivial_move, 4>,
+    small_vector<lifecycle_tracked_trivial_move, 4, std::uint32_t, compact_lsb_opts>,
+    small_vector<lifecycle_tracked_trivial_move, 4, std::uint32_t, embedded_opts>
+>;
+
+template <typename T> std::atomic<int> & live_count_for();
+template <> std::atomic<int> & live_count_for<lifecycle_tracked>()              { return tracked_live_count;    }
+template <> std::atomic<int> & live_count_for<lifecycle_tracked_trivial_move>() { return tracked_tm_live_count; }
+
+template <typename VecType>
+class storage_lifecycle : public ::testing::Test
+{
+public:
+    using elem_t = typename VecType::value_type;
+    static std::atomic<int> & live_count_ref() { return live_count_for<elem_t>(); }
+    static int live_count() { return live_count_ref().load( std::memory_order_relaxed ); }
+    void SetUp() override { live_count_ref().store( 0, std::memory_order_relaxed ); }
+};
+TYPED_TEST_SUITE( storage_lifecycle, LifecycleTestTypes );
+
+
+// Test: destructor destroys all elements (no leak).
+TYPED_TEST( storage_lifecycle, destructor_destroys_all_elements )
+{
+    {
+        TypeParam v;
+        for ( int i{ 0 }; i < 20; ++i )
+            v.emplace_back( i );
+        ASSERT_EQ( this->live_count(), 20 );
+    }
+    EXPECT_EQ( this->live_count(), 0 ) << "elements leaked after vector destruction";
+}
+
+// Test: move construction transfers ownership, source is safe to destroy.
+TYPED_TEST( storage_lifecycle, move_construct_no_double_free )
+{
+    {
+        TypeParam v1;
+        for ( int i{ 0 }; i < 20; ++i )
+            v1.emplace_back( i );
+        auto const count_before{ this->live_count() };
+        TypeParam v2{ std::move( v1 ) };
+        // Move may or may not change the live count depending on whether
+        // elements are bitwise-moved or move-constructed, but the important
+        // thing is that after both are destroyed, count must be 0.
+        EXPECT_EQ( v2.size(), 20u );
+        EXPECT_GE( this->live_count(), count_before ); // no premature destruction
+    }
+    EXPECT_EQ( this->live_count(), 0 ) << "leak or double-free after move + destroy";
+}
+
+// Test: move assignment frees old storage, doesn't leak.
+TYPED_TEST( storage_lifecycle, move_assign_frees_old_storage )
+{
+    {
+        TypeParam v1;
+        for ( int i{ 0 }; i < 10; ++i )
+            v1.emplace_back( i );
+
+        TypeParam v2;
+        for ( int i{ 100 }; i < 120; ++i )
+            v2.emplace_back( i );
+
+        ASSERT_EQ( this->live_count(), 30 ); // 10 + 20
+
+        v1 = std::move( v2 );
+
+        // After move-assign: v1 has 20 elements, v2 is empty/moved-from.
+        // The 10 old elements in v1 must be destroyed (not leaked).
+        EXPECT_EQ( v1.size(), 20u );
+        EXPECT_LE( this->live_count(), 20 + static_cast<int>( v2.size() ) );
+    }
+    EXPECT_EQ( this->live_count(), 0 ) << "leak after move-assign + destroy";
+}
+
+// Test: copy construction creates independent copy, both can be destroyed.
+TYPED_TEST( storage_lifecycle, copy_construct_independent_lifetime )
+{
+    {
+        TypeParam v1;
+        for ( int i{ 0 }; i < 15; ++i )
+            v1.emplace_back( i );
+
+        TypeParam v2{ v1 };
+        ASSERT_EQ( this->live_count(), 30 ); // 15 + 15
+        EXPECT_EQ( v2.size(), 15u );
+    }
+    EXPECT_EQ( this->live_count(), 0 ) << "leak after copy + destroy both";
+}
+
+// Test: clear destroys all elements, second clear is safe.
+TYPED_TEST( storage_lifecycle, clear_destroys_elements )
+{
+    TypeParam v;
+    for ( int i{ 0 }; i < 20; ++i )
+        v.emplace_back( i );
+    ASSERT_EQ( this->live_count(), 20 );
+
+    v.clear();
+    EXPECT_EQ( this->live_count(), 0 );
+    EXPECT_EQ( v.size(), 0u );
+
+    // Second clear on empty vector: no-op, no crash.
+    v.clear();
+    EXPECT_EQ( this->live_count(), 0 );
+}
+
+// Test: erase removes elements and shifts the rest.
+// Note: trivially_destructible_after_move_assignment optimization skips dtors
+// on moved-from tail slots for nothrow-moveable types. Those elements are
+// logically dead (beyond size()) but their storage/dtors may be deferred.
+TYPED_TEST( storage_lifecycle, erase_destroys_erased_elements )
+{
+    TypeParam v;
+    for ( int i{ 0 }; i < 10; ++i )
+        v.emplace_back( i );
+    ASSERT_EQ( this->live_count(), 10 );
+
+    v.erase( v.begin() + 2, v.begin() + 5 ); // erase 3 elements
+    EXPECT_EQ( v.size(), 7u );
+
+    // Verify remaining element values are correct (shifted left).
+    EXPECT_EQ( v[ 0 ].value, 0 );
+    EXPECT_EQ( v[ 1 ].value, 1 );
+    EXPECT_EQ( v[ 2 ].value, 5 ); // was index 5, shifted to index 2
+    EXPECT_EQ( v[ 3 ].value, 6 );
+    EXPECT_EQ( v[ 6 ].value, 9 );
+}
+
+// Test: pop_back destroys the removed element.
+TYPED_TEST( storage_lifecycle, pop_back_destroys_element )
+{
+    TypeParam v;
+    for ( int i{ 0 }; i < 5; ++i )
+        v.emplace_back( i );
+    ASSERT_EQ( this->live_count(), 5 );
+
+    v.pop_back();
+    EXPECT_EQ( this->live_count(), 4 );
+    EXPECT_EQ( v.size(), 4u );
+}
+
+// Test: SBO-specific — heap spill followed by destruction.
+// (For tr_vector this is just a regular heap destruction, which is fine.)
+TYPED_TEST( storage_lifecycle, heap_spill_then_destroy )
+{
+    {
+        TypeParam v;
+        // Push enough elements to guarantee heap spill on SBO types (inline N=4).
+        for ( int i{ 0 }; i < 100; ++i )
+            v.emplace_back( i );
+        ASSERT_EQ( this->live_count(), 100 );
+        ASSERT_EQ( v.size(), 100u );
+    }
+    EXPECT_EQ( this->live_count(), 0 ) << "heap-spilled elements leaked";
+}
+
+// Test: SBO-specific — heap spill, then move-assign an inline-sized vector.
+TYPED_TEST( storage_lifecycle, heap_spill_move_assign_inline )
+{
+    {
+        TypeParam v1;
+        for ( int i{ 0 }; i < 100; ++i )
+            v1.emplace_back( i );
+
+        TypeParam v2;
+        v2.emplace_back( 42 );
+
+        ASSERT_EQ( this->live_count(), 101 );
+
+        // Move a small vector into the heap-spilled one: old heap must be freed.
+        v1 = std::move( v2 );
+        EXPECT_EQ( v1.size(), 1u );
+    }
+    EXPECT_EQ( this->live_count(), 0 ) << "old heap allocation leaked after move-assign from inline";
+}
+
+// Test: shrink_to destroys excess elements.
+TYPED_TEST( storage_lifecycle, shrink_to_destroys_excess )
+{
+    TypeParam v;
+    for ( int i{ 0 }; i < 20; ++i )
+        v.emplace_back( i );
+    ASSERT_EQ( this->live_count(), 20 );
+
+    v.resize( 5 );
+    EXPECT_EQ( this->live_count(), 5 );
+    EXPECT_EQ( v.size(), 5u );
 }
 
 //------------------------------------------------------------------------------

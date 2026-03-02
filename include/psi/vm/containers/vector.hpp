@@ -8,10 +8,10 @@
 /// (push_back, iterators, etc.) directly in one class.
 ///
 /// Usage:
-///   vector<vm_storage<T>>                                → vm_vector<T>
-///   vector<heap_storage<T, crt_allocator<T>>>             → tr_vector<T>
-///   vector<fixed_storage<T, N>>                          → fc_vector<T, N>
-///   vector<sbo_hybrid<T, N>>                             → small_vector<T, N>
+///   vector<vm_storage<T>>                      → vm_vector<T>
+///   vector<heap_storage<T, crt_allocator<T>>>  → tr_vector<T>
+///   vector<fixed_storage<T, N>>                → fc_vector<T, N>
+///   vector<sbo_hybrid<T, N>>                   → small_vector<T, N>
 ///
 /// Copyright (c) Domagoj Saric.
 ///
@@ -28,6 +28,7 @@
 
 #include <psi/vm/align.hpp>
 #include <psi/vm/containers/abi.hpp>
+#include <psi/vm/containers/growth_policy.hpp>
 #include <psi/vm/containers/is_trivially_moveable.hpp>
 
 #include <psi/build/disable_warnings.hpp>
@@ -58,18 +59,6 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
-struct geometric_growth
-{
-    std::uint8_t num{ 3 }; // numerator   (3/2 = 1.5x default)
-    std::uint8_t den{ 2 }; // denominator (num == den -> no geometric growth)
-
-    /// Returns max(target_size, current_capacity * num / den).
-    template <std::unsigned_integral T>
-    [[ nodiscard ]] constexpr T operator()( T const target_size, T const current_capacity ) const noexcept { return std::max( target_size, static_cast<T>( current_capacity * num / den ) ); }
-
-    [[ nodiscard ]] explicit constexpr operator bool() const noexcept { return num != den; }
-};
-
 PSI_WARNING_DISABLE_PUSH()
 PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
 
@@ -91,6 +80,78 @@ namespace detail
 #endif
 
     struct init_policy_tag{};
+
+    // --- Storage-independent element movement algorithms ---
+    // Parameterized only on T, not on Storage. Avoids per-storage-type
+    // template instantiation for identical element-shifting logic.
+
+    /// Shift elements right by n positions to make room for insertion.
+    /// Operates on raw T* pointers — caller is responsible for
+    /// size bookkeeping and ensuring sufficient capacity.
+    template <typename T>
+    void shift_elements_right( T * const data, std::size_t const current_size, std::size_t const position, std::size_t const n ) noexcept( std::is_nothrow_move_constructible_v<T> )
+    {
+        auto const elements_to_move{ current_size - position };
+        if constexpr ( is_trivially_moveable<T> )
+        {
+            PSI_WARNING_DISABLE_PUSH()
+            PSI_WARNING_CLANG_DISABLE( -Wnontrivial-memcall ) // e.g. for trivial_abi std::string
+            // Clang does not use is_trivially_moveable/trivial_abi and is incorrect
+            // (i.e. an uninitialized_move_backwards is required)
+            std::memmove( &data[ position + n ], &data[ position ], elements_to_move * sizeof( T ) );
+            PSI_WARNING_DISABLE_POP()
+        }
+        else
+        {
+            // Phase 1: move the last min(n, elements_to_move) elements into
+            // truly uninitialized space past the old end. No overlap possible.
+            auto const uninit_count{ std::min( n, elements_to_move ) };
+            std::uninitialized_move
+            (
+                &data[ current_size - uninit_count ],
+                &data[ current_size ],
+                &data[ current_size ]
+            );
+            // Phase 2: shift remaining elements backward within initialized
+            // space (source and destination may overlap but move_backward
+            // handles right-to-left correctly).
+            if ( elements_to_move > n )
+            {
+                std::move_backward
+                (
+                    &data[ position ],
+                    &data[ position + elements_to_move - n ],
+                    &data[ current_size ]
+                );
+            }
+        }
+    }
+
+    /// Overwrite existing elements from an input range. Returns the number
+    /// of elements written (i.e. min(dest_count, source_count)).
+    /// Updates `first` to point past the consumed source elements.
+    template <typename T, typename It>
+    std::size_t overwrite_from_range( T * __restrict const dest, std::size_t const dest_count, It & first, It const last ) noexcept( std::is_nothrow_assignable_v<T &, decltype( *first )> )
+    {
+        if constexpr ( std::random_access_iterator<It> )
+        {
+            auto const n{ std::min( dest_count, static_cast<std::size_t>( std::distance( first, last ) ) ) };
+            auto const result{ std::ranges::copy_n( first, n, dest ) };
+            first = result.in;
+            return n;
+        }
+        else
+        {
+            std::size_t count{ 0 };
+            while ( ( first != last ) && ( count < dest_count ) )
+            {
+                dest[ count ] = *first;
+                ++first;
+                ++count;
+            }
+            return count;
+        }
+    }
 } // namespace detail
 
 template <std::unsigned_integral Target>
@@ -220,25 +281,25 @@ public:
 private:
     constexpr auto begin_ptr( this auto & self ) noexcept { return self.data(); }
     constexpr auto   end_ptr( this auto & self ) noexcept { return self.data() + self.size(); }
-    constexpr iterator make_iterator( [[ maybe_unused ]] this vector & self, value_type * const ptr ) noexcept
+    constexpr iterator make_iterator( value_type * const ptr ) noexcept
     {
         return
 #   if defined( _LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR )
-            std::__make_bounded_iter( ptr, self.begin_ptr(), self.end_ptr() );
+            std::__make_bounded_iter( ptr, begin_ptr(), end_ptr() );
 #   elif _ITERATOR_DEBUG_LEVEL
-            std::_Span_iterator{ ptr, self.begin_ptr(), self.end_ptr() };
+            std::_Span_iterator{ ptr, begin_ptr(), end_ptr() };
 #   else
             ptr;
 #   endif
     }
-    constexpr iterator make_iterator( this vector & self, size_type const offset ) noexcept
+    constexpr iterator make_iterator( size_type const offset ) noexcept
     {
-        auto const begin{ self.data() };
-        return self.make_iterator( begin + offset );
+        auto const begin{ data() };
+        return make_iterator( begin + offset );
     }
-    constexpr const_iterator make_iterator( this vector const & self, size_type const offset ) noexcept
+    constexpr const_iterator make_iterator( size_type const offset ) const noexcept
     {
-        return { const_cast<vector &>( self ).make_iterator( offset ) };
+        return { const_cast<vector &>( *this ).make_iterator( offset ) };
     }
 
     // constructor helpers - for initializing the vector during construction
@@ -333,65 +394,90 @@ public:
     //!
     //! <b>Complexity</b>: Linear to n.
     template <std::input_iterator It>
-    void assign( this vector & self, It first, It const last )
+    void assign( It first, It const last )
     {
         // Overwrite all elements we can from [first, last)
-        auto       cur   { self.begin() };
-        auto const end_it{ self.end  () };
-        if constexpr ( std::random_access_iterator<It> ) {
-            auto const overwrite_size{ std::min( self.size(), static_cast<typename vector::size_type>( std::distance( first, last ) ) ) };
-            auto const next_iters{ std::ranges::copy_n( first, overwrite_size, cur ) };
-            first = next_iters.in;
-            cur   = next_iters.out;
-        } else {
-            while ( ( first != last ) && ( cur != end_it ) ) {
-                *cur++ = *first;
-                ++first;
-            }
-        }
+        auto const overwritten{ detail::overwrite_from_range( data(), this->size(), first, last ) };
 
         if ( first == last )
         {
             // There are no more elements in the sequence, erase remaining
-            auto const target_size{ static_cast<size_type>( cur - self.begin() ) };
-            std::destroy( cur, end_it );
-            self.storage_shrink_to( target_size );
+            auto const target_size{ static_cast<size_type>( overwritten ) };
+            std::destroy( data() + target_size, data() + this->size() );
+            this->storage_shrink_to( target_size );
         }
         else
         {
             // There are more elements in the range, insert the remaining ones
-            self.append_range( std::ranges::subrange( first, last ) );
+            append_range( std::ranges::subrange( first, last ) );
         }
     }
 
     template <std::random_access_iterator It>
-    void assign( this vector & self, It const first, It const last )
+    void assign( It const first, It const last )
     requires( std::is_trivially_destructible_v<value_type> )
     {
         auto const input_size{ static_cast<size_type>( std::distance( first, last ) ) };
-        self.resize( input_size, no_init );
-        std::uninitialized_copy_n( first, input_size, self.begin() );
+        resize( input_size, no_init );
+        std::uninitialized_copy_n( first, input_size, begin() );
     }
     template <std::ranges::range Rng>
-    void assign( this vector & self, Rng && data )
+    void assign( Rng && data )
     {
-        if constexpr ( requires{ std::size( data ); } )
+        if constexpr ( std::ranges::sized_range<Rng> )
         {
-            // TODO specialized path for non-random-access ranges with 'cached' size information
+            auto const input_size{ static_cast<size_type>( std::size( data ) ) };
+            if constexpr ( std::is_trivially_destructible_v<value_type> )
+            {
+                // Trivially destructible: no-init resize + uninitialized_* construction.
+                // Uses construction (not assignment) to handle type conversions.
+                resize( input_size, no_init );
+                if constexpr ( std::is_rvalue_reference_v<Rng &&> )
+                    std::uninitialized_move_n( std::ranges::begin( data ), input_size, this->data() );
+                else
+                    std::uninitialized_copy_n( std::ranges::begin( data ), input_size, this->data() );
+                return;
+            }
+            else
+            {
+                auto       first   { std::ranges::begin( data ) };
+                auto const last    { std::ranges::end  ( data ) };
+                auto const old_size{ this->size() };
+                // Phase 1: overwrite existing elements in-place.
+                auto const overwritten{ detail::overwrite_from_range( this->data(), old_size, first, last ) };
+                if ( input_size <= old_size )
+                {
+                    std::destroy( this->data() + overwritten, this->data() + old_size );
+                    this->storage_shrink_size_to( input_size );
+                }
+                else
+                {
+                    // Phase 2: reserve capacity (size stays at old_size for exception
+                    // safety — if construction throws, the dtor sees the correct size).
+                    this->reserve( input_size );
+                    if constexpr ( std::is_rvalue_reference_v<Rng &&> )
+                        std::uninitialized_move( first, last, this->data() + overwritten );
+                    else
+                        std::uninitialized_copy( first, last, this->data() + overwritten );
+                    // Commit: capacity already reserved, just update size_.
+                    this->storage_grow_to( input_size );
+                }
+                return;
+            }
         }
         auto const begin{ std::begin( data ) };
         auto const end  { std::end  ( data ) };
         if constexpr ( std::is_rvalue_reference_v<Rng> )
-            self.assign( std::make_move_iterator( begin ), std::make_move_iterator( end ) );
+            assign( std::make_move_iterator( begin ), std::make_move_iterator( end ) );
         else
-            self.assign( begin, end );
+            assign( begin, end );
     }
-    void assign( this vector & self, vector && other ) noexcept( std::is_nothrow_move_assignable_v<vector> )
+    void assign( vector && other ) noexcept( std::is_nothrow_move_assignable_v<vector> )
     {
-        self = std::move( other );
+        *this = std::move( other );
     }
     template <std::ranges::range Rng>
-    void assign_range( this vector & self, Rng && data ) { self.assign( std::forward<Rng>( data ) ); }
+    void assign_range( Rng && data ) { assign( std::forward<Rng>( data ) ); }
 
     //! <b>Effects</b>: Assigns the n copies of val to *this.
     //!
@@ -399,27 +485,27 @@ public:
     //!   T's copy/move constructor/assignment throws.
     //!
     //! <b>Complexity</b>: Linear to n.
-    void assign( this vector & self, size_type const n, param_const_ref val )
+    void assign( size_type const n, param_const_ref val )
     {
         if constexpr ( std::is_trivially_destructible_v<value_type> )
         {
-            self.resize( n, no_init );
-            std::uninitialized_fill_n( self.data(), n, val );
+            resize( n, no_init );
+            std::uninitialized_fill_n( data(), n, val );
         }
         else
         {
-            auto const current_size{ self.size() };
+            auto const current_size{ this->size() };
             auto const overwrite_count{ std::min( n, current_size ) };
-            std::fill_n( self.begin(), overwrite_count, val );
+            std::fill_n( begin(), overwrite_count, val );
             if ( n > current_size )
             {
-                auto const data{ self.grow_to( n, no_init ) };
+                auto const data{ grow_to( n, no_init ) };
                 std::uninitialized_fill_n( &data[ current_size ], n - current_size, val );
             }
             else
             {
-                std::destroy( self.nth( n ), self.end() );
-                self.storage_shrink_size_to( n );
+                std::destroy( nth( n ), end() );
+                this->storage_shrink_size_to( n );
             }
         }
     }
@@ -481,22 +567,22 @@ public:
     [[ nodiscard ]] static constexpr size_type max_size() noexcept { return static_cast<size_type>( std::numeric_limits<size_type>::max() / sizeof( value_type ) ); }
 
     // intentional non-standard behaviour: default_init by default
-    void resize( this vector & self, size_type const new_size ) { self.resize( new_size, default_init ); }
+    void resize( size_type const new_size ) { resize( new_size, default_init ); }
 
     //! <b>Effects</b>: Inserts or erases elements at the end such that
     //!   the size becomes n. New elements are copy constructed from x.
     //!
     //! <b>Throws</b>: If memory allocation throws, or T's copy/move constructor throws.
     //!
-    //! <b>Complexity</b>: Linear to the difference between size() and new_size.
+    //! <b>Complexity</b>: Linear to the difference between this->size() and new_size.
     template <typename Initializer>
-    void resize( this vector & self, size_type const new_size, Initializer && initializer )
+    void resize( size_type const new_size, Initializer && initializer )
     {
-        if ( new_size > self.size() ) self.  grow_to( new_size, std::forward<Initializer>( initializer ) );
-        else                          self.shrink_to( new_size                                           );
+        if ( new_size > this->size() )   grow_to( new_size, std::forward<Initializer>( initializer ) );
+        else                           shrink_to( new_size                                           );
     }
 
-    void shrink_to_fit( this vector & self ) noexcept { self.storage_shrink_to( self.size() ); }
+    void shrink_to_fit( ) noexcept { this->storage_shrink_to( this->size() ); }
 
     //////////////////////////////////////////////
     //
@@ -504,7 +590,7 @@ public:
     //
     //////////////////////////////////////////////
 
-    //! <b>Requires</b>: !empty()
+    //! <b>Requires</b>: !this->empty()
     //!
     //! <b>Effects</b>: Returns a reference to the first
     //!   element of the container.
@@ -514,7 +600,7 @@ public:
     //! <b>Complexity</b>: Constant.
     [[ nodiscard ]] auto & front( this auto && self ) noexcept { return self.span().front(); }
 
-    //! <b>Requires</b>: !empty()
+    //! <b>Requires</b>: !this->empty()
     //!
     //! <b>Effects</b>: Returns a reference to the last
     //!   element of the container.
@@ -524,7 +610,7 @@ public:
     //! <b>Complexity</b>: Constant.
     [[ nodiscard ]] auto & back( this auto && self ) noexcept { return self.span().back(); }
 
-    //! <b>Requires</b>: size() > n.
+    //! <b>Requires</b>: this->size() > n.
     //!
     //! <b>Effects</b>: Returns a reference to the nth element
     //!   from the beginning of the container.
@@ -534,11 +620,11 @@ public:
     //! <b>Complexity</b>: Constant.
     [[ nodiscard ]] auto & operator[]( this auto && self, size_type const n ) noexcept { return self.span()[ n ]; }
 
-    //! <b>Requires</b>: size() >= n.
+    //! <b>Requires</b>: this->size() >= n.
     //!
     //! <b>Effects</b>: Returns an iterator to the nth element
     //!   from the beginning of the container. Returns end()
-    //!   if n == size().
+    //!   if n == this->size().
     //!
     //! <b>Throws</b>: Nothing.
     //!
@@ -554,25 +640,25 @@ public:
     //! <b>Requires</b>: begin() <= p <= end().
     //!
     //! <b>Effects</b>: Returns the index of the element pointed by p
-    //!   and size() if p == end().
+    //!   and this->size() if p == end().
     //!
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
     //!
     //! <b>Note</b>: Non-standard extension
-    [[ nodiscard ]] size_type index_of( this vector const & self, const_iterator const p ) noexcept
+    [[ nodiscard ]] size_type index_of( const_iterator const p ) noexcept
     {
-        self.verify_iterator( p );
-        return static_cast<size_type>( p - self.begin() );
+        verify_iterator( p );
+        return static_cast<size_type>( p - begin() );
     }
 
-    //! <b>Requires</b>: size() > n.
+    //! <b>Requires</b>: this->size() > n.
     //!
     //! <b>Effects</b>: Returns a reference to the nth element
     //!   from the beginning of the container.
     //!
-    //! <b>Throws</b>: range_error if n >= size()
+    //! <b>Throws</b>: range_error if n >= this->size()
     //!
     //! <b>Complexity</b>: Constant.
     [[ nodiscard ]] auto & at( this auto && self, size_type const n )
@@ -633,23 +719,23 @@ public:
     }
 
     template <class ...Args>
-    reference emplace_back( this vector & self, Args &&...args )
+    reference emplace_back( Args &&...args )
     {
-        auto const current_size{ self.size() };
+        auto const current_size{ this->size() };
         if constexpr ( sizeof...( Args ) || true ) // grow_by( 1, default_init ) would call uninitialized_default_construct (i.e. a loop) - TODO grow_by_one and shrink_by_one methods for push&pop-back operations
         {
-            auto const data{ self.grow_by( 1, no_init ) };
+            auto const data{ grow_by( 1, no_init ) };
             auto & placeholder{ data[ current_size ] };
             try {
                 return construct_at( placeholder, std::forward<Args>( args )... );
             } catch( ... ) {
-                self.shrink_by( 1 );
+                shrink_by( 1 );
                 throw;
             }
         }
         else
         {
-            return self.grow_by( 1, default_init )[ current_size ];
+            return grow_by( 1, default_init )[ current_size ];
         }
     }
 
@@ -664,11 +750,11 @@ public:
     //!
     //! <b>Note</b>: Non-standard extension.
     template <typename... Args>
-    bool stable_emplace_back( this vector & self, Args &&... args )
+    bool stable_emplace_back( Args &&... args )
     {
-        if ( !self.stable_reserve( self.size() + 1 ) )
+        if ( !stable_reserve( this->size() + 1 ) )
             return false;
-        self.emplace_back( std::forward<Args>( args )... );
+        emplace_back( std::forward<Args>( args )... );
         return true;
     }
 
@@ -683,9 +769,9 @@ public:
     //! <b>Complexity</b>: If position is end(), amortized constant time
     //!   Linear time otherwise.
     template <typename... Args>
-    iterator emplace( this vector & self, const_iterator const position, Args &&... args )
+    iterator emplace( const_iterator const position, Args &&... args )
     {
-        auto const iter{ self.make_space_for_insert( position, 1 ) };
+        auto const iter{ make_space_for_insert( position, 1 ) };
         if constexpr ( trivially_destructible_after_move_assignment<value_type> )
             construct_at( *iter, std::forward<Args>( args )... );
         else
@@ -699,9 +785,9 @@ public:
     //!   T's copy/move constructor throws.
     //!
     //! <b>Complexity</b>: Amortized constant time.
-    void push_back( this vector & self, param_const_ref x ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
+    void push_back( param_const_ref x ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
     {
-        self.emplace_back( x );
+        emplace_back( x );
     }
 
     //! <b>Effects</b>: Constructs a new element in the end of the vector
@@ -711,10 +797,10 @@ public:
     //!   T's copy/move constructor throws.
     //!
     //! <b>Complexity</b>: Amortized constant time.
-    void push_back( this vector & self, value_type && x ) noexcept( noexcept_storage() && std::is_nothrow_move_constructible_v<value_type> )
+    void push_back( value_type && x ) noexcept( noexcept_storage() && std::is_nothrow_move_constructible_v<value_type> )
     requires( !std::is_trivial_v<value_type> ) // otherwise better to go through the pass-in-reg overload
     {
-        self.emplace_back( std::move( x ) );
+        emplace_back( std::move( x ) );
     }
 
     //! <b>Requires</b>: position must be a valid iterator of *this.
@@ -725,7 +811,7 @@ public:
     //!
     //! <b>Complexity</b>: If position is end(), amortized constant time
     //!   Linear time otherwise.
-    iterator insert( this vector & self, const_iterator const position, param_const_ref x ) { return self.emplace( position, x ); }
+    iterator insert( const_iterator const position, param_const_ref x ) { return emplace( position, x ); }
 
     //! <b>Requires</b>: position must be a valid iterator of *this.
     //!
@@ -735,7 +821,7 @@ public:
     //!
     //! <b>Complexity</b>: If position is end(), amortized constant time
     //!   Linear time otherwise.
-    iterator insert( this vector & self, const_iterator const position, value_type && x ) requires( !std::is_trivially_move_constructible_v<value_type> ) { return self.emplace( position, std::move( x ) ); }
+    iterator insert( const_iterator const position, value_type && x ) requires( !std::is_trivially_move_constructible_v<value_type> ) { return emplace( position, std::move( x ) ); }
 
     //! <b>Requires</b>: position must be a valid iterator of *this.
     //!
@@ -746,9 +832,9 @@ public:
     //! <b>Throws</b>: If memory allocation throws or T's copy/move constructor throws.
     //!
     //! <b>Complexity</b>: Linear to n.
-    iterator insert( this vector & self, const_iterator const position, size_type const n, param_const_ref x )
+    iterator insert( const_iterator const position, size_type const n, param_const_ref x )
     {
-        auto const iter{ self.make_space_for_insert( position, n ) };
+        auto const iter{ make_space_for_insert( position, n ) };
         if constexpr ( trivially_destructible_after_move_assignment<value_type> )
             std::uninitialized_fill_n( iter, n, x );
         else
@@ -767,10 +853,10 @@ public:
     //!
     //! <b>Complexity</b>: Linear to boost::container::iterator_distance [first, last).
     template <std::input_iterator InIt>
-    iterator insert( this vector & self, const_iterator const position, InIt const first, InIt const last )
+    iterator insert( const_iterator const position, InIt const first, InIt const last )
     {
         auto const n{ static_cast<size_type>( std::distance( first, last ) ) };
-        auto const iter{ self.make_space_for_insert( position, n ) };
+        auto const iter{ make_space_for_insert( position, n ) };
         if constexpr ( trivially_destructible_after_move_assignment<value_type> )
             std::uninitialized_copy_n( first, n, iter );
         else
@@ -785,18 +871,18 @@ public:
     //! <b>Returns</b>: an iterator to the first inserted element or position if first == last.
     //!
     //! <b>Complexity</b>: Linear to the range [il.begin(), il.end()).
-    iterator insert( this vector & self, const_iterator const position, std::initializer_list<value_type> const il )
+    iterator insert( const_iterator const position, std::initializer_list<value_type> const il )
     {
-        return self.insert( position, il.begin(), il.end() );
+        return insert( position, il.begin(), il.end() );
     }
 
     template <std::ranges::input_range Rng>
-    iterator insert_range( this vector & self, const_iterator const position, Rng && rng )
+    iterator insert_range( const_iterator const position, Rng && rng )
     {
         if constexpr ( std::ranges::sized_range<Rng> )
         {
             auto const n{ verified_cast<size_type>( std::ranges::size( rng ) ) };
-            auto const iter{ self.make_space_for_insert( position, n ) };
+            auto const iter{ make_space_for_insert( position, n ) };
             if constexpr ( std::is_rvalue_reference_v<Rng &&> )
             {
                 if constexpr ( trivially_destructible_after_move_assignment<value_type> )
@@ -817,24 +903,24 @@ public:
         {
             // Non-sized input ranges: append at end, then rotate into position.
             // This avoids materializing into a temporary vector (a la libc++).
-            auto const pos_index{ self.index_of( position ) };
-            auto const old_size { self.size() };
+            auto const pos_index{ index_of( position ) };
+            auto const old_size { this->size() };
             for ( auto it{ std::ranges::begin( rng ) }; it != std::ranges::end( rng ); ++it )
-                self.emplace_back( *it );
-            std::rotate( self.nth( pos_index ), self.nth( old_size ), self.end() );
-            return self.nth( pos_index );
+                emplace_back( *it );
+            std::rotate( nth( pos_index ), nth( old_size ), end() );
+            return nth( pos_index );
         }
     }
 
     template <std::ranges::range Rng>
-    void append_range( this vector & self, Rng && __restrict rng )
+    void append_range( Rng && __restrict rng )
     {
-        auto const current_size{ self.size() };
+        auto const current_size{ this->size() };
         if constexpr ( requires{ std::size( rng ); } )
         {
-            auto const additional_size{ verified_cast<size_type>( std:: size( rng ) ) };
+            auto const additional_size{ verified_cast<size_type>( std::size( rng ) ) };
             auto const input_begin    {                           std::begin( rng )   };
-            auto const target_position{ self.grow_by( additional_size, no_init ) + current_size };
+            auto const target_position{ grow_by( additional_size, no_init ) + current_size };
             try
             {
                 if constexpr ( std::is_rvalue_reference_v<Rng> )
@@ -844,7 +930,7 @@ public:
             }
             catch (...)
             {
-                self.storage_shrink_size_to( current_size );
+                this->storage_shrink_size_to( current_size );
                 throw;
             }
         }
@@ -853,19 +939,19 @@ public:
             try
             {
                 if constexpr ( std::is_rvalue_reference_v<Rng> )
-                    std::move( std::begin( rng ), std::end( rng ), std::back_inserter( self ) );
+                    std::move( std::begin( rng ), std::end( rng ), std::back_inserter( *this ) );
                 else
-                    std::copy( std::begin( rng ), std::end( rng ), std::back_inserter( self ) );
+                    std::copy( std::begin( rng ), std::end( rng ), std::back_inserter( *this ) );
             }
             catch (...)
             {
-                self.storage_shrink_size_to( current_size );
+                this->storage_shrink_size_to( current_size );
                 throw;
             }
         }
     }
 #ifndef __cpp_lib_span_initializer_list
-    void append_range( this vector & self, std::initializer_list<value_type> const rng ) { self.append_range( std::span{ rng.begin(), rng.end() } ); }
+    void append_range( std::initializer_list<value_type> const rng ) { append_range( std::span{ rng.begin(), rng.end() } ); }
 #endif
 
     //! <b>Effects</b>: Removes the last element from the container.
@@ -873,11 +959,11 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant time.
-    void pop_back( this vector & self ) noexcept
+    void pop_back( ) noexcept
     {
-        BOOST_ASSUME( !self.empty() );
-        std::destroy_at( &self.back() );
-        self.storage_dec_size();
+        BOOST_ASSUME( !this->empty() );
+        std::destroy_at( &back() );
+        this->storage_dec_size();
     }
 
     //! <b>Effects</b>: Erases the element at position pos.
@@ -886,17 +972,17 @@ public:
     //!
     //! <b>Complexity</b>: Linear to the elements between pos and the
     //!   last element. Constant if pos is the last element.
-    iterator erase( this vector & self, const_iterator const position ) noexcept
+    iterator erase( const_iterator const position ) noexcept
     {
-        self.verify_iterator( position );
-        auto const pos_index{ self.index_of( position ) };
-        auto const mutable_pos{ self.nth( pos_index ) };
-        std::shift_left( mutable_pos, self.end(), 1 );
+        verify_iterator( position );
+        auto const pos_index{ index_of( position ) };
+        auto const mutable_pos{ nth( pos_index ) };
+        std::shift_left( mutable_pos, end(), 1 );
         if constexpr ( trivially_destructible_after_move_assignment<value_type> )
-            self.storage_dec_size();
+            this->storage_dec_size();
         else
-            self.pop_back();
-        return self.nth( pos_index );
+            pop_back();
+        return nth( pos_index );
     }
 
     //! <b>Effects</b>: Erases the elements pointed by [first, last).
@@ -905,21 +991,21 @@ public:
     //!
     //! <b>Complexity</b>: Linear to the distance between first and last
     //!   plus linear to the elements between pos and the last element.
-    iterator erase( this vector & self, const_iterator const first, const_iterator const last ) noexcept
+    iterator erase( const_iterator const first, const_iterator const last ) noexcept
     {
-        self.verify_iterator( first );
-        self.verify_iterator( last  );
+        verify_iterator( first );
+        verify_iterator( last  );
         BOOST_ASSERT( first <= last );
-        auto const first_index{ self.index_of( first ) };
+        auto const first_index  { index_of( first ) };
         auto const mutable_start{ detail::mutable_iter( first ) };
         auto const mutable_end  { detail::mutable_iter( last  ) };
-        auto const new_end      { std::move( mutable_end, self.end(), mutable_start ) };
-        auto const new_size     { static_cast<size_type>( new_end - self.begin() ) };
+        auto const new_end      { std::move( mutable_end, end(), mutable_start ) };
+        auto const new_size     { static_cast<size_type>( new_end - begin() ) };
         if constexpr ( trivially_destructible_after_move_assignment<value_type> )
-            self.storage_shrink_size_to( new_size );
+            this->storage_shrink_size_to( new_size );
         else
-            self.shrink_to( new_size );
-        return self.nth( first_index );
+            shrink_to( new_size );
+        return nth( first_index );
     }
     //! <b>Effects</b>: Erases all the elements of the vector.
     //!
@@ -927,13 +1013,13 @@ public:
     //!
     //! <b>Complexity</b>: Linear to the number of elements in the container.
     [[ gnu::cold ]]
-    void clear( this vector & self ) noexcept
+    void clear( ) noexcept
     {
-        std::destroy( self.begin(), self.end() );
+        std::destroy( begin(), end() );
 #   if 0 // default to STL behaviour (keep capacity) - TODO make this configurable?
-        self.storage_shrink_to( 0 );
+        this->storage_shrink_to( 0 );
 #   else
-        self.storage_shrink_size_to( 0 );
+        this->storage_shrink_size_to( 0 );
 #   endif
     }
 
@@ -941,53 +1027,53 @@ public:
     // Extensions
     ///////////////////////////////////////////////////////////////////////////
 
-    //! <b>Effects</b>: If n is less than or equal to capacity(), this call has no
+    //! <b>Effects</b>: If n is less than or equal to this->capacity(), this call has no
     //!   effect. Otherwise, it is a request for allocation of additional memory
     //!   (memory expansion) that will not invalidate iterators.
-    //!   If the request is successful, then capacity() is greater than or equal to
-    //!   n; otherwise, capacity() is unchanged. In either case, size() is unchanged.
+    //!   If the request is successful, then this->capacity() is greater than or equal to
+    //!   n; otherwise, this->capacity() is unchanged. In either case, this->size() is unchanged.
     //!
-    //! <b>Returns</b>: true if capacity() >= new_cap after the call (either
+    //! <b>Returns</b>: true if this->capacity() >= new_cap after the call (either
     //!   already was, or in-place expansion succeeded), false otherwise.
     //!
     //! <b>Note</b>: Non-standard extension.
-    bool stable_reserve( this vector & self, size_type const new_cap )
+    bool stable_reserve( size_type const new_cap )
     {
-        if ( new_cap <= self.capacity() )
+        if ( new_cap <= this->capacity() )
             return true;
         // Try in-place expansion if the storage backend supports it
         // (e.g. tr_vector on MSVC via ::_expand(), vm_vector via page mapping)
-        if constexpr ( requires { self.storage_try_expand_capacity( new_cap ); } )
-            return self.storage_try_expand_capacity( new_cap );
+        if constexpr ( requires { this->storage_try_expand_capacity( new_cap ); } )
+            return this->storage_try_expand_capacity( new_cap );
         return false;
     }
 
-    value_type * grow_to( this vector & self, size_type const target_size, no_init_t ) { return self.storage_grow_to( target_size ); }
-    value_type * grow_to( this vector & self, size_type const target_size, default_init_t )
+    value_type * grow_to( size_type const target_size, no_init_t ) { return this->storage_grow_to( target_size ); }
+    value_type * grow_to( size_type const target_size, default_init_t )
     {
-        auto const current_size{ self.size() };
-        if ( target_size <= current_size ) [[ unlikely ]] { // meh, already/also handled by storage_grow_to()
-            return self.data();
+        auto const current_size{ this->size() };
+        if ( target_size <= current_size ) [[ unlikely ]] { // meh, already/also handled by this->storage_grow_to()
+            return data();
         }
-        auto const data{ self.grow_to( target_size, no_init ) };
+        auto const data{ grow_to( target_size, no_init ) };
         if constexpr ( !std::is_trivially_default_constructible_v<value_type> ) {
             try {
                 std::uninitialized_default_construct( &data[ current_size ], &data[ target_size ] );
             } catch(...) {
-                self.storage_shrink_size_to( current_size );
+                this->storage_shrink_size_to( current_size );
                 throw;
             }
         }
         return data;
     }
 
-    value_type * grow_to( this vector & self, size_type const target_size, value_init_t )
+    value_type * grow_to( size_type const target_size, value_init_t )
     {
-        auto const current_size{ self.size() };
+        auto const current_size{ this->size() };
         if ( target_size <= current_size ) [[ unlikely ]] {
-            return self.data();
+            return data();
         }
-        auto const data{ self.grow_to( target_size, no_init ) };
+        auto const data{ grow_to( target_size, no_init ) };
         auto const uninitialized_space_begin{ &data[ current_size ] };
         auto const uninitialized_space_size { target_size - current_size };
         if constexpr ( std::is_trivially_constructible_v<value_type> )
@@ -1012,123 +1098,72 @@ public:
             try {
                 std::uninitialized_value_construct_n( uninitialized_space_begin, uninitialized_space_size );
             } catch(...) {
-                self.storage_shrink_size_to( current_size );
+                this->storage_shrink_size_to( current_size );
                 throw;
             }
         }
         return data;
     }
     template <typename U>
-    value_type * grow_to( this vector & self, size_type const target_size, U && default_value )
+    value_type * grow_to( size_type const target_size, U && default_value )
     requires std::constructible_from<value_type, U>
     {
-        auto const current_size{ self.size() };
+        auto const current_size{ this->size() };
         if ( target_size <= current_size ) [[ unlikely ]] {
-            return self.data();
+            return data();
         }
-        auto const data{ self.grow_to( target_size, no_init ) };
+        auto const data{ grow_to( target_size, no_init ) };
         auto const uninitialized_space_begin{ &data[ current_size ] };
         auto const uninitialized_space_size { target_size - current_size };
         try {
             std::uninitialized_fill_n( uninitialized_space_begin, uninitialized_space_size, std::forward<U>( default_value ) );
         } catch(...) {
-            self.storage_shrink_size_to( current_size );
+            this->storage_shrink_size_to( current_size );
             throw;
         }
         return data;
     }
 
-    value_type * grow_by( this vector & self, size_type const delta, auto const init_policy )
+    value_type * grow_by( size_type const delta, auto const init_policy )
     {
-        return self.grow_to( self.size() + delta, init_policy );
+        return grow_to( this->size() + delta, init_policy );
     }
 
-    void shrink_to( this vector & self, size_type const target_size ) noexcept
+    void shrink_to( size_type const target_size ) noexcept
     {
-        BOOST_ASSUME( target_size <= self.size() );
-        std::destroy( self.nth( target_size ), self.end() );
-        self.storage_shrink_size_to( target_size ); // std::vector behaviour: never release/shrink capacity
+        BOOST_ASSUME( target_size <= this->size() );
+        std::destroy( nth( target_size ), end() );
+        this->storage_shrink_size_to( target_size ); // std::vector behaviour: never release/shrink capacity
     }
-    void shrink_by( this vector & self, size_type const delta ) noexcept { self.shrink_to( self.size() - delta ); }
+    void shrink_by( size_type const delta ) noexcept { shrink_to( this->size() - delta ); }
 
 private:
-    void verify_iterator( [[ maybe_unused ]] this vector const & self, [[ maybe_unused ]] const_iterator const iter ) noexcept
+    void verify_iterator( [[ maybe_unused ]] const_iterator const iter ) const noexcept
     {
-        BOOST_ASSERT( iter >= self.begin() );
-        BOOST_ASSERT( iter <= self.end  () );
+        BOOST_ASSERT( iter >= begin() );
+        BOOST_ASSERT( iter <= end  () );
     }
 
-    iterator make_space_for_insert( this vector & self, const_iterator const position, size_type const n )
+    iterator make_space_for_insert( const_iterator const position, size_type const n )
     {
-        self.verify_iterator( position );
-        auto const position_index{ self.index_of( position ) };
-        auto const current_size  { self.size() };
+        verify_iterator( position );
+        auto const position_index{ index_of( position ) };
+        auto const current_size  { this->size() };
         auto const new_size      { static_cast<size_type>( current_size + n ) };
-        auto const data{ self.grow_to( new_size, no_init ) };
-        auto const elements_to_move{ static_cast<size_type>( current_size - position_index ) };
-        if constexpr ( is_trivially_moveable<value_type> )
-        {
-            PSI_WARNING_DISABLE_PUSH()
-#       if defined( __clang__ ) && ( __clang_major__ >= 20 )
-            PSI_WARNING_CLANG_DISABLE( -Wnontrivial-memcall ) // e.g. for trivial_abi std::string
-#       endif
-            // does not use is_trivially_moveable/trivial_abi and is incorrect
-            // (i.e. an uninitialized_move_backwards is required)
-            //std::uninitialized_move_n( &data[ position_index ], elements_to_move, &data[ position_index + n ] );
-            std::memmove( &data[ position_index + n ], &data[ position_index ], elements_to_move * sizeof( *data ) );
-            PSI_WARNING_DISABLE_POP()
-        }
-        else
-        {
-            if ( n <= elements_to_move )
-            {
-                // Case 1: enough elements after position to fill the gap.
-                // Phase 1: move last n elements into uninitialized space past old end.
-                std::uninitialized_move
-                (
-                    &data[ current_size - n ],
-                    &data[ current_size ],
-                    &data[ current_size ]
-                );
-                // Phase 2: shift remaining elements backward within initialized space.
-                auto const remaining{ static_cast<size_type>( elements_to_move - n ) };
-                std::move_backward
-                (
-                    &data[ position_index ],
-                    &data[ position_index + remaining ],
-                    &data[ position_index + remaining + n ]
-                );
-            }
-            else
-            {
-                // Case 2: fewer elements after position than being inserted (includes
-                // the common end-insert case where elements_to_move == 0).
-                // All destination slots are past old end -> uninitialized.
-                std::uninitialized_move
-                (
-                    &data[ position_index ],
-                    &data[ current_size ],
-                    &data[ position_index + n ]
-                );
-            }
-        }
-        return self.make_iterator( &data[ position_index ] );
+        auto const data          { grow_to( new_size, no_init ) };
+        // Storage-independent element shift (parameterized only on T, not Storage)
+        detail::shift_elements_right( data, current_size, position_index, n );
+        return make_iterator( &data[ position_index ] );
     }
 
 public:
     // --- growth policy ---
-    // Geometric growth is applied here at the vector level (not inside storage).
-    // Storage does exact-size allocation; vector over-allocates for amortization.
-    // Shadows storage_t::storage_grow_to() so that calls route through here.
+    // Delegates to the storage's Growth-aware storage_grow_to<Growth>().
+    // Each storage decides how to combine the growth factor with its capacity
+    // check in a single pass, avoiding redundant comparisons.
     value_type * storage_grow_to( size_type const target_size )
     {
-        if constexpr ( static_cast<bool>( Growth ) )
-        {
-            auto const current_cap{ storage_t::capacity() };
-            if ( target_size > current_cap ) [[ unlikely ]]
-                storage_t::reserve( Growth( target_size, current_cap ) );
-        }
-        return storage_t::storage_grow_to( target_size );
+        return storage_t::template storage_grow_to<Growth>( target_size );
     }
 
     // --- default constructor ---
@@ -1142,10 +1177,7 @@ public:
     // --- destructor ---
     constexpr ~vector() noexcept
     {
-        if constexpr ( !std::is_trivially_destructible_v<value_type> )
-            std::destroy_n( this->data(), this->size() );
-        if ( this->data() )
-            storage_t::storage_free();
+        std::destroy_n( this->data(), this->size() );
     }
 
     // --- copy constructor ---
@@ -1160,9 +1192,7 @@ public:
 
     // (B) Non-copyable storage (heap_storage, fixed_storage, sbo_hybrid):
     //     element-level copy semantics live here at the vector level.
-    constexpr vector( vector const & other )
-        requires ( !std::is_copy_constructible_v<storage_t> )
-        : storage_t{}
+    constexpr vector( vector const & other ) requires ( !std::is_copy_constructible_v<storage_t> )
     {
         // Optimization for small trivially-copyable fixed-capacity vectors:
         // memcpy the entire object (size + inline array) with a handful of
@@ -1203,11 +1233,7 @@ public:
         if ( this != &other )
         {
             // Destroy current elements
-            if constexpr ( !std::is_trivially_destructible_v<value_type> )
-                std::destroy_n( this->data(), this->size() );
-            if ( this->data() )
-                storage_t::storage_free();
-
+            std::destroy_n( this->data(), this->size() );
             // Move storage from other
             static_cast<storage_t &>( *this ) = std::move( static_cast<storage_t &>( other ) );
         }

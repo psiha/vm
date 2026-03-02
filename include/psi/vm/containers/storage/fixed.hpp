@@ -24,6 +24,7 @@
 //------------------------------------------------------------------------------
 #pragma once
 
+#include <psi/vm/containers/growth_policy.hpp>
 #include <psi/vm/containers/noninitialized_array.hpp>
 #include <psi/vm/containers/is_trivially_moveable.hpp>
 #include <psi/vm/containers/abi.hpp> // detail::throw_out_of_range
@@ -94,9 +95,8 @@ public:
     // Storages manage raw memory -- element-level copy belongs to vector<Storage>.
     fixed_storage( fixed_storage const & ) = delete;
     fixed_storage & operator=( fixed_storage const & ) = delete;
-
+    //...meh...spaghetti - move _is_ handled by storage...todo cleanup
     constexpr fixed_storage( fixed_storage && other ) noexcept( std::is_nothrow_move_constructible_v<T> )
-        : size_{ 0 }
     {
         if constexpr ( fixed_sized_move )
         {
@@ -116,16 +116,7 @@ public:
         {
             if constexpr ( !std::is_trivially_destructible_v<T> )
                 std::destroy_n( data(), size() );
-            if constexpr ( fixed_sized_move )
-            {
-                std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
-            }
-            else
-            {
-                std::uninitialized_move_n( other.data(), other.size(), data() );
-                size_ = other.size_;
-            }
-            other.size_ = 0;
+            new ( this ) fixed_storage( std::move( other ) );
         }
         return *this;
     }
@@ -139,8 +130,9 @@ public:
 
     void reserve( size_type const new_capacity ) const noexcept { BOOST_ASSUME( new_capacity <= static_capacity ); }
 
-    // --- storage_* interface for vector_impl ---
+    // --- storage_* interface for vector<> ---
     constexpr value_type * storage_init   ( size_type const initial_size ) noexcept( noexcept( overflow_handler() ) ) { return storage_grow_to( initial_size ); }
+    template <geometric_growth = geometric_growth{1, 1}>
     constexpr value_type * storage_grow_to( size_type const  target_size ) noexcept( noexcept( overflow_handler() ) )
     {
         static_assert( sizeof( fixed_storage ) == sizeof( this_pod ) );

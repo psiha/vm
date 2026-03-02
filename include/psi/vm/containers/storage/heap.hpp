@@ -28,6 +28,7 @@
 #if PSI_VM_HAS_MIMALLOC
 #   include <psi/vm/allocators/mimalloc.hpp>
 #endif
+#include <psi/vm/containers/growth_policy.hpp>
 #include <psi/vm/containers/is_trivially_moveable.hpp>
 
 #include <boost/assert.hpp>
@@ -102,14 +103,20 @@ public:
     constexpr explicit heap_storage( allocator_type alloc_init ) noexcept
         : allocator_type{ std::move( alloc_init ) }, p_array_{ nullptr }, size_{ 0 }, capacity_{ 0 } {}
 
+    constexpr ~heap_storage() noexcept
+    {
+        if ( p_array_ )
+            storage_free();
+    }
+
     // Storages manage raw memory -- element-level copy belongs to vector<Storage>.
     heap_storage( heap_storage const & ) = delete;
     heap_storage & operator=( heap_storage const & ) = delete;
 
     constexpr heap_storage( heap_storage && other ) noexcept
         : allocator_type{ static_cast<allocator_type &&>( other ) }
-        , p_array_{ other.p_array_ }
-        , size_{ other.size_ }
+        , p_array_ { other.p_array_  }
+        , size_    { other.size_     }
         , capacity_{ other.capacity_ }
     { other.mark_freed(); }
 
@@ -147,7 +154,7 @@ public:
 
     void reserve( size_type const new_capacity )
     {
-        auto const current_cap{ capacity() };
+        auto const current_cap{ options.cache_capacity ? capacity() : size() };
         if ( new_capacity > current_cap ) {
             do_grow( new_capacity, current_cap );
         }
@@ -166,7 +173,7 @@ public:
         swap( capacity_, other.capacity_ );
     }
 
-    // --- storage_* interface for vector_impl ---
+    // --- storage_* interface for vector<> ---
     [[ using gnu: cold, assume_aligned( alignment ) ]]
     constexpr value_type * storage_init( size_type const initial_size )
     {
@@ -182,6 +189,7 @@ public:
         }
         return data();
     }
+    template <geometric_growth G = {1, 1}>
     [[ using gnu: assume_aligned( alignment ), returns_nonnull ]]
     constexpr value_type * storage_grow_to( size_type const target_size )
     {
@@ -189,7 +197,7 @@ public:
         BOOST_ASSUME( current_capacity >= size_ );
         BOOST_ASSUME( target_size      >= size_ );
         if ( target_size > current_capacity ) [[ unlikely ]] {
-            do_grow( target_size, current_capacity );
+            do_grow( G ? G( target_size, current_capacity ) : target_size, current_capacity );
         }
         size_ = target_size;
         return data();

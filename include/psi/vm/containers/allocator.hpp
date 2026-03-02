@@ -77,7 +77,7 @@ public:
     void unmap() noexcept { view_.unmap(); }
 
 private:
-    err::fallible_result< std::size_t, error > open( file_handle && file ) noexcept
+    err::fallible_result<std::size_t, error> open( file_handle && file ) noexcept
     {
         if ( !file )
             return error{};
@@ -139,9 +139,9 @@ private:
     static sz_t  to_t_sz( auto                      const sz  ) noexcept { return static_cast<sz_t>( sz / sizeof( T ) ); }
 
 public:
-    using value_type = T;
-    using       pointer = T *;
-    using const_pointer = T const *;
+    using value_type      = T;
+    using       pointer   = T *;
+    using const_pointer   = T const *;
     using       reference = T &;
     using const_reference = T const &;
     using       size_type = sz_t;
