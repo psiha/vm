@@ -1289,25 +1289,27 @@ namespace
     };
 
     static_assert( !is_trivially_moveable<address_tracker> );
-
-    // A type with a non-trivial destructor that increments a counter.
-    struct move_counter
-    {
-        int  value;
-        int* move_count;
-        int* destroy_count;
-
-        explicit move_counter( int v, int & mc, int & dc ) : value{ v }, move_count{ &mc }, destroy_count{ &dc } {}
-        move_counter( move_counter const & other ) : value{ other.value }, move_count{ other.move_count }, destroy_count{ other.destroy_count } {}
-        move_counter( move_counter && other ) noexcept : value{ other.value }, move_count{ other.move_count }, destroy_count{ other.destroy_count } { ++(*move_count); other.value = -1; }
-        move_counter & operator=( move_counter && other ) noexcept { value = other.value; move_count = other.move_count; destroy_count = other.destroy_count; ++(*move_count); other.value = -1; return *this; }
-        ~move_counter() { if ( destroy_count ) ++(*destroy_count); }
-
-        move_counter & operator=( move_counter const & ) = default;
-    };
-
-    static_assert( !is_trivially_moveable<move_counter> );
 } // anon
+
+// A type with a non-trivial destructor that increments a counter.
+// Outside anonymous namespace so we can specialize trivially_destructible_after_move_assignment.
+struct move_counter
+{
+    int  value;
+    int* move_count;
+    int* destroy_count;
+
+    explicit move_counter( int v, int & mc, int & dc ) : value{ v }, move_count{ &mc }, destroy_count{ &dc } {}
+    move_counter( move_counter const & other ) : value{ other.value }, move_count{ other.move_count }, destroy_count{ other.destroy_count } {}
+    move_counter( move_counter && other ) noexcept : value{ other.value }, move_count{ other.move_count }, destroy_count{ other.destroy_count } { ++(*move_count); other.value = -1; }
+    move_counter & operator=( move_counter && other ) noexcept { value = other.value; move_count = other.move_count; destroy_count = other.destroy_count; ++(*move_count); other.value = -1; return *this; }
+    ~move_counter() { if ( destroy_count ) ++(*destroy_count); }
+
+    move_counter & operator=( move_counter const & ) = default;
+};
+static_assert( !is_trivially_moveable<move_counter> );
+// Destructor always increments counter (even when moved-from), so skip-destroy is unsafe.
+template <> constexpr bool trivially_destructible_after_move_assignment<move_counter>{ false };
 
 TEST( tr_vector_nontrivial, push_back_triggers_move_not_memcpy )
 {
@@ -1482,6 +1484,8 @@ struct lifecycle_tracked
 };
 static_assert( !std::is_trivially_destructible_v<lifecycle_tracked> );
 static_assert( !is_trivially_moveable<lifecycle_tracked>, "lifecycle_tracked must NOT be trivially moveable" );
+// Destructor always decrements counter (even when moved-from), so skip-destroy is unsafe.
+template <> constexpr bool trivially_destructible_after_move_assignment<lifecycle_tracked>{ false };
 
 // Sanity: verify lifecycle_tracked counting with raw new/delete.
 TEST( lifecycle_tracked_sanity, raw_new_delete )

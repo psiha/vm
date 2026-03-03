@@ -31,6 +31,7 @@ The vector system is built on a **`vector<Storage>`** class template parameteriz
 |---------|-------------|
 | `heap_storage<T>` | Heap-allocated array with pluggable allocator (default: `mimalloc` on Windows/macOS, `crt` on Linux). Supports `heap_options` for capacity caching, geometric growth, and alignment |
 | `fixed_storage<T, N>` | Inline (stack) array with compile-time capacity bound. Configurable overflow handler |
+| `sbo_hybrid<T, N>` | Small Buffer Optimization: inline stack buffer with automatic heap spill on overflow. Three compile-time union-based layout modes (see below). All layouts are trivially relocatable when T is |
 | `vm_storage<T>` | Persistent storage via memory-mapped files or shared memory, with configurable headers and allocation granularity |
 
 ### Vector types
@@ -41,7 +42,7 @@ The vector system is built on a **`vector<Storage>`** class template parameteriz
 | `tr_vector<T>` | `= vector<heap_storage<T>>` | Trivially relocatable heap vector — exploits trivial relocatability for move/realloc without element-wise copy |
 | `fc_vector<T, N>` | `= vector<fixed_storage<T, N>>` | Fixed-capacity inline vector (`inplace_vector`-like) |
 | `vm_vector<T>` | `= vector<vm_storage<T>>` | VM-backed persistent vector |
-| `small_vector<T, N>` | Standalone | Inline (stack) buffer with heap spill. Three layout modes: *compact* (MSB tag, trivially relocatable, `[[clang::trivial_abi]]`), *compact_lsb* (LSB tag, optimal LE addressing), *pointer_based* (LLVM/Boost style, type-erasable via `small_vector_base<T>`). Configurable `geometric_growth` factor, `sz_t`, and alignment |
+| `small_vector<T, N>` | `= vector<sbo_hybrid<T, N>>` | Inline (stack) buffer with heap spill. Three layout modes: *compact* (MSB tag), *compact_lsb* (LSB tag, optimal LE addressing), *embedded* (sz_ packed inside union, default). Layout auto-selected or explicitly configured via `sbo_options`. Configurable `geometric_growth` factor, `sz_t`, and alignment |
 
 ### Allocators
 
@@ -51,9 +52,17 @@ All heap-based storage uses allocators derived from the `allocator_base<Derived,
 |-----------|---------|:-:|-------|
 | `crt_allocator` | `malloc`/`realloc` | MSVC `_expand` | Default on Linux (glibc). MSVC `_expand` enables in-place growth & shrink |
 | `mimalloc_allocator` | [mimalloc](https://github.com/microsoft/mimalloc) | `mi_expand` | Default on Windows & macOS. Best overall throughput |
+| `mi_scoped_heap_allocator` | mimalloc scoped heap | `mi_expand` | Routes through a thread-local `mi_heap_scope` RAII guard for pooled allocation. All allocations freed atomically on scope exit, or transferred to default heap via `release()` |
 | `dlmalloc_allocator` | Boost.Container alloc_lib | `boost_cont_grow` | Good in-place growth, guaranteed in-place shrink |
 | `jemalloc_allocator` | [jemalloc](https://github.com/jemalloc/jemalloc) | `je_xallocx` | Optional |
 | `tcmalloc_allocator` | [tcmalloc](https://github.com/google/tcmalloc) | `tc_realloc` | Optional |
+
+### Type traits
+
+| Trait | Header | Description |
+|-------|--------|-------------|
+| `is_trivially_moveable<T>` | `is_trivially_moveable.hpp` | Detects types safe for bitwise relocation (`memcpy`/`realloc`/`mremap`). Uses compiler builtins (P1144/P2786) when available, falls back to heuristics. User-specializable |
+| `trivially_destructible_after_move_assignment<T>` | `trivially_destructible_after_move.hpp` | Can the moved-from husk's destructor be elided? Defaults to `is_nothrow_move_assignable_v<T> \|\| is_trivially_destructible_v<T>`. User-specializable for types that violate the heuristic (e.g., node-based containers with heap-allocated sentinel nodes) |
 
 ---
 
@@ -166,6 +175,7 @@ include/psi/vm/
 │   ├── allocator_base.hpp  N2045 V2 CRTP base (allocation_command, allocate_at_least, resize)
 │   ├── crt.hpp             CRT malloc/realloc allocator
 │   ├── mimalloc.hpp        Microsoft mimalloc allocator
+│   ├── mi_scoped_heap.hpp  Scoped-heap allocator (pooled allocation with bulk free)
 │   ├── dlmalloc.hpp        Boost.Container dlmalloc allocator
 │   ├── jemalloc.hpp        jemalloc allocator
 │   └── tcmalloc.hpp        Google tcmalloc allocator
@@ -173,13 +183,16 @@ include/psi/vm/
 │   ├── storage/            Storage backends for vector<Storage>
 │   │   ├── heap.hpp        heap_storage (heap-allocated, pluggable allocator)
 │   │   ├── fixed.hpp       fixed_storage (inline, compile-time capacity)
-│   │   └── sbo_hybrid.hpp  small_storage (inline buffer + heap spill, used by small_vector)
-│   ├── vector.hpp          vector<Storage> template + vector_impl CRTP mixin
+│   │   └── sbo_hybrid.hpp  sbo_hybrid (inline buffer + heap spill, 3 layout modes)
+│   ├── vector.hpp          vector<Storage> unified template
 │   ├── tr_vector.hpp       tr_vector<T> type alias (= vector<heap_storage<T>>)
 │   ├── fc_vector.hpp       fc_vector<T,N> type alias (= vector<fixed_storage<T,N>>)
 │   ├── vm_vector.hpp       vm_vector<T> (memory-mapped storage)
-│   ├── small_vector.hpp    small_vector<T,N> (inline buffer + heap spill)
-│   ├── b_plus_tree.hpp     B+ tree
+│   ├── small_vector.hpp    small_vector<T,N> type alias (= vector<sbo_hybrid<T,N>>)
+│   ├── is_trivially_moveable.hpp       Trivial relocatability trait + stdlib specializations
+│   ├── trivially_destructible_after_move.hpp  Moved-from destructor elision trait + stdlib specializations
+│   ├── growth_policy.hpp   geometric_growth configurable growth factor
+│   ├── b+tree.hpp          B+ tree
 │   └── flat_*.hpp          Flat associative containers (set, map, multi*)
 ├── mapped_view/            RAII memory-mapped view wrappers
 ├── mapping/                File & memory mapping primitives
@@ -194,6 +207,9 @@ include/psi/vm/
 src/                        Platform-specific implementations (win32/posix)
 test/                       Google Test suite
 doc/                        Technical documentation & analyses
+psi_vm.natvis               Visual Studio debugger visualizers
+psi_vm_lldb.py              LLDB Python pretty-printers
+psi_vm_gdb.py               GDB Python pretty-printers
 ```
 
 ---
@@ -218,8 +234,13 @@ Fetched automatically at configure time via CPM.cmake:
 
 ## Debugger support
 
-- **Visual Studio**: [Natvis](https://learn.microsoft.com/en-us/visualstudio/debugger/create-custom-views-of-native-objects) visualizers for all container types (`psi_vm.natvis`, auto-loaded by CMake)
-- **LLDB**: Python pretty-printer script (`psi_vm_lldb.py`)
+| Debugger | File | Integration |
+|----------|------|-------------|
+| **Visual Studio** | [`psi_vm.natvis`](psi_vm.natvis) | Auto-loaded via CMake `target_sources`. Covers all vector types (heap, fixed, sbo_hybrid), flat containers, B+ tree, and `pass_in_reg` |
+| **LLDB** | [`psi_vm_lldb.py`](psi_vm_lldb.py) | `command script import /path/to/psi_vm_lldb.py` (add to `~/.lldbinit` or VSCode CodeLLDB `initCommands`) |
+| **GDB** | [`psi_vm_gdb.py`](psi_vm_gdb.py) | `source /path/to/psi_vm_gdb.py` (add to `~/.gdbinit` or VSCode cppdbg `setupCommands`) |
+
+All three debugger integrations support the same container types with layout-aware visualization for `small_vector`'s three union-based layouts (embedded, compact_lsb, compact).
 
 ---
 

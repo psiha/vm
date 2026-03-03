@@ -689,24 +689,23 @@ TEST( small_vector_embedded, sizeof_no_worse_than_compact_lsb )
 // Non-trivially-moveable type tests -- exercises the new generalized paths.
 ////////////////////////////////////////////////////////////////////////////////
 
-namespace
+static std::atomic<int> nontrivial_live_count{ 0 };
+
+struct nontrivial
 {
-    static std::atomic<int> nontrivial_live_count{ 0 };
+    int value;
+    explicit nontrivial( int v = 0 ) noexcept : value{ v } { nontrivial_live_count.fetch_add( 1, std::memory_order_relaxed ); }
+    nontrivial( nontrivial const & o ) noexcept : value{ o.value } { nontrivial_live_count.fetch_add( 1, std::memory_order_relaxed ); }
+    nontrivial( nontrivial && o ) noexcept : value{ o.value } { o.value = -1; nontrivial_live_count.fetch_add( 1, std::memory_order_relaxed ); }
+    ~nontrivial() noexcept { nontrivial_live_count.fetch_sub( 1, std::memory_order_relaxed ); }
+    nontrivial & operator=( nontrivial const & o ) noexcept { value = o.value; return *this; }
+    nontrivial & operator=( nontrivial && o ) noexcept { value = o.value; o.value = -1; return *this; }
+};
+// Destructor always decrements counter (even when moved-from), so skip-destroy is unsafe.
+template <> constexpr bool trivially_destructible_after_move_assignment<nontrivial>{ false };
 
-    struct nontrivial
-    {
-        int value;
-        explicit nontrivial( int v = 0 ) noexcept : value{ v } { nontrivial_live_count.fetch_add( 1, std::memory_order_relaxed ); }
-        nontrivial( nontrivial const & o ) noexcept : value{ o.value } { nontrivial_live_count.fetch_add( 1, std::memory_order_relaxed ); }
-        nontrivial( nontrivial && o ) noexcept : value{ o.value } { o.value = -1; nontrivial_live_count.fetch_add( 1, std::memory_order_relaxed ); }
-        ~nontrivial() noexcept { nontrivial_live_count.fetch_sub( 1, std::memory_order_relaxed ); }
-        nontrivial & operator=( nontrivial const & o ) noexcept { value = o.value; return *this; }
-        nontrivial & operator=( nontrivial && o ) noexcept { value = o.value; o.value = -1; return *this; }
-    };
-
-    static_assert( !is_trivially_moveable<nontrivial> );
-    static_assert( !is_trivially_moveable<small_vector<nontrivial, 4>> );
-} // anonymous namespace
+static_assert( !is_trivially_moveable<nontrivial> );
+static_assert( !is_trivially_moveable<small_vector<nontrivial, 4>> );
 
 // Use embedded layout (default for small sz_t) as the canonical non-trivial test
 template <std::uint32_t N>
