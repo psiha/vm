@@ -20,6 +20,7 @@
 #include <psi/vm/mapped_view/mapped_view.hpp>
 
 #include <cstring> // memcpy, memcmp
+
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -39,7 +40,11 @@ map
 ) noexcept;
 
 BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
+#ifdef _WIN32
+void unmap( mapped_span view, std::size_t trailing_placeholder_size ) noexcept;
+#else
 void unmap( mapped_span view );
+#endif
 
 void unmap_partial( mapped_span range ) noexcept;
 //------------------------------------------------------------------------------
@@ -69,7 +74,11 @@ basic_mapped_view<read_only>::map
 template <bool read_only>
 void basic_mapped_view<read_only>::do_unmap() noexcept
 {
+#ifdef _WIN32
+    vm::unmap( reinterpret_cast<mapped_span const &>( static_cast<span const &>( *this ) ), 0 );
+#else
     vm::unmap( reinterpret_cast<mapped_span const &>( static_cast<span const &>( *this ) ) );
+#endif
 }
 
 
@@ -89,6 +98,104 @@ namespace
             });
         }
     }
+
+#ifdef _WIN32
+    template <typename View>
+    BOOST_NOINLINE
+    fallible_result<void>
+    expand_windows_adjacent_or_remap
+    (
+        View        &       view,
+        std::size_t   const target_size,
+        mapping     &       original_mapping,
+        std::size_t * const trailing_placeholder_size
+    ) noexcept
+    {
+        using span = typename View::span;
+
+        auto const current_address    { const_cast<std::byte *>( view.data() ) };
+        auto const current_size       {                          view.size()   };
+        auto const kernel_current_size{ align_up( current_size, reserve_granularity ) };
+
+        if ( kernel_current_size >= target_size ) [[ likely ]]
+        {
+            static_cast<span &>( view ) = { current_address, target_size };
+            return err::success;
+        }
+
+        auto const additional_tail_size{ target_size - kernel_current_size };
+        auto const tail_target_address { current_address + kernel_current_size };
+
+        // Step 1b: try to extend in-place by mapping additional pages adjacent.
+        auto const new_address
+        {
+            windows_mmap
+            (
+                original_mapping,
+                tail_target_address,
+                additional_tail_size,
+                kernel_current_size,
+                original_mapping.view_mapping_flags,
+                original_mapping.is_file_based() ? mapping_object_type::file : mapping_object_type::memory
+            ).data()
+        };
+
+        if ( new_address ) [[ likely ]]
+        {
+            if ( current_address != nullptr ) [[ likely ]]
+            {
+                BOOST_ASSUME( new_address == current_address + kernel_current_size );
+                static_cast<span &>( view ) = { current_address, target_size };
+            }
+            else
+            {
+                static_cast<span &>( view ) = { static_cast<std::byte *>( new_address ), target_size };
+            }
+            return err::success;
+        }
+
+        // Step 2a: overreserve section map and track trailing placeholder (extendable view only).
+        if ( trailing_placeholder_size )
+        {
+            if ( auto * const base{ detail::overreserve_section_map(
+                original_mapping.get(),
+                target_size,
+                0,
+                original_mapping.view_mapping_flags.page_protection
+            ) } )
+            {
+                if ( current_address )
+                {
+                    if ( original_mapping.view_mapping_flags.is_cow() )
+                        std::memcpy( base, current_address, current_size );
+                    else
+                        BOOST_ASSERT_MSG( std::memcmp( base, current_address, current_size ) == 0, "View expansion garbled data." );
+                    vm::unmap( { current_address, current_size }, *trailing_placeholder_size );
+                }
+                static_cast<span &>( view ) = { base, target_size };
+                *trailing_placeholder_size  = align_up( target_size, reserve_granularity );
+                return err::success;
+            }
+        }
+
+        // Step 2b: plain remap fallback.
+        auto remapped_span{ view.map( original_mapping, 0, target_size )() };
+        if ( !remapped_span )
+            return remapped_span.error();
+
+        if ( original_mapping.view_mapping_flags.is_cow() )
+        {
+            std::memcpy( const_cast<std::byte *>( remapped_span->data() ), view.data(), view.size() );
+        }
+        else
+        {
+            BOOST_ASSERT_MSG( std::memcmp( remapped_span->data(), view.data(), view.size() ) == 0, "View expansion garbled data." );
+        }
+
+        view = std::move( *remapped_span );
+        return err::success;
+    }
+#endif
 } // anonymous namespace
 
 template <bool read_only>
@@ -161,46 +268,12 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
 
 #else // Windows + macOS: try adjacent mapping, then fallback
 
+#   ifdef _WIN32
+    return expand_windows_adjacent_or_remap( *this, target_size, original_mapping, nullptr );
+#   else // macOS
     auto const additional_tail_size{ target_size - kernel_current_size };
     auto const tail_target_address { current_address + kernel_current_size };
 
-    // Step 1a: try placeholder-based section expansion (fast path when a
-    // trailing placeholder exists from a previous overreserve operation).
-#   ifdef _WIN32
-    if ( current_address )
-    {
-        auto const aligned_additional{ align_up( additional_tail_size, reserve_granularity ) };
-        if
-        (
-            detail::try_placeholder_section_expand
-            (
-                original_mapping.get(),
-                current_address,
-                kernel_current_size,
-                aligned_additional,
-                original_mapping.view_mapping_flags.page_protection
-            )
-        )
-        {
-            static_cast<span &>( *this ) = { current_address, target_size };
-            return err::success;
-        }
-    }
-
-    // Step 1b: try to extend in-place by mapping additional pages adjacent.
-    auto const new_address
-    {
-        windows_mmap
-        (
-            original_mapping,
-            tail_target_address,
-            additional_tail_size,
-            kernel_current_size, // offset into section
-            original_mapping.view_mapping_flags,
-            original_mapping.is_file_based() ? mapping_object_type::file : mapping_object_type::memory
-        ).data()
-    };
-#   else // macOS
     auto new_address
     {
         posix::mmap
@@ -218,66 +291,12 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
         BOOST_VERIFY( ::munmap( new_address, additional_tail_size ) == 0 );
         new_address = nullptr;
     }
-#   endif
-
-    if ( new_address ) [[ likely ]]
-    {
-        if ( current_address != nullptr ) [[ likely ]]
-        {
-            BOOST_ASSUME( new_address == current_address + kernel_current_size );
-            static_cast<span &>( *this ) = { current_address, target_size };
-        }
-        else
-        {
-            static_cast<span &>( *this ) = { static_cast<std::byte *>( new_address ), target_size };
-        }
-        return err::success;
-    }
-
-    // Step 2: fallback — create a new full-size mapping and transfer data.
-
-#   ifdef _WIN32
-    // Step 2a: overreserve — new section view with 2x trailing placeholder.
-    // unmap_concatenated() frees trailing placeholders, so the lifecycle is clean.
-    if ( auto * const base{ detail::overreserve_section_map(
-        original_mapping.get(),
-        target_size,
-        0, // section_offset (full remap from beginning)
-        original_mapping.view_mapping_flags.page_protection
-    ) } )
-    {
-        if ( current_address )
-        {
-            if ( original_mapping.view_mapping_flags.is_cow() )
-                std::memcpy( base, current_address, current_size );
-            else
-                BOOST_ASSERT_MSG( std::memcmp( base, current_address, current_size ) == 0, "overreserve garbled data" );
-        }
-        this->unmap();
-        static_cast<span &>( *this ) = { base, target_size };
-        return err::success;
-    }
-#   endif
 
     // Step 2b: plain fallback — no over-reservation.
     auto remapped_span{ this->map( original_mapping, 0, target_size )() };
     if ( !remapped_span )
         return remapped_span.error();
 
-#   ifdef _WIN32
-    if ( original_mapping.view_mapping_flags.is_cow() )
-    {
-        // COW (PAGE_WRITECOPY) view: the new view sees original section data,
-        // not our private (COW-modified) pages.  Must copy from old view.
-        // TODO: use dirty_tracker to copy only modified pages.
-        std::memcpy( const_cast<std::byte *>( remapped_span->data() ), this->data(), this->size() );
-    }
-    else
-    {
-        // Non-COW: new view maps the same section data.
-        BOOST_ASSERT_MSG( std::memcmp( remapped_span->data(), this->data(), this->size() ) == 0, "View expansion garbled data." );
-    }
-#   else // macOS
     if ( !original_mapping.is_file_based() )
     {
         // mach_vm_remap: zero-copy page transfer from old to new mapping.
@@ -302,14 +321,73 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
     {
         BOOST_ASSERT_MSG( std::memcmp( remapped_span->data(), this->data(), this->size() ) == 0, "View expansion garbled data." );
     }
-#   endif
+
     *this = std::move( *remapped_span );
     return err::success;
+#   endif
 #endif // platform
 }
 
 template class basic_mapped_view<false>;
 template class basic_mapped_view<true >;
+
+#ifdef _WIN32
+template <bool read_only>
+void extendable_basic_mapped_view<read_only>::do_unmap() noexcept
+{
+    vm::unmap( reinterpret_cast<mapped_span const &>( static_cast<span const &>( *this ) ), trailing_placeholder_size_ );
+    trailing_placeholder_size_ = 0;
+}
+
+template <bool read_only> BOOST_NOINLINE
+fallible_result<void>
+extendable_basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & original_mapping ) noexcept
+{
+    auto const current_address    { const_cast<std::byte *>( this->data() ) };
+    auto const current_size       {                          this->size()   };
+    auto const kernel_current_size{ align_up( current_size, reserve_granularity ) };
+
+    if ( kernel_current_size >= target_size ) [[ likely ]]
+    {
+        static_cast<span &>( *this ) = { current_address, target_size };
+        return err::success;
+    }
+
+    auto const additional_tail_size{ target_size - kernel_current_size };
+
+    // Step 1a: placeholder-based section expansion.
+    if ( current_address )
+    {
+        auto const aligned_additional{ align_up( additional_tail_size, reserve_granularity ) };
+        std::size_t remaining_placeholder_size{ trailing_placeholder_size_ };
+        if
+        (
+            trailing_placeholder_size_ &&
+            detail::try_placeholder_section_expand
+            (
+                original_mapping.get(),
+                current_address,
+                kernel_current_size,
+                aligned_additional,
+                trailing_placeholder_size_,
+                original_mapping.view_mapping_flags.page_protection,
+                &remaining_placeholder_size
+            )
+        )
+        {
+            trailing_placeholder_size_ = remaining_placeholder_size;
+            static_cast<span &>( *this ) = { current_address, target_size };
+            return err::success;
+        }
+    }
+
+    return expand_windows_adjacent_or_remap( *this, target_size, original_mapping, &trailing_placeholder_size_ );
+}
+
+template class extendable_basic_mapped_view<false>;
+template class extendable_basic_mapped_view<true >;
+
+#endif // _WIN32
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm

@@ -68,28 +68,36 @@ inline bool is_standalone_placeholder( void const * const address ) noexcept
     return ( mbi.State == MEM_RESERVE ) && ( mbi.AllocationBase == address );
 }
 
-/// Free an entire placeholder at the given address (size=0 → release whole allocation).
-inline void free_placeholder( void * const address ) noexcept
+[[ nodiscard ]]
+inline bool free_vm( void * const address, std::size_t const size, std::uint32_t const flags = 0 ) noexcept
 {
     PVOID  addr{ address };
-    SIZE_T sz  { 0 };
-    BOOST_VERIFY( nt::NtFreeVirtualMemory( nt::current_process, &addr, &sz, MEM_RELEASE ) == nt::STATUS_SUCCESS );
+    SIZE_T sz  { size };
+    return nt::NtFreeVirtualMemory
+    (
+        nt::current_process,
+        &addr,
+        &sz,
+        MEM_RELEASE | flags
+    ) == nt::STATUS_SUCCESS;
 }
+
+/// Free an entire placeholder at the given address (size=0 → release whole allocation).
+inline void free_placeholder( void * const address ) noexcept { BOOST_VERIFY( free_vm( address, 0 ) ); }
 
 /// Split a placeholder at [address, address+split_size) | [address+split_size, ...).
 /// Returns true on success.
 [[ nodiscard ]]
 inline bool split_placeholder( void * const address, std::size_t const split_size ) noexcept
 {
-    PVOID  addr{ address };
-    SIZE_T sz  { split_size };
-    return nt::NtFreeVirtualMemory
-    (
-        nt::current_process,
-        &addr,
-        &sz,
-        MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER
-    ) == nt::STATUS_SUCCESS;
+    return free_vm( address, split_size, MEM_PRESERVE_PLACEHOLDER );
+}
+
+/// Coalesce adjacent placeholders spanning [address, address+size).
+[[ nodiscard ]]
+inline bool coalesce_placeholders( void * const address, std::size_t const size ) noexcept
+{
+    return free_vm( address, size, MEM_COALESCE_PLACEHOLDERS );
 }
 
 /// Reserve a placeholder region of the given size.
@@ -172,39 +180,53 @@ inline bool try_placeholder_expand(
     if ( placeholder_size < additional_size )
         return false;
 
+    auto const was_split{ placeholder_size > additional_size };
+
     // Split the placeholder if larger than needed.
-    if ( placeholder_size > additional_size && !split_placeholder( adj, additional_size ) )
+    if ( was_split && !split_placeholder( adj, additional_size ) )
         return false;
 
     // Replace the (now exactly-sized) placeholder with committed memory.
-    return commit_placeholder( adj, additional_size, alloc_type );
+    if ( commit_placeholder( adj, additional_size, alloc_type ) )
+        return true;
+
+    // Roll back the split so tracked placeholder capacity remains consistent.
+    if ( was_split )
+        BOOST_VERIFY( coalesce_placeholders( adj, placeholder_size ) );
+    return false;
 }
 
 
 /// Try to expand a section view in-place by mapping additional section data
-/// into a trailing placeholder.  Uses NtMapViewOfSectionEx(MEM_REPLACE_PLACEHOLDER).
+/// into an explicitly tracked trailing placeholder. Uses
+/// NtMapViewOfSectionEx(MEM_REPLACE_PLACEHOLDER).
 /// Returns true on success (the section view now covers [address, address+target_size)).
+/// The tracked placeholder size is decremented by additional_size; remaining
+/// bytes are returned via remaining_placeholder_size.
 [[ nodiscard, gnu::cold ]]
 inline bool try_placeholder_section_expand(
     HANDLE        const section_handle,
     std::byte   * const address,
     std::size_t   const current_size,
     std::size_t   const additional_size,
-    ULONG         const page_protection
+    std::size_t   const trailing_placeholder_size,
+    ULONG         const page_protection,
+    std::size_t * const remaining_placeholder_size = nullptr
 ) noexcept
 {
-    auto * const adj{ address + current_size };
-    auto const placeholder_size{ query_placeholder( adj ) };
-    if ( placeholder_size < additional_size )
+    if ( trailing_placeholder_size < additional_size )
         return false;
 
+    auto * const adj{ address + current_size };
+    auto const was_split{ trailing_placeholder_size > additional_size };
+
     // Split the placeholder if larger than needed.
-    if ( placeholder_size > additional_size && !split_placeholder( adj, additional_size ) )
+    if ( was_split && !split_placeholder( adj, additional_size ) )
         return false;
 
     // Map the section view into the placeholder via NtMapViewOfSectionEx.
     PVOID         view_base{ adj };
-    LARGE_INTEGER offset { .QuadPart = static_cast<LONGLONG>( current_size ) };
+    LARGE_INTEGER offset   { .QuadPart = static_cast<LONGLONG>( current_size ) };
     SIZE_T        view_size{ additional_size };
 
     if
@@ -221,10 +243,33 @@ inline bool try_placeholder_section_expand(
             nullptr, 0
         ) != nt::STATUS_SUCCESS
     )
+    {
+        if ( was_split )
+            BOOST_VERIFY( coalesce_placeholders( adj, trailing_placeholder_size ) );
         return false;
+    }
 
     // NtMapViewOfSectionEx has no CommitSize — commit SEC_RESERVE pages explicitly.
-    return commit_view_pages( adj, additional_size, page_protection );
+    if ( !commit_view_pages( adj, additional_size, page_protection ) )
+    {
+        BOOST_VERIFY
+        (
+            nt::NtUnmapViewOfSectionEx
+            (
+                nt::current_process,
+                adj,
+                MEM_PRESERVE_PLACEHOLDER
+            ) == nt::STATUS_SUCCESS
+        );
+        if ( was_split )
+            BOOST_VERIFY( coalesce_placeholders( adj, trailing_placeholder_size ) );
+        return false;
+    }
+
+    if ( remaining_placeholder_size )
+        *remaining_placeholder_size = trailing_placeholder_size - additional_size;
+
+    return true;
 }
 
 
@@ -286,8 +331,17 @@ inline std::byte * overreserve_section_map(
     // NtMapViewOfSectionEx has no CommitSize — commit SEC_RESERVE pages explicitly.
     if ( !commit_view_pages( base, aligned_size, page_protection ) )
     {
-        nt::NtUnmapViewOfSectionEx( nt::current_process, base, 0 );
-        free_placeholder( base + aligned_size );
+        BOOST_VERIFY
+        (
+            nt::NtUnmapViewOfSectionEx
+            (
+                nt::current_process,
+                base,
+                MEM_PRESERVE_PLACEHOLDER
+            ) == nt::STATUS_SUCCESS
+        );
+        BOOST_VERIFY( coalesce_placeholders( base, headroom_size ) );
+        free_placeholder( base );
         return nullptr;
     }
 

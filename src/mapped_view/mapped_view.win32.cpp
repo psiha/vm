@@ -146,7 +146,7 @@ std::size_t mem_region_size( void * const address ) noexcept;
 namespace
 {
     BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_NOINLINE
-    void unmap_concatenated( void * address, std::size_t size ) noexcept
+    void unmap_concatenated( void * address, std::size_t size, std::size_t const trailing_placeholder_size ) noexcept
     {
         // emulate support for adjacent/concatenated regions (as supported by mmap)
         // (duplicated logic from free() in allocation.win32.cpp)
@@ -163,17 +163,25 @@ namespace
             sub( size   , region_size );
         }
 
-        // Free trailing placeholder from overreserve_section_map (if present).
-        if ( detail::is_standalone_placeholder( tail ) )
+        // Trailing placeholder cleanup for overreserve_section_map.
+        // Placeholder ownership is tracked explicitly by mapped_view, so no
+        // heuristic VM inspection is needed (or allowed) here.
+        if ( trailing_placeholder_size )
+        {
+#ifndef NDEBUG
+            auto const trailing_region_size{ detail::query_placeholder( tail ) };
+            BOOST_ASSERT( trailing_region_size >= trailing_placeholder_size );
+#endif
             detail::free_placeholder( tail );
+        }
     }
 } // anonymous namespace
 
 BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
-void unmap( mapped_span const view ) noexcept
+void unmap( mapped_span const view, std::size_t const trailing_placeholder_size ) noexcept
 {
     if ( !view.empty() )
-        unmap_concatenated( view.data(), view.size() );
+        unmap_concatenated( view.data(), view.size(), trailing_placeholder_size );
 }
 
 void unmap_partial( mapped_span const range ) noexcept
