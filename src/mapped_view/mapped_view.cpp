@@ -235,16 +235,29 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
     }
 
     // Step 2: fallback — create a new full-size mapping and transfer data.
-    // Note: Step 2a (overreserve_section_map) is currently disabled.
-    // The 2x over-reservation creates trailing placeholders that are not cleaned
-    // up on subsequent view relocations (do_unmap only unmaps the section view,
-    // not the trailing placeholder — leaking virtual address space). Additionally,
-    // the alignment mismatch between view size tracking (4KB commit granularity)
-    // and placeholder split points (64KB reserve granularity) causes
-    // try_placeholder_section_expand to fail on the next expansion, falling
-    // through to another overreserve_section_map — compounding the leak.
-    // TODO: fix placeholder lifecycle management (free trailing placeholder in
-    // do_unmap or track it explicitly) before re-enabling.
+
+#   ifdef _WIN32
+    // Step 2a: overreserve — new section view with 2x trailing placeholder.
+    // unmap_concatenated() frees trailing placeholders, so the lifecycle is clean.
+    if ( auto * const base{ detail::overreserve_section_map(
+        original_mapping.get(),
+        target_size,
+        0, // section_offset (full remap from beginning)
+        original_mapping.view_mapping_flags.page_protection
+    ) } )
+    {
+        if ( current_address )
+        {
+            if ( original_mapping.view_mapping_flags.is_cow() )
+                std::memcpy( base, current_address, current_size );
+            else
+                BOOST_ASSERT_MSG( std::memcmp( base, current_address, current_size ) == 0, "overreserve garbled data" );
+        }
+        this->unmap();
+        static_cast<span &>( *this ) = { base, target_size };
+        return err::success;
+    }
+#   endif
 
     // Step 2b: plain fallback — no over-reservation.
     auto remapped_span{ this->map( original_mapping, 0, target_size )() };

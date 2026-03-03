@@ -16,6 +16,7 @@
 //------------------------------------------------------------------------------
 #include "mapped_view.win32.hpp"
 #include "../allocation/allocation.impl.hpp"
+#include "../allocation/expand_win32.hpp"
 
 #include <psi/vm/align.hpp>
 #include <psi/vm/mapped_view/mapped_view.hpp>
@@ -149,16 +150,22 @@ namespace
     {
         // emulate support for adjacent/concatenated regions (as supported by mmap)
         // (duplicated logic from free() in allocation.win32.cpp)
+        void * tail{ nullptr };
         for ( ;; )
         {
             auto const region_size{ mem_region_size( address ) };
             BOOST_ASSUME( region_size <= align_up( size, reserve_granularity ) );
+            tail = static_cast<std::byte *>( address ) + region_size;
             BOOST_VERIFY( ::UnmapViewOfFile( address ) );
             if ( region_size >= size )
                 break;
             add( address, region_size );
             sub( size   , region_size );
         }
+
+        // Free trailing placeholder from overreserve_section_map (if present).
+        if ( detail::is_standalone_placeholder( tail ) )
+            detail::free_placeholder( tail );
     }
 } // anonymous namespace
 
