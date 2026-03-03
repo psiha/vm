@@ -82,7 +82,7 @@ mem_mapping::mem_mapping( mem_mapping const & source )
         if ( !source.mapping_.is_file_based() ) // source is ephemeral (memfd)
             mapping_.set_ephemeral();
 #   endif
-        view_ = mapped_view::map( mapping_, cow_view_flags, 0, total_mapped );
+        view_ = extendable_mapped_view::map( mapping_, cow_view_flags, 0, total_mapped );
         return;
     }
 
@@ -98,7 +98,7 @@ mem_mapping::mem_mapping( mem_mapping const & source )
             .flags      = MAP_PRIVATE | MAP_ANONYMOUS
         };
         mapping_ = { posix::handle{}, cow_view_flags, total_mapped };
-        view_    = mapped_view::map( mapping_, cow_view_flags, 0, total_mapped );
+        view_    = extendable_mapped_view::map( mapping_, cow_view_flags, 0, total_mapped );
 
         auto target_addr{ reinterpret_cast<mach_vm_address_t>( view_.data() ) };
         auto const kr
@@ -148,7 +148,7 @@ mem_mapping::mem_mapping( mem_mapping const & source )
             };
             mapping_ = { posix::handle{ mfd }, cow_view_flags, total_mapped };
             mapping_.set_ephemeral(); // memfd: fd-backed but not on-disk
-            view_ = mapped_view::map( mapping_, cow_view_flags, 0, total_mapped );
+            view_ = extendable_mapped_view::map( mapping_, cow_view_flags, 0, total_mapped );
             return;
         }
         // memfd_create failed (fd limit or kernel too old) — fall through to memcpy
@@ -162,7 +162,7 @@ mem_mapping::mem_mapping( mem_mapping const & source )
         .flags      = MAP_PRIVATE | MAP_ANONYMOUS
     };
     mapping_ = { posix::handle{}, cow_view_flags, total_mapped };
-    view_    = mapped_view::map( mapping_, cow_view_flags, 0, total_mapped );
+    view_    = extendable_mapped_view::map( mapping_, cow_view_flags, 0, total_mapped );
     std::memcpy( view_.data(), source.view_.data(), total_mapped );
 }
 

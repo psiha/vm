@@ -47,7 +47,7 @@ mem_mapping::mem_mapping( mem_mapping const & source )
     flags::viewing const cow_view_flags{ PAGE_WRITECOPY };
     mapping_ = { dup_section, cow_view_flags, source.mapping_.ap, std::move( cow_file ) };
 
-    view_ = mapped_view::map( mapping_, cow_view_flags, 0, total_mapped ); // fallible_result throws on error
+    view_ = extendable_mapped_view::map( mapping_, cow_view_flags, 0, total_mapped ); // fallible_result throws on error
 }
 
 //------------------------------------------------------------------------------

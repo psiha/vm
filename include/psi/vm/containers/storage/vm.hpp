@@ -370,8 +370,8 @@ private:
     size_type client_to_storage_size( size_type sz ) const noexcept;
 
 private:
-    mapped_view view_;
-    mapping     mapping_;
+    extendable_mapped_view view_;
+    mapping                mapping_;
 }; // mem_mapping
 
 
@@ -412,9 +412,9 @@ private:
 
     PSI_WARNING_DISABLE_PUSH()
     PSI_WARNING_GCC_OR_CLANG_DISABLE( -Wsign-conversion )
-    static T *  to_t_ptr  ( mapped_view::value_type * const ptr     ) noexcept {                                             return reinterpret_cast<T *>( ptr ); }
-    static sz_t to_t_sz   ( auto                      const byte_sz ) noexcept { BOOST_ASSUME( byte_sz % sizeof( T ) == 0 ); return static_cast<sz_t>( byte_sz / sizeof( T ) ); }
-    static sz_t to_byte_sz( auto                      const sz      ) noexcept
+    static T *  to_t_ptr  ( extendable_mapped_view::value_type * const ptr     ) noexcept {                                             return reinterpret_cast<T *>( ptr ); }
+    static sz_t to_t_sz   ( auto                                 const byte_sz ) noexcept { BOOST_ASSUME( byte_sz % sizeof( T ) == 0 ); return static_cast<sz_t>( byte_sz / sizeof( T ) ); }
+    static sz_t to_byte_sz( auto                                 const sz      ) noexcept
     {
         auto const rez{ sz * sizeof( T ) };
         BOOST_ASSERT( rez <= std::numeric_limits<sz_t>::max() );

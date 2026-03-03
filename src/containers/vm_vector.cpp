@@ -99,7 +99,7 @@ void * mem_mapping::shrink_to_slow( std::size_t const target_size ) noexcept( ma
             view_.unmap();
         set_size( mapping_, storage_size )().assume_succeeded();
         if ( do_unmap )
-            view_ = mapped_view::map( mapping_, 0, storage_size );
+            view_ = extendable_mapped_view::map( mapping_, 0, storage_size );
     }
     return data();
 }
@@ -113,7 +113,7 @@ void mem_mapping::shrink_mapped_size_to( std::size_t const target_size ) noexcep
     else
     {
         view_.unmap();
-        view_ = mapped_view::map( mapping_, 0, target_size );
+        view_ = extendable_mapped_view::map( mapping_, 0, target_size );
     }
 }
 
@@ -341,7 +341,7 @@ mem_mapping::map( file_handle file, std::size_t const mapping_size ) noexcept
 
     if ( mapping_size ) [[ likely ]]
     {
-        auto view{ mapped_view::map( mapping_, 0, mapping_size ).as_result_or_error() };
+        auto view{ extendable_mapped_view::map( mapping_, 0, mapping_size ).as_result_or_error() };
         if ( !view )
             return view.error();
         view_ = *std::move( view );
