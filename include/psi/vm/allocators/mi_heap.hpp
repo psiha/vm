@@ -49,8 +49,8 @@ template <typename T, typename sz_t = std::size_t>
 struct mi_heap_allocator
     : allocator_base<T, sz_t>
 {
-    using base = allocator_base<T, sz_t>;
-    using version = base::template version_type<mi_heap_allocator>;
+    using base          = allocator_base<T, sz_t>;
+    using version       = base::template version_type<mi_heap_allocator>;
     using value_type    = T;
     using pointer       = T *;
     using const_pointer = T const *;

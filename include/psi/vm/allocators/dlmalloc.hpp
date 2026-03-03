@@ -45,6 +45,7 @@ extern "C"
     std::size_t boost_cont_size    ( void const * p ) noexcept;
     int         boost_cont_grow    ( void * oldmem, std::size_t minbytes, std::size_t maxbytes, std::size_t * received ) noexcept;
     int         boost_cont_shrink  ( void * oldmem, std::size_t minbytes, std::size_t maxbytes, std::size_t * received, int do_commit ) noexcept;
+    int         boost_cont_malloc_trim( std::size_t pad ) noexcept;
 } // extern "C"
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -127,6 +128,12 @@ struct dlmalloc_allocator
     static size_type size( const_pointer const ptr ) noexcept
     {
         return static_cast<size_type>( ::boost_cont_size( ptr ) / sizeof( T ) );
+    }
+
+    /// Release unused memory back to the OS.
+    static void trim() noexcept
+    {
+        ::boost_cont_malloc_trim( 0 );
     }
 
     // --- allocator traits ---

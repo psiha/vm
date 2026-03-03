@@ -40,7 +40,7 @@
 //------------------------------------------------------------------------------
 #pragma once
 
-#include <psi/vm/allocators/mimalloc.hpp> // detail::p_scoped_heap
+#include <psi/vm/allocators/allocator_base.hpp>
 
 #include <boost/assert.hpp>
 
@@ -52,6 +52,12 @@
 namespace psi::vm
 {
 //------------------------------------------------------------------------------
+
+namespace detail
+{
+    // Thread-local active scoped heap. nullptr = no scope active (use default).
+    inline thread_local mi_heap_t * p_scoped_heap{ nullptr };
+} // namespace detail
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -204,6 +210,17 @@ struct mi_scoped_heap_allocator
     static size_type size( const_pointer const ptr ) noexcept
     {
         return static_cast<size_type>( ::mi_usable_size( ptr ) / sizeof( T ) );
+    }
+
+    /// Release unused memory back to the OS. Collects the scoped heap if
+    /// one is active, otherwise performs a global mimalloc collection.
+    static void trim() noexcept
+    {
+        auto * const heap{ detail::p_scoped_heap };
+        if ( heap )
+            ::mi_heap_collect( heap, true );
+        else
+            ::mi_collect( true );
     }
 
     // --- allocator traits ---

@@ -37,6 +37,7 @@ extern "C"
     void *      tc_realloc    ( void * ptr, std::size_t size ) noexcept;
     void        tc_free       ( void * ptr ) noexcept;
     std::size_t tc_malloc_size( const void * ptr ) noexcept;
+    void        MallocExtension_ReleaseFreeMemory() noexcept;
 }
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -105,6 +106,12 @@ struct tcmalloc_allocator
     static size_type size( const_pointer const ptr ) noexcept
     {
         return static_cast<size_type>( ::tc_malloc_size( ptr ) / sizeof( T ) );
+    }
+
+    /// Release free memory back to the OS.
+    static void trim() noexcept
+    {
+        ::MallocExtension_ReleaseFreeMemory();
     }
 
     // --- allocator traits ---

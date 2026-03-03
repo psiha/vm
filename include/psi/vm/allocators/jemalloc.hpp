@@ -30,6 +30,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio> // snprintf (for mallctl arena command)
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -95,6 +96,15 @@ struct jemalloc_allocator
     static size_type size( const_pointer const ptr ) noexcept
     {
         return static_cast<size_type>( ::je_sallocx( ptr, je_flags<alignment>() ) / sizeof( T ) );
+    }
+
+    /// Release dirty/muzzy pages across all arenas back to the OS.
+    static void trim() noexcept
+    {
+        // MALLCTL_ARENAS_ALL is defined by jemalloc.h for "all arenas".
+        char cmd[ 64 ];
+        std::snprintf( cmd, sizeof( cmd ), "arena.%u.purge", MALLCTL_ARENAS_ALL );
+        ::je_mallctl( cmd, nullptr, nullptr, nullptr, 0 );
     }
 
     // --- allocator traits ---

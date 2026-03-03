@@ -233,6 +233,16 @@ struct crt_allocator
         return static_cast<size_type>( detail::crt_aligned_alloc_size<alignment>( p ) / sizeof( T ) );
     }
 
+    /// Release unused memory back to the OS.
+    static void trim() noexcept
+    {
+#   if defined( __linux__ )
+        ::malloc_trim( 0 );
+#   endif
+        // Windows: HeapCompact is per-heap and not useful for CRT.
+        // macOS:   no public CRT trim API.
+    }
+
     // --- allocator traits ---
     static constexpr bool try_expand_supports_null  { false }; // _expand(nullptr) is UB
     // _expand works in-place for shrink, but only on non-aligned (regular malloc)
