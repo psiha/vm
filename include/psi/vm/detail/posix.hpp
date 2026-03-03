@@ -31,7 +31,7 @@
 #   define PSI_VM_POSIX_STANDARD_LINUX_OSX_MSVC( standard, linux, osx, msvc ) msvc
 #elif defined( __APPLE__ )
 #   define PSI_VM_POSIX_STANDARD_LINUX_OSX_MSVC( standard, linux, osx, msvc ) osx
-#elif defined( _GNU_SOURCE )
+#elif defined( __linux__ )
 #   define PSI_VM_POSIX_STANDARD_LINUX_OSX_MSVC( standard, linux, osx, msvc ) linux
 #else
 #   define PSI_VM_POSIX_STANDARD_LINUX_OSX_MSVC( standard, linux, osx, msvc ) standard

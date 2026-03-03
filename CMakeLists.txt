@@ -144,6 +144,11 @@ if ( PSI_VM_MIMALLOC AND NOT TARGET mimalloc-static )
     FetchContent_MakeAvailable( mimalloc )
 endif()
 
+if ( PSI_VM_MIMALLOC AND TARGET mimalloc-static )
+    target_link_libraries( psi_vm PUBLIC mimalloc-static )
+    target_compile_definitions( psi_vm PUBLIC PSI_VM_HAS_MIMALLOC=1 )
+endif()
+
 
 ###################
 ## Testing
