@@ -28,6 +28,7 @@
 #ifdef _WIN32
 
 #include <psi/vm/allocation.hpp> // page_size
+#include <psi/vm/allocators/allocator_base.hpp> // detail::throw_bad_alloc
 #include <psi/vm/detail/nt.hpp>  // NtQueryVirtualMemory, MEMORY_WORKING_SET_EX_INFORMATION
 
 #include <cstdlib> // malloc/free
@@ -87,17 +88,20 @@ dirty_tracker & dirty_tracker::operator=( dirty_tracker && other ) noexcept
 
 //--- arm ----------------------------------------------------------------------
 
-void dirty_tracker::arm( std::byte * const address, std::size_t const size ) noexcept
+void dirty_tracker::arm( std::byte * const address, std::size_t const size )
 {
     base_        = address;
     size_        = size;
     snapshotted_ = false;
-    num_pages_   = ( size + ::psi::vm::page_size - 1 ) / ::psi::vm::page_size;
+    auto const required_pages{ ( size + psi::vm::page_size - 1 ) / psi::vm::page_size };
 
     // Ensure ws_info_ buffer is large enough
-    auto * const new_buf{ std::realloc( ws_info_, num_pages_ * sizeof( working_set_ex_info ) ) };
-    if ( new_buf )
-        ws_info_ = new_buf;
+    auto * const new_buf{ std::realloc( ws_info_, required_pages * sizeof( working_set_ex_info ) ) };
+    if ( required_pages && !new_buf )
+        throw_bad_alloc();
+
+    ws_info_   = new_buf;
+    num_pages_ = required_pages;
 }
 
 

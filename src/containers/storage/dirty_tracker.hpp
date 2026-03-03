@@ -12,7 +12,9 @@
 ///            not COW-since-clone — empirically validated 2026-02-27)
 ///   - Fallback: node-level dirty flag (always available, all platforms)
 ///
-/// The tracker is a value type -- no virtual dispatch, no heap allocation.
+/// The tracker is a value type -- no virtual dispatch.
+/// Platform implementations may allocate internal scratch buffers
+/// (e.g. Windows working-set query array, Linux pagemap cache).
 /// One tracker per COW clone (each clone has its own mapping range).
 ///
 /// Copyright (c) Domagoj Saric 2026.
@@ -59,7 +61,7 @@ struct dirty_tracker
     dirty_tracker & operator=( dirty_tracker && ) noexcept;
 
     /// Arm tracking on the given address range. Called after COW clone.
-    void arm( std::byte * address, std::size_t size ) noexcept;
+    void arm( std::byte * address, std::size_t size );
 
     /// Batch-query the kernel for dirty state of all pages.
     /// Call once before the commit loop. Lazy: caches results internally.

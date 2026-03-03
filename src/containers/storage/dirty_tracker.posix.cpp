@@ -36,6 +36,7 @@
 #ifdef __linux__
 
 #include <psi/vm/allocation.hpp> // page_size
+#include <psi/vm/allocators/allocator_base.hpp> // detail::throw_bad_alloc
 
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -169,19 +170,22 @@ dirty_tracker & dirty_tracker::operator=( dirty_tracker && other ) noexcept
 
 //--- arm ----------------------------------------------------------------------
 
-void dirty_tracker::arm( std::byte * const address, std::size_t const size ) noexcept
+void dirty_tracker::arm( std::byte * const address, std::size_t const size )
 {
     base_        = address;
     size_        = size;
     snapshotted_ = false;
-    num_pages_   = ( size + page_size - 1 ) / page_size;
+    auto const required_pages{ ( size + page_size - 1 ) / page_size };
 
     // Ensure pagemap cache is large enough
     auto * const new_cache{ static_cast<std::uint64_t *>(
-        std::realloc( pagemap_cache_, num_pages_ * sizeof( std::uint64_t ) )
+        std::realloc( pagemap_cache_, required_pages * sizeof( std::uint64_t ) )
     ) };
-    if ( new_cache )
-        pagemap_cache_ = new_cache;
+    if ( required_pages && !new_cache )
+        throw_bad_alloc();
+
+    pagemap_cache_ = new_cache;
+    num_pages_     = required_pages;
 
     // Open pagemap fd (cached)
     if ( pm_fd_ == -1 )

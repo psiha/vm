@@ -26,9 +26,9 @@ dirty_tracker::~dirty_tracker()                   noexcept = default;
 dirty_tracker:: dirty_tracker( dirty_tracker && ) noexcept = default;
 dirty_tracker & dirty_tracker::operator=( dirty_tracker && ) noexcept = default;
 
-void dirty_tracker::arm     ( std::byte *, std::size_t ) noexcept {}
-void dirty_tracker::snapshot()                           noexcept {}
-void dirty_tracker::clear   ()                           noexcept {}
+void dirty_tracker::arm     ( std::byte *, std::size_t ) {}
+void dirty_tracker::snapshot() noexcept {}
+void dirty_tracker::clear   () noexcept {}
 
 bool dirty_tracker::is_dirty( std::size_t ) const noexcept { return true ; } // always dirty → caller uses node dirty flag
 bool dirty_tracker::has_kernel_tracking()   const noexcept { return false; }
