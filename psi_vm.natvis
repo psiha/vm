@@ -15,7 +15,7 @@
 
     Type name notes:
       MSVC expands type aliases, so natvis patterns must match the expanded form:
-        tr_vector<T,sz,opts>    → vector<heap_storage<T,sz,void,opts>, geometric_growth{}>
+        heap_vector<T,sz,opts>    → vector<heap_storage<T,sz,void,opts>, geometric_growth{}>
         fc_vector<T,N,oh>      → vector<fixed_storage<T,N,oh>>
         small_vector<T,N,s,o>  → vector<sbo_hybrid<T,N,s,o>, geometric_growth{}>
       Old typedef patterns are kept as Low-priority fallbacks.
@@ -49,7 +49,7 @@
 
 
     <!-- ================================================================== -->
-    <!-- psi::vm::vector<heap_storage<...>>  (was tr_vector)                 -->
+    <!-- psi::vm::vector<heap_storage<...>>  (was heap_vector)                 -->
     <!--                                                                     -->
     <!-- Data members (inherited from heap_storage base):                    -->
     <!--   T * p_array_;                                                     -->
@@ -68,8 +68,8 @@
         </Expand>
     </Type>
 
-    <!-- Legacy: tr_vector (typedef may still be visible in some contexts) -->
-    <Type Name="psi::vm::tr_vector&lt;*,*,*&gt;" Priority="Low">
+    <!-- Legacy: heap_vector (typedef may still be visible in some contexts) -->
+    <Type Name="psi::vm::heap_vector&lt;*,*,*&gt;" Priority="Low">
         <DisplayString>{{ size={size_} }}</DisplayString>
         <Expand>
             <Item Name="[size]" ExcludeView="simple">size_</Item>
@@ -246,7 +246,7 @@
         </Expand>
     </Type>
 
-    <!-- flat_set_impl with vector<heap_storage<...>> storage (was tr_vector) -->
+    <!-- flat_set_impl with vector<heap_storage<...>> storage (was heap_vector) -->
     <Type Name="psi::vm::flat_set_impl&lt;*,*,psi::vm::vector&lt;psi::vm::heap_storage&lt;$T1,*&gt;,*&gt;&gt;">
         <DisplayString>{{ size={storage_.size_} }}</DisplayString>
         <Expand>
@@ -270,8 +270,8 @@
         </Expand>
     </Type>
 
-    <!-- Legacy: flat_set_impl with tr_vector storage -->
-    <Type Name="psi::vm::flat_set_impl&lt;*,*,psi::vm::tr_vector&lt;$T1,*,*&gt;&gt;" Priority="Low">
+    <!-- Legacy: flat_set_impl with heap_vector storage -->
+    <Type Name="psi::vm::flat_set_impl&lt;*,*,psi::vm::heap_vector&lt;$T1,*,*&gt;&gt;" Priority="Low">
         <DisplayString>{{ size={storage_.size_} }}</DisplayString>
         <Expand>
             <Item Name="[size]" ExcludeView="simple">storage_.size_</Item>
@@ -350,7 +350,7 @@
         </Expand>
     </Type>
 
-    <!-- flat_map_impl with vector<heap_storage<...>> storage (was tr_vector) -->
+    <!-- flat_map_impl with vector<heap_storage<...>> storage (was heap_vector) -->
     <Type Name="psi::vm::flat_map_impl&lt;*,*,*,psi::vm::vector&lt;psi::vm::heap_storage&lt;$T1,*&gt;,*&gt;,psi::vm::vector&lt;psi::vm::heap_storage&lt;$T2,*&gt;,*&gt;&gt;">
         <DisplayString>{{ size={storage_.keys.size_} }}</DisplayString>
         <Expand>
@@ -366,8 +366,8 @@
         </Expand>
     </Type>
 
-    <!-- Legacy: flat_map_impl with tr_vector storage -->
-    <Type Name="psi::vm::flat_map_impl&lt;*,*,*,psi::vm::tr_vector&lt;$T1,*,*&gt;,psi::vm::tr_vector&lt;$T2,*,*&gt;&gt;" Priority="Low">
+    <!-- Legacy: flat_map_impl with heap_vector storage -->
+    <Type Name="psi::vm::flat_map_impl&lt;*,*,*,psi::vm::heap_vector&lt;$T1,*,*&gt;,psi::vm::heap_vector&lt;$T2,*,*&gt;&gt;" Priority="Low">
         <DisplayString>{{ size={storage_.keys.size_} }}</DisplayString>
         <Expand>
             <Item Name="[size]" ExcludeView="simple">storage_.keys.size_</Item>

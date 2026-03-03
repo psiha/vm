@@ -3,7 +3,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #include <psi/vm/containers/flat_map.hpp>
-#include <psi/vm/containers/tr_vector.hpp>
+#include <psi/vm/containers/heap_vector.hpp>
 #include <psi/vm/containers/is_trivially_moveable.hpp>
 
 #include <gtest/gtest.h>
@@ -35,9 +35,9 @@ class flat_map_typed : public ::testing::Test {};
 
 using map_configs = ::testing::Types<
     map_config< std::vector<int>,              std::vector<std::string_view> >,
-    map_config< tr_vector<int>,                tr_vector<std::string_view>   >,
+    map_config< heap_vector<int>,                heap_vector<std::string_view>   >,
     map_config< std::deque<int>,               std::deque<std::string_view>  >,
-    map_config< tr_vector<int, std::uint32_t>, std::deque<std::string_view>  >,
+    map_config< heap_vector<int, std::uint32_t>, std::deque<std::string_view>  >,
     map_config< std::deque<int>,               std::vector<std::string_view> >
 >;
 
@@ -829,10 +829,10 @@ TYPED_TEST( flat_map_typed, initializer_list_assignment )
 ////////////////////////////////////////////////////////////////////////////////
 
 using FM             = flat_map<int, int>;
-using tr_flat_map_ii = flat_map<int, int, std::less<int>, tr_vector<int>, tr_vector<int>>;
-using tr_vec_map     = flat_map<int, int, std::less<int>, tr_vector<int, std::uint32_t>, tr_vector<int, std::uint32_t>>;
+using tr_flat_map_ii = flat_map<int, int, std::less<int>, heap_vector<int>, heap_vector<int>>;
+using tr_vec_map     = flat_map<int, int, std::less<int>, heap_vector<int, std::uint32_t>, heap_vector<int, std::uint32_t>>;
 using tr_less_map     = flat_map<int, int, std::less<>>;
-using tr_vec_less_map = flat_map<int, int, std::less<>, tr_vector<int>, tr_vector<int>>;
+using tr_vec_less_map = flat_map<int, int, std::less<>, heap_vector<int>, heap_vector<int>>;
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -906,12 +906,12 @@ TEST( flat_map, values_in_key_order )
     EXPECT_EQ( vals[ 2 ], "c" ); // key=3
 }
 
-TEST( flat_map, tr_vector_keys_span )
+TEST( flat_map, heap_vector_keys_span )
 {
     tr_flat_map_ii m;
     m[ 5 ] = 50; m[ 1 ] = 10; m[ 3 ] = 30;
     auto const & keys{ m.keys() };
-    // tr_vector is contiguous -- can form a span for cache-friendly key-only iteration
+    // heap_vector is contiguous -- can form a span for cache-friendly key-only iteration
     std::span<int const> keySpan{ keys.data(), keys.size() };
     EXPECT_EQ( keySpan.size(), 3u );
     EXPECT_EQ( keySpan[ 0 ], 1 );
@@ -931,7 +931,7 @@ TEST( flat_map, reserve_and_shrink )
     EXPECT_EQ( m.size(), 50u );
 }
 
-TEST( flat_map, tr_vector_reserve_and_shrink )
+TEST( flat_map, heap_vector_reserve_and_shrink )
 {
     tr_flat_map_ii m;
     m.reserve( 100 );
@@ -1005,7 +1005,7 @@ TEST( flat_map, transparent_contains_count )
     EXPECT_EQ   ( m.count( 99U ), 0u );
 }
 
-TEST( flat_map, tr_vector_transparent_combined )
+TEST( flat_map, heap_vector_transparent_combined )
 {
     tr_vec_less_map m;
     m[ 5 ] = 50; m[ 1 ] = 10; m[ 3 ] = 30;
@@ -1030,7 +1030,7 @@ TEST( flat_map, tr_vector_transparent_combined )
     EXPECT_EQ( keySpan[ 2 ], 5 );
 }
 
-TEST( flat_map, tr_vector_transparent_emplace_hint_and_erase )
+TEST( flat_map, heap_vector_transparent_emplace_hint_and_erase )
 {
     tr_vec_less_map m;
     for ( int i{ 0 }; i < 50; ++i ) {
@@ -1144,12 +1144,12 @@ TEST( flat_map, size_type_matches_smaller_container )
     static_assert( std::is_same_v<FM::size_type, std::size_t> );
 }
 
-TEST( flat_map, tr_vector_size_type_is_uint32 )
+TEST( flat_map, heap_vector_size_type_is_uint32 )
 {
     static_assert( std::is_same_v<tr_vec_map::size_type, std::uint32_t> );
 }
 
-TEST( flat_map, tr_vector_insert_range )
+TEST( flat_map, heap_vector_insert_range )
 {
     tr_vec_map m;
     m.try_emplace( 1, 10 );
@@ -1161,7 +1161,7 @@ TEST( flat_map, tr_vector_insert_range )
         EXPECT_EQ( m.at( i ), i * 10 );
 }
 
-TEST( flat_map, tr_vector_erase_if )
+TEST( flat_map, heap_vector_erase_if )
 {
     tr_vec_map m;
     for ( int i{ 0 }; i < 10; ++i )
@@ -1171,7 +1171,7 @@ TEST( flat_map, tr_vector_erase_if )
     EXPECT_EQ( m.size(), 5u );
 }
 
-TEST( flat_map, tr_vector_bulk_merge )
+TEST( flat_map, heap_vector_bulk_merge )
 {
     tr_vec_map target;
     target.try_emplace( 1, 10 );

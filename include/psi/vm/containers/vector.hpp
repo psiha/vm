@@ -9,7 +9,7 @@
 ///
 /// Usage:
 ///   vector<vm_storage<T>>                      → vm_vector<T>
-///   vector<heap_storage<T, crt_allocator<T>>>  → tr_vector<T>
+///   vector<heap_storage<T, crt_allocator<T>>>  → heap_vector<T>
 ///   vector<fixed_storage<T, N>>                → fc_vector<T, N>
 ///   vector<sbo_hybrid<T, N>>                   → small_vector<T, N>
 ///
@@ -1003,7 +1003,7 @@ public:
         if ( new_cap <= this->capacity() )
             return true;
         // Try in-place expansion if the storage backend supports it
-        // (e.g. tr_vector on MSVC via ::_expand(), vm_vector via page mapping)
+        // (e.g. heap_vector on MSVC via ::_expand(), vm_vector via page mapping)
         if constexpr ( requires { this->storage_try_expand_capacity( new_cap ); } )
             return this->storage_try_expand_capacity( new_cap );
         return false;
@@ -1238,7 +1238,7 @@ bool constexpr is_trivially_moveable<vector<Storage, Growth>>{ true };
 
 //------------------------------------------------------------------------------
 
-// Generic erase_if / erase for any psi_vm_vector (tr_vector, vm_vector,
+// Generic erase_if / erase for any psi_vm_vector (heap_vector, vm_vector,
 // small_vector, fc_vector, etc.).
 template <psi_vm_vector Vec, typename Pred>
 constexpr typename Vec::size_type erase_if( Vec & c, Pred pred )

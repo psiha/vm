@@ -1,10 +1,10 @@
 ////////////////////////////////////////////////////////////////////////////////
-/// Trivially relocatable vector
+/// Heap-allocated vector
 ///
-/// tr_vector<T> is a type alias for vector<heap_storage<T>>.
-/// The heap_storage class (in storage/heap.hpp) provides the raw memory
-/// management; vector<Storage> (in vector.hpp) adds the standard container
-/// interface (push_back, iterators, copy/move, etc.) directly.
+/// heap_vector<T> is a type alias for vector<heap_storage<T>>.
+/// Key advantage over std::vector: in-place expansion via allocator expand
+/// (avoids the double-allocation + element-wise move inherent to std::vector's
+/// limited allocator interface). Works with all element types.
 ////////////////////////////////////////////////////////////////////////////////
 ///
 /// Copyright (c) Domagoj Saric.
@@ -27,11 +27,11 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
-// tr_vector<T, sz_t, options, growth> = vector<heap_storage<T, sz_t, void, options>, growth>
+// heap_vector<T, sz_t, options, growth> = vector<heap_storage<T, sz_t, void, options>, growth>
 // The 'void' Allocator default auto-computes to crt_allocator with correct alignment.
 // Growth policy lives at the vector<> level, not inside storage.
 template <typename T, typename sz_t = std::size_t, heap_options options = {}, geometric_growth growth = {}>
-using tr_vector = vector<heap_storage<T, sz_t, void, options>, growth>;
+using heap_vector = vector<heap_storage<T, sz_t, void, options>, growth>;
 
 // Generic erase_if / erase are provided in vector.hpp for all psi_vm_vector types.
 

@@ -24,7 +24,7 @@
 
 #include "komparator.hpp"
 #include "lookup.hpp"
-#include "tr_vector.hpp"
+#include "heap_vector.hpp"
 
 #include <boost/assert.hpp>
 
@@ -389,7 +389,7 @@ namespace detail {
 
     // storage_erase_if -- dispatch erase_if on the underlying storage via ADL.
     // Resolves to std::erase_if for std containers (vector, deque) and
-    // psi::vm::erase_if for tr_vector / paired_storage.
+    // psi::vm::erase_if for heap_vector / paired_storage.
     template <typename S, typename Pred>
     constexpr auto storage_erase_if( S & s, Pred pred ) {
         return erase_if( s, std::move( pred ) );
@@ -549,7 +549,7 @@ public:
         if ( &self == &source )
             return;
         if constexpr ( is_unique<decltype( self )> ) {
-            tr_vector<size_type> transferIndices;
+            heap_vector<size_type> transferIndices;
             transferIndices.reserve( source.size() );
             {
                 auto const & srcKeys{ keys_of( source.storage_ ) };
@@ -696,7 +696,7 @@ protected:
     //
     // Delegates to storage_erase_if (namespace-scope helper) which dispatches
     // via ADL: std::erase_if for std containers, psi::vm::erase_if for
-    // tr_vector / paired_storage.
+    // heap_vector / paired_storage.
     //--------------------------------------------------------------------------
     template <typename Pred>
     friend constexpr size_type erase_if( flat_impl & c, Pred pred ) {

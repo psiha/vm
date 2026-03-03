@@ -19,7 +19,7 @@ Integration:
 
 Type name notes:
   GDB shows expanded type names for template aliases:
-    tr_vector<T,sz,opts>    -> vector<heap_storage<T,sz,void,opts>, geometric_growth{}>
+    heap_vector<T,sz,opts>    -> vector<heap_storage<T,sz,void,opts>, geometric_growth{}>
     fc_vector<T,N,oh>       -> vector<fixed_storage<T,N,oh>>
     small_vector<T,N,s,o>   -> vector<sbo_hybrid<T,N,s,o>, geometric_growth{}>
   Patterns match both old (typedef) and new (expanded) names.
@@ -69,11 +69,11 @@ def safe_find_field(val, name):
 
 
 # ==============================================================================
-# vector<heap_storage<...>> / tr_vector
+# vector<heap_storage<...>> / heap_vector
 # ==============================================================================
 
 class HeapVectorPrinter:
-    """Pretty-printer for vector<heap_storage<...>> (and legacy tr_vector).
+    """Pretty-printer for vector<heap_storage<...>> (and legacy heap_vector).
     Data members (inherited from heap_storage base): p_array_, size_."""
 
     def __init__(self, val):
@@ -370,7 +370,7 @@ def _build_lookup():
     patterns = [
         # vector<heap_storage<...>>
         (rf'^{prefix}vector<{prefix}heap_storage<',       HeapVectorPrinter),
-        (rf'^{prefix}tr_vector<',                          HeapVectorPrinter),
+        (rf'^{prefix}heap_vector<',                          HeapVectorPrinter),
 
         # vector<fixed_storage<...>>
         (rf'^{prefix}vector<{prefix}fixed_storage<',       FixedVectorPrinter),

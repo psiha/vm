@@ -1,6 +1,6 @@
 #include <psi/vm/containers/b+tree.hpp>
 #include <psi/vm/containers/b+tree_print.hpp>
-#include <psi/vm/containers/tr_vector.hpp>
+#include <psi/vm/containers/heap_vector.hpp>
 
 #include <boost/assert.hpp>
 #include <boost/container/flat_set.hpp>
@@ -322,12 +322,12 @@ TEST( bp_tree, insert_presorted )
         bptree_set<unsigned> bpt;
         bpt.map_memory( test_size );
 
-        tr_vector<unsigned> odds{ test_size / 2, no_init };
+        heap_vector<unsigned> odds{ test_size / 2, no_init };
         for ( auto i{ 0U }; i < test_size / 2; ++i )
             odds[ i ] = i * 2 + 1;
         EXPECT_EQ( bpt.insert_presorted( odds ), odds.size() );
 
-        tr_vector<unsigned> evens{ test_size / 2, no_init };
+        heap_vector<unsigned> evens{ test_size / 2, no_init };
         for ( auto i{ 0U }; i < test_size / 2; ++i )
             evens[ i ] = i * 2;
         EXPECT_EQ( bpt.insert_presorted( evens ), evens.size() );
@@ -467,14 +467,14 @@ TEST( bp_tree, insert_triggers_multiple_splits )
     auto const test_size{ max_per_node * 5 }; // Enough to cause multiple splits
 
     // First insert: every 3rd number
-    tr_vector<unsigned> first_batch;
+    heap_vector<unsigned> first_batch;
     for ( auto i{ 0U }; i < test_size; i += 3 )
         first_batch.push_back( i );
 
     EXPECT_EQ( bpt.insert( first_batch ), first_batch.size() );
 
     // Second insert: numbers that interleave with first batch
-    tr_vector<unsigned> second_batch;
+    heap_vector<unsigned> second_batch;
     for ( auto i{ 0U }; i < test_size; ++i ) {
         if ( i % 3 != 0 )
             second_batch.push_back( i );

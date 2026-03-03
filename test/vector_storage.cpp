@@ -9,7 +9,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 #include <psi/vm/containers/vector.hpp>
-#include <psi/vm/containers/tr_vector.hpp>
+#include <psi/vm/containers/heap_vector.hpp>
 #include <psi/vm/containers/fc_vector.hpp>
 #include <psi/vm/containers/vm_vector.hpp>
 #include <psi/vm/allocators/crt.hpp>
@@ -127,15 +127,15 @@ TEST( vector_storage, fixed_storage_fill )
 
 
 ////////////////////////////////////////////////////////////////////////////////
-// Verify tr_vector alias: tr_vector<T> is now vector<heap_storage<T>>
+// Verify heap_vector alias: heap_vector<T> is now vector<heap_storage<T>>
 ////////////////////////////////////////////////////////////////////////////////
 
-TEST( vector_storage, tr_vector_is_heap_storage_alias )
+TEST( vector_storage, heap_vector_is_heap_storage_alias )
 {
-    // tr_vector<T> = vector<heap_storage<T>> (same type after aliasing)
-    static_assert( std::is_same_v<tr_vector<int>, vector<heap_storage<int>>> );
+    // heap_vector<T> = vector<heap_storage<T>> (same type after aliasing)
+    static_assert( std::is_same_v<heap_vector<int>, vector<heap_storage<int>>> );
 
-    tr_vector<int> vec;
+    heap_vector<int> vec;
     for ( int i{ 0 }; i < 100; ++i )
         vec.push_back( i );
 
@@ -242,8 +242,8 @@ struct incomplete_type; // forward declaration only -- never completed in this T
 static_assert( sizeof( heap_storage<incomplete_type> ) > 0 );
 static_assert( sizeof( vector<heap_storage<incomplete_type>> ) > 0 );
 
-// tr_vector<T> = vector<heap_storage<T>> so it should also work
-static_assert( sizeof( tr_vector<incomplete_type> ) > 0 );
+// heap_vector<T> = vector<heap_storage<T>> so it should also work
+static_assert( sizeof( heap_vector<incomplete_type> ) > 0 );
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -262,7 +262,7 @@ static_assert(  std::is_move_assignable_v   <fixed_storage<int, 16>> );
 
 // But vector<Storage> IS copyable (copies elements, not raw memory)
 static_assert(  std::is_copy_constructible_v<vector<heap_storage<int>>> );
-static_assert(  std::is_copy_constructible_v<tr_vector<int>> );
+static_assert(  std::is_copy_constructible_v<heap_vector<int>> );
 static_assert(  std::is_copy_constructible_v<fc_vector<int, 16>> );
 
 
@@ -644,8 +644,8 @@ TEST( vector_storage, mi_heap_allocator_release_survives_scope )
 
 TEST( vector_storage, growth_policy_geometric )
 {
-    // Default tr_vector has 3/2 (1.5x) geometric growth
-    tr_vector<int> vec;
+    // Default heap_vector has 3/2 (1.5x) geometric growth
+    heap_vector<int> vec;
     ASSERT_TRUE( vec.empty() );
 
     // Push elements and verify capacity grows geometrically (> linearly)

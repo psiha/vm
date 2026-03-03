@@ -2,13 +2,13 @@
 /// psi::vm flat_set / flat_multiset test suite
 ///
 /// Typed tests exercise core flat_set behaviour across three container backends
-/// (std::vector, tr_vector, std::deque). Standalone tests cover container-
+/// (std::vector, heap_vector, std::deque). Standalone tests cover container-
 /// specific features, transparent comparators, CTAD, forwarding, pass_in_reg,
 /// LookupType, and flat_multiset.
 ////////////////////////////////////////////////////////////////////////////////
 
 #include <psi/vm/containers/flat_set.hpp>
-#include <psi/vm/containers/tr_vector.hpp>
+#include <psi/vm/containers/heap_vector.hpp>
 #include <psi/vm/containers/abi.hpp>
 #include <psi/vm/containers/lookup.hpp>
 
@@ -42,7 +42,7 @@ class flat_set_typed : public ::testing::Test {};
 
 using set_configs = ::testing::Types<
     set_config< std::vector<int>              >,
-    set_config< tr_vector<int, std::uint32_t> >,
+    set_config< heap_vector<int, std::uint32_t> >,
     set_config< std::deque<int>               >
 >;
 
@@ -438,8 +438,8 @@ TYPED_TEST( flat_set_typed, keys_returns_sorted )
 using FS  = flat_set<int>;
 using FSS = flat_set<std::string>;
 
-// tr_vector-backed set with uint32_t size_type
-using tr_vec_set = flat_set<int, std::less<int>, tr_vector<int, std::uint32_t>>;
+// heap_vector-backed set with uint32_t size_type
+using tr_vec_set = flat_set<int, std::less<int>, heap_vector<int, std::uint32_t>>;
 
 // Transparent comparator set
 struct TransComp {
@@ -483,12 +483,12 @@ TEST( flat_set, sequence_alias )
     EXPECT_EQ( &s.keys(), &s.sequence() );
 }
 
-TEST( flat_set, tr_vector_size_type )
+TEST( flat_set, heap_vector_size_type )
 {
     static_assert( std::is_same_v<tr_vec_set::size_type, std::uint32_t> );
 }
 
-TEST( flat_set, tr_vector_reserve_capacity )
+TEST( flat_set, heap_vector_reserve_capacity )
 {
     tr_vec_set s;
     s.reserve( 50 );

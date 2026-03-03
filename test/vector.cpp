@@ -1,8 +1,8 @@
-// Comprehensive std::vector-like compliance tests for tr_vector and fc_vector
+// Comprehensive std::vector-like compliance tests for heap_vector and fc_vector
 // using Google Test typed tests to cover both implementations uniformly.
 #include <psi/vm/containers/fc_vector.hpp>
 #include <psi/vm/containers/small_vector.hpp>
-#include <psi/vm/containers/tr_vector.hpp>
+#include <psi/vm/containers/heap_vector.hpp>
 
 #include <gtest/gtest.h>
 
@@ -28,8 +28,8 @@ inline constexpr sbo_options compact_lsb_opts{ .layout = sbo_layout::compact_lsb
 inline constexpr sbo_options embedded_opts   { .layout = sbo_layout::embedded    };
 
 using VectorTestTypes = ::testing::Types<
-    tr_vector<int>,
-    tr_vector<int, std::uint32_t>,
+    heap_vector<int>,
+    heap_vector<int, std::uint32_t>,
     fc_vector<int, 256>,
     small_vector<int, 16>,
     small_vector<int,  4, std::uint32_t>,
@@ -933,23 +933,23 @@ TYPED_TEST( vector_compliance, insert_at_various_positions )
 
 
 ////////////////////////////////////////////////////////////////////////////////
-// 10. Move semantics (tr_vector specific)
+// 10. Move semantics (heap_vector specific)
 ////////////////////////////////////////////////////////////////////////////////
 
-TEST( tr_vector_move, move_constructor_empties_source )
+TEST( heap_vector_move, move_constructor_empties_source )
 {
-    tr_vector<int> v{ 1, 2, 3 };
-    tr_vector<int> moved{ std::move( v ) };
+    heap_vector<int> v{ 1, 2, 3 };
+    heap_vector<int> moved{ std::move( v ) };
     EXPECT_TRUE( v.empty() );
     EXPECT_EQ( v.data(), nullptr );
     EXPECT_EQ( v.capacity(), 0 );
     EXPECT_EQ( moved.size(), 3 );
 }
 
-TEST( tr_vector_move, move_assignment_clears_source )
+TEST( heap_vector_move, move_assignment_clears_source )
 {
-    tr_vector<int> v{ 1, 2, 3 };
-    tr_vector<int> dest{ 10, 20 };
+    heap_vector<int> v{ 1, 2, 3 };
+    heap_vector<int> dest{ 10, 20 };
     dest = std::move( v );
     // Move-assign: dest gets v's data, v is left empty (cleared).
     EXPECT_EQ( dest.size(), 3 );
@@ -1116,12 +1116,12 @@ TEST( fc_vector_specific, gcc_dse_bug_standalone_reproducer )
 
 
 ////////////////////////////////////////////////////////////////////////////////
-// 12. tr_vector with uint32_t size_type
+// 12. heap_vector with uint32_t size_type
 ////////////////////////////////////////////////////////////////////////////////
 
-TEST( tr_vector_u32, basic_operations )
+TEST( heap_vector_u32, basic_operations )
 {
-    tr_vector<int, std::uint32_t> v{ 1, 2, 3 };
+    heap_vector<int, std::uint32_t> v{ 1, 2, 3 };
     static_assert( std::is_same_v<decltype( v.size() ), std::uint32_t> );
     EXPECT_EQ( v.size(), 3u );
     v.push_back( 4 );
@@ -1129,9 +1129,9 @@ TEST( tr_vector_u32, basic_operations )
     EXPECT_EQ( v[ 3 ], 4 );
 }
 
-TEST( tr_vector_u32, assign_n_val )
+TEST( heap_vector_u32, assign_n_val )
 {
-    tr_vector<int, std::uint32_t> v{ 1, 2, 3 };
+    heap_vector<int, std::uint32_t> v{ 1, 2, 3 };
     v.assign( std::uint32_t( 5 ), 42 );
     EXPECT_EQ( v.size(), 5u );
     for ( std::uint32_t i{ 0 }; i < v.size(); ++i )
@@ -1191,9 +1191,9 @@ TEST( fc_vector_specific, stable_emplace_back )
     EXPECT_EQ( v.size(), 4 ); // unchanged
 }
 
-TEST( tr_vector_move, stable_reserve_beyond_capacity )
+TEST( heap_vector_move, stable_reserve_beyond_capacity )
 {
-    tr_vector<int> v{ 1, 2, 3 };
+    heap_vector<int> v{ 1, 2, 3 };
     auto const cap{ v.capacity() };
     // Beyond current capacity -- may or may not succeed depending on allocator
     auto const result{ v.stable_reserve( cap + 100 ) };
@@ -1261,8 +1261,8 @@ TYPED_TEST( vector_compliance, insert_range_non_sized_empty )
 
 
 ////////////////////////////////////////////////////////////////////////////////
-// Non-trivially-moveable type tests for tr_vector
-// Verifies that tr_vector correctly uses move+destroy (not bitwise realloc)
+// Non-trivially-moveable type tests for heap_vector
+// Verifies that heap_vector correctly uses move+destroy (not bitwise realloc)
 // when growing vectors of types that are NOT trivially relocatable.
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -1311,9 +1311,9 @@ static_assert( !is_trivially_moveable<move_counter> );
 // Destructor always increments counter (even when moved-from), so skip-destroy is unsafe.
 template <> constexpr bool trivially_destructible_after_move_assignment<move_counter>{ false };
 
-TEST( tr_vector_nontrivial, push_back_triggers_move_not_memcpy )
+TEST( heap_vector_nontrivial, push_back_triggers_move_not_memcpy )
 {
-    tr_vector<address_tracker> v;
+    heap_vector<address_tracker> v;
     // Push enough elements to trigger multiple reallocations
     for ( int i{ 0 }; i < 100; ++i )
     {
@@ -1327,9 +1327,9 @@ TEST( tr_vector_nontrivial, push_back_triggers_move_not_memcpy )
     EXPECT_EQ( v[ 99 ].value, 99 );
 }
 
-TEST( tr_vector_nontrivial, reserve_triggers_move_not_memcpy )
+TEST( heap_vector_nontrivial, reserve_triggers_move_not_memcpy )
 {
-    tr_vector<address_tracker> v;
+    heap_vector<address_tracker> v;
     for ( int i{ 0 }; i < 10; ++i )
         v.emplace_back( i );
 
@@ -1343,13 +1343,13 @@ TEST( tr_vector_nontrivial, reserve_triggers_move_not_memcpy )
     }
 }
 
-TEST( tr_vector_nontrivial, growth_calls_move_ctor_and_destroys_old )
+TEST( heap_vector_nontrivial, growth_calls_move_ctor_and_destroys_old )
 {
     int move_count   { 0 };
     int destroy_count{ 0 };
 
     {
-        tr_vector<move_counter> v;
+        heap_vector<move_counter> v;
         // Push elements one by one, forcing reallocations
         for ( int i{ 0 }; i < 50; ++i )
             v.emplace_back( i, move_count, destroy_count );
@@ -1371,9 +1371,9 @@ TEST( tr_vector_nontrivial, growth_calls_move_ctor_and_destroys_old )
     EXPECT_GE( destroy_count, 50 );
 }
 
-TEST( tr_vector_nontrivial, copy_constructor )
+TEST( heap_vector_nontrivial, copy_constructor )
 {
-    tr_vector<address_tracker> src;
+    heap_vector<address_tracker> src;
     for ( int i{ 0 }; i < 20; ++i )
         src.emplace_back( i );
 
@@ -1388,9 +1388,9 @@ TEST( tr_vector_nontrivial, copy_constructor )
     }
 }
 
-TEST( tr_vector_nontrivial, move_constructor )
+TEST( heap_vector_nontrivial, move_constructor )
 {
-    tr_vector<address_tracker> src;
+    heap_vector<address_tracker> src;
     for ( int i{ 0 }; i < 20; ++i )
         src.emplace_back( i );
 
@@ -1404,13 +1404,13 @@ TEST( tr_vector_nontrivial, move_constructor )
     }
 }
 
-TEST( tr_vector_nontrivial, move_assignment )
+TEST( heap_vector_nontrivial, move_assignment )
 {
-    tr_vector<address_tracker> src;
+    heap_vector<address_tracker> src;
     for ( int i{ 0 }; i < 20; ++i )
         src.emplace_back( i );
 
-    tr_vector<address_tracker> dst;
+    heap_vector<address_tracker> dst;
     dst.emplace_back( 999 );
 
     dst = std::move( src );
@@ -1423,9 +1423,9 @@ TEST( tr_vector_nontrivial, move_assignment )
     }
 }
 
-TEST( tr_vector_nontrivial, erase_and_shrink )
+TEST( heap_vector_nontrivial, erase_and_shrink )
 {
-    tr_vector<address_tracker> v;
+    heap_vector<address_tracker> v;
     for ( int i{ 0 }; i < 10; ++i )
         v.emplace_back( i );
 
@@ -1441,10 +1441,10 @@ TEST( tr_vector_nontrivial, erase_and_shrink )
     }
 }
 
-TEST( tr_vector_nontrivial, with_string )
+TEST( heap_vector_nontrivial, with_string )
 {
     // std::string is a real-world non-trivially-moveable type
-    tr_vector<std::string> v;
+    heap_vector<std::string> v;
     for ( int i{ 0 }; i < 100; ++i )
         v.emplace_back( "string_" + std::to_string( i ) );
 
@@ -1509,12 +1509,12 @@ TEST( lifecycle_tracked_sanity, std_vector )
     EXPECT_EQ( tracked_live_count.load( std::memory_order_seq_cst ), 0 ) << "std::vector: element should be destroyed";
 }
 
-// Sanity: verify lifecycle_tracked counting with tr_vector.
-TEST( lifecycle_tracked_sanity, tr_vector_single )
+// Sanity: verify lifecycle_tracked counting with heap_vector.
+TEST( lifecycle_tracked_sanity, heap_vector_single )
 {
     tracked_live_count.store( 0, std::memory_order_seq_cst );
     {
-        tr_vector<lifecycle_tracked> v;
+        heap_vector<lifecycle_tracked> v;
         v.emplace_back( 42 );
         EXPECT_EQ( tracked_live_count.load( std::memory_order_seq_cst ), 1 ) << "one element should be alive after emplace_back";
     }
@@ -1524,7 +1524,7 @@ TEST( lifecycle_tracked_sanity, tr_vector_single )
 TEST( lifecycle_tracked_sanity, growth_preserves_count )
 {
     tracked_live_count.store( 0, std::memory_order_seq_cst );
-    tr_vector<lifecycle_tracked> v;
+    heap_vector<lifecycle_tracked> v;
     for ( int i{ 0 }; i < 20; ++i )
     {
         v.emplace_back( i );
@@ -1552,8 +1552,8 @@ static_assert( is_trivially_moveable<lifecycle_tracked_trivial_move> );
 
 // Run lifecycle tests against all storage backends.
 using LifecycleTestTypes = ::testing::Types<
-    tr_vector<lifecycle_tracked>,
-    tr_vector<lifecycle_tracked_trivial_move>,
+    heap_vector<lifecycle_tracked>,
+    heap_vector<lifecycle_tracked_trivial_move>,
     small_vector<lifecycle_tracked_trivial_move, 4>,
     small_vector<lifecycle_tracked_trivial_move, 4, std::uint32_t, compact_lsb_opts>,
     small_vector<lifecycle_tracked_trivial_move, 4, std::uint32_t, embedded_opts>
@@ -1697,7 +1697,7 @@ TYPED_TEST( storage_lifecycle, pop_back_destroys_element )
 }
 
 // Test: SBO-specific — heap spill followed by destruction.
-// (For tr_vector this is just a regular heap destruction, which is fine.)
+// (For heap_vector this is just a regular heap destruction, which is fine.)
 TYPED_TEST( storage_lifecycle, heap_spill_then_destroy )
 {
     {

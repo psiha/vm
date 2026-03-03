@@ -14,10 +14,10 @@ Integration:
     ]
 
 Type name notes:
-  tr_vector<T,sz,opts> = vector<heap_storage<T,sz,void,opts>, geometric_growth{}>
+  heap_vector<T,sz,opts> = vector<heap_storage<T,sz,void,opts>, geometric_growth{}>
   fc_vector<T,N,oh>    = vector<fixed_storage<T,N,oh>>
   LLDB shows expanded type names, so regex patterns must match both
-  old (tr_vector/fc_vector) and new (vector<heap_storage/fixed_storage>) names.
+  old (heap_vector/fc_vector) and new (vector<heap_storage/fixed_storage>) names.
 """
 
 import lldb
@@ -47,10 +47,10 @@ def get_child_by_name(valobj, name):
 
 def get_vector_data_and_size(valobj):
     """Extract (data_ptr, size) from a std::vector, vector<heap_storage>,
-    vector<fixed_storage>, tr_vector, or fc_vector."""
+    vector<fixed_storage>, heap_vector, or fc_vector."""
     type_name = valobj.GetType().GetUnqualifiedType().GetName()
 
-    # vector<heap_storage<...>> or tr_vector: has p_array_ + size_
+    # vector<heap_storage<...>> or heap_vector: has p_array_ + size_
     p = valobj.GetChildMemberWithName("p_array_")
     if not p.IsValid():
         p = get_child_by_name(valobj, "p_array_")
@@ -112,11 +112,11 @@ def get_vector_data_and_size(valobj):
 
 
 # ==============================================================================
-# vector<heap_storage<...>> / tr_vector
+# vector<heap_storage<...>> / heap_vector
 # ==============================================================================
 
 class HeapVectorSynthProvider:
-    """Synthetic provider for vector<heap_storage<...>> (and legacy tr_vector).
+    """Synthetic provider for vector<heap_storage<...>> (and legacy heap_vector).
     Data members (inherited from heap_storage base): p_array_, size_."""
 
     def __init__(self, valobj, internal_dict):
@@ -506,7 +506,7 @@ def pass_in_reg_summary(valobj, internal_dict):
 def __lldb_init_module(debugger, internal_dict):
     prefix = "psi::vm::"
 
-    # vector<heap_storage<...>> (expanded type name for tr_vector)
+    # vector<heap_storage<...>> (expanded type name for heap_vector)
     debugger.HandleCommand(f'type summary add -F psi_vm_lldb.heap_vector_summary -x "^{prefix}vector<{prefix}heap_storage<" -w psi_vm')
     debugger.HandleCommand(f'type synthetic add -l psi_vm_lldb.HeapVectorSynthProvider -x "^{prefix}vector<{prefix}heap_storage<" -w psi_vm')
 
@@ -514,9 +514,9 @@ def __lldb_init_module(debugger, internal_dict):
     debugger.HandleCommand(f'type summary add -F psi_vm_lldb.fixed_vector_summary -x "^{prefix}vector<{prefix}fixed_storage<" -w psi_vm')
     debugger.HandleCommand(f'type synthetic add -l psi_vm_lldb.FixedVectorSynthProvider -x "^{prefix}vector<{prefix}fixed_storage<" -w psi_vm')
 
-    # Legacy: tr_vector / fc_vector (if debugger shows typedef name)
-    debugger.HandleCommand(f'type summary add -F psi_vm_lldb.heap_vector_summary -x "^{prefix}tr_vector<" -w psi_vm')
-    debugger.HandleCommand(f'type synthetic add -l psi_vm_lldb.HeapVectorSynthProvider -x "^{prefix}tr_vector<" -w psi_vm')
+    # Legacy: heap_vector / fc_vector (if debugger shows typedef name)
+    debugger.HandleCommand(f'type summary add -F psi_vm_lldb.heap_vector_summary -x "^{prefix}heap_vector<" -w psi_vm')
+    debugger.HandleCommand(f'type synthetic add -l psi_vm_lldb.HeapVectorSynthProvider -x "^{prefix}heap_vector<" -w psi_vm')
     debugger.HandleCommand(f'type summary add -F psi_vm_lldb.fixed_vector_summary -x "^{prefix}fc_vector<" -w psi_vm')
     debugger.HandleCommand(f'type synthetic add -l psi_vm_lldb.FixedVectorSynthProvider -x "^{prefix}fc_vector<" -w psi_vm')
 

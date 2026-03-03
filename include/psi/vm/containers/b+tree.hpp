@@ -6,7 +6,7 @@
 #include <psi/vm/allocation.hpp>
 #include <psi/vm/containers/komparator.hpp>
 #include <psi/vm/containers/lookup.hpp>
-#include <psi/vm/containers/tr_vector.hpp>
+#include <psi/vm/containers/heap_vector.hpp>
 
 #include <psi/build/disable_warnings.hpp>
 
@@ -1177,7 +1177,7 @@ protected: // 'other'
         // save a linearized array of (full) nodes in order to be able to use
         // "really random access iterators" (similar to std::deque iterators)
         // for subsequent sorting
-        tr_vector<leaf_node *, std::uint32_t> nodes;
+        heap_vector<leaf_node *, std::uint32_t> nodes;
     }; // struct bulk_copied_input
 
     template <typename I, typename S, std::ranges::subrange_kind kind>
@@ -1186,7 +1186,7 @@ protected: // 'other'
     {
         auto constexpr can_preallocate{ kind == std::ranges::subrange_kind::sized };
         size_type input_size;
-        tr_vector<leaf_node *, std::uint32_t> nodes;
+        heap_vector<leaf_node *, std::uint32_t> nodes;
         auto p_node{ nodes.end() };
         if constexpr ( can_preallocate ) {
             input_size = static_cast<size_type>( keys.size() );

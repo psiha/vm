@@ -4,8 +4,9 @@
 [![License](https://img.shields.io/badge/license-BSL--1.0-blue.svg)](https://www.boost.org/LICENSE_1_0.txt)
 [![C++23](https://img.shields.io/badge/C%2B%2B-23-blue.svg)](https://en.cppreference.com/w/cpp/compiler_support)
 
-**Portable, lightweight, near-zero-overhead memory mapping, virtual memory management, containers and utilities.**
+**Cross-platform virtual memory primitives, in-place-expandable containers, and copy-on-write abstractions for C++23.**
 
+Provides direct access to low-level OS capabilities that `std::allocator` and `std::vector` cannot express: `mremap`, placeholder-based section expansion, `mach_vm_remap`, kernel-level COW page sharing, and dirty page tracking — all behind a portable, zero-overhead abstraction layer.
 
 ---
 
@@ -13,17 +14,37 @@
 
 Cross-platform abstractions over OS virtual memory and memory-mapped I/O:
 
-- **Allocation** — reserve/commit semantics (Windows `VirtualAlloc`, POSIX `mmap`+`madvise`)
+- **Reserve / commit** — two-phase allocation with explicit control over physical page backing (Windows `VirtualAlloc`, POSIX `mmap` + `madvise`)
 - **File mapping** — RAII mapped views with configurable access flags and sharing modes
+- **In-place view expansion** — platform-specific strategies to grow a mapping without relocation:
+  - Linux: `mremap()` — atomic, relocating, COW-safe
+  - Windows: `NtAllocateVirtualMemoryEx` placeholder split/replace — guaranteed in-place growth with trailing placeholder over-reservation
+  - macOS: `mach_vm_remap()` — zero-copy page transfer to a new region
+- **Copy-on-write cloning** — kernel-level page sharing (not deep copy):
+  - Windows: `PAGE_WRITECOPY` section views — kernel breaks COW per page on first write
+  - POSIX file-backed: `dup(fd)` + `MAP_PRIVATE`
+  - Linux anonymous: `memfd_create` + `MAP_PRIVATE` (true kernel COW, not memcpy)
+  - macOS anonymous: `mach_vm_remap(copy=TRUE)`
+- **Dirty page tracking** — detect which pages were modified since a COW snapshot:
+  - Linux: `userfaultfd` WP_ASYNC (kernel 6.1+), soft-dirty fallback (`/proc/self/pagemap`)
+  - Windows: `QueryWorkingSetEx` (batch, single syscall, detects COW via Shared→Private transition)
+  - All platforms: node-level dirty flag fallback
 - **Shared memory** — IPC-ready shared memory objects
-- **Protection** — page-level read/write/execute protection control
-- **Alignment utilities** — aligned allocation, page-size queries
+- **Page protection** — read/write/execute control at page granularity
+- **Alignment utilities** — `commit_granularity`, `reserve_granularity`, page-size queries
 
 ---
 
-## Vectors
+## Containers
 
-The vector system is built on a **`vector<Storage>`** class template parameterized by a storage backend. This design cleanly separates the standard vector interface (push_back, insert, erase, ...) from the memory management strategy.
+### Design
+
+The container system is built on a single **`vector<Storage, Growth>`** class template with two orthogonal parameters:
+
+- **`Storage`** — how memory is allocated and mapped (heap, stack, memory-mapped file, SBO hybrid)
+- **`Growth`** — capacity expansion policy: `geometric_growth{num, den}` (default `{3,2}` = 1.5x; `{1,1}` = exact-fit)
+
+`vector<Storage, Growth>` provides the full standard interface (push_back, insert, erase, iterators, copy/move semantics). Storage provides raw memory management. Growth controls when and how much to over-allocate. The three concerns are fully orthogonal.
 
 ### Storage backends
 
@@ -31,18 +52,17 @@ The vector system is built on a **`vector<Storage>`** class template parameteriz
 |---------|-------------|
 | `heap_storage<T>` | Heap-allocated array with pluggable allocator (default: `mimalloc` on Windows/macOS, `crt` on Linux). Supports `heap_options` for capacity caching, geometric growth, and alignment |
 | `fixed_storage<T, N>` | Inline (stack) array with compile-time capacity bound. Configurable overflow handler |
-| `sbo_hybrid<T, N>` | Small Buffer Optimization: inline stack buffer with automatic heap spill on overflow. Three compile-time union-based layout modes (see below). All layouts are trivially relocatable when T is |
-| `vm_storage<T>` | Persistent storage via memory-mapped files or shared memory, with configurable headers and allocation granularity |
+| `sbo_hybrid<T, N>` | Small Buffer Optimization: inline stack buffer with automatic heap spill on overflow. Three compile-time union-based layout modes (*embedded*, *compact*, *compact_lsb*). All layouts are trivially relocatable when T is |
+| `vm_storage<T>` | Persistent storage via memory-mapped files or shared memory, with configurable headers, COW cloning, and kernel-level in-place expansion |
 
-### Vector types
+### Convenience aliases
 
-| Container | Definition | Description |
-|-----------|-----------|-------------|
-| `vector<Storage>` | Primary template | Standard vector interface over any storage backend |
-| `tr_vector<T>` | `= vector<heap_storage<T>>` | Trivially relocatable heap vector — exploits trivial relocatability for move/realloc without element-wise copy |
+| Alias | Definition | Description |
+|-------|-----------|-------------|
+| `heap_vector<T>` | `= vector<heap_storage<T>>` | Heap-allocated vector. Unlike `std::vector`, supports in-place expansion via allocator `expand` / `_expand` / `mi_expand` — avoids the double-allocation + element-wise move inherent to `std::vector`'s limited allocator interface. Works with all element types |
 | `fc_vector<T, N>` | `= vector<fixed_storage<T, N>>` | Fixed-capacity inline vector (`inplace_vector`-like) |
-| `vm_vector<T>` | `= vector<vm_storage<T>>` | VM-backed persistent vector |
-| `small_vector<T, N>` | `= vector<sbo_hybrid<T, N>>` | Inline (stack) buffer with heap spill. Three layout modes: *compact* (MSB tag), *compact_lsb* (LSB tag, optimal LE addressing), *embedded* (sz_ packed inside union, default). Layout auto-selected or explicitly configured via `sbo_options`. Configurable `geometric_growth` factor, `sz_t`, and alignment |
+| `vm_vector<T>` | `= vector<vm_storage<T>>` | VM-backed persistent vector with exact-fit growth (`{1,1}`). Supports file-backed and anonymous mappings, COW cloning, and kernel-level in-place expansion via `mremap` / placeholders / `mach_vm_remap` |
+| `small_vector<T, N>` | `= vector<sbo_hybrid<T, N>>` | Inline (stack) buffer with heap spill. Three layout modes: *embedded* (default, sz_ packed inside union), *compact* (MSB tag), *compact_lsb* (LSB tag, optimal LE addressing). Layout auto-selected or explicitly configured via `sbo_options` |
 
 ### Allocators
 
@@ -184,8 +204,8 @@ include/psi/vm/
 │   │   ├── heap.hpp        heap_storage (heap-allocated, pluggable allocator)
 │   │   ├── fixed.hpp       fixed_storage (inline, compile-time capacity)
 │   │   └── sbo_hybrid.hpp  sbo_hybrid (inline buffer + heap spill, 3 layout modes)
-│   ├── vector.hpp          vector<Storage> unified template
-│   ├── tr_vector.hpp       tr_vector<T> type alias (= vector<heap_storage<T>>)
+│   ├── vector.hpp          vector<Storage, Growth> unified template
+│   ├── heap_vector.hpp     heap_vector<T> type alias (= vector<heap_storage<T>>)
 │   ├── fc_vector.hpp       fc_vector<T,N> type alias (= vector<fixed_storage<T,N>>)
 │   ├── vm_vector.hpp       vm_vector<T> (memory-mapped storage)
 │   ├── small_vector.hpp    small_vector<T,N> type alias (= vector<sbo_hybrid<T,N>>)
