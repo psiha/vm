@@ -168,10 +168,10 @@ namespace
         // heuristic VM inspection is needed (or allowed) here.
         if ( trailing_placeholder_size )
         {
-#ifndef NDEBUG
+#       ifndef NDEBUG
             auto const trailing_region_size{ detail::query_placeholder( tail ) };
             BOOST_ASSERT( trailing_region_size >= trailing_placeholder_size );
-#endif
+#       endif
             detail::free_placeholder( tail );
         }
     }
