@@ -76,7 +76,7 @@ namespace psi::vm
 // @ https://github.com/psiha/vm/issues/31
 //
 // In addition, this library needs a trait like
-// 'trivially_destructible_after_move' (see vector.hpp) and a trait
+// 'trivially_destructible_after_move' (see trivially_destructible_after_move.hpp) and a trait
 // that would signal a type that contains no absolute pointers or references
 // (so that it can be trivially persisted to disk or used for IPC, see
 // 'does_not_hold_addresses' in vm_vector.hpp).
@@ -144,6 +144,7 @@ template <typename E, typename T, typename A> bool constexpr is_trivially_moveab
 template <typename S> bool constexpr is_trivially_moveable<std::function<S>>{ true };
 #endif
 template <typename... T> bool constexpr is_trivially_moveable<std::variant<T...>>{( is_trivially_moveable<T> && ... )};
+
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm

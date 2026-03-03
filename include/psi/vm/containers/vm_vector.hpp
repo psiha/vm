@@ -23,7 +23,7 @@ namespace psi::vm
 ///
 /// An alias for vector<vm_storage<T, sz_t>>. All element-level operations
 /// are inherited from vector<>; storage management (map_file, map_memory,
-/// COW copy, etc.) is provided by vm_storage / contiguous_storage.
+/// COW copy, etc.) is provided by vm_storage / mem_mapping.
 ///
 /// Uses exact-fit growth {1,1} instead of the default geometric {3,2}
 /// because file-backed storage allocates the full capacity to the file via

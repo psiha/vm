@@ -30,6 +30,7 @@
 #include <psi/vm/allocators/crt.hpp>
 #include <psi/vm/containers/growth_policy.hpp>
 #include <psi/vm/containers/is_trivially_moveable.hpp>
+#include <psi/vm/containers/trivially_destructible_after_move.hpp>
 #include <psi/vm/containers/noninitialized_array.hpp>
 
 #include <boost/assert.hpp>
@@ -232,7 +233,8 @@ private:
                 auto   const sz     { self.size()          };
                 auto * const p      { al::template allocate<alignment>( new_capacity ) };
                 std::uninitialized_move_n( old_ptr, sz, p );
-                std::destroy_n( old_ptr, sz );
+                if constexpr ( !trivially_destructible_after_move_assignment<T> )
+                    std::destroy_n( old_ptr, sz );
                 al::template deallocate<alignment>( old_ptr, old_cap );
                 self.heap_data_ref() = p;
             }
@@ -247,7 +249,8 @@ private:
             else
             {
                 std::uninitialized_move_n( self.buffer_data(), sz, p );
-                std::destroy_n( self.buffer_data(), sz );
+                if constexpr ( !trivially_destructible_after_move_assignment<T> )
+                    std::destroy_n( self.buffer_data(), sz );
             }
             self.set_heap_state( p, new_capacity, sz );
         }
@@ -357,14 +360,16 @@ public:
         }
         else if ( other.is_heap() )
         {
-            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+            storage_.heap_ = other.storage_.heap_;
+            size_          = other.size_;
         }
         else
         {
             auto const sz{ other.size() };
             set_inline_size( sz );
             std::uninitialized_move_n( other.buffer_data(), sz, buffer_data() );
-            std::destroy_n( other.buffer_data(), sz );
+            if constexpr ( !trivially_destructible_after_move_assignment<T> )
+                std::destroy_n( other.buffer_data(), sz );
         }
         other.size_ = 0; // inline-0: clear heap flag (heap pointer in other is now owned by *this)
     }
@@ -378,14 +383,16 @@ public:
         }
         else if ( other.is_heap() )
         {
-            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+            storage_.heap_ = other.storage_.heap_;
+            size_          = other.size_;
         }
         else
         {
             auto const sz{ other.size() };
             set_inline_size( sz );
             std::uninitialized_move_n( other.buffer_data(), sz, buffer_data() );
-            std::destroy_n( other.buffer_data(), sz );
+            if constexpr ( !trivially_destructible_after_move_assignment<T> )
+                std::destroy_n( other.buffer_data(), sz );
         }
         other.size_ = 0;
         return *this;
@@ -481,14 +488,16 @@ public:
         }
         else if ( other.is_heap() )
         {
-            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+            size_          = other.size_;
+            storage_.heap_ = other.storage_.heap_;
         }
         else
         {
             auto const sz{ other.size() };
             set_inline_size( sz );
             std::uninitialized_move_n( other.buffer_data(), sz, buffer_data() );
-            std::destroy_n( other.buffer_data(), sz );
+            if constexpr ( !trivially_destructible_after_move_assignment<T> )
+                std::destroy_n( other.buffer_data(), sz );
         }
         other.size_ = 0; // LSB=0, sz=0 -> inline-0
     }
@@ -502,14 +511,16 @@ public:
         }
         else if ( other.is_heap() )
         {
-            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+            size_          = other.size_;
+            storage_.heap_ = other.storage_.heap_;
         }
         else
         {
             auto const sz{ other.size() };
             set_inline_size( sz );
             std::uninitialized_move_n( other.buffer_data(), sz, buffer_data() );
-            std::destroy_n( other.buffer_data(), sz );
+            if constexpr ( !trivially_destructible_after_move_assignment<T> )
+                std::destroy_n( other.buffer_data(), sz );
         }
         other.size_ = 0;
         return *this;
@@ -617,14 +628,15 @@ public:
         }
         else if ( other.is_heap() )
         {
-            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+            storage_.heap_ = other.storage_.heap_;
         }
         else
         {
             auto const sz{ other.size() };
             set_inline_size( sz );
             std::uninitialized_move_n( other.buffer_data(), sz, buffer_data() );
-            std::destroy_n( other.buffer_data(), sz );
+            if constexpr ( !trivially_destructible_after_move_assignment<T> )
+                std::destroy_n( other.buffer_data(), sz );
         }
         other.storage_.inline_.sz_ = 0; // inline-0: clear LSB flag + size
     }
@@ -638,14 +650,15 @@ public:
         }
         else if ( other.is_heap() )
         {
-            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+            storage_.heap_ = other.storage_.heap_;
         }
         else
         {
             auto const sz{ other.size() };
             set_inline_size( sz );
             std::uninitialized_move_n( other.buffer_data(), sz, buffer_data() );
-            std::destroy_n( other.buffer_data(), sz );
+            if constexpr ( !trivially_destructible_after_move_assignment<T> )
+                std::destroy_n( other.buffer_data(), sz );
         }
         other.storage_.inline_.sz_ = 0;
         return *this;

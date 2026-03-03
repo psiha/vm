@@ -30,6 +30,7 @@
 #endif
 #include <psi/vm/containers/growth_policy.hpp>
 #include <psi/vm/containers/is_trivially_moveable.hpp>
+#include <psi/vm/containers/trivially_destructible_after_move.hpp>
 
 #include <boost/assert.hpp>
 
@@ -319,7 +320,8 @@ private:
         };
         std::uninitialized_move_n( p_array_, size_, guard.get() );
         auto * const new_ptr{ guard.release() }; // move succeeded, take ownership
-        std::destroy_n( p_array_, size_ );
+        if constexpr ( !trivially_destructible_after_move_assignment<T> )
+            std::destroy_n( p_array_, size_ );
         alloc().template deallocate<alignment>( p_array_, options.cache_capacity ? old_cap : size_type{} );
         p_array_ = new_ptr;
     }
