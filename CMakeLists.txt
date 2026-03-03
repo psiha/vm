@@ -96,6 +96,16 @@ endif()
 ## Target(s)
 ###################
 
+# Default to ON for standalone builds (testing), OFF when included from host project
+set( PSI_VM_MIMALLOC_DEFAULT ON )
+if ( NOT PROJECT_IS_TOP_LEVEL )
+    set( PSI_VM_MIMALLOC_DEFAULT OFF )
+endif()
+
+option( PSI_VM_MIMALLOC  "Pull and build mimalloc (Microsoft) allocator"  ${PSI_VM_MIMALLOC_DEFAULT} )
+option( PSI_VM_JEMALLOC  "Enable jemalloc allocator wrapper"              OFF )
+option( PSI_VM_TCMALLOC  "Enable tcmalloc (Google) allocator wrapper"     OFF )
+
 include( vm.cmake )
 
 target_link_libraries( psi_vm PUBLIC
@@ -124,12 +134,7 @@ target_precompile_headers( psi_vm PUBLIC src/pch.hpp )
 ## Optional allocator backends
 ###################
 
-# Default to ON for standalone builds (testing), OFF when included from host project
-option( PSI_VM_MIMALLOC  "Pull and build mimalloc (Microsoft) allocator"  ON  )
-option( PSI_VM_JEMALLOC  "Enable jemalloc allocator wrapper"              OFF )
-option( PSI_VM_TCMALLOC  "Enable tcmalloc (Google) allocator wrapper"     OFF )
-
-if ( PSI_VM_MIMALLOC )
+if ( PSI_VM_MIMALLOC AND NOT TARGET mimalloc-static )
     include( FetchContent )
     set( MI_OVERRIDE     OFF CACHE BOOL "" FORCE )
     set( MI_BUILD_SHARED OFF CACHE BOOL "" FORCE )
@@ -137,8 +142,6 @@ if ( PSI_VM_MIMALLOC )
     set( MI_BUILD_OBJECT OFF CACHE BOOL "" FORCE )
     FetchContent_Declare( mimalloc GIT_REPOSITORY https://github.com/microsoft/mimalloc.git GIT_TAG v3.2.8 GIT_SHALLOW TRUE )
     FetchContent_MakeAvailable( mimalloc )
-    target_link_libraries( psi_vm PUBLIC mimalloc-static )
-    target_compile_definitions( psi_vm PUBLIC PSI_VM_HAS_MIMALLOC=1 )
 endif()
 
 

@@ -24,9 +24,6 @@
 #ifdef _WIN32
 #   include <psi/vm/detail/nt.hpp>
 #elif defined( __linux__ )
-#   ifndef _GNU_SOURCE
-#       define _GNU_SOURCE
-#   endif
 #   include <sys/mman.h>
 #elif defined( __APPLE__ )
 #   include <mach/mach_init.h>

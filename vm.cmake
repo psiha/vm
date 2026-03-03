@@ -43,6 +43,10 @@ add_library( psi_vm STATIC ${vm_public_headers} ${vm_sources} )
 add_library( psi::vm ALIAS psi_vm )
 target_include_directories( psi_vm PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include" )
 
+if ( CMAKE_SYSTEM_NAME MATCHES "Linux" )
+  target_compile_definitions( psi_vm PRIVATE _GNU_SOURCE )
+endif()
+
 # Minimum Windows version: Win11 (placeholder VM APIs guaranteed available)
 if ( WIN32 )
   target_compile_definitions( psi_vm PUBLIC NTDDI_VERSION=0x0A00000E )

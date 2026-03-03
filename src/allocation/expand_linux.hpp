@@ -14,10 +14,6 @@
 //------------------------------------------------------------------------------
 #pragma once
 #ifdef __linux__
-
-#ifndef _GNU_SOURCE
-#   define _GNU_SOURCE
-#endif
 #include <sys/mman.h>
 
 #include <psi/vm/allocation.hpp> // reallocation_type
