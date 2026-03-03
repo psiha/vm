@@ -551,13 +551,13 @@ bptree_base::new_node()
         cached_node.mark_dirty();
         return as<node_placeholder>( cached_node );
     }
-    auto & new_node{ nodes_.emplace_back() };
-    BOOST_ASSUME( !new_node.num_vals );
-    BOOST_ASSUME( !new_node.left     );
-    BOOST_ASSUME( !new_node.right    );
-    new_node.mark_dirty();
+    auto & new_nd{ nodes_.emplace_back() };
+    BOOST_ASSUME( !new_nd.num_vals );
+    BOOST_ASSUME( !new_nd.left     );
+    BOOST_ASSUME( !new_nd.right    );
+    new_nd.mark_dirty();
     update_cached_pointers();
-    return new_node;
+    return new_nd;
 }
 [[ gnu::noinline ]]
 void bptree_base::free( node_header & node ) noexcept
