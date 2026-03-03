@@ -271,8 +271,9 @@ TEST( bp_tree, nonunique )
 
     std::ranges::shuffle( numbers, rng );
     EXPECT_EQ( bpt.erase( test_num ), numbers.size() + 1 );
-    for ( auto const n : numbers )
+    for ( auto const n : numbers ) {
         EXPECT_EQ( bpt.erase( n ), n != test_num );
+    }
     EXPECT_TRUE( bpt.empty() );
 }
 
