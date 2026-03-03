@@ -27,8 +27,6 @@ namespace psi::vm
 
 [[ gnu::cold ]]
 mem_mapping::mem_mapping( mem_mapping const & source )
-    :
-    mem_mapping{}
 {
     if ( !source.has_attached_storage() )
         return;
@@ -37,15 +35,14 @@ mem_mapping::mem_mapping( mem_mapping const & source )
     if ( !total_mapped )
         return;
 
-    // Duplicate the section handle (kernel COW: new view gets PAGE_WRITECOPY).
-    // handle_traits::copy returns fallible_result — auto-throws on error.
-    handle_traits::native_t const dup_section{ win32::handle_traits::copy( source.mapping_.get() ) };
-
     // Duplicate file handle if source is file-backed (for correct
     // is_file_based() reporting and allocation_type in view mapping)
     file_handle cow_file;
     if ( source.mapping_.is_file_based() )
         cow_file = file_handle{ win32::handle_traits::copy( source.mapping_.file.get() ) };
+
+    // Duplicate the section handle (kernel COW: new view gets PAGE_WRITECOPY).
+    handle_traits::native_t const dup_section{ win32::handle_traits::copy( source.mapping_.get() ) };
 
     flags::viewing const cow_view_flags{ PAGE_WRITECOPY };
     mapping_ = { dup_section, cow_view_flags, source.mapping_.ap, std::move( cow_file ) };

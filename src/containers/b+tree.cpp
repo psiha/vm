@@ -635,8 +635,8 @@ void bptree_base::update_dbg_helpers() noexcept {
 [[ gnu::cold ]]
 bptree_base::bptree_base( bptree_base const & source )
     :
-    p_hdr_ {},
-    nodes_ { source.nodes_ } // COW copy via contiguous_storage copy ctor
+    p_hdr_{},
+    nodes_{ source.nodes_ } // COW copy via mem_mapping copy ctor
 {
     if ( nodes_.has_attached_storage() )
     {
@@ -707,10 +707,21 @@ void bptree_base::commit_to( bptree_base & target ) const noexcept
 #           ifndef NDEBUG
             // Cross-check: a clean node must be byte-identical to the target.
             auto const & tgt_node{ tgt_nodes[ i ] };
-            BOOST_ASSERT_MSG(
-                std::memcmp( &src_node, &tgt_node, stride ) == 0,
-                "node not marked dirty but differs from target — missing mark_dirty() call"
-            );
+            if ( std::memcmp( &src_node, &tgt_node, stride ) != 0 )
+            {
+                std::fprintf( stderr, "commit_to: node[%u] clean but differs! src_dirty=%d tgt_dirty=%d stride=%zu num_nodes=%u tgt_num_nodes=%u\n",
+                    i, src_node.tail.dirty, tgt_node.tail.dirty, stride, num_nodes, tgt_num_nodes );
+                // Find first differing byte
+                auto const * s{ reinterpret_cast<std::byte const *>( &src_node ) };
+                auto const * t{ reinterpret_cast<std::byte const *>( &tgt_node ) };
+                for ( std::size_t b{ 0 }; b < stride; ++b )
+                    if ( s[ b ] != t[ b ] )
+                    {
+                        std::fprintf( stderr, "  first diff at byte %zu: src=0x%02x tgt=0x%02x\n", b, (unsigned)s[ b ], (unsigned)t[ b ] );
+                        break;
+                    }
+                BOOST_ASSERT_MSG( false, "node not marked dirty but differs from target — missing mark_dirty() call" );
+            }
 #           endif
             continue;
         }
