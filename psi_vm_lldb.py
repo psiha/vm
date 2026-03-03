@@ -544,7 +544,11 @@ def __lldb_init_module(debugger, internal_dict):
     debugger.HandleCommand(f'type summary add -F psi_vm_lldb.bptree_summary -x "^{prefix}bptree_base$" -w psi_vm')
     debugger.HandleCommand(f'type summary add -F psi_vm_lldb.bptree_summary -x "^{prefix}bp_tree_impl<" -w psi_vm')
 
-    # small_vector
+    # vector<sbo_hybrid<...>> (expanded type name for small_vector)
+    debugger.HandleCommand(f'type summary add -F psi_vm_lldb.small_vector_summary -x "^{prefix}vector<{prefix}sbo_hybrid<" -w psi_vm')
+    debugger.HandleCommand(f'type synthetic add -l psi_vm_lldb.SmallVectorSynthProvider -x "^{prefix}vector<{prefix}sbo_hybrid<" -w psi_vm')
+
+    # Legacy: small_vector (if debugger shows typedef name)
     debugger.HandleCommand(f'type summary add -F psi_vm_lldb.small_vector_summary -x "^{prefix}small_vector<" -w psi_vm')
     debugger.HandleCommand(f'type synthetic add -l psi_vm_lldb.SmallVectorSynthProvider -x "^{prefix}small_vector<" -w psi_vm')
 
