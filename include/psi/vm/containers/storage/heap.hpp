@@ -219,7 +219,7 @@ public:
             // skip realloc, just update metadata. The allocator may release
             // trailing pages but the pointer is stable.
             if constexpr ( has_try_shrink_in_place<al> )
-                alloc().try_shrink_in_place( p_array_, size_, target_size );
+                BOOST_VERIFY( alloc().try_shrink_in_place( p_array_, size_, target_size ) );
         }
         else
         {

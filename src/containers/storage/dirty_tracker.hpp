@@ -83,9 +83,11 @@ struct dirty_tracker
 #endif
 
 private:
+#if !defined( __APPLE__ ) // macOS has no kernel tracking — these fields are unused there
     std::byte * base_{};
     std::size_t size_{};
     bool        snapshotted_{ false };
+#endif
 
 #ifdef __linux__
     mode mode_{ mode::none };
