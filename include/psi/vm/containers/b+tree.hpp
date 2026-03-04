@@ -2273,7 +2273,7 @@ protected: // pass-in-reg public function overloads/impls
         }
         // Key is past the end of the found leaf — advance to next leaf
         if ( p_leaf->right ) [[ unlikely ]] {
-            return base::make_iter( base::leaf( p_leaf->right ), 0 );
+            return base::make_iter( base::leaf( p_leaf->right ), node_size_type{ 0 } );
         }
         return end();
     }
@@ -3423,7 +3423,7 @@ bp_tree_impl<Key, Comparator>::insert_presorted( std::span<Key const> const pres
         return { first_leaf_slot, { prev_leaf_slot, leaf( prev_leaf_slot ).num_vals } };
     }};
 
-    this->reserve_additional( total_size );
+    this->reserve_additional( total_size * 4 / 3 ); // some headroom to account for splits and partial node fills
 
     if ( empty() ) [[ unlikely ]]
     {
