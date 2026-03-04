@@ -4,8 +4,9 @@
 [![License](https://img.shields.io/badge/license-BSL--1.0-blue.svg)](https://www.boost.org/LICENSE_1_0.txt)
 [![C++23](https://img.shields.io/badge/C%2B%2B-23-blue.svg)](https://en.cppreference.com/w/cpp/compiler_support)
 
-**Portable, lightweight, near-zero-overhead memory mapping, virtual memory management, containers and utilities.**
+**Cross-platform virtual memory primitives, in-place-expandable containers, and copy-on-write abstractions for C++23.**
 
+Provides direct access to low-level OS capabilities that `std::allocator` and `std::vector` cannot express: `mremap`, placeholder-based section expansion, `mach_vm_remap`, kernel-level COW page sharing, and dirty page tracking — all behind a portable, zero-overhead abstraction layer.
 
 ---
 
@@ -13,23 +14,75 @@
 
 Cross-platform abstractions over OS virtual memory and memory-mapped I/O:
 
-- **Allocation** — reserve/commit semantics (Windows `VirtualAlloc`, POSIX `mmap`+`madvise`)
+- **Reserve / commit** — two-phase allocation with explicit control over physical page backing (Windows `VirtualAlloc`, POSIX `mmap` + `madvise`)
 - **File mapping** — RAII mapped views with configurable access flags and sharing modes
+- **In-place view expansion** — platform-specific strategies to grow a mapping without relocation:
+  - Linux: `mremap()` — atomic, relocating, COW-safe
+  - Windows: `NtAllocateVirtualMemoryEx` placeholder split/replace — guaranteed in-place growth with trailing placeholder over-reservation
+  - macOS: `mach_vm_remap()` — zero-copy page transfer to a new region
+- **Copy-on-write cloning** — kernel-level page sharing (not deep copy):
+  - Windows: `PAGE_WRITECOPY` section views — kernel breaks COW per page on first write
+  - POSIX file-backed: `dup(fd)` + `MAP_PRIVATE`
+  - Linux anonymous: `memfd_create` + `MAP_PRIVATE` (true kernel COW, not memcpy)
+  - macOS anonymous: `mach_vm_remap(copy=TRUE)`
+- **Dirty page tracking** — detect which pages were modified since a COW snapshot:
+  - Linux: `userfaultfd` WP_ASYNC (kernel 6.1+), soft-dirty fallback (`/proc/self/pagemap`)
+  - Windows: `QueryWorkingSetEx` (batch, single syscall, detects COW via Shared→Private transition)
+  - All platforms: node-level dirty flag fallback
 - **Shared memory** — IPC-ready shared memory objects
-- **Protection** — page-level read/write/execute protection control
-- **Alignment utilities** — aligned allocation, page-size queries
+- **Page protection** — read/write/execute control at page granularity
+- **Alignment utilities** — `commit_granularity`, `reserve_granularity`, page-size queries
 
 ---
 
-## Vectors
+## Containers
 
-| Container | Description |
-|-----------|-------------|
-| `small_vector<T, N>` | **Small Vector** — inline (stack) buffer with heap spill. Three layout modes: *compact* (MSB tag, trivially relocatable, `[[clang::trivial_abi]]`), *compact_lsb* (LSB tag, optimal LE addressing), *pointer_based* (LLVM/Boost style, type-erasable via `small_vector_base<T>`). Configurable `geometric_growth` factor, `sz_t`, and alignment |
-| `tr_vector<T>` | **Trivially Relocatable Vector** — exploits trivial relocatability for move/realloc without element-wise copy |
-| `vm_vector<T>` | **VM-backed Vector** — persistent storage via memory-mapped files or shared memory, with configurable headers and allocation granularity |
-| `fc_vector<T, N>` | **Fixed Capacity Vector** — inline (stack) storage with compile-time capacity bound (`inplace_vector`-like) |
-| `vector_impl<D>` | **CRTP Base** — reusable deducing-this mixin implementing the standard vector interface boilerplate over a concrete storage backend |
+### Design
+
+The container system is built on a single **`vector<Storage, Growth>`** class template with two orthogonal parameters:
+
+- **`Storage`** — how memory is allocated and mapped (heap, stack, memory-mapped file, SBO hybrid)
+- **`Growth`** — capacity expansion policy: `geometric_growth{num, den}` (default `{3,2}` = 1.5x; `{1,1}` = exact-fit)
+
+`vector<Storage, Growth>` provides the full standard interface (push_back, insert, erase, iterators, copy/move semantics). Storage provides raw memory management. Growth controls when and how much to over-allocate. The three concerns are fully orthogonal.
+
+### Storage backends
+
+| Storage | Description |
+|---------|-------------|
+| `heap_storage<T>` | Heap-allocated array with pluggable allocator (default: `mimalloc` on Windows/macOS, `crt` on Linux). Supports `heap_options` for capacity caching, geometric growth, and alignment |
+| `fixed_storage<T, N>` | Inline (stack) array with compile-time capacity bound. Configurable overflow handler |
+| `sbo_hybrid<T, N>` | Small Buffer Optimization: inline stack buffer with automatic heap spill on overflow. Three compile-time union-based layout modes (*embedded*, *compact*, *compact_lsb*). All layouts are trivially relocatable when T is |
+| `vm_storage<T>` | Persistent storage via memory-mapped files or shared memory, with configurable headers, COW cloning, and kernel-level in-place expansion |
+
+### Convenience aliases
+
+| Alias | Definition | Description |
+|-------|-----------|-------------|
+| `heap_vector<T>` | `= vector<heap_storage<T>>` | Heap-allocated vector. Unlike `std::vector`, supports in-place expansion via allocator `expand` / `_expand` / `mi_expand` — avoids the double-allocation + element-wise move inherent to `std::vector`'s limited allocator interface. Works with all element types |
+| `fc_vector<T, N>` | `= vector<fixed_storage<T, N>>` | Fixed-capacity inline vector (`inplace_vector`-like) |
+| `vm_vector<T>` | `= vector<vm_storage<T>>` | VM-backed persistent vector with exact-fit growth (`{1,1}`). Supports file-backed and anonymous mappings, COW cloning, and kernel-level in-place expansion via `mremap` / placeholders / `mach_vm_remap` |
+| `small_vector<T, N>` | `= vector<sbo_hybrid<T, N>>` | Inline (stack) buffer with heap spill. Three layout modes: *embedded* (default, sz_ packed inside union), *compact* (MSB tag), *compact_lsb* (LSB tag, optimal LE addressing). Layout auto-selected or explicitly configured via `sbo_options` |
+
+### Allocators
+
+All heap-based storage uses allocators derived from the `allocator_base<Derived, T, sz_t>` CRTP base, which provides the [N2045](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2006/n2045.html) "Version 2" allocator interface (`allocation_command`, `allocate_at_least`, single-node allocation, and generic resize dispatch).
+
+| Allocator | Backend | In-place expand | Notes |
+|-----------|---------|:-:|-------|
+| `crt_allocator` | `malloc`/`realloc` | MSVC `_expand` | Default on Linux (glibc). MSVC `_expand` enables in-place growth & shrink |
+| `mimalloc_allocator` | [mimalloc](https://github.com/microsoft/mimalloc) | `mi_expand` | Default on Windows & macOS. Best overall throughput |
+| `mi_scoped_heap_allocator` | mimalloc scoped heap | `mi_expand` | Routes through a thread-local `mi_heap_scope` RAII guard for pooled allocation. All allocations freed atomically on scope exit, or transferred to default heap via `release()` |
+| `dlmalloc_allocator` | Boost.Container alloc_lib | `boost_cont_grow` | Good in-place growth, guaranteed in-place shrink |
+| `jemalloc_allocator` | [jemalloc](https://github.com/jemalloc/jemalloc) | `je_xallocx` | Optional |
+| `tcmalloc_allocator` | [tcmalloc](https://github.com/google/tcmalloc) | `tc_realloc` | Optional |
+
+### Type traits
+
+| Trait | Header | Description |
+|-------|--------|-------------|
+| `is_trivially_moveable<T>` | `is_trivially_moveable.hpp` | Detects types safe for bitwise relocation (`memcpy`/`realloc`/`mremap`). Uses compiler builtins (P1144/P2786) when available, falls back to heuristics. User-specializable |
+| `trivially_destructible_after_move_assignment<T>` | `trivially_destructible_after_move.hpp` | Can the moved-from husk's destructor be elided? Defaults to `is_nothrow_move_assignable_v<T> \|\| is_trivially_destructible_v<T>`. User-specializable for types that violate the heuristic (e.g., node-based containers with heap-allocated sentinel nodes) |
 
 ---
 
@@ -138,20 +191,45 @@ target_link_libraries(your_target PRIVATE psi::vm)
 
 ```
 include/psi/vm/
-├── containers/         Flat containers, B+ tree, vector variants
-├── mapped_view/        RAII memory-mapped view wrappers
-├── mapping/            File & memory mapping primitives
-├── mappable_objects/   File handles, shared memory objects
-├── handles/            Cross-platform OS handle abstractions
-├── flags/              Access, protection, construction policy flags
-├── allocation.hpp      Reserve/commit allocation
-├── align.hpp           Alignment utilities
-├── protection.hpp      Memory protection flags
-└── span.hpp            Strongly-typed memory spans
+├── allocators/             Allocator backends
+│   ├── allocator_base.hpp  N2045 V2 CRTP base (allocation_command, allocate_at_least, resize)
+│   ├── crt.hpp             CRT malloc/realloc allocator
+│   ├── mimalloc.hpp        Microsoft mimalloc allocator
+│   ├── mi_scoped_heap.hpp  Scoped-heap allocator (pooled allocation with bulk free)
+│   ├── dlmalloc.hpp        Boost.Container dlmalloc allocator
+│   ├── jemalloc.hpp        jemalloc allocator
+│   └── tcmalloc.hpp        Google tcmalloc allocator
+├── containers/
+│   ├── storage/            Storage backends for vector<Storage>
+│   │   ├── heap.hpp        heap_storage (heap-allocated, pluggable allocator)
+│   │   ├── fixed.hpp       fixed_storage (inline, compile-time capacity)
+│   │   └── sbo_hybrid.hpp  sbo_hybrid (inline buffer + heap spill, 3 layout modes)
+│   ├── vector.hpp          vector<Storage, Growth> unified template
+│   ├── heap_vector.hpp     heap_vector<T> type alias (= vector<heap_storage<T>>)
+│   ├── fc_vector.hpp       fc_vector<T,N> type alias (= vector<fixed_storage<T,N>>)
+│   ├── vm_vector.hpp       vm_vector<T> (memory-mapped storage)
+│   ├── small_vector.hpp    small_vector<T,N> type alias (= vector<sbo_hybrid<T,N>>)
+│   ├── is_trivially_moveable.hpp       Trivial relocatability trait + stdlib specializations
+│   ├── trivially_destructible_after_move.hpp  Moved-from destructor elision trait + stdlib specializations
+│   ├── growth_policy.hpp   geometric_growth configurable growth factor
+│   ├── b+tree.hpp          B+ tree
+│   └── flat_*.hpp          Flat associative containers (set, map, multi*)
+├── mapped_view/            RAII memory-mapped view wrappers
+├── mapping/                File & memory mapping primitives
+├── mappable_objects/       File handles, shared memory objects
+├── handles/                Cross-platform OS handle abstractions
+├── flags/                  Access, protection, construction policy flags
+├── allocation.hpp          Reserve/commit allocation
+├── align.hpp               Alignment utilities
+├── protection.hpp          Memory protection flags
+└── span.hpp                Strongly-typed memory spans
 
-src/                    Platform-specific implementations (win32/posix)
-test/                   Google Test suite
-doc/                    Technical documentation & analyses
+src/                        Platform-specific implementations (win32/posix)
+test/                       Google Test suite
+doc/                        Technical documentation & analyses
+psi_vm.natvis               Visual Studio debugger visualizers
+psi_vm_lldb.py              LLDB Python pretty-printers
+psi_vm_gdb.py               GDB Python pretty-printers
 ```
 
 ---
@@ -168,13 +246,21 @@ Fetched automatically at configure time via CPM.cmake:
 | [psiha/err](https://github.com/psiha/err) | master | Error handling |
 | [psiha/build](https://github.com/psiha/build) | master | Build infrastructure |
 | [Google Test](https://github.com/google/googletest) | 1.15.2 | Testing (test target only) |
+| [mimalloc](https://github.com/microsoft/mimalloc) | latest | Allocator backend (ON by default, CMake: `PSI_VM_MIMALLOC`) |
+| [jemalloc](https://github.com/jemalloc/jemalloc) | — | Allocator backend (OFF by default, CMake: `PSI_VM_JEMALLOC`) |
+| [tcmalloc](https://github.com/google/tcmalloc) | — | Allocator backend (OFF by default, CMake: `PSI_VM_TCMALLOC`) |
 
 ---
 
 ## Debugger support
 
-- **Visual Studio**: [Natvis](https://learn.microsoft.com/en-us/visualstudio/debugger/create-custom-views-of-native-objects) visualizers for all container types (`psi_vm.natvis`, auto-loaded by CMake)
-- **LLDB**: Python pretty-printer script (`psi_vm_lldb.py`)
+| Debugger | File | Integration |
+|----------|------|-------------|
+| **Visual Studio** | [`psi_vm.natvis`](psi_vm.natvis) | Auto-loaded via CMake `target_sources`. Covers all vector types (heap, fixed, sbo_hybrid), flat containers, B+ tree, and `pass_in_reg` |
+| **LLDB** | [`psi_vm_lldb.py`](psi_vm_lldb.py) | `command script import /path/to/psi_vm_lldb.py` (add to `~/.lldbinit` or VSCode CodeLLDB `initCommands`) |
+| **GDB** | [`psi_vm_gdb.py`](psi_vm_gdb.py) | `source /path/to/psi_vm_gdb.py` (add to `~/.gdbinit` or VSCode cppdbg `setupCommands`) |
+
+All three debugger integrations support the same container types with layout-aware visualization for `small_vector`'s three union-based layouts (embedded, compact_lsb, compact).
 
 ---
 

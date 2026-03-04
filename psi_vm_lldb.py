@@ -12,6 +12,12 @@ Integration:
     "lldb.launch.initCommands": [
         "command script import /path/to/psi_vm_lldb.py"
     ]
+
+Type name notes:
+  heap_vector<T,sz,opts> = vector<heap_storage<T,sz,void,opts>, geometric_growth{}>
+  fc_vector<T,N,oh>    = vector<fixed_storage<T,N,oh>>
+  LLDB shows expanded type names, so regex patterns must match both
+  old (heap_vector/fc_vector) and new (vector<heap_storage/fixed_storage>) names.
 """
 
 import lldb
@@ -40,19 +46,31 @@ def get_child_by_name(valobj, name):
 
 
 def get_vector_data_and_size(valobj):
-    """Extract (data_ptr, size) from a std::vector, tr_vector, or fc_vector."""
+    """Extract (data_ptr, size) from a std::vector, vector<heap_storage>,
+    vector<fixed_storage>, heap_vector, or fc_vector."""
     type_name = valobj.GetType().GetUnqualifiedType().GetName()
 
-    if "tr_vector" in type_name:
-        p = valobj.GetChildMemberWithName("p_array_")
+    # vector<heap_storage<...>> or heap_vector: has p_array_ + size_
+    p = valobj.GetChildMemberWithName("p_array_")
+    if not p.IsValid():
+        p = get_child_by_name(valobj, "p_array_")
+    if p.IsValid():
         s = valobj.GetChildMemberWithName("size_")
+        if not s.IsValid():
+            s = get_child_by_name(valobj, "size_")
         return p, s.GetValueAsUnsigned(0)
 
-    if "fc_vector" in type_name:
+    # vector<fixed_storage<...>> or fc_vector: has size_ + array_
+    arr = valobj.GetChildMemberWithName("array_")
+    if not arr.IsValid():
+        arr = get_child_by_name(valobj, "array_")
+    if arr.IsValid():
         s = valobj.GetChildMemberWithName("size_")
-        arr = valobj.GetChildMemberWithName("array_")
-        data = arr.GetChildMemberWithName("data") if arr.IsValid() else valobj
-        return data.AddressOf(), s.GetValueAsUnsigned(0)
+        if not s.IsValid():
+            s = get_child_by_name(valobj, "size_")
+        data = arr.GetChildMemberWithName("data")
+        if data.IsValid():
+            return data.AddressOf(), s.GetValueAsUnsigned(0)
 
     # Assume libc++ std::vector layout: __begin_, __end_, __end_cap_
     begin = valobj.GetChildMemberWithName("__begin_")
@@ -64,8 +82,7 @@ def get_vector_data_and_size(valobj):
         size = (end_val - begin_val) // elem_size if elem_size > 0 else 0
         return begin, size
 
-    # MSVC STL layout (fallback, for cppvsdbg users shouldn't reach here)
-    # _Mypair._Myval2._Myfirst / _Mylast
+    # MSVC STL layout (fallback)
     pair = valobj.GetChildMemberWithName("_Mypair")
     if pair.IsValid():
         val2 = pair.GetChildMemberWithName("_Myval2")
@@ -95,16 +112,20 @@ def get_vector_data_and_size(valobj):
 
 
 # ==============================================================================
-# tr_vector
+# vector<heap_storage<...>> / heap_vector
 # ==============================================================================
 
-class TrVectorSynthProvider:
+class HeapVectorSynthProvider:
+    """Synthetic provider for vector<heap_storage<...>> (and legacy heap_vector).
+    Data members (inherited from heap_storage base): p_array_, size_."""
+
     def __init__(self, valobj, internal_dict):
         self.valobj = valobj
 
     def update(self):
-        self.p_array = self.valobj.GetChildMemberWithName("p_array_")
-        self.size = self.valobj.GetChildMemberWithName("size_").GetValueAsUnsigned(0)
+        self.p_array = get_child_by_name(self.valobj, "p_array_")
+        s = get_child_by_name(self.valobj, "size_")
+        self.size = s.GetValueAsUnsigned(0) if s.IsValid() else 0
 
     def num_children(self):
         return self.size
@@ -116,29 +137,34 @@ class TrVectorSynthProvider:
             return -1
 
     def get_child_at_index(self, index):
-        if index < 0 or index >= self.size:
+        if index < 0 or index >= self.size or not self.p_array.IsValid():
             return None
         elem_type = self.p_array.GetType().GetPointeeType()
         offset = index * elem_type.GetByteSize()
         return self.p_array.CreateChildAtOffset(f"[{index}]", offset, elem_type)
 
 
-def tr_vector_summary(valobj, internal_dict):
-    size = valobj.GetChildMemberWithName("size_").GetValueAsUnsigned(0)
+def heap_vector_summary(valobj, internal_dict):
+    s = get_child_by_name(valobj, "size_")
+    size = s.GetValueAsUnsigned(0) if s.IsValid() else 0
     return f"size={size}"
 
 
 # ==============================================================================
-# fc_vector
+# vector<fixed_storage<...>> / fc_vector
 # ==============================================================================
 
-class FcVectorSynthProvider:
+class FixedVectorSynthProvider:
+    """Synthetic provider for vector<fixed_storage<...>> (and legacy fc_vector).
+    Data members (inherited from fixed_storage base): size_, array_."""
+
     def __init__(self, valobj, internal_dict):
         self.valobj = valobj
 
     def update(self):
-        self.size = self.valobj.GetChildMemberWithName("size_").GetValueAsUnsigned(0)
-        arr = self.valobj.GetChildMemberWithName("array_")
+        s = get_child_by_name(self.valobj, "size_")
+        self.size = s.GetValueAsUnsigned(0) if s.IsValid() else 0
+        arr = get_child_by_name(self.valobj, "array_")
         self.data = arr.GetChildMemberWithName("data") if arr.IsValid() else None
 
     def num_children(self):
@@ -156,8 +182,9 @@ class FcVectorSynthProvider:
         return self.data.GetChildAtIndex(index, lldb.eNoDynamicValues, True)
 
 
-def fc_vector_summary(valobj, internal_dict):
-    size = valobj.GetChildMemberWithName("size_").GetValueAsUnsigned(0)
+def fixed_vector_summary(valobj, internal_dict):
+    s = get_child_by_name(valobj, "size_")
+    size = s.GetValueAsUnsigned(0) if s.IsValid() else 0
     return f"size={size}"
 
 
@@ -479,13 +506,19 @@ def pass_in_reg_summary(valobj, internal_dict):
 def __lldb_init_module(debugger, internal_dict):
     prefix = "psi::vm::"
 
-    # tr_vector
-    debugger.HandleCommand(f'type summary add -F psi_vm_lldb.tr_vector_summary -x "^{prefix}tr_vector<" -w psi_vm')
-    debugger.HandleCommand(f'type synthetic add -l psi_vm_lldb.TrVectorSynthProvider -x "^{prefix}tr_vector<" -w psi_vm')
+    # vector<heap_storage<...>> (expanded type name for heap_vector)
+    debugger.HandleCommand(f'type summary add -F psi_vm_lldb.heap_vector_summary -x "^{prefix}vector<{prefix}heap_storage<" -w psi_vm')
+    debugger.HandleCommand(f'type synthetic add -l psi_vm_lldb.HeapVectorSynthProvider -x "^{prefix}vector<{prefix}heap_storage<" -w psi_vm')
 
-    # fc_vector
-    debugger.HandleCommand(f'type summary add -F psi_vm_lldb.fc_vector_summary -x "^{prefix}fc_vector<" -w psi_vm')
-    debugger.HandleCommand(f'type synthetic add -l psi_vm_lldb.FcVectorSynthProvider -x "^{prefix}fc_vector<" -w psi_vm')
+    # vector<fixed_storage<...>> (expanded type name for fc_vector)
+    debugger.HandleCommand(f'type summary add -F psi_vm_lldb.fixed_vector_summary -x "^{prefix}vector<{prefix}fixed_storage<" -w psi_vm')
+    debugger.HandleCommand(f'type synthetic add -l psi_vm_lldb.FixedVectorSynthProvider -x "^{prefix}vector<{prefix}fixed_storage<" -w psi_vm')
+
+    # Legacy: heap_vector / fc_vector (if debugger shows typedef name)
+    debugger.HandleCommand(f'type summary add -F psi_vm_lldb.heap_vector_summary -x "^{prefix}heap_vector<" -w psi_vm')
+    debugger.HandleCommand(f'type synthetic add -l psi_vm_lldb.HeapVectorSynthProvider -x "^{prefix}heap_vector<" -w psi_vm')
+    debugger.HandleCommand(f'type summary add -F psi_vm_lldb.fixed_vector_summary -x "^{prefix}fc_vector<" -w psi_vm')
+    debugger.HandleCommand(f'type synthetic add -l psi_vm_lldb.FixedVectorSynthProvider -x "^{prefix}fc_vector<" -w psi_vm')
 
     # flat_set_impl (covers flat_set and flat_multiset via inheritance)
     debugger.HandleCommand(f'type summary add -F psi_vm_lldb.flat_set_summary -x "^{prefix}flat_set_impl<" -w psi_vm')
@@ -511,7 +544,11 @@ def __lldb_init_module(debugger, internal_dict):
     debugger.HandleCommand(f'type summary add -F psi_vm_lldb.bptree_summary -x "^{prefix}bptree_base$" -w psi_vm')
     debugger.HandleCommand(f'type summary add -F psi_vm_lldb.bptree_summary -x "^{prefix}bp_tree_impl<" -w psi_vm')
 
-    # small_vector
+    # vector<sbo_hybrid<...>> (expanded type name for small_vector)
+    debugger.HandleCommand(f'type summary add -F psi_vm_lldb.small_vector_summary -x "^{prefix}vector<{prefix}sbo_hybrid<" -w psi_vm')
+    debugger.HandleCommand(f'type synthetic add -l psi_vm_lldb.SmallVectorSynthProvider -x "^{prefix}vector<{prefix}sbo_hybrid<" -w psi_vm')
+
+    # Legacy: small_vector (if debugger shows typedef name)
     debugger.HandleCommand(f'type summary add -F psi_vm_lldb.small_vector_summary -x "^{prefix}small_vector<" -w psi_vm')
     debugger.HandleCommand(f'type synthetic add -l psi_vm_lldb.SmallVectorSynthProvider -x "^{prefix}small_vector<" -w psi_vm')
 

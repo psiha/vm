@@ -4,23 +4,23 @@
 /// Provides flat_map (unique keys) and flat_multimap (equivalent keys allowed).
 ///
 /// Architecture:
-///   flat_impl<Storage, Compare> — shared base holding storage, comparator,
+///   flat_impl<Storage, Compare> -- shared base holding storage, comparator,
 ///     capacity (empty, size, clear, reserve, shrink_to_fit), key_comp,
 ///     comparison, merge, lookup index helpers, and deducing-this sort utilities.
-///   flat_map_impl<Key, T, Compare, KC, MC> — map-specific base (inherits flat_impl).
+///   flat_map_impl<Key, T, Compare, KC, MC> -- map-specific base (inherits flat_impl).
 ///     Adds iterator, lookup, positional erase, erase by key,
 ///     extract/replace, observers, erase_if.
 ///     Does NOT depend on uniqueness semantics.
-///   flat_map<Key, T, Compare, KC, MC> — unique sorted map (inherits flat_map_impl).
+///   flat_map<Key, T, Compare, KC, MC> -- unique sorted map (inherits flat_map_impl).
 ///     Adds unique emplace/insert, operator[], at(), try_emplace, insert_or_assign,
 ///     constructors with dedup, unique merge.
-///   flat_multimap<Key, T, Compare, KC, MC> — equivalent sorted map (inherits flat_map_impl).
+///   flat_multimap<Key, T, Compare, KC, MC> -- equivalent sorted map (inherits flat_map_impl).
 ///     Adds multi emplace/insert, constructors without dedup, multi merge.
 ///
 /// Extensions beyond C++23 std::flat_map:
-///   - reserve(n), shrink_to_fit()        — bulk pre-allocation / compaction
-///   - merge(source) (lvalue & rvalue)    — std::map-style element transfer
-///   - insert_range(sorted_hint_t, R&&)   — sorted bulk range insert
+///   - reserve(n), shrink_to_fit()        -- bulk pre-allocation / compaction
+///   - merge(source) (lvalue & rvalue)    -- std::map-style element transfer
+///   - insert_range(sorted_hint_t, R&&)   -- sorted bulk range insert
 ///
 /// Copyright (c) Domagoj Saric.
 ///
@@ -65,7 +65,7 @@ template <typename Key, typename T, typename Compare, typename KeyContainer, typ
 namespace detail {
 
 //==============================================================================
-// paired_storage — comparator-agnostic synchronized dual-container ops
+// paired_storage -- comparator-agnostic synchronized dual-container ops
 //
 // Serves as the flat_map storage type; flat_set uses a simpler single-container
 // storage directly.
@@ -141,7 +141,7 @@ struct paired_storage
         constexpr iterator_impl( iterator_impl const & ) noexcept = default;
         constexpr iterator_impl & operator=( iterator_impl const & ) noexcept = default;
 
-        // Implicit mutable → const conversion
+        // Implicit mutable -> const conversion
         constexpr iterator_impl( iterator_impl<false> const & other ) noexcept requires IsConst
             : storage_{ other.storage_ }, idx_{ other.idx_ } {}
 
@@ -317,13 +317,13 @@ struct paired_storage
 // (found by ADL at flat_impl template instantiation time)
 //==============================================================================
 
-// truncate_to — paired_storage overload (delegates to member)
+// truncate_to -- paired_storage overload (delegates to member)
 template <typename KC, typename MC>
 constexpr void truncate_to( paired_storage<KC,MC> & s, typename paired_storage<KC,MC>::size_type const n ) noexcept {
     s.truncate_to( n );
 }
 
-// keys_of — extract the keys container from paired_storage
+// keys_of -- extract the keys container from paired_storage
 template <typename KC, typename MC>
 constexpr auto       & keys_of( paired_storage<KC,MC>       & s ) noexcept { return s.keys; }
 template <typename KC, typename MC>
@@ -331,13 +331,13 @@ constexpr auto const & keys_of( paired_storage<KC,MC> const & s ) noexcept { ret
 
 // libstdc++ bug: ranges::sort/inplace_merge delegate to std::sort/inplace_merge
 // which create value_type temporaries. For zip_view this constructs tuple<T,T>
-// from tuple<T&,T&>&& — std::get on rvalue tuple of lvalue refs returns lvalue
-// refs (reference collapsing: T& && → T&), triggering copies instead of moves.
+// from tuple<T&,T&>&& -- std::get on rvalue tuple of lvalue refs returns lvalue
+// refs (reference collapsing: T& && -> T&), triggering copies instead of moves.
 // libstdc++'s own std::flat_map has the same bug (confirmed GCC 15.2.1).
 // Additionally, std::inplace_merge uses legacy iterator_category tag dispatch
 // (std::__rotate), failing entirely for zip_view iterators.
 // Workaround for inplace_merge: rotate-based merge using ranges primitives
-// (iter_swap, rotate, lower/upper_bound — no value_type temporaries).
+// (iter_swap, rotate, lower/upper_bound -- no value_type temporaries).
 #ifdef __GLIBCXX__
 template <std::random_access_iterator Iter, typename Comp, typename Proj>
 constexpr void proxy_inplace_merge( Iter first, Iter middle, Iter last, Comp comp, Proj proj ) {
@@ -363,7 +363,7 @@ constexpr void proxy_inplace_merge( Iter first, Iter middle, Iter last, Comp com
 }
 #endif
 
-// sort_storage — paired_storage overload (zip-view sort)
+// sort_storage -- paired_storage overload (zip-view sort)
 template <bool Unique, typename KC, typename MC, typename Comp>
 constexpr void sort_storage( paired_storage<KC,MC> & storage, Comp const & comp ) {
     auto zv{ storage.zip_view() };
@@ -374,7 +374,7 @@ constexpr void sort_storage( paired_storage<KC,MC> & storage, Comp const & comp 
     }
 }
 
-// sort_merge_storage — paired_storage overload (zip-view sort + merge)
+// sort_merge_storage -- paired_storage overload (zip-view sort + merge)
 template <bool Unique, bool WasSorted, typename KC, typename MC, typename Comp>
 constexpr void sort_merge_storage( paired_storage<KC,MC> & storage, Comp const & comp, typename paired_storage<KC,MC>::size_type const oldSize ) {
     if ( storage.keys.size() <= oldSize )
@@ -398,54 +398,54 @@ constexpr void sort_merge_storage( paired_storage<KC,MC> & storage, Comp const &
     }
 }
 
-// storage_erase_at — paired_storage overload
+// storage_erase_at -- paired_storage overload
 template <typename KC, typename MC>
 constexpr void storage_erase_at( paired_storage<KC,MC> & s, typename paired_storage<KC,MC>::size_type const pos ) noexcept {
     s.erase_element_at( pos );
 }
 
-// storage_erase_range — paired_storage overload
+// storage_erase_range -- paired_storage overload
 template <typename KC, typename MC>
 constexpr void storage_erase_range( paired_storage<KC,MC> & s, typename paired_storage<KC,MC>::size_type const first, typename paired_storage<KC,MC>::size_type const last ) noexcept {
     s.erase_elements( first, last );
 }
 
-// storage_move_append — paired_storage overload
+// storage_move_append -- paired_storage overload
 template <typename KC, typename MC>
 constexpr void storage_move_append( paired_storage<KC,MC> & dest, paired_storage<KC,MC> & source ) {
     dest.append_ranges( source.keys | std::views::as_rvalue, source.values | std::views::as_rvalue );
 }
 
-// storage_emplace_back_from — paired_storage overload
+// storage_emplace_back_from -- paired_storage overload
 template <typename KC, typename MC>
 constexpr void storage_emplace_back_from( paired_storage<KC,MC> & dest, paired_storage<KC,MC> & source, typename paired_storage<KC,MC>::size_type const idx ) {
     dest.keys  .emplace_back( std::move( source.keys  [ idx ] ) );
     dest.values.emplace_back( std::move( source.values[ idx ] ) );
 }
 
-// storage_emplace_back — paired_storage overload (key + mapped value args)
+// storage_emplace_back -- paired_storage overload (key + mapped value args)
 template <typename KC, typename MC, typename K, typename... Args>
 constexpr void storage_emplace_back( paired_storage<KC,MC> & s, K && key, Args &&... args ) {
     s.keys  .emplace_back( std::forward<K>( key ) );
     s.values.emplace_back( std::forward<Args>( args )... );
 }
 
-// storage_back — reference to the last emplaced mapped value
+// storage_back -- reference to the last emplaced mapped value
 template <typename KC, typename MC>
 constexpr auto & storage_back( paired_storage<KC,MC> & s ) noexcept { return s.values.back(); }
 
-// storage_move_element — paired_storage overload
+// storage_move_element -- paired_storage overload
 template <typename KC, typename MC>
 constexpr void storage_move_element( paired_storage<KC,MC> & s, typename paired_storage<KC,MC>::size_type const dst, typename paired_storage<KC,MC>::size_type const src ) noexcept {
     s.keys  [ dst ] = std::move( s.keys  [ src ] );
     s.values[ dst ] = std::move( s.values[ src ] );
 }
 
-// erase_if — paired_storage overload (map path)
+// erase_if -- paired_storage overload (map path)
 // zip_view yields tuple<Key&, Value&>; projection converts to pair so the
 // predicate receives pair<Key const &, Value &> as mandated by the standard.
 // The projection is required for indirect_unary_predicate constraint
-// satisfaction on all three implementations (P2165R4 tuple→pair implicit
+// satisfaction on all three implementations (P2165R4 tuple->pair implicit
 // conversion does not satisfy the constraint).
 // Exception-safe: clears on predicate exception (basic guarantee) to
 // maintain key/value synchronisation.
@@ -472,7 +472,7 @@ constexpr auto erase_if( paired_storage<KC,MC> & s, Pred pred ) {
 
 
 //==============================================================================
-// flat_map_impl — shared base for flat_map and flat_multimap
+// flat_map_impl -- shared base for flat_map and flat_multimap
 //
 // Provides everything that does NOT depend on uniqueness semantics:
 //   iterators, lookup, positional erase, erase by key,
@@ -504,7 +504,7 @@ class flat_map_impl
 
 public:
     //--------------------------------------------------------------------------
-    // Member types (key_compare, nothrow_move_constructible — inherited)
+    // Member types (key_compare, nothrow_move_constructible -- inherited)
     //--------------------------------------------------------------------------
     using typename flat_base::size_type;
     using typename flat_base::difference_type;
@@ -517,7 +517,7 @@ public:
     using mapped_container_type = MappedContainer;
     using containers            = storage;
 
-    // Inherited from flat_impl → Komparator
+    // Inherited from flat_impl -> Komparator
     using flat_base::transparent_comparator;
     using typename flat_base::key_const_arg;
 
@@ -532,7 +532,7 @@ public:
     };
 
     //--------------------------------------------------------------------------
-    // Iterator — SCARY: type depends on KC/MC, not on Compare
+    // Iterator -- SCARY: type depends on KC/MC, not on Compare
     //--------------------------------------------------------------------------
 public:
     using iterator               = typename storage::iterator;
@@ -547,17 +547,17 @@ public:
     constexpr auto end  ( this auto && self ) noexcept { return self.storage_.end  (); }
 
     //--------------------------------------------------------------------------
-    // Capacity (empty, size, reserve, shrink_to_fit — inherited from flat_impl)
+    // Capacity (empty, size, reserve, shrink_to_fit -- inherited from flat_impl)
     //--------------------------------------------------------------------------
     [[nodiscard]] constexpr size_type max_size() const noexcept { return std::min( this->storage_.keys.max_size(), this->storage_.values.max_size() ); }
 
     //--------------------------------------------------------------------------
-    // Lookup — find, contains, count, lower_bound, upper_bound, equal_range
+    // Lookup -- find, contains, count, lower_bound, upper_bound, equal_range
     // are all inherited from flat_impl.
     //--------------------------------------------------------------------------
 
     //--------------------------------------------------------------------------
-    // Modifiers — erase
+    // Modifiers -- erase
     //--------------------------------------------------------------------------
     constexpr iterator erase( const_iterator const pos ) noexcept { return this->erase_pos_impl( pos ); }
     constexpr iterator erase(       iterator const pos ) noexcept { return erase( const_iterator{ pos } ); }
@@ -577,7 +577,7 @@ public:
     }
 
     //--------------------------------------------------------------------------
-    // Observers (key_comp, key_comp_mutable — inherited from flat_impl)
+    // Observers (key_comp, key_comp_mutable -- inherited from flat_impl)
     //--------------------------------------------------------------------------
     [[nodiscard]] constexpr value_compare value_comp() const noexcept { return value_compare{ this->key_comp() }; }
 
@@ -586,7 +586,7 @@ public:
 
     // erase_if: inherited from flat_impl (friend, found via ADL)
 
-    // Key-container iterator → map iterator (compute index, construct zip iterator)
+    // Key-container iterator -> map iterator (compute index, construct zip iterator)
     constexpr auto iter_from_key( this auto && self, auto const key_it ) noexcept {
         auto const idx{ static_cast<size_type>( key_it - self.storage_.keys.begin() ) };
         return self.make_iter( idx );
@@ -597,7 +597,7 @@ public:
         return self.storage_.make_iter( pos );
     }
 
-    // Iterator → index conversion
+    // Iterator -> index conversion
     constexpr size_type iter_index( const_iterator const it ) const noexcept {
         return it.index();
     }
@@ -617,13 +617,13 @@ protected:
         BOOST_ASSERT( this->storage_.keys.size() == this->storage_.values.size() );
     }
 
-    // "Fake deducing-this" forwarder — passes Derived & through to flat_impl
+    // "Fake deducing-this" forwarder -- passes Derived & through to flat_impl
     template <typename Derived, typename... Args>
     requires std::derived_from<std::remove_cvref_t<Derived>, flat_map_impl>
     constexpr flat_map_impl( Derived & self, Args &&... args )
         : flat_base{ self, std::forward<Args>( args )... } {}
 
-    // Pre-sorted iterator pair (no Derived needed — no sorting)
+    // Pre-sorted iterator pair (no Derived needed -- no sorting)
     template <std::input_iterator InputIt>
     constexpr flat_map_impl( Compare const & comp, InputIt first, InputIt last )
         : flat_base{ comp, first, last } {}
@@ -636,7 +636,7 @@ protected:
 
 
 //==============================================================================
-// flat_map — unique sorted map
+// flat_map -- unique sorted map
 //==============================================================================
 
 template
@@ -667,7 +667,7 @@ public:
     using base::transparent_comparator;
 
     //--------------------------------------------------------------------------
-    // Constructors — one-liners via "fake deducing-this" base constructors
+    // Constructors -- one-liners via "fake deducing-this" base constructors
     //--------------------------------------------------------------------------
     constexpr flat_map() = default;
 
@@ -710,7 +710,7 @@ public:
     }
 
     //--------------------------------------------------------------------------
-    // Swap (type-safe: only flat_map ↔ flat_map, not flat_map ↔ flat_multimap)
+    // Swap (type-safe: only flat_map <-> flat_map, not flat_map <-> flat_multimap)
     //--------------------------------------------------------------------------
     constexpr void swap( flat_map & other ) noexcept { this->swap_impl( other ); }
     friend constexpr void swap( flat_map & a, flat_map & b ) noexcept { a.swap( b ); }
@@ -740,17 +740,17 @@ public:
     }
 
     //--------------------------------------------------------------------------
-    // Lookup — find, contains, count, lower_bound, upper_bound, equal_range
+    // Lookup -- find, contains, count, lower_bound, upper_bound, equal_range
     // inherited from flat_impl. count() uses self.unique for optimization.
     //--------------------------------------------------------------------------
 
     //--------------------------------------------------------------------------
-    // Modifiers — optimized erase by key for unique keys
+    // Modifiers -- optimized erase by key for unique keys
     //--------------------------------------------------------------------------
 #if !defined( _MSC_VER ) && !defined( __GNUC__ )
     using base::erase; // positional + range + by-key from flat_map_impl
 #else
-    // Explicit forwarding — see flat_set comment about using-declaration hiding bug.
+    // Explicit forwarding -- see flat_set comment about using-declaration hiding bug.
     constexpr iterator erase( const_iterator const pos ) noexcept { return base::erase( pos ); }
     constexpr iterator erase(       iterator const pos ) noexcept { return base::erase( pos ); }
     constexpr iterator erase( const_iterator const first, const_iterator const last ) noexcept { return base::erase( first, last ); }
@@ -765,10 +765,10 @@ public:
     }
 
     //--------------------------------------------------------------------------
-    // Modifiers — unique insert / emplace
+    // Modifiers -- unique insert / emplace
     //--------------------------------------------------------------------------
-    using base::insert;       // bulk insert, initializer_list, sorted bulk — from flat_impl
-    using base::insert_range; // insert_range, sorted insert_range — from flat_impl
+    using base::insert;       // bulk insert, initializer_list, sorted bulk -- from flat_impl
+    using base::insert_range; // insert_range, sorted insert_range -- from flat_impl
 
     constexpr auto insert( value_type const & v ) { return emplace( v.first, v.second ); }
     constexpr auto insert( value_type &&      v ) { return emplace( std::move( v.first ), std::move( v.second ) ); }
@@ -836,7 +836,7 @@ public:
 
 
 //==============================================================================
-// flat_multimap — sorted map with equivalent keys allowed
+// flat_multimap -- sorted map with equivalent keys allowed
 //==============================================================================
 
 template
@@ -865,7 +865,7 @@ public:
     static constexpr bool unique{ false };
 
     //--------------------------------------------------------------------------
-    // Constructors — one-liners via "fake deducing-this" base constructors
+    // Constructors -- one-liners via "fake deducing-this" base constructors
     //--------------------------------------------------------------------------
     constexpr flat_multimap() = default;
 
@@ -914,10 +914,10 @@ public:
     friend constexpr void swap( flat_multimap & a, flat_multimap & b ) noexcept { a.swap( b ); }
 
     //--------------------------------------------------------------------------
-    // Modifiers — multi insert / emplace
+    // Modifiers -- multi insert / emplace
     //--------------------------------------------------------------------------
-    using base::insert;       // bulk insert, initializer_list, sorted bulk — from flat_impl
-    using base::insert_range; // insert_range, sorted insert_range — from flat_impl
+    using base::insert;       // bulk insert, initializer_list, sorted bulk -- from flat_impl
+    using base::insert_range; // insert_range, sorted insert_range -- from flat_impl
 
     constexpr auto insert( value_type const & v ) { return emplace( v.first, v.second ); }
     constexpr auto insert( value_type &&      v ) { return emplace( std::move( v.first ), std::move( v.second ) ); }
@@ -944,7 +944,7 @@ public:
 
 
 //------------------------------------------------------------------------------
-// Deduction guides — flat_map
+// Deduction guides -- flat_map
 //------------------------------------------------------------------------------
 
 // Container pair (unsorted)
@@ -992,7 +992,7 @@ flat_map( sorted_unique_t, std::initializer_list<std::pair<Key, T>>, Comp = Comp
 
 
 //------------------------------------------------------------------------------
-// Deduction guides — flat_multimap
+// Deduction guides -- flat_multimap
 //------------------------------------------------------------------------------
 
 // Container pair (unsorted)

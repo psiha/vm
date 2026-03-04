@@ -79,8 +79,19 @@ struct [[ clang::trivial_abi ]] pass_in_reg
 
     using  value_type = T;
     using stored_type = std::conditional_t<pass_by_val, T, typename optimal_const_ref<T>::type>;
+    // Primary: brace-init (handles aggregates, same-type, multi-arg — rejects narrowing)
     BOOST_FORCEINLINE
     constexpr pass_in_reg( auto const &... args ) noexcept requires requires { stored_type{ args... }; } : value{ args... } {}
+    // Fallback: single-arg implicit conversion that brace-init rejects as narrowing.
+    // Matches std::vector::push_back behavior (allows int→uint via implicit conversion).
+    // Only selected when the primary (brace) constructor fails for the given type.
+    template <typename U>
+    BOOST_FORCEINLINE
+    constexpr pass_in_reg( U const & arg ) noexcept
+        requires( !std::same_as<std::remove_cvref_t<U>, pass_in_reg> &&
+                   std::is_convertible_v<U, stored_type> &&
+                  !requires { stored_type{ arg }; } ) // brace-init would reject (narrowing)
+        : value( static_cast<stored_type>( arg ) ) {}
     constexpr pass_in_reg( pass_in_reg const &  ) noexcept = default;
     constexpr pass_in_reg( pass_in_reg       && ) noexcept = default;
 
@@ -105,23 +116,23 @@ pass_in_reg( T ) -> pass_in_reg<T>;
 // Correctness for all three accepted key categories:
 //
 // 1. K == key_type (any comparator):
-//    pass_in_reg{ key } (CTAD) → pass_in_reg<key_type>. stored_type is either
-//    key_type by value (trivial/small) or optimal_const_ref (e.g. string →
-//    string_view).  The comparator always handles these — this is the
+//    pass_in_reg{ key } (CTAD) -> pass_in_reg<key_type>. stored_type is either
+//    key_type by value (trivial/small) or optimal_const_ref (e.g. string ->
+//    string_view).  The comparator always handles these -- this is the
 //    standard case.
 //
 // 2. K != key_type, transparent comparator:
-//    pass_in_reg{ key } (CTAD) → pass_in_reg<K>. Preserves the heterogeneous
+//    pass_in_reg{ key } (CTAD) -> pass_in_reg<K>. Preserves the heterogeneous
 //    type. The transparent comparator accepts it directly. This is the
 //    standard heterogeneous lookup case.
 //
 // 3. K != key_type, K convertible to key_type (non-transparent comparator):
-//    pass_in_reg{ key } (CTAD) → pass_in_reg<K>.  stored_type wraps K
+//    pass_in_reg{ key } (CTAD) -> pass_in_reg<K>.  stored_type wraps K
 //    optimally (by value if trivial, otherwise optimal_const_ref<K> which
 //    defaults to K const &).  The non-transparent comparator (e.g.
 //    std::less<key_type>) receives K and performs implicit conversion to
 //    key_type at each comparison call.  This is identical to what happens
-//    inside the standard non-template overload — the only difference is that
+//    inside the standard non-template overload -- the only difference is that
 //    the implicit conversion happens at the comparator call site rather than
 //    at the outer function boundary.  For callers who want single-conversion
 //    semantics, explicitly constructing key_type before calling find() is
@@ -129,12 +140,12 @@ pass_in_reg( T ) -> pass_in_reg<T>;
 //    transparent comparator.
 //
 // Optimality:
-//    The _impl function takes Reg auto const — pass_in_reg ensures the key
+//    The _impl function takes Reg auto const -- pass_in_reg ensures the key
 //    is passed in registers (by value for trivials/SIMD, optimal_const_ref
 //    for strings/ranges).  This avoids both unnecessary copies and
 //    unnecessary indirection through const-ref for small types.  The public
 //    wrapper is a thin inline template that only constructs the pass_in_reg
-//    and forwards — no code duplication in the _impl body.
+//    and forwards -- no code duplication in the _impl body.
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename T>
@@ -161,7 +172,7 @@ template <typename T>
 concept Reg = reg<T>;
 
 /// Wraps a value in pass_in_reg if it isn't already Reg-compatible.
-/// Returns by value — the result is always Reg and can be passed in registers.
+/// Returns by value -- the result is always Reg and can be passed in registers.
 template <typename T>
 [[nodiscard]] constexpr auto enreg( T const & v ) noexcept {
     if constexpr ( Reg<T> )

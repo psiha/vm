@@ -1,6 +1,6 @@
 #include <psi/vm/containers/b+tree.hpp>
 #include <psi/vm/containers/b+tree_print.hpp>
-#include <psi/vm/containers/tr_vector.hpp>
+#include <psi/vm/containers/heap_vector.hpp>
 
 #include <boost/assert.hpp>
 #include <boost/container/flat_set.hpp>
@@ -271,8 +271,9 @@ TEST( bp_tree, nonunique )
 
     std::ranges::shuffle( numbers, rng );
     EXPECT_EQ( bpt.erase( test_num ), numbers.size() + 1 );
-    for ( auto const n : numbers )
+    for ( auto const n : numbers ) {
         EXPECT_EQ( bpt.erase( n ), n != test_num );
+    }
     EXPECT_TRUE( bpt.empty() );
 }
 
@@ -322,12 +323,12 @@ TEST( bp_tree, insert_presorted )
         bptree_set<unsigned> bpt;
         bpt.map_memory( test_size );
 
-        tr_vector<unsigned> odds{ test_size / 2, no_init };
+        heap_vector<unsigned> odds{ test_size / 2, no_init };
         for ( auto i{ 0U }; i < test_size / 2; ++i )
             odds[ i ] = i * 2 + 1;
         EXPECT_EQ( bpt.insert_presorted( odds ), odds.size() );
 
-        tr_vector<unsigned> evens{ test_size / 2, no_init };
+        heap_vector<unsigned> evens{ test_size / 2, no_init };
         for ( auto i{ 0U }; i < test_size / 2; ++i )
             evens[ i ] = i * 2;
         EXPECT_EQ( bpt.insert_presorted( evens ), evens.size() );
@@ -467,14 +468,14 @@ TEST( bp_tree, insert_triggers_multiple_splits )
     auto const test_size{ max_per_node * 5 }; // Enough to cause multiple splits
 
     // First insert: every 3rd number
-    tr_vector<unsigned> first_batch;
+    heap_vector<unsigned> first_batch;
     for ( auto i{ 0U }; i < test_size; i += 3 )
         first_batch.push_back( i );
 
     EXPECT_EQ( bpt.insert( first_batch ), first_batch.size() );
 
     // Second insert: numbers that interleave with first batch
-    tr_vector<unsigned> second_batch;
+    heap_vector<unsigned> second_batch;
     for ( auto i{ 0U }; i < test_size; ++i ) {
         if ( i % 3 != 0 )
             second_batch.push_back( i );
@@ -1232,6 +1233,134 @@ TEST( bp_tree, erase_sorted_exact_mixed_present_absent )
     EXPECT_NE( bpt.find( 0U ), bpt.end() );  // still there
 
     indirect_values.clear();
+}
+
+TEST( bp_tree, lower_bound_from )
+{
+    // Test lower_bound_from edge cases:
+    //   pos=begin/middle/end × key=before/at/after/between/past-end
+    bptree_set<int> bpt;
+    bpt.map_memory( 1000 );
+
+    // Insert even numbers: 0, 2, 4, ..., 18 (10 elements)
+    for ( int i{ 0 }; i < 20; i += 2 )
+        bpt.insert( i );
+
+    auto const b{ bpt.begin() };
+    auto const e{ bpt.end() };
+
+    // --- pos=begin ---
+    {
+        // key exactly at begin (0): should find 0
+        auto it{ bpt.lower_bound_from( b, 0 ) };
+        ASSERT_NE( it, e );
+        EXPECT_EQ( *it, 0 );
+
+        // key between elements (1): should find 2
+        it = bpt.lower_bound_from( b, 1 );
+        ASSERT_NE( it, e );
+        EXPECT_EQ( *it, 2 );
+
+        // key before all elements (-1): should find 0 (first element)
+        // Note: lower_bound_from searches forward from pos, key < *pos
+        // means the pos itself is the answer
+        it = bpt.lower_bound_from( b, -1 );
+        ASSERT_NE( it, e );
+        EXPECT_EQ( *it, 0 );
+    }
+
+    // --- pos=middle (pointing at element 10) ---
+    {
+        auto mid{ bpt.find( 10 ) };
+        ASSERT_NE( mid, e );
+        ASSERT_EQ( *mid, 10 );
+
+        // key exactly at pos (10): should find 10
+        auto it{ bpt.lower_bound_from( mid, 10 ) };
+        ASSERT_NE( it, e );
+        EXPECT_EQ( *it, 10 );
+
+        // key after pos (11): should find 12
+        it = bpt.lower_bound_from( mid, 11 );
+        ASSERT_NE( it, e );
+        EXPECT_EQ( *it, 12 );
+
+        // key at next element (12): should find 12
+        it = bpt.lower_bound_from( mid, 12 );
+        ASSERT_NE( it, e );
+        EXPECT_EQ( *it, 12 );
+
+        // key before pos (9): find_next searches from offset, key < keys[offset]
+        // should still return 10 (the element at pos — first >= key from offset)
+        it = bpt.lower_bound_from( mid, 9 );
+        ASSERT_NE( it, e );
+        EXPECT_EQ( *it, 10 );
+
+        // key way before pos (1): same — first >= 1 from offset is 10
+        it = bpt.lower_bound_from( mid, 1 );
+        ASSERT_NE( it, e );
+        EXPECT_EQ( *it, 10 );
+    }
+
+    // --- pos=last element (18) ---
+    {
+        auto last{ bpt.find( 18 ) };
+        ASSERT_NE( last, e );
+        ASSERT_EQ( *last, 18 );
+
+        // key at last (18): should find 18
+        auto it{ bpt.lower_bound_from( last, 18 ) };
+        ASSERT_NE( it, e );
+        EXPECT_EQ( *it, 18 );
+
+        // key past all elements (19): should return end()
+        it = bpt.lower_bound_from( last, 19 );
+        EXPECT_EQ( it, e );
+
+        // key past all elements (100): should return end()
+        it = bpt.lower_bound_from( last, 100 );
+        EXPECT_EQ( it, e );
+    }
+
+    // --- Sequential forward scan (simulating cursor walk) ---
+    {
+        auto pos{ bpt.begin() };
+        // Search for each even number in order: should find exact match
+        for ( int i{ 0 }; i < 20; i += 2 ) {
+            auto it{ bpt.lower_bound_from( pos, i ) };
+            ASSERT_NE( it, e ) << "Failed to find " << i;
+            EXPECT_EQ( *it, i );
+            pos = it; // advance cursor
+        }
+    }
+
+    // --- Sequential with gaps (odd numbers — no exact match) ---
+    {
+        auto pos{ bpt.begin() };
+        for ( int i{ 1 }; i < 19; i += 2 ) {
+            auto it{ bpt.lower_bound_from( pos, i ) };
+            ASSERT_NE( it, e ) << "Failed lower_bound for " << i;
+            EXPECT_EQ( *it, i + 1 ) << "Expected next even number after " << i;
+            pos = it; // cursor advances to the found position
+        }
+    }
+
+    // --- Large tree to exercise cross-leaf navigation ---
+    {
+        bptree_set<int> big;
+        big.map_memory( 100000 );
+        for ( int i{ 0 }; i < 10000; i += 2 )
+            big.insert( i );
+
+        // Forward scan with gaps
+        auto pos{ big.begin() };
+        for ( int i{ 1 }; i < 9999; i += 200 ) {
+            auto it{ big.lower_bound_from( pos, i ) };
+            ASSERT_NE( it, big.end() ) << "Failed at key " << i;
+            EXPECT_EQ( *it, i + 1 ); // next even number
+            pos = it;
+        }
+    }
 }
 
 //------------------------------------------------------------------------------

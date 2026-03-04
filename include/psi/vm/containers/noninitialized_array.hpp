@@ -1,6 +1,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 /// Utility union for easier debugging: no need for special 'visualizers' over
-/// type-erased byte arrays — contained values are directly visible in the
+/// type-erased byte arrays -- contained values are directly visible in the
 /// debugger.
 ////////////////////////////////////////////////////////////////////////////////
 ///

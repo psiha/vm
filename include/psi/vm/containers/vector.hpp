@@ -1,0 +1,1269 @@
+////////////////////////////////////////////////////////////////////////////////
+///
+/// \file vector.hpp
+/// ----------------
+///
+/// Unified vector header: provides the vector<Storage, Growth> template that
+/// combines any storage backend with the standard container interface
+/// (push_back, iterators, etc.) directly in one class.
+///
+/// Usage:
+///   vector<vm_storage<T>>                      → vm_vector<T>
+///   vector<heap_storage<T, crt_allocator<T>>>  → heap_vector<T>
+///   vector<fixed_storage<T, N>>                → fc_vector<T, N>
+///   vector<sbo_hybrid<T, N>>                   → small_vector<T, N>
+///
+/// Copyright (c) Domagoj Saric.
+///
+/// Use, modification and distribution is subject to the
+/// Boost Software License, Version 1.0.
+/// (See accompanying file LICENSE_1_0.txt or copy at
+/// http://www.boost.org/LICENSE_1_0.txt)
+///
+/// For more information, see http://www.boost.org
+///
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+#pragma once
+
+#include <psi/vm/align.hpp>
+#include <psi/vm/containers/abi.hpp>
+#include <psi/vm/containers/growth_policy.hpp>
+#include <psi/vm/containers/is_trivially_moveable.hpp>
+#include <psi/vm/containers/trivially_destructible_after_move.hpp>
+
+#include <psi/build/disable_warnings.hpp>
+
+#include <boost/assert.hpp>
+#include <boost/config_ex.hpp>
+
+#include <algorithm>
+#include <concepts>
+#include <climits>
+#include <cstdint>
+#include <cstring>
+#include <iterator>
+#include <memory>
+#include <ranges>
+#include <span>
+#include <type_traits>
+#include <std_fix/const_iterator.hpp>
+//------------------------------------------------------------------------------
+#include <initializer_list>
+#include <utility>
+namespace boost::container { struct try_emplace_t; }
+//------------------------------------------------------------------------------
+namespace psi::vm
+{
+//------------------------------------------------------------------------------
+
+PSI_WARNING_DISABLE_PUSH()
+PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
+
+namespace detail
+{
+    // throw_out_of_range declared in abi.hpp, defined in vm_vector.cpp
+
+    template <typename T>
+    constexpr T * mutable_iter( T const * const ptr ) noexcept { return const_cast<T *>( ptr ); }
+
+    template <typename Base>
+    constexpr Base mutable_iter( std::basic_const_iterator<Base> const iter ) noexcept { return iter.base(); }
+#if defined( _LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR )
+    template <typename T>
+    auto mutable_iter( std::__bounded_iter<T const *> const iter ) noexcept { return reinterpret_cast<std::__bounded_iter<T *> const &>( iter ); }
+#elif _ITERATOR_DEBUG_LEVEL
+    template <typename T>
+    auto mutable_iter( std::_Span_iterator<T const> const iter ) noexcept { return reinterpret_cast<std::_Span_iterator<T> const &>( iter ); }
+#endif
+
+    struct init_policy_tag{};
+
+    // --- Storage-independent element movement algorithms ---
+    // Parameterized only on T, not on Storage. Avoids per-storage-type
+    // template instantiation for identical element-shifting logic.
+
+    /// Shift elements right by n positions to make room for insertion.
+    /// Operates on raw T* pointers — caller is responsible for
+    /// size bookkeeping and ensuring sufficient capacity.
+    template <typename T>
+    void shift_elements_right( T * const data, std::size_t const current_size, std::size_t const position, std::size_t const n ) noexcept( std::is_nothrow_move_constructible_v<T> )
+    {
+        auto const elements_to_move{ current_size - position };
+        if constexpr ( is_trivially_moveable<T> )
+        {
+            PSI_WARNING_DISABLE_PUSH()
+            PSI_WARNING_CLANG_DISABLE( -Wnontrivial-memcall ) // e.g. for trivial_abi std::string
+            // Clang does not use is_trivially_moveable/trivial_abi and is incorrect
+            // (i.e. an uninitialized_move_backwards is required)
+            std::memmove( &data[ position + n ], &data[ position ], elements_to_move * sizeof( T ) );
+            PSI_WARNING_DISABLE_POP()
+        }
+        else
+        {
+            // Phase 1: move the last min(n, elements_to_move) elements into
+            // truly uninitialized space past the old end. No overlap possible.
+            auto const uninit_count{ std::min( n, elements_to_move ) };
+            std::uninitialized_move
+            (
+                &data[ current_size - uninit_count ],
+                &data[ current_size ],
+                &data[ current_size ]
+            );
+            // Phase 2: shift remaining elements backward within initialized
+            // space (source and destination may overlap but move_backward
+            // handles right-to-left correctly).
+            if ( elements_to_move > n )
+            {
+                std::move_backward
+                (
+                    &data[ position ],
+                    &data[ position + elements_to_move - n ],
+                    &data[ current_size ]
+                );
+            }
+        }
+    }
+
+    /// Overwrite existing elements from an input range. Returns the number
+    /// of elements written (i.e. min(dest_count, source_count)).
+    /// Updates `first` to point past the consumed source elements.
+    template <typename T, typename It>
+    std::size_t overwrite_from_range( T * __restrict const dest, std::size_t const dest_count, It & first, It const last ) noexcept( std::is_nothrow_assignable_v<T &, decltype( *first )> )
+    {
+        if constexpr ( std::random_access_iterator<It> )
+        {
+            auto const n{ std::min( dest_count, static_cast<std::size_t>( std::distance( first, last ) ) ) };
+            auto const result{ std::ranges::copy_n( first, n, dest ) };
+            first = result.in;
+            return n;
+        }
+        else
+        {
+            std::size_t count{ 0 };
+            while ( ( first != last ) && ( count < dest_count ) )
+            {
+                dest[ count ] = *first;
+                ++first;
+                ++count;
+            }
+            return count;
+        }
+    }
+} // namespace detail
+
+template <std::unsigned_integral Target>
+[[ gnu::const ]] constexpr Target verified_cast( std::unsigned_integral auto const source ) noexcept
+{
+    auto constexpr target_max{ std::numeric_limits<Target>::max() };
+    BOOST_ASSUME( source <= target_max );
+    auto const result{ static_cast<Target>( source ) };
+    BOOST_ASSUME( result == source );
+    return result;
+}
+
+struct no_init_t      : detail::init_policy_tag{}; inline constexpr no_init_t      no_init     ;
+struct default_init_t : detail::init_policy_tag{}; inline constexpr default_init_t default_init;
+struct value_init_t   : detail::init_policy_tag{}; inline constexpr value_init_t   value_init  ;
+
+template <typename T>
+concept init_policy = std::is_base_of_v<detail::init_policy_tag, T>;
+
+
+/// Concept matching types that carry the psi_vm_vector_tag.
+template <typename T>
+concept psi_vm_vector = requires { typename std::remove_cvref_t<T>::psi_vm_vector_tag; };
+
+
+////////////////////////////////////////////////////////////////////////////////
+/// \class vector
+///
+/// \brief Storage-parameterized vector. The Storage class provides the
+///        backing memory (allocation, growth, shrinkage) while vector<>
+///        provides the standard container interface (push_back, iterators,
+///        copy/move, etc.) directly.
+///
+/// The Storage class must satisfy the VectorStorage contract:
+///   Required types: value_type, size_type
+///   Required static: storage_zero_initialized (bool constexpr)
+///   Required methods:
+///     T* data() noexcept / T const* data() const noexcept
+///     size_type size() const noexcept
+///     size_type capacity() const noexcept
+///     bool empty() const noexcept
+///     T* storage_init(size_type)
+///     T* storage_grow_to(size_type)
+///     T* storage_shrink_to(size_type) noexcept
+///     void storage_shrink_size_to(size_type) noexcept
+///     void storage_dec_size() noexcept
+///     void storage_inc_size() noexcept
+///     void storage_free() noexcept
+///   Optional methods:
+///     bool storage_try_expand_capacity(size_type) noexcept
+///     void swap(Storage &) noexcept
+///
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename Storage, geometric_growth Growth = geometric_growth{}>
+class [[ nodiscard, clang::trivial_abi ]] vector
+    :
+    public Storage
+{
+    using storage_t = Storage;
+
+public:
+    using psi_vm_vector_tag      = void; // tag for constraining free comparison operators
+    using value_type             = typename storage_t::value_type;
+    using size_type              = typename storage_t::size_type;
+    using       pointer          = value_type       *;
+    using const_pointer          = value_type const *;
+    using       reference        = value_type       &;
+    using const_reference        = value_type const &;
+#if 0 // fails for incomplete T
+    using param_const_ref        = std::conditional_t<can_be_passed_in_reg<value_type>, value_type const, pass_in_reg<value_type>>;
+#else
+    using param_const_ref        = pass_in_reg<value_type>;
+#endif
+    using difference_type        = std::make_signed_t<size_type>;
+#if defined( _LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR )
+    using       iterator         = std::__bounded_iter<pointer>;
+    using const_iterator         = std::basic_const_iterator<iterator>; // __bounded_iter<T> is not convertible to __bounded_iter<T const> so we have to use the std wrapper
+#elif _ITERATOR_DEBUG_LEVEL
+    // checked_array_iterator is deprecated so use the span iterator wrapper
+    using       iterator         = std::_Span_iterator<value_type>;
+    using const_iterator         = std::basic_const_iterator<iterator>; // same as for __bounded_iter
+#else
+    using       iterator         =       pointer;
+    using const_iterator         = const_pointer;
+#endif
+    using       reverse_iterator = std::reverse_iterator<      iterator>;
+    using const_reverse_iterator = std::reverse_iterator<const_iterator>;
+
+private:
+    constexpr auto begin_ptr( this auto & self ) noexcept { return self.data(); }
+    constexpr auto   end_ptr( this auto & self ) noexcept { return self.data() + self.size(); }
+    constexpr iterator make_iterator( value_type * const ptr ) noexcept
+    {
+        return
+#   if defined( _LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR )
+            std::__make_bounded_iter( ptr, begin_ptr(), end_ptr() );
+#   elif _ITERATOR_DEBUG_LEVEL
+            std::_Span_iterator{ ptr, begin_ptr(), end_ptr() };
+#   else
+            ptr;
+#   endif
+    }
+    constexpr iterator make_iterator( size_type const offset ) noexcept
+    {
+        auto const begin{ data() };
+        return make_iterator( begin + offset );
+    }
+    constexpr const_iterator make_iterator( size_type const offset ) const noexcept
+    {
+        return { const_cast<vector &>( *this ).make_iterator( offset ) };
+    }
+
+    // constructor helpers - for initializing the vector during construction
+    constexpr void initialized_impl( size_type const initial_size, no_init_t ) noexcept
+    {
+        storage_t::storage_init( initial_size );
+        BOOST_ASSUME( this->size() == initial_size );
+    }
+
+    // GCC 15.2.1 bug: when a base-class constructor inherited via
+    // `using base::base` writes through a CRTP static_cast<Impl&>(*this)
+    // downcast to a union member in the derived class, the optimizer's dead
+    // store elimination incorrectly treats those writes as dead after
+    // inlining (Release/LTO). Clobbering the data pointer prevents this.
+#if defined( __GNUC__ ) && !defined( __clang__ )
+    constexpr value_type * gcc_dse_workaround( value_type * p ) noexcept
+    {
+        if !consteval { asm volatile( "" : "+r"( p ) :: "memory" ); }
+        return p;
+    }
+#else
+    static constexpr value_type * gcc_dse_workaround( value_type * p ) noexcept { return p; }
+#endif
+
+    constexpr void initialized_impl( size_type const initial_size, default_init_t ) noexcept
+    {
+        initialized_impl( initial_size, no_init );
+        std::uninitialized_default_construct_n( gcc_dse_workaround( this->data() ), this->size() );
+    }
+    constexpr void initialized_impl( size_type const initial_size, value_init_t ) noexcept
+    {
+        initialized_impl( initial_size, no_init );
+        if constexpr ( std::is_trivially_constructible_v<value_type> && storage_t::storage_zero_initialized )
+        {
+            BOOST_ASSERT_MSG
+            (
+                !initial_size || ( *std::max_element( this->data(), this->size() ) == 0 ),
+                "Broken storage promise to zero-init"
+            );
+        }
+        else
+        {
+            std::uninitialized_value_construct_n( gcc_dse_workaround( this->data() ), this->size() );
+        }
+    }
+
+public:
+    // MSVC (VS 17.12.3) fails compilation if this is a variable
+    static bool consteval noexcept_storage() { return noexcept( std::declval<vector &>().storage_grow_to( size_type( 123 ) ) ); };
+
+    // non standard default: default-initialization
+    constexpr explicit vector( size_type const initial_size ) noexcept( noexcept_storage() && std::is_nothrow_default_constructible_v<value_type> ) : vector( initial_size, default_init ) {}
+    constexpr vector( size_type const initial_size, init_policy auto const policy ) noexcept( noexcept_storage() && std::is_nothrow_default_constructible_v<value_type> )
+        : storage_t{}
+    {
+        initialized_impl( initial_size, policy );
+    }
+
+    constexpr vector( size_type const count, param_const_ref const value ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
+        : storage_t{}
+    {
+        initialized_impl( count, no_init );
+        std::uninitialized_fill_n( gcc_dse_workaround( this->data() ), count, value );
+        BOOST_ASSUME( this->size() == count );
+    }
+
+    template <std::input_iterator It>
+    constexpr vector( It const first, It const last ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
+        : storage_t{}
+    {
+        if constexpr ( std::random_access_iterator<It> )
+        {
+            auto const sz{ static_cast<size_type>( std::distance( first, last ) ) };
+            initialized_impl( sz, no_init );
+            std::uninitialized_copy_n( first, sz, gcc_dse_workaround( this->data() ) );
+        }
+        else
+        {
+            initialized_impl( 0, no_init );
+            std::copy( first, last, std::back_inserter( *this ) );
+        }
+    }
+
+    constexpr vector( std::initializer_list<value_type> const initial_values ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
+        : vector( initial_values.begin(), initial_values.end() )
+    {}
+
+    //! <b>Effects</b>: Assigns the the range [first, last) to *this.
+    //!
+    //! <b>Throws</b>: If memory allocation throws or T's copy/move constructor/assignment or
+    //!   T's constructor/assignment from dereferencing InpIt throws.
+    //!
+    //! <b>Complexity</b>: Linear to n.
+    template <std::input_iterator It>
+    void assign( It first, It const last )
+    {
+        // Overwrite all elements we can from [first, last)
+        auto const overwritten{ detail::overwrite_from_range( data(), this->size(), first, last ) };
+
+        if ( first == last )
+        {
+            // There are no more elements in the sequence, erase remaining
+            auto const target_size{ static_cast<size_type>( overwritten ) };
+            std::destroy( data() + target_size, data() + this->size() );
+            this->storage_shrink_to( target_size );
+        }
+        else
+        {
+            // There are more elements in the range, insert the remaining ones
+            append_range( std::ranges::subrange( first, last ) );
+        }
+    }
+
+    template <std::random_access_iterator It>
+    void assign( It const first, It const last )
+    requires( std::is_trivially_destructible_v<value_type> )
+    {
+        auto const input_size{ static_cast<size_type>( std::distance( first, last ) ) };
+        resize( input_size, no_init );
+        std::uninitialized_copy_n( first, input_size, begin() );
+    }
+    template <std::ranges::range Rng>
+    void assign( Rng && data )
+    {
+        if constexpr ( std::ranges::sized_range<Rng> )
+        {
+            auto const input_size{ static_cast<size_type>( std::size( data ) ) };
+            if constexpr ( std::is_trivially_destructible_v<value_type> )
+            {
+                // Trivially destructible: no-init resize + uninitialized_* construction.
+                // Uses construction (not assignment) to handle type conversions.
+                resize( input_size, no_init );
+                if constexpr ( std::is_rvalue_reference_v<Rng &&> )
+                    std::uninitialized_move_n( std::ranges::begin( data ), input_size, this->data() );
+                else
+                    std::uninitialized_copy_n( std::ranges::begin( data ), input_size, this->data() );
+                return;
+            }
+            else
+            {
+                auto       first   { std::ranges::begin( data ) };
+                auto const last    { std::ranges::end  ( data ) };
+                auto const old_size{ this->size() };
+                // Phase 1: overwrite existing elements in-place.
+                auto const overwritten{ detail::overwrite_from_range( this->data(), old_size, first, last ) };
+                if ( input_size <= old_size )
+                {
+                    std::destroy( this->data() + overwritten, this->data() + old_size );
+                    this->storage_shrink_size_to( input_size );
+                }
+                else
+                {
+                    // Phase 2: reserve capacity (size stays at old_size for exception
+                    // safety — if construction throws, the dtor sees the correct size).
+                    this->reserve( input_size );
+                    if constexpr ( std::is_rvalue_reference_v<Rng &&> )
+                        std::uninitialized_move( first, last, this->data() + overwritten );
+                    else
+                        std::uninitialized_copy( first, last, this->data() + overwritten );
+                    // Commit: capacity already reserved, just update size_.
+                    this->storage_grow_to( input_size );
+                }
+                return;
+            }
+        }
+        else
+        {
+            auto const begin{ std::begin( data ) };
+            auto const end  { std::end  ( data ) };
+            if constexpr ( std::is_rvalue_reference_v<Rng> )
+                assign( std::make_move_iterator( begin ), std::make_move_iterator( end ) );
+            else
+                assign( begin, end );
+        }
+    }
+    void assign( vector && other ) noexcept( std::is_nothrow_move_assignable_v<vector> )
+    {
+        *this = std::move( other );
+    }
+    template <std::ranges::range Rng>
+    void assign_range( Rng && data ) { assign( std::forward<Rng>( data ) ); }
+
+    //! <b>Effects</b>: Assigns the n copies of val to *this.
+    //!
+    //! <b>Throws</b>: If memory allocation throws or
+    //!   T's copy/move constructor/assignment throws.
+    //!
+    //! <b>Complexity</b>: Linear to n.
+    void assign( size_type const n, param_const_ref val )
+    {
+        if constexpr ( std::is_trivially_destructible_v<value_type> )
+        {
+            resize( n, no_init );
+            std::uninitialized_fill_n( data(), n, val );
+        }
+        else
+        {
+            auto const current_size{ this->size() };
+            auto const overwrite_count{ std::min( n, current_size ) };
+            std::fill_n( begin(), overwrite_count, val );
+            if ( n > current_size )
+            {
+                auto const data{ grow_to( n, no_init ) };
+                std::uninitialized_fill_n( &data[ current_size ], n - current_size, val );
+            }
+            else
+            {
+                std::destroy( nth( n ), end() );
+                this->storage_shrink_size_to( n );
+            }
+        }
+    }
+
+    //////////////////////////////////////////////
+    //
+    //                iterators
+    //
+    //////////////////////////////////////////////
+
+    //! <b>Effects</b>: Returns an iterator to the first element contained in the vector.
+    //! <b>Throws</b>: Nothing.
+    //! <b>Complexity</b>: Constant.
+    [[ nodiscard ]]       iterator  begin()       noexcept { return make_iterator( size_type{ 0 } ); }
+    [[ nodiscard ]] const_iterator  begin() const noexcept { return const_cast<vector &>( *this ).begin(); }
+    [[ nodiscard ]] const_iterator cbegin() const noexcept { return begin(); }
+
+    //! <b>Effects</b>: Returns an iterator to the end of the vector.
+    //!
+    //! <b>Throws</b>: Nothing.
+    //!
+    //! <b>Complexity</b>: Constant.
+    [[ nodiscard ]]       iterator  end()       noexcept { return make_iterator( this->size() ); }
+    [[ nodiscard ]] const_iterator  end() const noexcept { return const_cast<vector &>( *this ).end(); }
+    [[ nodiscard ]] const_iterator cend() const noexcept { return end(); }
+
+    //! <b>Effects</b>: Returns a reverse_iterator pointing to the beginning
+    //! of the reversed vector.
+    //! <b>Throws</b>: Nothing.
+    //! <b>Complexity</b>: Constant.
+    [[ nodiscard ]] reverse_iterator        rbegin()       noexcept { return std::make_reverse_iterator( end() ); }
+    [[ nodiscard ]] const_reverse_iterator  rbegin() const noexcept { return std::make_reverse_iterator( end() ); }
+    [[ nodiscard ]] const_reverse_iterator crbegin() const noexcept { return rbegin(); }
+
+    //! <b>Effects</b>: Returns a reverse_iterator pointing to the end
+    //! of the reversed vector.
+    //! <b>Throws</b>: Nothing.
+    //! <b>Complexity</b>: Constant.
+    [[ nodiscard ]] reverse_iterator        rend()       noexcept { return std::make_reverse_iterator( begin() ); }
+    [[ nodiscard ]] const_reverse_iterator  rend() const noexcept { return std::make_reverse_iterator( begin() ); }
+    [[ nodiscard ]] const_reverse_iterator crend() const noexcept { return rend(); }
+
+    //////////////////////////////////////////////
+    //
+    //                capacity
+    //
+    //////////////////////////////////////////////
+
+    //! <b>Effects</b>: Returns true if the vector contains no elements.
+    //! <b>Throws</b>: Nothing.
+    //! <b>Complexity</b>: Constant.
+    [[ nodiscard, gnu::pure ]] bool empty() const noexcept { return BOOST_UNLIKELY( this->size() == 0 ); }
+
+    //! <b>Effects</b>: Returns the largest possible size of the vector.
+    //!
+    //! <b>Throws</b>: Nothing.
+    //!
+    //! <b>Complexity</b>: Constant.
+    [[ nodiscard ]] static constexpr size_type max_size() noexcept { return static_cast<size_type>( std::numeric_limits<size_type>::max() / sizeof( value_type ) ); }
+
+    // intentional non-standard behaviour: default_init by default
+    void resize( size_type const new_size ) { resize( new_size, default_init ); }
+
+    //! <b>Effects</b>: Inserts or erases elements at the end such that
+    //!   the size becomes n. New elements are copy constructed from x.
+    //!
+    //! <b>Throws</b>: If memory allocation throws, or T's copy/move constructor throws.
+    //!
+    //! <b>Complexity</b>: Linear to the difference between this->size() and new_size.
+    template <typename Initializer>
+    void resize( size_type const new_size, Initializer && initializer )
+    {
+        if ( new_size > this->size() )   grow_to( new_size, std::forward<Initializer>( initializer ) );
+        else                           shrink_to( new_size                                           );
+    }
+
+    void shrink_to_fit( ) noexcept { this->storage_shrink_to( this->size() ); }
+
+    //////////////////////////////////////////////
+    //
+    //               element access
+    //
+    //////////////////////////////////////////////
+
+    //! <b>Requires</b>: !this->empty()
+    //!
+    //! <b>Effects</b>: Returns a reference to the first
+    //!   element of the container.
+    //!
+    //! <b>Throws</b>: Nothing.
+    //!
+    //! <b>Complexity</b>: Constant.
+    [[ nodiscard ]] auto & front( this auto && self ) noexcept { return self.span().front(); }
+
+    //! <b>Requires</b>: !this->empty()
+    //!
+    //! <b>Effects</b>: Returns a reference to the last
+    //!   element of the container.
+    //!
+    //! <b>Throws</b>: Nothing.
+    //!
+    //! <b>Complexity</b>: Constant.
+    [[ nodiscard ]] auto & back( this auto && self ) noexcept { return self.span().back(); }
+
+    //! <b>Requires</b>: this->size() > n.
+    //!
+    //! <b>Effects</b>: Returns a reference to the nth element
+    //!   from the beginning of the container.
+    //!
+    //! <b>Throws</b>: Nothing.
+    //!
+    //! <b>Complexity</b>: Constant.
+    [[ nodiscard ]] auto & operator[]( this auto && self, size_type const n ) noexcept { return self.span()[ n ]; }
+
+    //! <b>Requires</b>: this->size() >= n.
+    //!
+    //! <b>Effects</b>: Returns an iterator to the nth element
+    //!   from the beginning of the container. Returns end()
+    //!   if n == this->size().
+    //!
+    //! <b>Throws</b>: Nothing.
+    //!
+    //! <b>Complexity</b>: Constant.
+    //!
+    //! <b>Note</b>: Non-standard extension
+    [[ nodiscard ]] auto nth( this auto && self, size_type const n ) noexcept
+    {
+        BOOST_ASSUME( n <= self.size() );
+        return self.begin() + static_cast<difference_type>( n );
+    }
+
+    //! <b>Requires</b>: begin() <= p <= end().
+    //!
+    //! <b>Effects</b>: Returns the index of the element pointed by p
+    //!   and this->size() if p == end().
+    //!
+    //! <b>Throws</b>: Nothing.
+    //!
+    //! <b>Complexity</b>: Constant.
+    //!
+    //! <b>Note</b>: Non-standard extension
+    [[ nodiscard ]] size_type index_of( const_iterator const p ) noexcept
+    {
+        verify_iterator( p );
+        return static_cast<size_type>( p - begin() );
+    }
+
+    //! <b>Requires</b>: this->size() > n.
+    //!
+    //! <b>Effects</b>: Returns a reference to the nth element
+    //!   from the beginning of the container.
+    //!
+    //! <b>Throws</b>: range_error if n >= this->size()
+    //!
+    //! <b>Complexity</b>: Constant.
+    [[ nodiscard ]] auto & at( this auto && self, size_type const n )
+    {
+#   if __cpp_lib_span >= 202311L
+        return self.span().at( n );
+#   else
+        if ( n >= self.size() )
+            detail::throw_out_of_range( "psi::vm::vector::at" );
+        return self[ n ];
+#   endif
+    }
+
+    //////////////////////////////////////////////
+    //
+    //                 data access
+    //
+    //////////////////////////////////////////////
+
+    using storage_t::data; // make non-const data() from storage visible alongside the const overload below
+    [[ nodiscard, gnu::pure ]] const_pointer data() const noexcept { return storage_t::data(); }
+
+    [[ nodiscard, gnu::pure ]] auto span( this auto && self ) noexcept { return std::span( self.data(), self.size() ); }
+
+    //////////////////////////////////////////////
+    //
+    //                modifiers
+    //
+    //////////////////////////////////////////////
+
+    //! <b>Effects</b>: Inserts an object of type T constructed with
+    //!   std::forward<Args>(args)... at the end of the vector.
+    //!
+    //! <b>Returns</b>: A reference to the created object.
+    //!
+    //! <b>Throws</b>: If memory allocation throws or the in-place constructor throws or
+    //!   T's copy/move constructor throws.
+    //!
+    //! <b>Complexity</b>: Amortized constant time.
+
+    template <class ...Args>
+    static reference construct_at( value_type & placeholder, Args &&...args ) noexcept( std::is_nothrow_constructible_v<value_type, Args...> )
+    {
+        return *std::construct_at( &placeholder, std::forward<Args>( args )... );
+    }
+    template <typename Key, typename...Args> // support for boost::container::flat_tree implementation(s)
+    static reference construct_at( value_type & placeholder, boost::container::try_emplace_t &&, Key && key, Args &&...args )
+    noexcept( std::is_nothrow_constructible_v<value_type, std::piecewise_construct_t, std::tuple<Key>, std::tuple<Args...>> )
+    {
+              std::construct_at( &placeholder.first , std::forward<Key>( key ) );
+        try { std::construct_at( &placeholder.second, std::forward<Args>( args )... ); }
+        catch( ... ) { std::destroy_at( &placeholder.first ); throw; }
+        return placeholder;
+    }
+    static reference construct_at( value_type & placeholder ) noexcept( std::is_nothrow_default_constructible_v<value_type> )
+    {
+        return *(new (&placeholder) value_type); // default to default init
+    }
+
+    template <class ...Args>
+    reference emplace_back( Args &&...args )
+    {
+        auto const current_size{ this->size() };
+        // Use storage_grow_to (with Growth policy) directly — this is the
+        // amortized-O(1) append path that gets geometric headroom.
+        auto const data{ this->storage_grow_to( current_size + 1 ) };
+        auto & placeholder{ data[ current_size ] };
+        try {
+            return construct_at( placeholder, std::forward<Args>( args )... );
+        } catch( ... ) {
+            this->storage_shrink_size_to( current_size ); // just adjust size, element was never constructed
+            throw;
+        }
+    }
+
+    //! <b>Effects</b>: Inserts an object of type T constructed with
+    //!   std::forward<Args>(args)... in the end of the vector, but only
+    //!   if doing so does not require buffer reallocation.
+    //!
+    //! <b>Returns</b>: true if the element was emplaced, false if it would
+    //!   require reallocation (invalidating pointers/iterators).
+    //!
+    //! <b>Complexity</b>: Amortized constant time.
+    //!
+    //! <b>Note</b>: Non-standard extension.
+    template <typename... Args>
+    bool stable_emplace_back( Args &&... args )
+    {
+        if ( !stable_reserve( this->size() + 1 ) )
+            return false;
+        emplace_back( std::forward<Args>( args )... );
+        return true;
+    }
+
+    //! <b>Requires</b>: position must be a valid iterator of *this.
+    //!
+    //! <b>Effects</b>: Inserts an object of type T constructed with
+    //!   std::forward<Args>(args)... before position
+    //!
+    //! <b>Throws</b>: If memory allocation throws or the in-place constructor throws or
+    //!   T's copy/move constructor/assignment throws.
+    //!
+    //! <b>Complexity</b>: If position is end(), amortized constant time
+    //!   Linear time otherwise.
+    template <typename... Args>
+    iterator emplace( const_iterator const position, Args &&... args )
+    {
+        if constexpr ( static_cast<bool>( Growth ) ) // amortized O(1) end-insert only matters with geometric growth
+        {
+            if ( position == cend() ) [[ unlikely ]]
+            {
+                emplace_back( std::forward<Args>( args )... );
+                return make_iterator( this->size() - 1 );
+            }
+        }
+        auto const iter{ make_space_for_insert( position, 1 ) };
+        if constexpr ( trivially_destructible_after_move_assignment<value_type> )
+            construct_at( *iter, std::forward<Args>( args )... );
+        else
+            *iter = { std::forward<Args>( args )... };
+        return iter;
+    }
+
+    //! <b>Effects</b>: Inserts a copy of x at the end of the vector.
+    //!
+    //! <b>Throws</b>: If memory allocation throws or
+    //!   T's copy/move constructor throws.
+    //!
+    //! <b>Complexity</b>: Amortized constant time.
+    void push_back( param_const_ref x ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
+    {
+        emplace_back( x );
+    }
+
+    //! <b>Effects</b>: Constructs a new element in the end of the vector
+    //!   and moves the resources of x to this new element.
+    //!
+    //! <b>Throws</b>: If memory allocation throws or
+    //!   T's copy/move constructor throws.
+    //!
+    //! <b>Complexity</b>: Amortized constant time.
+    void push_back( value_type && x ) noexcept( noexcept_storage() && std::is_nothrow_move_constructible_v<value_type> )
+    requires( !std::is_trivial_v<value_type> ) // otherwise better to go through the pass-in-reg overload
+    {
+        emplace_back( std::move( x ) );
+    }
+
+    //! <b>Requires</b>: position must be a valid iterator of *this.
+    //!
+    //! <b>Effects</b>: Insert a copy of x before position.
+    //!
+    //! <b>Throws</b>: If memory allocation throws or T's copy/move constructor/assignment throws.
+    //!
+    //! <b>Complexity</b>: If position is end(), amortized constant time
+    //!   Linear time otherwise.
+    iterator insert( const_iterator const position, param_const_ref x ) { return emplace( position, x ); }
+
+    //! <b>Requires</b>: position must be a valid iterator of *this.
+    //!
+    //! <b>Effects</b>: Insert a new element before position with x's resources.
+    //!
+    //! <b>Throws</b>: If memory allocation throws.
+    //!
+    //! <b>Complexity</b>: If position is end(), amortized constant time
+    //!   Linear time otherwise.
+    iterator insert( const_iterator const position, value_type && x ) requires( !std::is_trivially_move_constructible_v<value_type> ) { return emplace( position, std::move( x ) ); }
+
+    //! <b>Requires</b>: position must be a valid iterator of *this.
+    //!
+    //! <b>Effects</b>: Insert n copies of x before pos.
+    //!
+    //! <b>Returns</b>: an iterator to the first inserted element or p if n is 0.
+    //!
+    //! <b>Throws</b>: If memory allocation throws or T's copy/move constructor throws.
+    //!
+    //! <b>Complexity</b>: Linear to n.
+    iterator insert( const_iterator const position, size_type const n, param_const_ref x )
+    {
+        auto const iter{ make_space_for_insert( position, n ) };
+        if constexpr ( trivially_destructible_after_move_assignment<value_type> )
+            std::uninitialized_fill_n( iter, n, x );
+        else
+            std::fill_n( iter, n, x );
+        return iter;
+    }
+
+    //! <b>Requires</b>: position must be a valid iterator of *this.
+    //!
+    //! <b>Effects</b>: Insert a copy of the [first, last) range before pos.
+    //!
+    //! <b>Returns</b>: an iterator to the first inserted element or pos if first == last.
+    //!
+    //! <b>Throws</b>: If memory allocation throws, T's constructor from a
+    //!   dereferenced InpIt throws or T's copy/move constructor/assignment throws.
+    //!
+    //! <b>Complexity</b>: Linear to boost::container::iterator_distance [first, last).
+    template <std::input_iterator InIt>
+    iterator insert( const_iterator const position, InIt const first, InIt const last )
+    {
+        auto const n{ static_cast<size_type>( std::distance( first, last ) ) };
+        auto const iter{ make_space_for_insert( position, n ) };
+        if constexpr ( trivially_destructible_after_move_assignment<value_type> )
+            std::uninitialized_copy_n( first, n, iter );
+        else
+            std::copy_n( first, n, iter );
+        return iter;
+    }
+
+    //! <b>Requires</b>: position must be a valid iterator of *this.
+    //!
+    //! <b>Effects</b>: Insert a copy of the [il.begin(), il.end()) range before position.
+    //!
+    //! <b>Returns</b>: an iterator to the first inserted element or position if first == last.
+    //!
+    //! <b>Complexity</b>: Linear to the range [il.begin(), il.end()).
+    iterator insert( const_iterator const position, std::initializer_list<value_type> const il )
+    {
+        return insert( position, il.begin(), il.end() );
+    }
+
+    template <std::ranges::input_range Rng>
+    iterator insert_range( const_iterator const position, Rng && rng )
+    {
+        if constexpr ( std::ranges::sized_range<Rng> )
+        {
+            auto const n{ verified_cast<size_type>( std::ranges::size( rng ) ) };
+            auto const iter{ make_space_for_insert( position, n ) };
+            if constexpr ( std::is_rvalue_reference_v<Rng &&> )
+            {
+                if constexpr ( trivially_destructible_after_move_assignment<value_type> )
+                    std::uninitialized_move( std::ranges::begin( rng ), std::ranges::end( rng ), iter );
+                else
+                    std::ranges::move( rng, iter );
+            }
+            else
+            {
+                if constexpr ( trivially_destructible_after_move_assignment<value_type> )
+                    std::uninitialized_copy( std::ranges::begin( rng ), std::ranges::end( rng ), iter );
+                else
+                    std::ranges::copy( rng, iter );
+            }
+            return iter;
+        }
+        else
+        {
+            // Non-sized input ranges: append at end, then rotate into position.
+            // This avoids materializing into a temporary vector (a la libc++).
+            auto const pos_index{ index_of( position ) };
+            auto const old_size { this->size() };
+            for ( auto it{ std::ranges::begin( rng ) }; it != std::ranges::end( rng ); ++it )
+                emplace_back( *it );
+            std::rotate( nth( pos_index ), nth( old_size ), end() );
+            return nth( pos_index );
+        }
+    }
+
+    template <std::ranges::range Rng>
+    void append_range( Rng && __restrict rng )
+    {
+        auto const current_size{ this->size() };
+        if constexpr ( requires{ std::size( rng ); } )
+        {
+            auto const additional_size{ verified_cast<size_type>( std::size( rng ) ) };
+            auto const input_begin    {                           std::begin( rng )   };
+            auto const target_position{ grow_by( additional_size, no_init ) + current_size };
+            try
+            {
+                if constexpr ( std::is_rvalue_reference_v<Rng> )
+                    std::uninitialized_move_n( input_begin, additional_size, target_position );
+                else
+                    std::uninitialized_copy_n( input_begin, additional_size, target_position );
+            }
+            catch (...)
+            {
+                this->storage_shrink_size_to( current_size );
+                throw;
+            }
+        }
+        else
+        {
+            try
+            {
+                if constexpr ( std::is_rvalue_reference_v<Rng> )
+                    std::move( std::begin( rng ), std::end( rng ), std::back_inserter( *this ) );
+                else
+                    std::copy( std::begin( rng ), std::end( rng ), std::back_inserter( *this ) );
+            }
+            catch (...)
+            {
+                shrink_to( current_size ); // destroy successfully push_back'd elements
+                throw;
+            }
+        }
+    }
+#ifndef __cpp_lib_span_initializer_list
+    void append_range( std::initializer_list<value_type> const rng ) { append_range( std::span{ rng.begin(), rng.end() } ); }
+#endif
+
+    //! <b>Effects</b>: Removes the last element from the container.
+    //!
+    //! <b>Throws</b>: Nothing.
+    //!
+    //! <b>Complexity</b>: Constant time.
+    void pop_back( ) noexcept
+    {
+        BOOST_ASSUME( !this->empty() );
+        std::destroy_at( &back() );
+        this->storage_dec_size();
+    }
+
+    //! <b>Effects</b>: Erases the element at position pos.
+    //!
+    //! <b>Throws</b>: Nothing.
+    //!
+    //! <b>Complexity</b>: Linear to the elements between pos and the
+    //!   last element. Constant if pos is the last element.
+    iterator erase( const_iterator const position ) noexcept
+    {
+        verify_iterator( position );
+        auto const pos_index{ index_of( position ) };
+        auto const mutable_pos{ nth( pos_index ) };
+        std::shift_left( mutable_pos, end(), 1 );
+        if constexpr ( trivially_destructible_after_move_assignment<value_type> )
+            this->storage_dec_size();
+        else
+            pop_back();
+        return nth( pos_index );
+    }
+
+    //! <b>Effects</b>: Erases the elements pointed by [first, last).
+    //!
+    //! <b>Throws</b>: Nothing.
+    //!
+    //! <b>Complexity</b>: Linear to the distance between first and last
+    //!   plus linear to the elements between pos and the last element.
+    iterator erase( const_iterator const first, const_iterator const last ) noexcept
+    {
+        verify_iterator( first );
+        verify_iterator( last  );
+        BOOST_ASSERT( first <= last );
+        auto const first_index  { index_of( first ) };
+        auto const mutable_start{ detail::mutable_iter( first ) };
+        auto const mutable_end  { detail::mutable_iter( last  ) };
+        auto const new_end      { std::move( mutable_end, end(), mutable_start ) };
+        auto const new_size     { static_cast<size_type>( new_end - begin() ) };
+        if constexpr ( trivially_destructible_after_move_assignment<value_type> )
+            this->storage_shrink_size_to( new_size );
+        else
+            shrink_to( new_size );
+        return nth( first_index );
+    }
+    //! <b>Effects</b>: Erases all the elements of the vector.
+    //!
+    //! <b>Throws</b>: Nothing.
+    //!
+    //! <b>Complexity</b>: Linear to the number of elements in the container.
+    [[ gnu::cold ]]
+    void clear( ) noexcept
+    {
+        std::destroy( begin(), end() );
+#   if 0 // default to STL behaviour (keep capacity) - TODO make this configurable?
+        this->storage_shrink_to( 0 );
+#   else
+        this->storage_shrink_size_to( 0 );
+#   endif
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    // Extensions
+    ///////////////////////////////////////////////////////////////////////////
+
+    //! <b>Effects</b>: If n is less than or equal to this->capacity(), this call has no
+    //!   effect. Otherwise, it is a request for allocation of additional memory
+    //!   (memory expansion) that will not invalidate iterators.
+    //!   If the request is successful, then this->capacity() is greater than or equal to
+    //!   n; otherwise, this->capacity() is unchanged. In either case, this->size() is unchanged.
+    //!
+    //! <b>Returns</b>: true if this->capacity() >= new_cap after the call (either
+    //!   already was, or in-place expansion succeeded), false otherwise.
+    //!
+    //! <b>Note</b>: Non-standard extension.
+    bool stable_reserve( size_type const new_cap )
+    {
+        if ( new_cap <= this->capacity() )
+            return true;
+        // Try in-place expansion if the storage backend supports it
+        // (e.g. heap_vector on MSVC via ::_expand(), vm_vector via page mapping)
+        if constexpr ( requires { this->storage_try_expand_capacity( new_cap ); } )
+            return this->storage_try_expand_capacity( new_cap );
+        else
+            return false;
+    }
+
+    // Explicit sizing: always exact-fit (no geometric headroom).
+    // Append operations (emplace_back) use storage_grow_to() with Growth instead.
+    value_type * grow_to( size_type const target_size, no_init_t ) { return storage_t::template storage_grow_to<geometric_growth{ 1, 1 }>( target_size ); }
+    value_type * grow_to( size_type const target_size, default_init_t )
+    {
+        auto const current_size{ this->size() };
+        if ( target_size <= current_size ) [[ unlikely ]] { // meh, already/also handled by this->storage_grow_to()
+            return data();
+        }
+        auto const data{ grow_to( target_size, no_init ) };
+        if constexpr ( !std::is_trivially_default_constructible_v<value_type> ) {
+            try {
+                std::uninitialized_default_construct( &data[ current_size ], &data[ target_size ] );
+            } catch(...) {
+                this->storage_shrink_size_to( current_size );
+                throw;
+            }
+        }
+        return data;
+    }
+
+    value_type * grow_to( size_type const target_size, value_init_t )
+    {
+        auto const current_size{ this->size() };
+        if ( target_size <= current_size ) [[ unlikely ]] {
+            return data();
+        }
+        auto const data{ grow_to( target_size, no_init ) };
+        auto const uninitialized_space_begin{ &data[ current_size ] };
+        auto const uninitialized_space_size { target_size - current_size };
+        if constexpr ( std::is_trivially_constructible_v<value_type> )
+        {
+            auto const new_space_bytes    { reinterpret_cast<std::uint8_t *>( data + current_size ) };
+            auto const new_space_byte_size{ static_cast<std::size_t>( uninitialized_space_size ) * sizeof( value_type ) };
+            if constexpr ( storage_t::storage_zero_initialized )
+            {
+                BOOST_ASSERT_MSG
+                (
+                    *std::max_element( new_space_bytes, new_space_bytes + new_space_byte_size ) == 0,
+                    "Broken storage promise to zero-extend"
+                );
+            }
+            else
+            {
+                std::memset( new_space_bytes, 0, new_space_byte_size );
+            }
+        }
+        else
+        {
+            try {
+                std::uninitialized_value_construct_n( uninitialized_space_begin, uninitialized_space_size );
+            } catch(...) {
+                this->storage_shrink_size_to( current_size );
+                throw;
+            }
+        }
+        return data;
+    }
+    template <typename U>
+    value_type * grow_to( size_type const target_size, U && default_value )
+    requires std::constructible_from<value_type, U>
+    {
+        auto const current_size{ this->size() };
+        if ( target_size <= current_size ) [[ unlikely ]] {
+            return data();
+        }
+        auto const data{ grow_to( target_size, no_init ) };
+        auto const uninitialized_space_begin{ &data[ current_size ] };
+        auto const uninitialized_space_size { target_size - current_size };
+        try {
+            std::uninitialized_fill_n( uninitialized_space_begin, uninitialized_space_size, std::forward<U>( default_value ) );
+        } catch(...) {
+            this->storage_shrink_size_to( current_size );
+            throw;
+        }
+        return data;
+    }
+
+    value_type * grow_by( size_type const delta, auto const init_policy )
+    {
+        return grow_to( this->size() + delta, init_policy );
+    }
+
+    void shrink_to( size_type const target_size ) noexcept
+    {
+        BOOST_ASSUME( target_size <= this->size() );
+        std::destroy( nth( target_size ), end() );
+        this->storage_shrink_size_to( target_size ); // std::vector behaviour: never release/shrink capacity
+    }
+    void shrink_by( size_type const delta ) noexcept { shrink_to( this->size() - delta ); }
+
+private:
+    void verify_iterator( [[ maybe_unused ]] const_iterator const iter ) const noexcept
+    {
+        BOOST_ASSERT( iter >= begin() );
+        BOOST_ASSERT( iter <= end  () );
+    }
+
+    iterator make_space_for_insert( const_iterator const position, size_type const n )
+    {
+        verify_iterator( position );
+        auto const position_index{ index_of( position ) };
+        auto const current_size  { this->size() };
+        auto const new_size      { static_cast<size_type>( current_size + n ) };
+        auto const data          { grow_to( new_size, no_init ) };
+        // Storage-independent element shift (parameterized only on T, not Storage)
+        detail::shift_elements_right( data, current_size, position_index, n );
+        return make_iterator( &data[ position_index ] );
+    }
+
+public:
+    // --- append growth ---
+    // Geometric-growth path for amortized-O(1) operations (emplace_back, etc.).
+    // Explicit sizing (grow_to, grow_by, resize) bypasses this and uses exact-fit
+    // to avoid wasting file-backed storage capacity.
+    value_type * storage_grow_to( size_type const target_size )
+    {
+        return storage_t::template storage_grow_to<Growth>( target_size );
+    }
+
+    // --- default constructor ---
+    constexpr vector() noexcept = default;
+
+    // --- construct from pre-configured storage (for stateful allocators) ---
+    constexpr explicit vector( storage_t && init ) noexcept( std::is_nothrow_move_constructible_v<storage_t> )
+        : storage_t{ std::move( init ) }
+    {}
+
+    // --- destructor ---
+    constexpr ~vector() noexcept
+    {
+        std::destroy_n( this->data(), this->size() );
+    }
+
+    // --- copy constructor ---
+    // Two overloads depending on whether the storage manages its own copy:
+    //
+    // (A) Copy-constructible storage (e.g. vm_storage COW clone): delegate
+    //     entirely to storage's copy constructor — no element-level copy.
+    constexpr vector( vector const & other ) noexcept( std::is_nothrow_copy_constructible_v<storage_t> )
+        requires std::is_copy_constructible_v<storage_t>
+        : storage_t{ static_cast<storage_t const &>( other ) }
+    {}
+
+    // (B) Non-copyable storage (heap_storage, fixed_storage, sbo_hybrid):
+    //     element-level copy semantics live here at the vector level.
+    constexpr vector( vector const & other ) requires ( !std::is_copy_constructible_v<storage_t> )
+    {
+        // Optimization for small trivially-copyable fixed-capacity vectors:
+        // memcpy the entire object (size + inline array) with a handful of
+        // register-width instructions instead of a dynamic memcpy call.
+        if constexpr ( storage_t::fixed_sized_copy )
+        {
+            std::memcpy( static_cast<void *>( this ), &other, sizeof( *this ) );
+        }
+        else if ( other.size() )
+        {
+            auto * dst{ storage_t::storage_init( other.size() ) };
+            try { std::uninitialized_copy_n( other.data(), other.size(), dst ); }
+            catch( ... ) { storage_t::storage_free(); throw; }
+        }
+    }
+
+    // --- move constructor ---
+    // Delegate to storage's move ctor (heap_storage: steal pointer;
+    // fixed_storage: memcpy or element-wise move)
+    constexpr vector( vector && other ) noexcept( std::is_nothrow_move_constructible_v<storage_t> )
+        : storage_t{ std::move( static_cast<storage_t &>( other ) ) }
+    {}
+
+    // --- copy assignment (copy-and-swap) ---
+    constexpr vector & operator=( vector const & other )
+    {
+        if ( this != &other )
+        {
+            auto tmp{ other }; // copy
+            swap( tmp );       // swap
+        } // tmp dtor frees old
+        return *this;
+    }
+
+    // --- move assignment ---
+    constexpr vector & operator=( vector && other ) noexcept( std::is_nothrow_move_constructible_v<storage_t> )
+    {
+        if ( this != &other )
+        {
+            // Destroy current elements
+            std::destroy_n( this->data(), this->size() );
+            // Move storage from other
+            static_cast<storage_t &>( *this ) = std::move( static_cast<storage_t &>( other ) );
+        }
+        return *this;
+    }
+
+    // --- initializer_list assignment ---
+    constexpr vector & operator=( std::initializer_list<value_type> const data )
+    {
+        this->assign( data );
+        return *this;
+    }
+
+    void swap( vector & other ) noexcept
+    {
+        if constexpr ( requires( storage_t & s ) { s.swap( s ); } )
+            storage_t::swap( static_cast<storage_t &>( other ) );
+        else
+            std::swap( static_cast<storage_t &>( *this ), static_cast<storage_t &>( other ) );
+    }
+}; // class vector
+
+
+//! <b>Effects</b>: Returns the result of std::lexicographical_compare_three_way
+//!
+//! <b>Complexity</b>: Linear to the number of elements in the container.
+template <std::ranges::range L, std::ranges::range R> requires( psi_vm_vector<L> || psi_vm_vector<R> )
+[[ nodiscard ]] constexpr auto operator<=>( L const & left, R const & right ) noexcept { return std::lexicographical_compare_three_way( left.begin(), left.end(), right.begin(), right.end() ); }
+template <std::ranges::range L, std::ranges::range R> requires( psi_vm_vector<L> || psi_vm_vector<R> )
+[[ nodiscard ]] constexpr auto operator== ( L const & left, R const & right ) noexcept { return std::equal                            ( left.begin(), left.end(), right.begin(), right.end() ); }
+
+PSI_WARNING_DISABLE_POP()
+
+//------------------------------------------------------------------------------
+
+// is_trivially_moveable: heap_storage is always trivially moveable (just pointer+sizes);
+// fixed_storage delegates to element type.
+template <typename Storage, geometric_growth Growth>
+requires( is_trivially_moveable<Storage> )
+bool constexpr is_trivially_moveable<vector<Storage, Growth>>{ true };
+
+//------------------------------------------------------------------------------
+
+// Generic erase_if / erase for any psi_vm_vector (heap_vector, vm_vector,
+// small_vector, fc_vector, etc.).
+template <psi_vm_vector Vec, typename Pred>
+constexpr typename Vec::size_type erase_if( Vec & c, Pred pred )
+{
+    auto const it{ std::remove_if( c.begin(), c.end(), std::move( pred ) ) };
+    auto const n { static_cast<typename Vec::size_type>( c.end() - it ) };
+    c.shrink_by( n );
+    return n;
+}
+
+template <psi_vm_vector Vec, typename U>
+constexpr typename Vec::size_type erase( Vec & c, U const & value )
+{
+    return erase_if( c, [&value]( auto const & elem ) { return elem == value; } );
+}
+
+//------------------------------------------------------------------------------
+} // namespace psi::vm
+//------------------------------------------------------------------------------

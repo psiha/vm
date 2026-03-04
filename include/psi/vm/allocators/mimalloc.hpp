@@ -1,0 +1,128 @@
+////////////////////////////////////////////////////////////////////////////////
+///
+/// \file mimalloc.hpp
+/// -------------------
+///
+/// Allocator wrapper for Microsoft's mimalloc (https://github.com/microsoft/mimalloc).
+/// Derives from allocator_base for the N2045 Version 2 interface.
+///
+/// Always uses the default mimalloc heap. For scoped-heap routing, use
+/// mi_scoped_heap_allocator (mi_scoped_heap.hpp) instead.
+///
+/// Requires: PSI_VM_MIMALLOC cmake option enabled (pulls mimalloc via FetchContent).
+///
+/// Copyright (c) Domagoj Saric 2026.
+///
+/// Use, modification and distribution is subject to the
+/// Boost Software License, Version 1.0.
+///
+////////////////////////////////////////////////////////////////////////////////
+//------------------------------------------------------------------------------
+#pragma once
+
+#include <psi/vm/allocators/allocator_base.hpp>
+
+#include <boost/assert.hpp>
+
+#include <mimalloc.h>
+
+#include <cstddef>
+#include <cstdint>
+//------------------------------------------------------------------------------
+namespace psi::vm
+{
+//------------------------------------------------------------------------------
+
+template <typename T, typename sz_t = std::size_t>
+struct mimalloc_allocator
+    : allocator_base<T, sz_t>
+{
+    using base          = allocator_base<T, sz_t>;
+    using version       = base::template version_type<mimalloc_allocator>;
+    using value_type    = T;
+    using pointer       = T *;
+    using const_pointer = T const *;
+    using size_type     = sz_t;
+
+    template <class U> struct rebind { using other = mimalloc_allocator<U, sz_t>; };
+
+    template <std::uint8_t alignment = detail::safe_alignof_v<T>>
+    [[ nodiscard ]] [[ using gnu: cold, assume_aligned( alignment ), malloc, returns_nonnull ]]
+    static pointer allocate( size_type const count, void const * const /*hint*/ = nullptr )
+    {
+        BOOST_ASSUME( count < base::max_size() );
+        auto const byte_size{ count * sizeof( T ) };
+        void * p;
+        if constexpr ( alignment > alignof( std::max_align_t ) )
+            p = ::mi_malloc_aligned( byte_size, alignment );
+        else
+            p = ::mi_malloc( byte_size );
+        if ( !p ) [[ unlikely ]]
+            detail::throw_bad_alloc();
+        return static_cast<pointer>( p );
+    }
+
+    template <std::uint8_t alignment = detail::safe_alignof_v<T>>
+    static void deallocate( pointer const ptr, size_type const /*size*/ = 0 ) noexcept
+    {
+        ::mi_free( ptr );
+    }
+
+    template <std::uint8_t alignment = detail::safe_alignof_v<T>>
+    [[ nodiscard ]]
+    static pointer grow_to( pointer const current_address, size_type const current_size, size_type const target_size )
+    {
+        BOOST_ASSUME( target_size >= current_size );
+        auto const byte_size{ target_size * sizeof( T ) };
+        void * p;
+        if constexpr ( alignment > alignof( std::max_align_t ) )
+            p = ::mi_realloc_aligned( current_address, byte_size, alignment );
+        else
+            p = ::mi_realloc( current_address, byte_size );
+        if ( !p ) [[ unlikely ]]
+            detail::throw_bad_alloc();
+        return static_cast<pointer>( p );
+    }
+
+    template <std::uint8_t alignment = detail::safe_alignof_v<T>>
+    [[ nodiscard ]]
+    static pointer shrink_to( pointer const current_address, size_type const current_size, size_type const target_size ) noexcept
+    {
+        BOOST_ASSUME( target_size <= current_size );
+        auto const byte_size{ target_size * sizeof( T ) };
+        void * p;
+        if constexpr ( alignment > alignof( std::max_align_t ) )
+            p = ::mi_realloc_aligned( current_address, byte_size, alignment );
+        else
+            p = ::mi_realloc( current_address, byte_size );
+        return static_cast<pointer>( p ? p : current_address );
+    }
+
+    [[ gnu::pure ]]
+    static size_type size( const_pointer const ptr ) noexcept
+    {
+        return static_cast<size_type>( ::mi_usable_size( ptr ) / sizeof( T ) );
+    }
+
+    /// Release unused memory back to the OS (force full collection).
+    static void trim() noexcept
+    {
+        ::mi_collect( true );
+    }
+
+    // --- allocator traits ---
+    static constexpr bool try_expand_supports_null              { false };
+    static constexpr bool guaranteed_in_place_shrink            { false };
+    static constexpr bool in_place_ops_require_default_alignment{ false };
+
+    [[ nodiscard ]]
+    static bool try_expand( pointer const ptr, size_type const target_size ) noexcept
+    {
+        auto const byte_size{ target_size * sizeof( T ) };
+        return ::mi_expand( ptr, byte_size ) != nullptr;
+    }
+}; // struct mimalloc_allocator
+
+//------------------------------------------------------------------------------
+} // namespace psi::vm
+//------------------------------------------------------------------------------

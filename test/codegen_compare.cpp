@@ -8,8 +8,8 @@
 /// Or use the CMake build: cmake --build . --target codegen_compare
 ///
 /// Look for these functions in the assembly:
-///   lower_bound_ref_*    — baseline: Key const &
-///   lower_bound_reg_*    — proposed: pass_in_reg<Key>
+///   lower_bound_ref_*    -- baseline: Key const &
+///   lower_bound_reg_*    -- proposed: pass_in_reg<Key>
 ////////////////////////////////////////////////////////////////////////////////
 
 #include <psi/vm/containers/flat_set.hpp>
@@ -65,7 +65,7 @@ template int_vec::const_iterator lower_bound_reg<int_vec::const_iterator, int, s
 template int_vec::const_iterator upper_bound_ref<int_vec::const_iterator, int, std::less<>>( int_vec::const_iterator, int_vec::const_iterator, int const &, std::less<> const & );
 template int_vec::const_iterator upper_bound_reg<int_vec::const_iterator, int, std::less<>>( int_vec::const_iterator, int_vec::const_iterator, pass_in_reg<int>, std::less<> const & );
 
-// --- string key, std::less<> (transparent → pass_in_reg stores string_view) ---
+// --- string key, std::less<> (transparent -> pass_in_reg stores string_view) ---
 template string_vec::const_iterator lower_bound_ref<string_vec::const_iterator, std::string, std::less<>>( string_vec::const_iterator, string_vec::const_iterator, std::string const &, std::less<> const & );
 template string_vec::const_iterator lower_bound_reg<string_vec::const_iterator, std::string, std::less<>>( string_vec::const_iterator, string_vec::const_iterator, pass_in_reg<std::string>, std::less<> const & );
 
@@ -73,13 +73,13 @@ template string_vec::const_iterator upper_bound_ref<string_vec::const_iterator, 
 template string_vec::const_iterator upper_bound_reg<string_vec::const_iterator, std::string, std::less<>>( string_vec::const_iterator, string_vec::const_iterator, pass_in_reg<std::string>, std::less<> const & );
 
 // NOTE: std::less<std::string> (non-transparent) + pass_in_reg<string> is intentionally
-// NOT tested — pass_in_reg converts string to string_view, which non-transparent
+// NOT tested -- pass_in_reg converts string to string_view, which non-transparent
 // comparators can't handle. This is exactly why key_const_arg only uses pass_in_reg
 // when transparent_comparator is true or the key is trivially passable in reg.
 
 
 //==============================================================================
-// Callers — to see how the call site codegen differs
+// Callers -- to see how the call site codegen differs
 //==============================================================================
 
 [[ gnu::noinline ]]
@@ -102,7 +102,7 @@ auto caller_string_reg( string_vec const & v, std::string const & key ) {
     return lower_bound_reg<string_vec::const_iterator, std::string, std::less<>>( v.begin(), v.end(), pass_in_reg<std::string>{ key }, std::less<>{} );
 }
 
-// caller with string_view directly (ideal case — no string object at all)
+// caller with string_view directly (ideal case -- no string object at all)
 [[ gnu::noinline ]]
 auto caller_string_reg_sv( string_vec const & v, std::string_view key ) {
     return lower_bound_reg<string_vec::const_iterator, std::string, std::less<>>( v.begin(), v.end(), pass_in_reg<std::string>{ key }, std::less<>{} );
@@ -110,7 +110,7 @@ auto caller_string_reg_sv( string_vec const & v, std::string_view key ) {
 
 
 //==============================================================================
-// flat_set integration test — how the container's own lower_bound looks
+// flat_set integration test -- how the container's own lower_bound looks
 //==============================================================================
 
 using int_set       = flat_set<int>;

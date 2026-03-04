@@ -51,7 +51,7 @@ namespace psi::vm
 // template <typename T>
 // bool is_trivially_moveable;
 //
-// Containers like tr_vector (relying on realloc) and vm_vector (relying on
+// Containers like heap_vector (relying on realloc) and vm_vector (relying on
 // mremap) need a trait to detect/constraint on types actually supporting
 // 'bitwise moves'.
 // There already exist several proposals related to this (most notably P1144 and
@@ -76,13 +76,14 @@ namespace psi::vm
 // @ https://github.com/psiha/vm/issues/31
 //
 // In addition, this library needs a trait like
-// 'trivially_destructible_after_move' (see vector_impl.hpp) and a trait
+// 'trivially_destructible_after_move' (see trivially_destructible_after_move.hpp) and a trait
 // that would signal a type that contains no absolute pointers or references
 // (so that it can be trivially persisted to disk or used for IPC, see
 // 'does_not_hold_addresses' in vm_vector.hpp).
 
 // https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2024/p1144r12.html std::is_trivially_relocatable
 // https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2024/p2786r11.html Trivial Relocatability
+// https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2025/p3920r0.html  the sad revert
 // https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/p2959r0.html  Relocation Within Containers
 // https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2024/p3055r1.html  Relax wording to permit relocation optimizations in the STL
 // https://www.open-std.org/JTC1/SC22/WG21/docs/papers/2014/n4158.pdf     Destructive Move
@@ -113,7 +114,7 @@ bool constexpr is_trivially_moveable
 #if defined( __clang__ ) // with Clang support both P1144 and the older builtin
     __is_trivially_relocatable( T ) ||
 #endif
-#if defined( __cpp_lib_trivially_relocatable /*P1144*/ ) || defined( __cpp_trivial_relocatability /*P2786*/ )
+#if defined( __cpp_lib_trivially_relocatable ) // P1144 or P2786 library support
     std::is_trivially_relocatable<T> ||
 #endif
     std::is_trivially_copyable_v<T> || // implies trivial destructibility https://eel.is/c++draft/class.prop#1
@@ -144,6 +145,7 @@ template <typename E, typename T, typename A> bool constexpr is_trivially_moveab
 template <typename S> bool constexpr is_trivially_moveable<std::function<S>>{ true };
 #endif
 template <typename... T> bool constexpr is_trivially_moveable<std::variant<T...>>{( is_trivially_moveable<T> && ... )};
+
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm

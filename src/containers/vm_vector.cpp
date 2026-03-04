@@ -17,6 +17,18 @@
 
 #include <boost/assert.hpp>
 
+#ifdef __linux__
+#   include <sys/mman.h>
+#   if __has_include( <sys/memfd.h> )
+#       include <sys/memfd.h>
+#   endif
+#   ifndef MFD_CLOEXEC
+#       define MFD_CLOEXEC 0x0001U
+        extern "C" int memfd_create( char const *, unsigned int ) noexcept;
+#   endif
+#   include <unistd.h> // ftruncate, close
+#endif
+
 #include <stdexcept>
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -27,42 +39,44 @@ namespace detail
 {
     [[ noreturn, gnu::cold ]] void throw_out_of_range( char const * const msg ) { throw std::out_of_range( msg ); }
 #if PSI_MALLOC_OVERCOMMIT != PSI_OVERCOMMIT_Full
-    [[ noreturn, gnu::cold ]] void throw_bad_alloc   () { throw std::bad_alloc(); }
+    [[ noreturn, gnu::cold ]] void throw_bad_alloc()
+    {
+#   ifdef _MSC_VER
+        std::_Xbad_alloc();
+#   else
+        throw std::bad_alloc{};
+#   endif
+    }
 #endif
 } // namespace detail
 
-void contiguous_storage::close() noexcept
+void mem_mapping::close() noexcept
 {
     unmap();
     mapping_.close();
 }
 
-void contiguous_storage::flush_async   ( std::size_t const beginning, std::size_t const size ) const noexcept { vm::flush_async   ( mapped_span({ view_.subspan( beginning, size ) }) ); }
-void contiguous_storage::flush_blocking( std::size_t const beginning, std::size_t const size ) const noexcept { vm::flush_blocking( mapped_span({ view_.subspan( beginning, size ) }), mapping_.underlying_file() ); }
+void mem_mapping::flush_async   ( std::size_t const beginning, std::size_t const size ) const noexcept { vm::flush_async   ( mapped_span({ view_.subspan( beginning, size ) }) ); }
+void mem_mapping::flush_blocking( std::size_t const beginning, std::size_t const size ) const noexcept { vm::flush_blocking( mapped_span({ view_.subspan( beginning, size ) }), mapping_.underlying_file() ); }
 [[ gnu::pure ]]
-contiguous_storage::size_type
-contiguous_storage::client_to_storage_size( size_type const sz ) const noexcept
+mem_mapping::size_type
+mem_mapping::client_to_storage_size( size_type const sz ) const noexcept
 {
     return sz + get_sizes().total_hdr_size();
 }
 
 [[ gnu::noinline ]]
-void * contiguous_storage::expand_capacity( std::size_t const target_capacity )
+void * mem_mapping::expand_capacity( std::size_t const target_capacity )
 {
     BOOST_ASSUME( target_capacity > mapped_size() );
-    // geometric growth (1.5x default)
-    // TODO: make this configurable (move out/down to container class templates)
+    // Exact-size expansion only. Geometric growth is the vector's responsibility.
     auto const current_fc_capacity{ storage_size() };
     if ( current_fc_capacity < target_capacity ) [[ unlikely ]]
-    {
-        constexpr geometric_growth growth;
-        auto const new_fs_capacity{ growth( target_capacity, current_fc_capacity ) };
-        set_size( mapping_, new_fs_capacity );
-    }
+        set_size( mapping_, target_capacity );
     return expand_view( target_capacity );
 }
 
-void * contiguous_storage::expand_view( std::size_t const target_size )
+void * mem_mapping::expand_view( std::size_t const target_size )
 {
     BOOST_ASSERT( get_size( mapping_ ) >= target_size );
     view_.expand( target_size, mapping_ );
@@ -70,7 +84,7 @@ void * contiguous_storage::expand_view( std::size_t const target_size )
 }
 
 [[ gnu::noinline ]]
-void * contiguous_storage::shrink_to_slow( std::size_t const target_size ) noexcept( mapping::views_downsizeable )
+void * mem_mapping::shrink_to_slow( std::size_t const target_size ) noexcept( mapping::views_downsizeable )
 {
     auto const storage_size{ client_to_storage_size( target_size ) };
     if constexpr ( mapping::views_downsizeable )
@@ -85,12 +99,12 @@ void * contiguous_storage::shrink_to_slow( std::size_t const target_size ) noexc
             view_.unmap();
         set_size( mapping_, storage_size )().assume_succeeded();
         if ( do_unmap )
-            view_ = mapped_view::map( mapping_, 0, storage_size );
+            view_ = extendable_mapped_view::map( mapping_, 0, storage_size );
     }
     return data();
 }
 
-void contiguous_storage::shrink_mapped_size_to( std::size_t const target_size ) noexcept( mapping::views_downsizeable )
+void mem_mapping::shrink_mapped_size_to( std::size_t const target_size ) noexcept( mapping::views_downsizeable )
 {
     if constexpr ( mapping::views_downsizeable )
     {
@@ -99,33 +113,23 @@ void contiguous_storage::shrink_mapped_size_to( std::size_t const target_size ) 
     else
     {
         view_.unmap();
-        view_ = mapped_view::map( mapping_, 0, target_size );
+        view_ = extendable_mapped_view::map( mapping_, 0, target_size );
     }
 }
 
 
-void contiguous_storage::shrink_to_fit() noexcept
+void mem_mapping::shrink_to_fit() noexcept
 {
     shrink_to_slow( stored_size() );
 }
 
-void contiguous_storage::reserve( size_type const new_capacity )
+void mem_mapping::reserve( size_type const new_capacity )
 {
     if ( new_capacity > vm_capacity() ) [[ unlikely ]]
         expand_capacity( client_to_storage_size( new_capacity ) );
 }
 
-void * contiguous_storage::grow_to( size_type const target_size )
-{
-    if ( target_size > size() ) [[ likely ]]
-    {
-        reserve( target_size );
-        stored_size() = target_size;
-    }
-    return data();
-}
-
-void * contiguous_storage::shrink_to( size_type const target_size ) noexcept
+void * mem_mapping::shrink_to( size_type const target_size ) noexcept
 {
     auto & sz{ stored_size() };
     if ( sz == target_size ) { // minimize every bit of unnecessary page touching/dirtying
@@ -141,7 +145,7 @@ void * contiguous_storage::shrink_to( size_type const target_size ) noexcept
     return shrink_to_slow( target_size );
 }
 
-void contiguous_storage::resize( size_type const target_size )
+void mem_mapping::resize( size_type const target_size )
 {
     if ( target_size > size() ) {
         grow_to( target_size );
@@ -153,7 +157,7 @@ void contiguous_storage::resize( size_type const target_size )
 }
 
 [[ gnu::pure, nodiscard ]]
-std::span<std::byte> contiguous_storage::header_storage() noexcept
+std::span<std::byte> mem_mapping::header_storage() noexcept
 {
     auto const & sizes{ get_sizes() };
     return
@@ -168,8 +172,8 @@ std::span<std::byte> contiguous_storage::header_storage() noexcept
 #pragma GCC diagnostic ignored "-Wconversion"
 #endif
 [[ gnu::const ]] constexpr
-contiguous_storage::sizes_hdr
-contiguous_storage::unpack( header_info const hdr_info ) noexcept
+mem_mapping::sizes_hdr
+mem_mapping::unpack( header_info const hdr_info ) noexcept
 {
     auto const         base_hdr_size{ align_up( std::uint8_t{ sizeof( sizes_hdr ) }, hdr_info.final_alignment() ) };
     auto const       client_hdr_size{ hdr_info.final_header_size() };
@@ -189,7 +193,7 @@ contiguous_storage::unpack( header_info const hdr_info ) noexcept
 
 [[ gnu::cold ]]
 err::result_or_error<void, error>
-contiguous_storage::map_file( file_handle file, flags::named_object_construction_policy const policy, header_info const hdr_info ) noexcept
+mem_mapping::map_file( file_handle file, flags::named_object_construction_policy const policy, header_info const hdr_info ) noexcept
 {
     if ( !file )
         return error{};
@@ -271,7 +275,7 @@ contiguous_storage::map_file( file_handle file, flags::named_object_construction
     return map_rslt.propagate();
 }
 [[ gnu::cold ]]
-err::result_or_error<void, error> contiguous_storage::map_memory( size_type const data_size, header_info const hdr_info ) noexcept
+err::result_or_error<void, error> mem_mapping::map_memory( size_type const data_size, header_info const hdr_info ) noexcept
 {
     auto hdr{ unpack( hdr_info ) };
     auto map_success{ map( {}, hdr.total_hdr_size() + data_size ) };
@@ -282,8 +286,38 @@ err::result_or_error<void, error> contiguous_storage::map_memory( size_type cons
     return err::success;
 }
 
+[[ gnu::cold ]]
+err::result_or_error<void, error> mem_mapping::map_cow_memory( size_type const data_size, header_info const hdr_info ) noexcept
+{
+#ifdef __linux__
+    // On Linux, create a memfd-backed mapping so that future COW copies (via
+    // the copy constructor) are zero-copy: dup(fd) + MAP_PRIVATE, instead of
+    // requiring an initial memcpy into a memfd. The memfd is anonymous but
+    // fd-backed, so it participates in the regular file-backed COW path.
+    auto const total_size{ unpack( hdr_info ).total_hdr_size() + data_size };
+    auto const mfd{ ::memfd_create( "psi_vm_cow_src", MFD_CLOEXEC ) };
+    if ( mfd != -1 )
+    {
+        if ( ::ftruncate( mfd, static_cast<off_t>( total_size ) ) == 0 )
+        {
+            auto hdr{ unpack( hdr_info ) };
+            auto map_success{ map( file_handle{ mfd }, total_size ) };
+            if ( !map_success )
+                return map_success.error();
+            mapping_.set_ephemeral(); // memfd: fd-backed but not on-disk
+            hdr.data_size = data_size;
+            get_sizes() = hdr;
+            return err::success;
+        }
+        ::close( mfd );
+    }
+    // memfd_create or ftruncate failed -- fall back to regular anonymous
+#endif // __linux__
+    return map_memory( data_size, hdr_info );
+}
+
 err::result_or_error<void, error>
-contiguous_storage::map( file_handle file, std::size_t const mapping_size ) noexcept
+mem_mapping::map( file_handle file, std::size_t const mapping_size ) noexcept
 {
     using ap    = flags::access_privileges;
     using flags = flags::mapping;
@@ -307,7 +341,7 @@ contiguous_storage::map( file_handle file, std::size_t const mapping_size ) noex
 
     if ( mapping_size ) [[ likely ]]
     {
-        auto view{ mapped_view::map( mapping_, 0, mapping_size ).as_result_or_error() };
+        auto view{ extendable_mapped_view::map( mapping_, 0, mapping_size ).as_result_or_error() };
         if ( !view )
             return view.error();
         view_ = *std::move( view );

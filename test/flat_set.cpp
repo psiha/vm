@@ -2,13 +2,13 @@
 /// psi::vm flat_set / flat_multiset test suite
 ///
 /// Typed tests exercise core flat_set behaviour across three container backends
-/// (std::vector, tr_vector, std::deque). Standalone tests cover container-
+/// (std::vector, heap_vector, std::deque). Standalone tests cover container-
 /// specific features, transparent comparators, CTAD, forwarding, pass_in_reg,
 /// LookupType, and flat_multiset.
 ////////////////////////////////////////////////////////////////////////////////
 
 #include <psi/vm/containers/flat_set.hpp>
-#include <psi/vm/containers/tr_vector.hpp>
+#include <psi/vm/containers/heap_vector.hpp>
 #include <psi/vm/containers/abi.hpp>
 #include <psi/vm/containers/lookup.hpp>
 
@@ -42,7 +42,7 @@ class flat_set_typed : public ::testing::Test {};
 
 using set_configs = ::testing::Types<
     set_config< std::vector<int>              >,
-    set_config< tr_vector<int, std::uint32_t> >,
+    set_config< heap_vector<int, std::uint32_t> >,
     set_config< std::deque<int>               >
 >;
 
@@ -438,8 +438,8 @@ TYPED_TEST( flat_set_typed, keys_returns_sorted )
 using FS  = flat_set<int>;
 using FSS = flat_set<std::string>;
 
-// tr_vector-backed set with uint32_t size_type
-using tr_vec_set = flat_set<int, std::less<int>, tr_vector<int, std::uint32_t>>;
+// heap_vector-backed set with uint32_t size_type
+using tr_vec_set = flat_set<int, std::less<int>, heap_vector<int, std::uint32_t>>;
 
 // Transparent comparator set
 struct TransComp {
@@ -483,12 +483,12 @@ TEST( flat_set, sequence_alias )
     EXPECT_EQ( &s.keys(), &s.sequence() );
 }
 
-TEST( flat_set, tr_vector_size_type )
+TEST( flat_set, heap_vector_size_type )
 {
     static_assert( std::is_same_v<tr_vec_set::size_type, std::uint32_t> );
 }
 
-TEST( flat_set, tr_vector_reserve_capacity )
+TEST( flat_set, heap_vector_reserve_capacity )
 {
     tr_vec_set s;
     s.reserve( 50 );
@@ -590,7 +590,7 @@ TEST( flat_set, forwarding_move_iterator_moves )
 }
 
 //==============================================================================
-// pass_in_reg — static assertions on stored_type
+// pass_in_reg -- static assertions on stored_type
 //==============================================================================
 
 TEST( flat_set, pass_in_reg_trivial_by_value )
@@ -611,7 +611,7 @@ TEST( flat_set, pass_in_reg_trivial_by_value )
 
 TEST( flat_set, pass_in_reg_string_becomes_string_view )
 {
-    // std::string is non-trivial — pass_in_reg should convert to string_view
+    // std::string is non-trivial -- pass_in_reg should convert to string_view
     using PIR_str = pass_in_reg<std::string>;
     static_assert( !PIR_str::pass_by_val );
     static_assert( std::is_same_v<PIR_str::stored_type, std::string_view> );
@@ -629,7 +629,7 @@ TEST( flat_set, pass_in_reg_preserves_heterogeneous_type )
 }
 
 //==============================================================================
-// LookupType concept — acceptance / rejection
+// LookupType concept -- acceptance / rejection
 //==============================================================================
 
 TEST( flat_set, lookup_type_concept_same_type_always_accepted )
@@ -662,7 +662,7 @@ TEST( flat_set, lookup_type_concept_non_transparent_requires_convertible )
 }
 
 //==============================================================================
-// Transparent lookup — verify zero unnecessary conversions
+// Transparent lookup -- verify zero unnecessary conversions
 //==============================================================================
 
 namespace
@@ -699,7 +699,7 @@ TEST( flat_set, transparent_lookup_zero_string_constructions )
 
     g_string_ctor_from_sv_count = 0;
 
-    // Lookup with char const * — transparent comparator handles string_view
+    // Lookup with char const * -- transparent comparator handles string_view
     // directly, so ZERO CountingString constructions should occur.
     char const * key{ "beta" };
     auto it{ s.find( key ) };
@@ -707,21 +707,21 @@ TEST( flat_set, transparent_lookup_zero_string_constructions )
     EXPECT_EQ( *it, "beta" );
     EXPECT_EQ( g_string_ctor_from_sv_count, 0 ) << "find() with transparent comparator should not construct strings";
 
-    // contains() — also zero constructions
+    // contains() -- also zero constructions
     EXPECT_TRUE( s.contains( key ) );
     EXPECT_EQ( g_string_ctor_from_sv_count, 0 ) << "contains() with transparent comparator should not construct strings";
 
-    // count() — also zero constructions
+    // count() -- also zero constructions
     EXPECT_EQ( s.count( key ), 1u );
     EXPECT_EQ( g_string_ctor_from_sv_count, 0 ) << "count() with transparent comparator should not construct strings";
 
-    // lower_bound / upper_bound — also zero constructions
+    // lower_bound / upper_bound -- also zero constructions
     auto lb{ s.lower_bound( key ) };
     auto ub{ s.upper_bound( key ) };
     EXPECT_EQ( g_string_ctor_from_sv_count, 0 ) << "lower/upper_bound with transparent comparator should not construct strings";
     EXPECT_EQ( std::distance( lb, ub ), 1 );
 
-    // equal_range — also zero constructions
+    // equal_range -- also zero constructions
     auto [er_lb, er_ub]{ s.equal_range( key ) };
     EXPECT_EQ( g_string_ctor_from_sv_count, 0 ) << "equal_range with transparent comparator should not construct strings";
     EXPECT_EQ( std::distance( er_lb, er_ub ), 1 );
@@ -736,7 +736,7 @@ TEST( flat_set, exact_key_type_lookup_zero_conversions )
 
     g_string_ctor_from_sv_count = 0;
 
-    // Lookup with exact key_type — no conversion should happen
+    // Lookup with exact key_type -- no conversion should happen
     CountingString const key{ "beta" };
     g_string_ctor_from_sv_count = 0; // reset after key construction
 
@@ -765,7 +765,7 @@ TEST( flat_set, transparent_int_set_lookup_with_long )
 {
     flat_set<int, std::less<>> s{ 10, 20, 30, 40, 50 };
 
-    // Lookup with long — heterogeneous, no conversion needed (transparent)
+    // Lookup with long -- heterogeneous, no conversion needed (transparent)
     EXPECT_TRUE( s.contains( 30L ) );
     EXPECT_EQ( s.count( 30L ), 1u );
     EXPECT_NE( s.find( 30L ), s.end() );
@@ -776,7 +776,7 @@ TEST( flat_set, transparent_int_set_lookup_with_long )
 }
 
 //==============================================================================
-// flat_multiset — Basic operations
+// flat_multiset -- Basic operations
 //==============================================================================
 
 TEST( flat_multiset, allows_duplicates )
@@ -836,7 +836,7 @@ TEST( flat_multiset, merge_transfers_all )
     FMS a{ 1, 2 };
     FMS b{ 2, 3 };
     a.merge( b );
-    EXPECT_EQ( a.size(), 4u ); // 1, 2, 2, 3 — no dedup
+    EXPECT_EQ( a.size(), 4u ); // 1, 2, 2, 3 -- no dedup
     EXPECT_EQ( a.count( 2 ), 2u );
     EXPECT_TRUE( b.empty() );
 }
@@ -868,7 +868,7 @@ TEST( flat_multiset, erase_if )
 }
 
 //==============================================================================
-// flat_multiset — Deduction guides
+// flat_multiset -- Deduction guides
 //==============================================================================
 
 TEST( flat_multiset, deduction_guide_sorted_equivalent )

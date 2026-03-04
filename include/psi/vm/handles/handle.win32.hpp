@@ -14,6 +14,7 @@
 
 #include <psi/vm/handles/handle.hpp>
 #include <psi/vm/handles/handle_ref.hpp>
+#include <psi/vm/error/error.hpp>
 
 #include <psi/build/disable_warnings.hpp>
 
@@ -57,7 +58,8 @@ struct handle_traits
         );
     }
 
-    static native_t copy( native_t native_handle ); // TODO
+    [[ gnu::cold, nodiscard ]]
+    static fallible_result<native_t> copy( native_t native_handle ) noexcept; // implemented in nt.cpp
 }; // handle_traits
 
 PSI_WARNING_DISABLE_POP()

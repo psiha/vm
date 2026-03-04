@@ -77,7 +77,7 @@ public:
     void unmap() noexcept { view_.unmap(); }
 
 private:
-    err::fallible_result< std::size_t, error > open( file_handle && file ) noexcept
+    err::fallible_result<std::size_t, error> open( file_handle && file ) noexcept
     {
         if ( !file )
             return error{};
@@ -98,7 +98,7 @@ private:
         if ( !mapping_ )
             return error{};
 
-        view_ = mapped_view::map( mapping_, 0, existing_size );
+        view_ = extendable_mapped_view::map( mapping_, 0, existing_size );
         if ( !view_.data() )
             return error{};
 
@@ -106,8 +106,8 @@ private:
     }
 
 private:
-    mapping     mapping_;
-    mapped_view view_   ;
+    mapping                mapping_;
+    extendable_mapped_view view_   ;
 }; // allocator_backing_mapping
 
 // WiP/toy attempt to provide an "extended STL-compatible allocator that
@@ -135,13 +135,13 @@ private:
 
     allocator_backing_mapping * p_storage_{ nullptr };
 
-    static T *  to_t_ptr( mapped_view::value_type * const ptr ) noexcept { return reinterpret_cast<T *>( ptr ); }
-    static sz_t  to_t_sz( auto                      const sz  ) noexcept { return static_cast<sz_t>( sz / sizeof( T ) ); }
+    static T *  to_t_ptr( extendable_mapped_view::value_type * const ptr ) noexcept { return reinterpret_cast<T *>( ptr ); }
+    static sz_t  to_t_sz( auto                                 const sz  ) noexcept { return static_cast<sz_t>( sz / sizeof( T ) ); }
 
 public:
-    using value_type = T;
-    using       pointer = T *;
-    using const_pointer = T const *;
+    using value_type      = T;
+    using       pointer   = T *;
+    using const_pointer   = T const *;
     using       reference = T &;
     using const_reference = T const &;
     using       size_type = sz_t;

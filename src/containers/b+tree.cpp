@@ -1,4 +1,6 @@
 #include <psi/vm/containers/b+tree.hpp>
+
+#include <cstring> // memcmp, memcpy
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -97,7 +99,7 @@ void bptree_base::reserve( node_slot::value_type new_capacity_in_number_of_nodes
 [[ gnu::cold ]]
 void bptree_base::assign_nodes_to_free_pool( node_slot::value_type const starting_node ) noexcept
 {
-    for ( auto & n : std::views::reverse( std::span{ nodes_ }.subspan( starting_node ) ) )
+    for ( auto & n : std::views::reverse( std::span( nodes_.data(), nodes_.size() ).subspan( starting_node ) ) )
         free( n );
 }
 
@@ -112,8 +114,9 @@ void bptree_base::rshift_sibling_parent_pos( node_header & node ) noexcept
     while ( p_node->right )
     {
         auto & right{ this->node( p_node->right ) };
-        BOOST_ASSUME( right.parent_child_idx == p_node->parent_child_idx );
-        ++right.parent_child_idx;
+        BOOST_ASSUME( right.tail.parent_child_idx == p_node->tail.parent_child_idx );
+        ++right.tail.parent_child_idx;
+        right.mark_dirty();
         p_node = &right;
     }
 }
@@ -123,9 +126,10 @@ void bptree_base::update_right_sibling_link( node_header const & left_node, node
     BOOST_ASSUME( slot_of( left_node ) == left_node_slot );
     if ( left_node.right ) [[ likely ]]
     {
-        auto & right_back_left{ right( left_node ).left };
-        BOOST_ASSUME( right_back_left != left_node_slot );
-        right_back_left = left_node_slot;
+        auto & right_nd{ right( left_node ) };
+        BOOST_ASSUME( right_nd.left != left_node_slot );
+        right_nd.left  = left_node_slot;
+        right_nd.mark_dirty();
     }
 }
 
@@ -136,6 +140,7 @@ void bptree_base::unlink_and_free_node( node_header & node, node_header & cached
     BOOST_ASSUME( left.right == slot_of( node ) );
     BOOST_ASSUME( node.left  == slot_of( left ) );
     left.right = node.right;
+    left.mark_dirty();
     update_right_sibling_link( left, node.left );
     free( node );
     BOOST_ASSERT( !node.parent );
@@ -228,6 +233,8 @@ void bptree_base::link( node_header & left, node_header & right ) const noexcept
     BOOST_ASSUME( !right.left  );
     left .right = slot_of( right );
     right.left  = slot_of( left  );
+    left .mark_dirty();
+    right.mark_dirty();
 }
 
 [[ gnu::noinline, gnu::sysv_abi ]]
@@ -244,9 +251,10 @@ bptree_base::new_spillover_node_for( node_header & existing_node )
     right_node.left  = existing_node_slot;
     right_node.right = left_node.right;
      left_node.right = right_node_slot;
+     left_node.mark_dirty();
     update_right_sibling_link( right_node, right_node_slot );
     right_node.parent           = left_node.parent;
-    right_node.parent_child_idx = left_node.parent_child_idx + 1;
+    right_node.tail.parent_child_idx = left_node.tail.parent_child_idx + 1;
     //right-sibling parent_child_idx rshifting is performed by insert_into_*
     //rshift_sibling_parent_pos( right_node );
 
@@ -265,8 +273,10 @@ bptree_base::new_root( node_slot const left_child, node_slot const right_child )
     hdr.root_         = slot_of( new_root );
     left .parent      = hdr.root_;
     right.parent      = hdr.root_;
-    BOOST_ASSUME( left .parent_child_idx == 0 );
-    BOOST_ASSUME( right.parent_child_idx == 1 );
+    left .mark_dirty();
+    right.mark_dirty();
+    BOOST_ASSUME( left .tail.parent_child_idx == 0 );
+    BOOST_ASSUME( right.tail.parent_child_idx == 1 );
     ++hdr.depth_;
     return new_root;
 }
@@ -538,14 +548,16 @@ bptree_base::new_node()
         unlink_right( cached_node );
         BOOST_ASSUME( hdr.free_node_count_ );
         --hdr.free_node_count_;
+        cached_node.mark_dirty();
         return as<node_placeholder>( cached_node );
     }
-    auto & new_node{ nodes_.emplace_back() };
-    BOOST_ASSUME( !new_node.num_vals );
-    BOOST_ASSUME( !new_node.left     );
-    BOOST_ASSUME( !new_node.right    );
+    auto & new_nd{ nodes_.emplace_back() };
+    BOOST_ASSUME( !new_nd.num_vals );
+    BOOST_ASSUME( !new_nd.left     );
+    BOOST_ASSUME( !new_nd.right    );
+    new_nd.mark_dirty();
     update_cached_pointers();
-    return new_node;
+    return new_nd;
 }
 [[ gnu::noinline ]]
 void bptree_base::free( node_header & node ) noexcept
@@ -571,6 +583,7 @@ void bptree_base::free( node_header & node ) noexcept
     // (to update the right link) so reset/setup the whole header right now for
     // the new allocation step.
     static_cast<node_header &>( freed_node ) = {};
+    freed_node.mark_dirty(); // node content changed (was reset to zero)
     // update the right link
     if ( free_list ) { BOOST_ASSUME(  hdr.free_node_count_ ); link( freed_node, this->node( free_list ) ); }
     else             { BOOST_ASSUME( !hdr.free_node_count_ ); }
@@ -600,6 +613,127 @@ void bptree_base::update_dbg_helpers() noexcept {
 #ifndef NDEBUG
     nodes__ = nodes_;
 #endif
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// COW (copy-on-write) copy constructor
+//
+// Creates a shallow clone of the source tree: all physical pages are shared
+// via kernel COW (PAGE_WRITECOPY / MAP_PRIVATE / mach_vm_remap). The first
+// write to any page in either the source or the clone triggers a private copy
+// of that page only.
+////////////////////////////////////////////////////////////////////////////////
+// TODO research: RCU-style generation switching
+//
+// Instead of mutating T1 in place, they:
+// - Build new snapshot(T2)
+// - Atomically publish pointer to new root
+// - Readers pin generation
+// - Old generation reclaimed when readers drain
+////////////////////////////////////////////////////////////////////////////////
+
+[[ gnu::cold ]]
+bptree_base::bptree_base( bptree_base const & source )
+    :
+    p_hdr_{},
+    nodes_{ source.nodes_ } // COW copy via mem_mapping copy ctor
+{
+    if ( nodes_.has_attached_storage() )
+    {
+        update_cached_pointers();
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// commit_to(): commit a COW clone's changes back to the target tree.
+//
+// Selective dirty-node copy: uses the node_header::dirty bit (set by
+// mark_dirty() on every mutation) to skip clean nodes entirely.  Only dirty
+// nodes are copied into the target.  In debug builds a memcmp cross-check
+// validates dirty-bit correctness (catches missing mark_dirty() calls).
+//
+// For memory-backed targets: if the clone grew (new_node() called
+// emplace_back), the target's node pool is extended first so the new dirty
+// nodes have room.  (Cannot swap storage — MAP_PRIVATE mutations are not
+// written back to the underlying memfd, so future COW copies of a swapped
+// target would see stale content and report the pre-commit element count.)
+//
+// For file-backed targets: growth is not handled here; callers must ensure
+// the target has sufficient capacity.
+////////////////////////////////////////////////////////////////////////////////
+
+[[ gnu::cold ]]
+void bptree_base::commit_to( bptree_base & target ) const noexcept
+{
+    if ( !nodes_.has_attached_storage() || !target.nodes_.has_attached_storage() )
+        return;
+
+    // For memory-backed targets: extend the target's node pool if the clone
+    // grew past it (new dirty nodes at positions >= original tgt size need room).
+    if ( !target.nodes_.file_backed() && nodes_.size() > target.nodes_.size() )
+        target.nodes_.storage_grow_to( nodes_.size() );
+
+    auto const src_mapped{ nodes_.mapped_size() };
+    auto const tgt_mapped{ target.nodes_.mapped_size() };
+    auto const common{ std::min( src_mapped, tgt_mapped ) };
+    if ( !common )
+        return;
+
+    auto const stride{ static_cast<std::size_t>( node_size ) };
+
+    // Always commit the entire mapped region's header area (before the node
+    // array) -- it contains tree metadata (root_, first_leaf_, size_, etc.).
+    // Use the node data pointers to determine where the node array starts;
+    // everything before that is header.
+    auto const * const src_nodes{ nodes_.data() };
+    auto       * const tgt_nodes{ target.nodes_.data() };
+    auto const src_hdr_begin{ reinterpret_cast<std::byte const *>( nodes_.header_storage().data() ) };
+    auto const tgt_hdr_begin{ reinterpret_cast<std::byte       *>( target.nodes_.header_storage().data() ) };
+    auto const hdr_bytes{ static_cast<std::size_t>( reinterpret_cast<std::byte const *>( src_nodes ) - src_hdr_begin ) };
+    if ( hdr_bytes && std::memcmp( src_hdr_begin, tgt_hdr_begin, hdr_bytes ) != 0 )
+        std::memcpy( tgt_hdr_begin, src_hdr_begin, hdr_bytes );
+
+    // Node area: skip clean nodes (dirty == 0), copy dirty ones.
+    auto const num_nodes    { nodes_.size() };
+    auto const tgt_num_nodes{ target.nodes_.size() };
+    auto const node_count   { std::min( num_nodes, tgt_num_nodes ) };
+
+    for ( node_slot::value_type i{ 0 }; i < node_count; ++i )
+    {
+        auto const & src_node{ src_nodes[ i ] };
+
+        if ( !src_node.tail.dirty )
+        {
+#           ifndef NDEBUG
+            // Cross-check: a clean node must be byte-identical to the target.
+            auto const & tgt_node{ tgt_nodes[ i ] };
+            if ( std::memcmp( &src_node, &tgt_node, stride ) != 0 )
+            {
+                std::fprintf( stderr, "commit_to: node[%u] clean but differs! src_dirty=%d tgt_dirty=%d stride=%zu num_nodes=%u tgt_num_nodes=%u\n",
+                    i, src_node.tail.dirty, tgt_node.tail.dirty, stride, num_nodes, tgt_num_nodes );
+                // Find first differing byte
+                auto const * s{ reinterpret_cast<std::byte const *>( &src_node ) };
+                auto const * t{ reinterpret_cast<std::byte const *>( &tgt_node ) };
+                for ( std::size_t b{ 0 }; b < stride; ++b )
+                    if ( s[ b ] != t[ b ] )
+                    {
+                        std::fprintf( stderr, "  first diff at byte %zu: src=0x%02x tgt=0x%02x\n", b, (unsigned)s[ b ], (unsigned)t[ b ] );
+                        break;
+                    }
+                BOOST_ASSERT_MSG( false, "node not marked dirty but differs from target — missing mark_dirty() call" );
+            }
+#           endif
+            continue;
+        }
+
+        auto & tgt_node{ tgt_nodes[ i ] };
+        std::memcpy( &tgt_node, &src_node, stride );
+        tgt_node.tail.dirty = false; // clear in target (target is the master branch)
+    }
+
+    // Sync the target's cached header pointer (the header contents may have
+    // changed -- size_, root_, depth_, free list, etc.).
+    target.update_cached_pointers();
 }
 
 //------------------------------------------------------------------------------

@@ -3,15 +3,22 @@
     Visual Studio / VSCode debugger visualizers for psi::vm containers.
 
     Integration:
-      Option A (recommended): Add to CMake target so it's automatically available:
-        target_sources(psi_vm INTERFACE
-            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/psi_vm.natvis>
+      Option A (recommended): Included via CMake target_sources (automatic):
+        target_sources(psi_vm PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/psi_vm.natvis>
         )
 
       Option B: Copy to per-user directory for global availability:
         %USERPROFILE%\Documents\Visual Studio 2022\Visualizers\psi_vm.natvis
 
       Option C: Add to VS project via Project > Add Existing Item.
+
+    Type name notes:
+      MSVC expands type aliases, so natvis patterns must match the expanded form:
+        heap_vector<T,sz,opts>    → vector<heap_storage<T,sz,void,opts>, geometric_growth{}>
+        fc_vector<T,N,oh>      → vector<fixed_storage<T,N,oh>>
+        small_vector<T,N,s,o>  → vector<sbo_hybrid<T,N,s,o>, geometric_growth{}>
+      Old typedef patterns are kept as Low-priority fallbacks.
 -->
 <AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
 
@@ -42,10 +49,27 @@
 
 
     <!-- ================================================================== -->
-    <!-- psi::vm::tr_vector                                                  -->
+    <!-- psi::vm::vector<heap_storage<...>>  (was heap_vector)                 -->
+    <!--                                                                     -->
+    <!-- Data members (inherited from heap_storage base):                    -->
+    <!--   T * p_array_;                                                     -->
+    <!--   size_type size_;                                                  -->
+    <!--   [optional] capacity_;                                             -->
     <!-- ================================================================== -->
 
-    <Type Name="psi::vm::tr_vector&lt;*,*,*&gt;">
+    <Type Name="psi::vm::vector&lt;psi::vm::heap_storage&lt;*&gt;,*&gt;">
+        <DisplayString>{{ size={size_} }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">size_</Item>
+            <ArrayItems>
+                <Size>size_</Size>
+                <ValuePointer>p_array_</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+
+    <!-- Legacy: heap_vector (typedef may still be visible in some contexts) -->
+    <Type Name="psi::vm::heap_vector&lt;*,*,*&gt;" Priority="Low">
         <DisplayString>{{ size={size_} }}</DisplayString>
         <Expand>
             <Item Name="[size]" ExcludeView="simple">size_</Item>
@@ -58,16 +82,146 @@
 
 
     <!-- ================================================================== -->
-    <!-- psi::vm::fc_vector                                                  -->
+    <!-- psi::vm::vector<fixed_storage<...>>  (was fc_vector)                -->
+    <!--                                                                     -->
+    <!-- Data members (inherited from fixed_storage base):                   -->
+    <!--   size_type size_;                                                  -->
+    <!--   noninitialized_array<T, N> array_;                                -->
     <!-- ================================================================== -->
 
-    <Type Name="psi::vm::fc_vector&lt;*,*,*&gt;">
+    <Type Name="psi::vm::vector&lt;psi::vm::fixed_storage&lt;*&gt;,*&gt;">
         <DisplayString>{{ size={size_} }}</DisplayString>
         <Expand>
             <Item Name="[size]" ExcludeView="simple">size_</Item>
             <ArrayItems>
                 <Size>size_</Size>
                 <ValuePointer>array_.data</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+
+    <!-- Legacy: fc_vector -->
+    <Type Name="psi::vm::fc_vector&lt;*,*,*&gt;" Priority="Low">
+        <DisplayString>{{ size={size_} }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">size_</Item>
+            <ArrayItems>
+                <Size>size_</Size>
+                <ValuePointer>array_.data</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+
+
+    <!-- ================================================================== -->
+    <!-- psi::vm::vector<sbo_hybrid<...>>  (was small_vector)                -->
+    <!--                                                                     -->
+    <!-- Three compile-time layouts, all in the same sbo_hybrid<T,N,sz,opt>  -->
+    <!-- template. Natvis disambiguates by member probing with priority       -->
+    <!-- fallback:                                                           -->
+    <!--                                                                     -->
+    <!--   embedded (default for alignof(T) >= sizeof(sz_t)):                -->
+    <!--     storage_.heap_.sz_ exists (CIS field inside union)              -->
+    <!--     inline: storage_.inline_.elements_.data                         -->
+    <!--     heap:   storage_.heap_.data_                                    -->
+    <!--     size = storage_.heap_.sz_ >> 1, heap = storage_.heap_.sz_ & 1   -->
+    <!--                                                                     -->
+    <!--   compact_lsb (default for alignof(T) < sizeof(sz_t)):              -->
+    <!--     size_ (LSB flag) + storage_ (union with heap_/buffer_)          -->
+    <!--     inline: storage_.buffer_.data                                   -->
+    <!--     heap:   storage_.heap_.data_                                    -->
+    <!--     size = size_ >> 1, heap = size_ & 1                             -->
+    <!--                                                                     -->
+    <!--   compact (explicit only):                                          -->
+    <!--     storage_ (union) + size_ (MSB flag)                             -->
+    <!--     Same member names as compact_lsb but MSB interpretation.        -->
+    <!--     See commented-out patterns below.                               -->
+    <!-- ================================================================== -->
+
+    <!-- embedded layout: storage_.heap_.sz_ exists (unique to this layout) -->
+    <Type Name="psi::vm::vector&lt;psi::vm::sbo_hybrid&lt;*&gt;,*&gt;" Priority="MediumHigh">
+        <DisplayString Condition="(storage_.heap_.sz_ &amp; 1) != 0">{{ size={storage_.heap_.sz_ >> 1}, heap }}</DisplayString>
+        <DisplayString>{{ size={storage_.heap_.sz_ >> 1}, inline }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">storage_.heap_.sz_ >> 1</Item>
+            <Item Name="[capacity]" Condition="(storage_.heap_.sz_ &amp; 1) != 0" ExcludeView="simple">storage_.heap_.cap_</Item>
+            <Item Name="[heap]" ExcludeView="simple">(storage_.heap_.sz_ &amp; 1) != 0</Item>
+            <ArrayItems>
+                <Size>storage_.heap_.sz_ >> 1</Size>
+                <ValuePointer>((storage_.heap_.sz_ &amp; 1) != 0) ? storage_.heap_.data_ : storage_.inline_.elements_.data</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+
+    <!-- compact_lsb layout: size_ (LSB flag) + storage_ with heap_.capacity_ -->
+    <Type Name="psi::vm::vector&lt;psi::vm::sbo_hybrid&lt;*&gt;,*&gt;" Priority="MediumLow">
+        <DisplayString Condition="(size_ &amp; 1) != 0">{{ size={size_ >> 1}, heap }}</DisplayString>
+        <DisplayString>{{ size={size_ >> 1}, inline }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">size_ >> 1</Item>
+            <Item Name="[capacity]" Condition="(size_ &amp; 1) != 0" ExcludeView="simple">storage_.heap_.capacity_</Item>
+            <Item Name="[heap]" ExcludeView="simple">(size_ &amp; 1) != 0</Item>
+            <ArrayItems>
+                <Size>size_ >> 1</Size>
+                <ValuePointer>((size_ &amp; 1) != 0) ? storage_.heap_.data_ : storage_.buffer_.data</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+
+    <!-- compact layout (MSB flag) — uncomment if using explicit sbo_layout::compact:
+    <Type Name="psi::vm::vector&lt;psi::vm::sbo_hybrid&lt;*,*,unsigned __int64,*&gt;,*&gt;" Priority="MediumLow">
+        <DisplayString Condition="(size_ &amp; 0x8000000000000000) != 0">{{ size={size_ &amp; 0x7FFFFFFFFFFFFFFF}, heap }}</DisplayString>
+        <DisplayString>{{ size={size_}, inline }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">size_ &amp; 0x7FFFFFFFFFFFFFFF</Item>
+            <Item Name="[capacity]" Condition="(size_ &amp; 0x8000000000000000) != 0" ExcludeView="simple">storage_.heap_.capacity_</Item>
+            <Item Name="[heap]" ExcludeView="simple">(size_ &amp; 0x8000000000000000) != 0</Item>
+            <ArrayItems>
+                <Size>size_ &amp; 0x7FFFFFFFFFFFFFFF</Size>
+                <ValuePointer>((size_ &amp; 0x8000000000000000) != 0) ? storage_.heap_.data_ : storage_.buffer_.data</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+    <Type Name="psi::vm::vector&lt;psi::vm::sbo_hybrid&lt;*,*,unsigned int,*&gt;,*&gt;" Priority="MediumLow">
+        <DisplayString Condition="(size_ &amp; 0x80000000) != 0">{{ size={size_ &amp; 0x7FFFFFFF}, heap }}</DisplayString>
+        <DisplayString>{{ size={size_}, inline }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">size_ &amp; 0x7FFFFFFF</Item>
+            <Item Name="[capacity]" Condition="(size_ &amp; 0x80000000) != 0" ExcludeView="simple">storage_.heap_.capacity_</Item>
+            <Item Name="[heap]" ExcludeView="simple">(size_ &amp; 0x80000000) != 0</Item>
+            <ArrayItems>
+                <Size>size_ &amp; 0x7FFFFFFF</Size>
+                <ValuePointer>((size_ &amp; 0x80000000) != 0) ? storage_.heap_.data_ : storage_.buffer_.data</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+    -->
+
+    <!-- Legacy: small_vector (in case debugger preserves the alias name) -->
+    <Type Name="psi::vm::small_vector&lt;*,*,*,*&gt;" Priority="MediumHigh">
+        <DisplayString Condition="(storage_.heap_.sz_ &amp; 1) != 0">{{ size={storage_.heap_.sz_ >> 1}, heap }}</DisplayString>
+        <DisplayString>{{ size={storage_.heap_.sz_ >> 1}, inline }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">storage_.heap_.sz_ >> 1</Item>
+            <Item Name="[capacity]" Condition="(storage_.heap_.sz_ &amp; 1) != 0" ExcludeView="simple">storage_.heap_.cap_</Item>
+            <Item Name="[heap]" ExcludeView="simple">(storage_.heap_.sz_ &amp; 1) != 0</Item>
+            <ArrayItems>
+                <Size>storage_.heap_.sz_ >> 1</Size>
+                <ValuePointer>((storage_.heap_.sz_ &amp; 1) != 0) ? storage_.heap_.data_ : storage_.inline_.elements_.data</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+
+    <Type Name="psi::vm::small_vector&lt;*,*,*,*&gt;" Priority="MediumLow">
+        <DisplayString Condition="(size_ &amp; 1) != 0">{{ size={size_ >> 1}, heap }}</DisplayString>
+        <DisplayString>{{ size={size_ >> 1}, inline }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">size_ >> 1</Item>
+            <Item Name="[capacity]" Condition="(size_ &amp; 1) != 0" ExcludeView="simple">storage_.heap_.capacity_</Item>
+            <Item Name="[heap]" ExcludeView="simple">(size_ &amp; 1) != 0</Item>
+            <ArrayItems>
+                <Size>size_ >> 1</Size>
+                <ValuePointer>((size_ &amp; 1) != 0) ? storage_.heap_.data_ : storage_.buffer_.data</ValuePointer>
             </ArrayItems>
         </Expand>
     </Type>
@@ -92,8 +246,8 @@
         </Expand>
     </Type>
 
-    <!-- flat_set_impl with tr_vector storage -->
-    <Type Name="psi::vm::flat_set_impl&lt;*,*,psi::vm::tr_vector&lt;$T1,*,*&gt;&gt;">
+    <!-- flat_set_impl with vector<heap_storage<...>> storage (was heap_vector) -->
+    <Type Name="psi::vm::flat_set_impl&lt;*,*,psi::vm::vector&lt;psi::vm::heap_storage&lt;$T1,*&gt;,*&gt;&gt;">
         <DisplayString>{{ size={storage_.size_} }}</DisplayString>
         <Expand>
             <Item Name="[size]" ExcludeView="simple">storage_.size_</Item>
@@ -104,8 +258,32 @@
         </Expand>
     </Type>
 
-    <!-- flat_set_impl with fc_vector storage -->
-    <Type Name="psi::vm::flat_set_impl&lt;*,*,psi::vm::fc_vector&lt;$T1,*,*&gt;&gt;">
+    <!-- flat_set_impl with vector<fixed_storage<...>> storage (was fc_vector) -->
+    <Type Name="psi::vm::flat_set_impl&lt;*,*,psi::vm::vector&lt;psi::vm::fixed_storage&lt;$T1,*&gt;,*&gt;&gt;">
+        <DisplayString>{{ size={storage_.size_} }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">storage_.size_</Item>
+            <ArrayItems>
+                <Size>storage_.size_</Size>
+                <ValuePointer>storage_.array_.data</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+
+    <!-- Legacy: flat_set_impl with heap_vector storage -->
+    <Type Name="psi::vm::flat_set_impl&lt;*,*,psi::vm::heap_vector&lt;$T1,*,*&gt;&gt;" Priority="Low">
+        <DisplayString>{{ size={storage_.size_} }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">storage_.size_</Item>
+            <ArrayItems>
+                <Size>storage_.size_</Size>
+                <ValuePointer>storage_.p_array_</ValuePointer>
+            </ArrayItems>
+        </Expand>
+    </Type>
+
+    <!-- Legacy: flat_set_impl with fc_vector storage -->
+    <Type Name="psi::vm::flat_set_impl&lt;*,*,psi::vm::fc_vector&lt;$T1,*,*&gt;&gt;" Priority="Low">
         <DisplayString>{{ size={storage_.size_} }}</DisplayString>
         <Expand>
             <Item Name="[size]" ExcludeView="simple">storage_.size_</Item>
@@ -172,8 +350,24 @@
         </Expand>
     </Type>
 
-    <!-- flat_map_impl with tr_vector storage for keys and values -->
-    <Type Name="psi::vm::flat_map_impl&lt;*,*,*,psi::vm::tr_vector&lt;$T1,*,*&gt;,psi::vm::tr_vector&lt;$T2,*,*&gt;&gt;">
+    <!-- flat_map_impl with vector<heap_storage<...>> storage (was heap_vector) -->
+    <Type Name="psi::vm::flat_map_impl&lt;*,*,*,psi::vm::vector&lt;psi::vm::heap_storage&lt;$T1,*&gt;,*&gt;,psi::vm::vector&lt;psi::vm::heap_storage&lt;$T2,*&gt;,*&gt;&gt;">
+        <DisplayString>{{ size={storage_.keys.size_} }}</DisplayString>
+        <Expand>
+            <Item Name="[size]" ExcludeView="simple">storage_.keys.size_</Item>
+            <CustomListItems>
+                <Variable Name="i" InitialValue="0"/>
+                <Size>storage_.keys.size_</Size>
+                <Loop Condition="i &lt; storage_.keys.size_">
+                    <Item Name="[{*(storage_.keys.p_array_ + i)}]">*(storage_.values.p_array_ + i)</Item>
+                    <Exec>i++</Exec>
+                </Loop>
+            </CustomListItems>
+        </Expand>
+    </Type>
+
+    <!-- Legacy: flat_map_impl with heap_vector storage -->
+    <Type Name="psi::vm::flat_map_impl&lt;*,*,*,psi::vm::heap_vector&lt;$T1,*,*&gt;,psi::vm::heap_vector&lt;$T2,*,*&gt;&gt;" Priority="Low">
         <DisplayString>{{ size={storage_.keys.size_} }}</DisplayString>
         <Expand>
             <Item Name="[size]" ExcludeView="simple">storage_.keys.size_</Item>
@@ -218,7 +412,7 @@
     <!-- ================================================================== -->
     <!-- psi::vm::bptree_base / bp_tree_impl                                 -->
     <!--                                                                     -->
-    <!-- B+ trees use memory-mapped node pools — full element iteration is   -->
+    <!-- B+ trees use memory-mapped node pools -- full element iteration is  -->
     <!-- not feasible in natvis. Show size, depth, and the header.           -->
     <!-- ================================================================== -->
 
@@ -247,117 +441,6 @@
         <DisplayString>{value}</DisplayString>
         <Expand>
             <ExpandedItem>value</ExpandedItem>
-        </Expand>
-    </Type>
-
-
-    <!-- ================================================================== -->
-    <!-- psi::vm::small_vector                                              -->
-    <!--                                                                     -->
-    <!-- Four layouts resolved at compile time:                              -->
-    <!--   auto_select (default) → embedded or compact_lsb                  -->
-    <!--   embedded:     storage_.heap_.sz_ (LSB flag), no separate size_   -->
-    <!--   compact_lsb:  size_ (LSB flag) + storage_                        -->
-    <!--   compact:      size_ (MSB flag) + storage_                        -->
-    <!--   pointer_based: data_/size_/capacity_ from small_vector_base      -->
-    <!--                                                                     -->
-    <!-- Disambiguation by member existence:                                -->
-    <!--   embedded has storage_.heap_.sz_ (unique — no size_ member)       -->
-    <!--   compact/compact_lsb have size_ + storage_.heap_.capacity_        -->
-    <!--   pointer_based has data_/size_/capacity_ (no storage_)            -->
-    <!--                                                                     -->
-    <!-- compact and compact_lsb can't coexist (same members, different     -->
-    <!-- flag logic). compact_lsb is active by default (matches             -->
-    <!-- auto_select). For explicit compact layout, swap the comments.      -->
-    <!-- ================================================================== -->
-
-    <!-- embedded layout (size inside union, LSB flag) -->
-    <!-- storage_.heap_.sz_ only exists in embedded — fails for compact/compact_lsb -->
-    <Type Name="psi::vm::small_vector&lt;*,*,*,*&gt;" Priority="MediumHigh">
-        <DisplayString Condition="(storage_.heap_.sz_ &amp; 1) != 0">{{ size={storage_.heap_.sz_ >> 1}, heap }}</DisplayString>
-        <DisplayString>{{ size={storage_.heap_.sz_ >> 1}, inline }}</DisplayString>
-        <Expand>
-            <Item Name="[size]" ExcludeView="simple">storage_.heap_.sz_ >> 1</Item>
-            <Item Name="[capacity]" Condition="(storage_.heap_.sz_ &amp; 1) != 0" ExcludeView="simple">storage_.heap_.cap_</Item>
-            <Item Name="[heap]" ExcludeView="simple">(storage_.heap_.sz_ &amp; 1) != 0</Item>
-            <ArrayItems>
-                <Size>storage_.heap_.sz_ >> 1</Size>
-                <ValuePointer>((storage_.heap_.sz_ &amp; 1) != 0) ? storage_.heap_.data_ : storage_.inline_.elements_.data</ValuePointer>
-            </ArrayItems>
-        </Expand>
-    </Type>
-
-    <!-- compact_lsb layout (LSB flag, any sz_t) — active by default (matches auto_select) -->
-    <Type Name="psi::vm::small_vector&lt;*,*,*,*&gt;" Priority="MediumLow">
-        <DisplayString Condition="(size_ &amp; 1) != 0">{{ size={size_ >> 1}, heap }}</DisplayString>
-        <DisplayString>{{ size={size_ >> 1}, inline }}</DisplayString>
-        <Expand>
-            <Item Name="[size]" ExcludeView="simple">size_ >> 1</Item>
-            <Item Name="[capacity]" Condition="(size_ &amp; 1) != 0" ExcludeView="simple">storage_.heap_.capacity_</Item>
-            <Item Name="[heap]" ExcludeView="simple">(size_ &amp; 1) != 0</Item>
-            <ArrayItems>
-                <Size>size_ >> 1</Size>
-                <ValuePointer>((size_ &amp; 1) != 0) ? storage_.heap_.data_ : storage_.buffer_.data</ValuePointer>
-            </ArrayItems>
-        </Expand>
-    </Type>
-
-    <!-- compact layout (MSB flag) — uncomment if using explicit compact layout:
-    <Type Name="psi::vm::small_vector&lt;*,*,unsigned __int64,*&gt;" Priority="MediumLow">
-        <DisplayString Condition="(size_ &amp; 0x8000000000000000) != 0">{{ size={size_ &amp; 0x7FFFFFFFFFFFFFFF}, heap }}</DisplayString>
-        <DisplayString>{{ size={size_}, inline }}</DisplayString>
-        <Expand>
-            <Item Name="[size]" ExcludeView="simple">size_ &amp; 0x7FFFFFFFFFFFFFFF</Item>
-            <Item Name="[capacity]" Condition="(size_ &amp; 0x8000000000000000) != 0" ExcludeView="simple">storage_.heap_.capacity_</Item>
-            <Item Name="[heap]" ExcludeView="simple">(size_ &amp; 0x8000000000000000) != 0</Item>
-            <ArrayItems>
-                <Size>size_ &amp; 0x7FFFFFFFFFFFFFFF</Size>
-                <ValuePointer>((size_ &amp; 0x8000000000000000) != 0) ? storage_.heap_.data_ : storage_.buffer_.data</ValuePointer>
-            </ArrayItems>
-        </Expand>
-    </Type>
-    <Type Name="psi::vm::small_vector&lt;*,*,unsigned int,*&gt;" Priority="MediumLow">
-        <DisplayString Condition="(size_ &amp; 0x80000000) != 0">{{ size={size_ &amp; 0x7FFFFFFF}, heap }}</DisplayString>
-        <DisplayString>{{ size={size_}, inline }}</DisplayString>
-        <Expand>
-            <Item Name="[size]" ExcludeView="simple">size_ &amp; 0x7FFFFFFF</Item>
-            <Item Name="[capacity]" Condition="(size_ &amp; 0x80000000) != 0" ExcludeView="simple">storage_.heap_.capacity_</Item>
-            <Item Name="[heap]" ExcludeView="simple">(size_ &amp; 0x80000000) != 0</Item>
-            <ArrayItems>
-                <Size>size_ &amp; 0x7FFFFFFF</Size>
-                <ValuePointer>((size_ &amp; 0x80000000) != 0) ? storage_.heap_.data_ : storage_.buffer_.data</ValuePointer>
-            </ArrayItems>
-        </Expand>
-    </Type>
-    -->
-
-    <!-- pointer_based layout: data_/size_/capacity_ from small_vector_base -->
-    <Type Name="psi::vm::small_vector&lt;*,*,*,*&gt;" Priority="Medium">
-        <DisplayString>{{ size={size_} }}</DisplayString>
-        <Expand>
-            <Item Name="[size]" ExcludeView="simple">size_</Item>
-            <Item Name="[capacity]" ExcludeView="simple">capacity_</Item>
-            <ArrayItems>
-                <Size>size_</Size>
-                <ValuePointer>data_</ValuePointer>
-            </ArrayItems>
-        </Expand>
-    </Type>
-
-
-    <!-- ================================================================== -->
-    <!-- psi::vm::small_vector_base (type-erased reference, pointer_based)  -->
-    <!-- ================================================================== -->
-
-    <Type Name="psi::vm::small_vector_base&lt;*,*,*&gt;">
-        <DisplayString>{{ size={size_} }}</DisplayString>
-        <Expand>
-            <Item Name="[size]" ExcludeView="simple">size_</Item>
-            <Item Name="[capacity]" ExcludeView="simple">capacity_</Item>
-            <ArrayItems>
-                <Size>size_</Size>
-                <ValuePointer>data_</ValuePointer>
-            </ArrayItems>
         </Expand>
     </Type>
 

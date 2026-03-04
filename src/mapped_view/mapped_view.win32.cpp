@@ -16,6 +16,7 @@
 //------------------------------------------------------------------------------
 #include "mapped_view.win32.hpp"
 #include "../allocation/allocation.impl.hpp"
+#include "../allocation/expand_win32.hpp"
 
 #include <psi/vm/align.hpp>
 #include <psi/vm/mapped_view/mapped_view.hpp>
@@ -82,7 +83,7 @@ windows_mmap
         view_start ? desired_size : 0
     };
 #else
-    auto const writable{ ( flags.page_protection & ( PAGE_READWRITE | PAGE_EXECUTE_READWRITE ) ) != 0 }; //...mrmlj...simplify all these hacks (for read only file mappings the 'reserve and have NtExtendSection auto-commit' logic does not seem to work)
+    auto const writable{ ( flags.page_protection & ( PAGE_READWRITE | PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY ) ) != 0 }; // WRITECOPY views are writable (writes go to private copies) and need the same MEM_RESERVE allocation type as READWRITE views
     auto const allocation_aligned_size{ align_up( desired_size, reserve_granularity ) };
     auto const actual_size{ writable ? allocation_aligned_size : align_up( desired_size, commit_granularity ) };
     auto          sz         { writable ? allocation_aligned_size : desired_size };
@@ -145,28 +146,42 @@ std::size_t mem_region_size( void * const address ) noexcept;
 namespace
 {
     BOOST_ATTRIBUTES( BOOST_MINSIZE, BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 ) BOOST_NOINLINE
-    void unmap_concatenated( void * address, std::size_t size ) noexcept
+    void unmap_concatenated( void * address, std::size_t size, std::size_t const trailing_placeholder_size ) noexcept
     {
         // emulate support for adjacent/concatenated regions (as supported by mmap)
         // (duplicated logic from free() in allocation.win32.cpp)
+        void * tail{ nullptr };
         for ( ;; )
         {
             auto const region_size{ mem_region_size( address ) };
             BOOST_ASSUME( region_size <= align_up( size, reserve_granularity ) );
+            tail = static_cast<std::byte *>( address ) + region_size;
             BOOST_VERIFY( ::UnmapViewOfFile( address ) );
             if ( region_size >= size )
                 break;
             add( address, region_size );
             sub( size   , region_size );
         }
+
+        // Trailing placeholder cleanup for overreserve_section_map.
+        // Placeholder ownership is tracked explicitly by mapped_view, so no
+        // heuristic VM inspection is needed (or allowed) here.
+        if ( trailing_placeholder_size )
+        {
+#       ifndef NDEBUG
+            auto const trailing_region_size{ detail::query_placeholder( tail ) };
+            BOOST_ASSERT( trailing_region_size >= trailing_placeholder_size );
+#       endif
+            detail::free_placeholder( tail );
+        }
     }
 } // anonymous namespace
 
 BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
-void unmap( mapped_span const view ) noexcept
+void unmap( mapped_span const view, std::size_t const trailing_placeholder_size ) noexcept
 {
     if ( !view.empty() )
-        unmap_concatenated( view.data(), view.size() );
+        unmap_concatenated( view.data(), view.size(), trailing_placeholder_size );
 }
 
 void unmap_partial( mapped_span const range ) noexcept
@@ -193,7 +208,7 @@ void flush_async( mapped_span const range ) noexcept
     if ( !::FlushViewOfFile( range.data(), range.size() ) ) [[ unlikely ]]
     {
 #   ifndef NDEBUG //...mrmlj...catching ghosts
-        std::fputs( err::make_exception( err::last_win32_error{} ).what(), stderr );
+        //std::fputs( err::make_exception( err::last_win32_error{} ).what(), stderr );
 #   endif
     }
 }

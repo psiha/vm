@@ -24,7 +24,7 @@
 
 #include "komparator.hpp"
 #include "lookup.hpp"
-#include "tr_vector.hpp"
+#include "heap_vector.hpp"
 
 #include <boost/assert.hpp>
 
@@ -61,7 +61,7 @@ concept sorted_insert_tag = ::std::same_as<T, sorted_unique_t> || ::std::same_as
 
 namespace detail {
     //==============================================================================
-    // truncate_to — shrink a single container to n elements (baseline primitive)
+    // truncate_to -- shrink a single container to n elements (baseline primitive)
     //
     // paired_storage::truncate_to delegates to this for each sub-container.
     //==============================================================================
@@ -77,7 +77,7 @@ namespace detail {
     // Lookup utilities (shared by flat_map and flat_set families)
     //==============================================================================
 
-    // Lean worker functions — comparator passed in registers; key accepts
+    // Lean worker functions -- comparator passed in registers; key accepts
     // both Reg-wrapped and plain const-ref types (the compiler optimizes away
     // the indirection for inlined Reg types; non-transparent + non-trivial
     // key_type arrives as key_type const & which is not Reg).
@@ -102,7 +102,7 @@ namespace detail {
         decltype( auto ) value{ prefetch( comp, key ) };
         auto const wrappedComp{ make_trivially_copyable_predicate( comp ) };
         auto const lb{ std::lower_bound( keys.begin(), keys.end(), value, wrappedComp ) };
-        // upper_bound search starts from lb — no redundant traversal of [begin, lb)
+        // upper_bound search starts from lb -- no redundant traversal of [begin, lb)
         auto const ub{ std::upper_bound( lb, keys.end(), value, wrappedComp ) };
         return std::pair{ lb, ub };
     }
@@ -125,7 +125,7 @@ namespace detail {
 
 
     //==============================================================================
-    // Merge/dedup strategy flags — constexpr switches for experimentation.
+    // Merge/dedup strategy flags -- constexpr switches for experimentation.
     // Only affect the single-container (set) overload of sort_merge_storage.
     //==============================================================================
     inline constexpr bool use_set_difference_dedup{ true  };  // filter tail against prefix before merge (vs. merge-then-unique)
@@ -145,7 +145,7 @@ namespace detail {
 
 
     //==============================================================================
-    // set_unique_difference — algorithms for pre-merge duplicate filtering
+    // set_unique_difference -- algorithms for pre-merge duplicate filtering
     //
     // Ported from boost/move/algo/detail/set_difference.hpp using std::move
     // instead of boost::move.
@@ -175,7 +175,7 @@ namespace detail {
             }
 
             if ( comp( *first1, *first2 ) ) {
-                // *first1 < *first2 — skip adjacent equivalents in range1
+                // *first1 < *first2 -- skip adjacent equivalents in range1
                 FwdIt1 i{ first1 };
                 while ( ++first1 != last1 ) {
                     if ( comp( *i, *first1 ) )
@@ -186,7 +186,7 @@ namespace detail {
             } else if ( comp( *first2, *first1 ) ) {
                 ++first2;
             } else {
-                // equivalent — skip from range1
+                // equivalent -- skip from range1
                 ++first1;
             }
         }
@@ -215,10 +215,10 @@ namespace detail {
             if ( comp( *first2, *first1 ) ) {
                 ++first2;
             } else if ( comp( *first1, *first2 ) ) {
-                // *first1 < *first2 — check for adjacent duplicates in range1
+                // *first1 < *first2 -- check for adjacent duplicates in range1
                 FwdOutIt result{ first1 };
                 if ( ++first1 != last1 && !comp( *result, *first1 ) ) {
-                    // adjacent dups found — switch to non-inplace
+                    // adjacent dups found -- switch to non-inplace
                     while ( ++first1 != last1 && !comp( *result, *first1 ) )
                         {}
                     return set_unique_difference(
@@ -227,7 +227,7 @@ namespace detail {
                     );
                 }
             } else {
-                // equivalent to an element in range2 — must skip
+                // equivalent to an element in range2 -- must skip
                 FwdOutIt result{ first1 };
                 while ( ++first1 != last1 && !comp( *result, *first1 ) )
                     {}
@@ -242,7 +242,7 @@ namespace detail {
 
 
     //==============================================================================
-    // do_inplace_merge — merge helper, chooses between std::inplace_merge and
+    // do_inplace_merge -- merge helper, chooses between std::inplace_merge and
     // boost::movelib::adaptive_merge (which uses spare capacity as scratch buffer)
     //==============================================================================
     template <typename KC>
@@ -269,18 +269,18 @@ namespace detail {
 
 
     //==============================================================================
-    // Storage abstraction helpers — generic (set-path) overloads for single
+    // Storage abstraction helpers -- generic (set-path) overloads for single
     // containers.  paired_storage (map-path) overloads live in flat_map.hpp
     // and are found via ADL at template instantiation time.
     //==============================================================================
 
-    // keys_of — extract the keys container from storage
+    // keys_of -- extract the keys container from storage
     template <typename KC> constexpr auto       & keys_of( KC       & c ) noexcept { return c; }
     template <typename KC> constexpr auto const & keys_of( KC const & c ) noexcept { return c; }
 
 
     //==============================================================================
-    // key_type_of — extracts key type from Storage
+    // key_type_of -- extracts key type from Storage
     // (KeyContainer for sets, paired_storage for maps)
     //==============================================================================
 
@@ -288,15 +288,15 @@ namespace detail {
     using key_type_of = std::ranges::range_value_t<std::remove_cvref_t<decltype( keys_of( std::declval<Storage const &>() ) )>>;
 
 
-    // unique_truncate — dedup in place and shrink; common tail for sort paths
+    // unique_truncate -- dedup in place and shrink; common tail for sort paths
     template <typename KC, typename Comp>
     constexpr void unique_truncate( KC & keys, Comp const & comp ) noexcept {
         auto const newEnd{ std::ranges::unique( keys, key_equiv( comp ) ).begin() };
         truncate_to( keys, static_cast<typename KC::size_type>( newEnd - keys.begin() ) );
     }
 
-    // sort_storage — sort + conditional dedup, truncating storage in place
-    // Single container (set): Komp is Komparator — .sort() dispatches to
+    // sort_storage -- sort + conditional dedup, truncating storage in place
+    // Single container (set): Komp is Komparator -- .sort() dispatches to
     // pdqsort_branchless when available; .comp() yields the raw comparator
     // for STL functions (fewer template instantiations).
     template <bool Unique, typename KC, typename Komp>
@@ -306,7 +306,7 @@ namespace detail {
             unique_truncate( keys, komp.comp() );
     }
 
-    // sort_merge_storage — sort appended tail, merge with sorted prefix, conditional dedup
+    // sort_merge_storage -- sort appended tail, merge with sorted prefix, conditional dedup
     template <bool Unique, bool WasSorted, typename KC, typename Komp>
     constexpr void sort_merge_storage( KC & keys, Komp const & komp, typename KC::size_type const oldSize ) {
         using key_sz_t = typename KC::size_type;
@@ -338,19 +338,19 @@ namespace detail {
         }
     }
 
-    // storage_erase_at — erase single element at position
+    // storage_erase_at -- erase single element at position
     template <typename KC>
     constexpr void storage_erase_at( KC & c, typename KC::size_type const pos ) noexcept {
         c.erase( c.begin() + static_cast<std::ptrdiff_t>( pos ) );
     }
 
-    // storage_erase_range — erase elements in [first, last)
+    // storage_erase_range -- erase elements in [first, last)
     template <typename KC>
     constexpr void storage_erase_range( KC & c, typename KC::size_type const first, typename KC::size_type const last ) noexcept {
         c.erase( c.begin() + static_cast<std::ptrdiff_t>( first ), c.begin() + static_cast<std::ptrdiff_t>( last ) );
     }
 
-    // storage_append_range — append elements from a range (polyfill for containers without C++23 append_range)
+    // storage_append_range -- append elements from a range (polyfill for containers without C++23 append_range)
     template <typename KC, typename R>
     constexpr void storage_append_range( KC & c, R && rg ) {
         if constexpr ( requires { c.append_range( std::forward<R>( rg ) ); } )
@@ -359,44 +359,44 @@ namespace detail {
             c.insert( c.end(), std::ranges::begin( rg ), std::ranges::end( rg ) );
     }
 
-    // storage_move_append — move all elements from source into dest
+    // storage_move_append -- move all elements from source into dest
     template <typename KC>
     constexpr void storage_move_append( KC & dest, KC & source ) {
         storage_append_range( dest, source | std::views::as_rvalue );
     }
 
-    // storage_emplace_back_from — move single element at source[idx] to back of dest
+    // storage_emplace_back_from -- move single element at source[idx] to back of dest
     template <typename KC>
     constexpr void storage_emplace_back_from( KC & dest, KC & source, typename KC::size_type const idx ) {
         dest.emplace_back( std::move( source[ idx ] ) );
     }
 
-    // storage_emplace_back — unchecked append (set path: single container)
+    // storage_emplace_back -- unchecked append (set path: single container)
     template <typename KC, typename... Args>
     constexpr void storage_emplace_back( KC & c, Args &&... args ) {
         c.emplace_back( std::forward<Args>( args )... );
     }
 
-    // storage_back — reference to the last emplaced element
+    // storage_back -- reference to the last emplaced element
     template <typename KC>
     constexpr auto & storage_back( KC & c ) noexcept { return c.back(); }
 
-    // storage_move_element — move element from src to dst position within same storage
+    // storage_move_element -- move element from src to dst position within same storage
     template <typename KC>
     constexpr void storage_move_element( KC & c, typename KC::size_type const dst, typename KC::size_type const src ) noexcept {
         c[ dst ] = std::move( c[ src ] );
     }
 
-    // storage_erase_if — dispatch erase_if on the underlying storage via ADL.
+    // storage_erase_if -- dispatch erase_if on the underlying storage via ADL.
     // Resolves to std::erase_if for std containers (vector, deque) and
-    // psi::vm::erase_if for tr_vector / paired_storage.
+    // psi::vm::erase_if for heap_vector / paired_storage.
     template <typename S, typename Pred>
     constexpr auto storage_erase_if( S & s, Pred pred ) {
         return erase_if( s, std::move( pred ) );
     }
 
 //==============================================================================
-// flat_impl — shared base for flat_set_impl and flat_map_impl
+// flat_impl -- shared base for flat_set_impl and flat_map_impl
 //
 // Lives in namespace detail so that unqualified calls to  functions
 // (keys_of, storage_erase_at, ...) resolve via ordinary lookup for the
@@ -478,7 +478,7 @@ public:
     }
 
     //--------------------------------------------------------------------------
-    // Bulk insert — append + sort + merge (± dedup based on derived class's unique)
+    // Bulk insert -- append + sort + merge (+/- dedup based on derived class's unique)
     //--------------------------------------------------------------------------
     template <std::input_iterator InputIt>
     constexpr void insert( this auto && self, InputIt first, InputIt last ) {
@@ -520,7 +520,7 @@ public:
     [[nodiscard]] constexpr key_compare & key_comp_mutable()       noexcept { return this->comp(); }
 
     //--------------------------------------------------------------------------
-    // Extensions — reserve, shrink_to_fit
+    // Extensions -- reserve, shrink_to_fit
     //--------------------------------------------------------------------------
     constexpr void reserve( size_type const n ) { storage_.reserve( n ); }
     constexpr void shrink_to_fit() noexcept     { storage_.shrink_to_fit(); }
@@ -542,14 +542,14 @@ public:
     // Merge (deducing-this: auto-detects unique vs multi from derived class)
     //--------------------------------------------------------------------------
 
-    // Lvalue merge — unique: selective transfer of non-duplicate elements;
+    // Lvalue merge -- unique: selective transfer of non-duplicate elements;
     //                multi:  move all elements from source.
     // Exception-safe: clears destination on failure (basic guarantee).
     constexpr void merge( this auto && self, flat_impl & source ) {
         if ( &self == &source )
             return;
         if constexpr ( is_unique<decltype( self )> ) {
-            tr_vector<size_type> transferIndices;
+            heap_vector<size_type> transferIndices;
             transferIndices.reserve( source.size() );
             {
                 auto const & srcKeys{ keys_of( source.storage_ ) };
@@ -584,7 +584,7 @@ public:
                 self.clear();
                 throw;
             }
-            // Compact source — remove transferred elements
+            // Compact source -- remove transferred elements
             {
                 size_type dst{ 0 };
                 size_type nextT{ 0 };
@@ -604,7 +604,7 @@ public:
         }
     }
 
-    // Rvalue merge — always move all (source is expiring)
+    // Rvalue merge -- always move all (source is expiring)
     // Exception-safe: clears destination on failure (basic guarantee).
     constexpr void merge( this auto && self, flat_impl && source ) {
         auto const oldSize{ self.size() };
@@ -620,7 +620,7 @@ public:
 
 public:
     //--------------------------------------------------------------------------
-    // Lookup — single constrained template per function
+    // Lookup -- single constrained template per function
     //
     // Deducing-this resolves self to the derived type, so self.iter_from_key()
     // / self.begin() / self.end() produce the correct iterator type (set vs
@@ -696,7 +696,7 @@ protected:
     //
     // Delegates to storage_erase_if (namespace-scope helper) which dispatches
     // via ADL: std::erase_if for std containers, psi::vm::erase_if for
-    // tr_vector / paired_storage.
+    // heap_vector / paired_storage.
     //--------------------------------------------------------------------------
     template <typename Pred>
     friend constexpr size_type erase_if( flat_impl & c, Pred pred ) {
@@ -714,10 +714,10 @@ protected:
     constexpr flat_impl( Compare const & comp, Storage storage ) noexcept( nothrow_move_constructible )
         : Komp{ comp }, storage_{ std::move( storage ) } {}
 
-    // "Fake deducing-this" constructors — Derived & gives access to
+    // "Fake deducing-this" constructors -- Derived & gives access to
     // Derived::unique (static constexpr bool) during base construction.
 
-    // Unsorted storage — sort (± dedup) in place
+    // Unsorted storage -- sort (+/- dedup) in place
     template <typename Derived>
     constexpr flat_impl( Derived &, Compare const & comp, Storage storage )
         : Komp{ comp }, storage_{ std::move( storage ) }
@@ -725,7 +725,7 @@ protected:
         sort_storage<Derived::unique>( storage_, this->komp() );
     }
 
-    // Unsorted iterator pair — construct storage from [first, last), then sort
+    // Unsorted iterator pair -- construct storage from [first, last), then sort
     template <typename Derived, std::input_iterator InputIt>
     constexpr flat_impl( Derived &, Compare const & comp, InputIt first, InputIt last )
         : Komp{ comp }, storage_{ first, last }
@@ -733,13 +733,13 @@ protected:
         sort_storage<Derived::unique>( storage_, this->komp() );
     }
 
-    // Pre-sorted iterator pair — no sorting needed
+    // Pre-sorted iterator pair -- no sorting needed
     template <std::input_iterator InputIt>
     constexpr flat_impl( Compare const & comp, InputIt first, InputIt last )
         : Komp{ comp }, storage_{ first, last }
     {}
 
-    // from_range — append then sort
+    // from_range -- append then sort
     template <typename Derived, std::ranges::input_range R>
     constexpr flat_impl( Derived &, Compare const & comp, std::from_range_t, R && rg )
         : Komp{ comp }
@@ -754,7 +754,7 @@ protected:
     constexpr flat_impl & operator=( flat_impl && )      = default;
 
     //--------------------------------------------------------------------------
-    // Lookup helpers — key-container iterators (primary)
+    // Lookup helpers -- key-container iterators (primary)
     // Keys arrive pre-wrapped (via enreg) from public API; the
     // detail:: workers accept Reg auto const so no further wrapping needed.
     //--------------------------------------------------------------------------
@@ -768,7 +768,7 @@ protected:
         return equal_range_iter( keys_of( storage_ ), enreg( this->comp() ), key );
     }
     //--------------------------------------------------------------------------
-    // Erase-by-key worker — derived one-liners delegate here
+    // Erase-by-key worker -- derived one-liners delegate here
     //--------------------------------------------------------------------------
     constexpr size_type erase_by_key_impl( Reg auto const key ) noexcept {
         auto const & keys{ keys_of( storage_ ) };
@@ -783,8 +783,8 @@ protected:
     }
 
     //--------------------------------------------------------------------------
-    // Positional erase workers — deducing-this delegates to derived class's
-    // public iter_index() / make_iter() for iterator ↔ index conversion.
+    // Positional erase workers -- deducing-this delegates to derived class's
+    // public iter_index() / make_iter() for iterator <-> index conversion.
     //--------------------------------------------------------------------------
     constexpr auto erase_pos_impl( this auto && self, auto pos ) noexcept {
         auto const idx{ self.iter_index( pos ) };
@@ -800,7 +800,7 @@ protected:
     }
 
     //--------------------------------------------------------------------------
-    // Lookup helpers — index-based (for emplace/insert in derived classes)
+    // Lookup helpers -- index-based (for emplace/insert in derived classes)
     //--------------------------------------------------------------------------
     template <typename K>
     [[nodiscard]] constexpr size_type lower_bound_index( K const & key ) const noexcept {
@@ -814,7 +814,7 @@ protected:
     }
 
     // Hint-aware insertion position for multi containers.
-    // Returns the hint position if valid (non-strict ordering — equivalents
+    // Returns the hint position if valid (non-strict ordering -- equivalents
     // are allowed at the boundary), otherwise narrows the binary search to
     // the relevant half of the container ("as close as possible to hint").
     [[nodiscard, gnu::pure]] constexpr size_type hinted_insert_pos( size_type const hintIdx, Reg auto const key ) const noexcept {
@@ -853,7 +853,7 @@ protected:
     }
 
     //--------------------------------------------------------------------------
-    // Protected swap — type-safe public wrappers in derived classes
+    // Protected swap -- type-safe public wrappers in derived classes
     //--------------------------------------------------------------------------
     constexpr void swap_impl( flat_impl & other ) noexcept {
         using std::swap;

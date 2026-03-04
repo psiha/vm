@@ -3,9 +3,9 @@
 /// containers.
 ///
 /// Contents:
-///   - is_simple_comparator<T>     — trait: can == replace double-negation test?
-///   - comp_eq(comp, a, b)         — optimised equality from strict-weak comparator
-///   - Komparator<Comparator>      — EBO wrapper with le/ge/eq/leq/geq + sort
+///   - is_simple_comparator<T>     -- trait: can == replace double-negation test?
+///   - comp_eq(comp, a, b)         -- optimised equality from strict-weak comparator
+///   - Komparator<Comparator>      -- EBO wrapper with le/ge/eq/leq/geq + sort
 ///
 /// Containers (flat_set, flat_map, b+tree) inherit from Komparator to get
 /// zero-overhead comparator storage + derived comparison helpers + sort.
@@ -54,7 +54,7 @@ template <typename T> constexpr bool is_simple_comparator{ false };
 template <typename T> constexpr bool is_simple_comparator<std::less   <T>>{ std::is_fundamental_v<T> };
 template <typename T> constexpr bool is_simple_comparator<std::greater<T>>{ std::is_fundamental_v<T> };
 // Transparent comparators (std::less<>/std::greater<>) just delegate to the
-// underlying < and > operators — they don't redefine ordering semantics, so
+// underlying < and > operators -- they don't redefine ordering semantics, so
 // == is safe for any ==-comparable type pair.
 template <> inline constexpr bool is_simple_comparator<std::less   <void>>{ true };
 template <> inline constexpr bool is_simple_comparator<std::greater<void>>{ true };
@@ -64,7 +64,7 @@ template <> inline constexpr bool is_simple_comparator<std::ranges::greater>{ tr
 
 
 //==============================================================================
-// comp_eq — optimised equality from a strict-weak comparator (free function)
+// comp_eq -- optimised equality from a strict-weak comparator (free function)
 //==============================================================================
 
 /// Three-tier dispatch:
@@ -83,12 +83,12 @@ template <typename Comp>
 
 
 //==============================================================================
-// Komparator — comparator wrapper (EBO via public inheritance)
+// Komparator -- comparator wrapper (EBO via public inheritance)
 //==============================================================================
 
 /// Publicly inherits from Comparator for empty-base optimisation. Being an
 /// aggregate (no user-declared constructors, public base, no data members)
-/// means no forwarding constructors are needed — aggregate initialization
+/// means no forwarding constructors are needed -- aggregate initialization
 /// handles all cases: Komparator<C>{ c } or Komparator<C>{}.
 ///
 /// Provides derived comparison operations (le, ge, eq, leq, geq) and a

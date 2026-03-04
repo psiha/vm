@@ -43,9 +43,20 @@ add_library( psi_vm STATIC ${vm_public_headers} ${vm_sources} )
 add_library( psi::vm ALIAS psi_vm )
 target_include_directories( psi_vm PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include" )
 
+if ( CMAKE_SYSTEM_NAME MATCHES "Linux" )
+  target_compile_definitions( psi_vm PRIVATE _GNU_SOURCE )
+endif()
+
 # Minimum Windows version: Win11 (placeholder VM APIs guaranteed available)
 if ( WIN32 )
   target_compile_definitions( psi_vm PUBLIC NTDDI_VERSION=0x0A00000E )
+endif()
+
+# Optional allocator support: if the host project sets PSI_VM_MIMALLOC and
+# provides the mimalloc-static target, link it and define the feature macro.
+if ( PSI_VM_MIMALLOC AND TARGET mimalloc-static )
+    target_link_libraries( psi_vm PUBLIC mimalloc-static )
+    target_compile_definitions( psi_vm PUBLIC PSI_VM_HAS_MIMALLOC=1 )
 endif()
 
 # Debugger visualizers — Visual Studio and Ninja generators handle .natvis natively;
