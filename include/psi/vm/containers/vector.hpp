@@ -426,12 +426,15 @@ public:
                 return;
             }
         }
-        auto const begin{ std::begin( data ) };
-        auto const end  { std::end  ( data ) };
-        if constexpr ( std::is_rvalue_reference_v<Rng> )
-            assign( std::make_move_iterator( begin ), std::make_move_iterator( end ) );
         else
-            assign( begin, end );
+        {
+            auto const begin{ std::begin( data ) };
+            auto const end  { std::end  ( data ) };
+            if constexpr ( std::is_rvalue_reference_v<Rng> )
+                assign( std::make_move_iterator( begin ), std::make_move_iterator( end ) );
+            else
+                assign( begin, end );
+        }
     }
     void assign( vector && other ) noexcept( std::is_nothrow_move_assignable_v<vector> )
     {
@@ -683,20 +686,15 @@ public:
     reference emplace_back( Args &&...args )
     {
         auto const current_size{ this->size() };
-        if constexpr ( sizeof...( Args ) || true ) // grow_by( 1, default_init ) would call uninitialized_default_construct (i.e. a loop) - TODO grow_by_one and shrink_by_one methods for push&pop-back operations
-        {
-            auto const data{ grow_by( 1, no_init ) };
-            auto & placeholder{ data[ current_size ] };
-            try {
-                return construct_at( placeholder, std::forward<Args>( args )... );
-            } catch( ... ) {
-                shrink_by( 1 );
-                throw;
-            }
-        }
-        else
-        {
-            return grow_by( 1, default_init )[ current_size ];
+        // Use storage_grow_to (with Growth policy) directly — this is the
+        // amortized-O(1) append path that gets geometric headroom.
+        auto const data{ this->storage_grow_to( current_size + 1 ) };
+        auto & placeholder{ data[ current_size ] };
+        try {
+            return construct_at( placeholder, std::forward<Args>( args )... );
+        } catch( ... ) {
+            this->storage_shrink_size_to( current_size ); // just adjust size, element was never constructed
+            throw;
         }
     }
 
@@ -732,6 +730,14 @@ public:
     template <typename... Args>
     iterator emplace( const_iterator const position, Args &&... args )
     {
+        if constexpr ( static_cast<bool>( Growth ) ) // amortized O(1) end-insert only matters with geometric growth
+        {
+            if ( position == cend() ) [[ unlikely ]]
+            {
+                emplace_back( std::forward<Args>( args )... );
+                return make_iterator( this->size() - 1 );
+            }
+        }
         auto const iter{ make_space_for_insert( position, 1 ) };
         if constexpr ( trivially_destructible_after_move_assignment<value_type> )
             construct_at( *iter, std::forward<Args>( args )... );
@@ -906,7 +912,7 @@ public:
             }
             catch (...)
             {
-                this->storage_shrink_size_to( current_size );
+                shrink_to( current_size ); // destroy successfully push_back'd elements
                 throw;
             }
         }
@@ -1006,10 +1012,13 @@ public:
         // (e.g. heap_vector on MSVC via ::_expand(), vm_vector via page mapping)
         if constexpr ( requires { this->storage_try_expand_capacity( new_cap ); } )
             return this->storage_try_expand_capacity( new_cap );
-        return false;
+        else
+            return false;
     }
 
-    value_type * grow_to( size_type const target_size, no_init_t ) { return this->storage_grow_to( target_size ); }
+    // Explicit sizing: always exact-fit (no geometric headroom).
+    // Append operations (emplace_back) use storage_grow_to() with Growth instead.
+    value_type * grow_to( size_type const target_size, no_init_t ) { return storage_t::template storage_grow_to<geometric_growth{ 1, 1 }>( target_size ); }
     value_type * grow_to( size_type const target_size, default_init_t )
     {
         auto const current_size{ this->size() };
@@ -1118,10 +1127,10 @@ private:
     }
 
 public:
-    // --- growth policy ---
-    // Delegates to the storage's Growth-aware storage_grow_to<Growth>().
-    // Each storage decides how to combine the growth factor with its capacity
-    // check in a single pass, avoiding redundant comparisons.
+    // --- append growth ---
+    // Geometric-growth path for amortized-O(1) operations (emplace_back, etc.).
+    // Explicit sizing (grow_to, grow_by, resize) bypasses this and uses exact-fit
+    // to avoid wasting file-backed storage capacity.
     value_type * storage_grow_to( size_type const target_size )
     {
         return storage_t::template storage_grow_to<Growth>( target_size );
