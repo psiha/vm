@@ -484,6 +484,11 @@ public:
     constexpr void insert( this auto && self, InputIt first, InputIt last ) {
         self.template bulk_insert<false>( first, last );
     }
+    template <std::input_iterator InputIt, std::sentinel_for<InputIt> Sentinel>
+    requires ( !std::same_as<InputIt, Sentinel> )
+    constexpr void insert( this auto && self, InputIt first, Sentinel last ) {
+        self.template bulk_insert<false>( first, last );
+    }
 
     constexpr void insert( this auto && self, std::initializer_list<value_type> il ) {
         self.insert( il.begin(), il.end() );
@@ -491,6 +496,11 @@ public:
 
     template <sorted_insert_tag SortedTag, std::input_iterator InputIt>
     constexpr void insert( this auto && self, SortedTag, InputIt first, InputIt last ) {
+        self.template bulk_insert<true>( first, last );
+    }
+    template <sorted_insert_tag SortedTag, std::input_iterator InputIt, std::sentinel_for<InputIt> Sentinel>
+    requires ( !std::same_as<InputIt, Sentinel> )
+    constexpr void insert( this auto && self, SortedTag, InputIt first, Sentinel last ) {
         self.template bulk_insert<true>( first, last );
     }
 
@@ -864,8 +874,8 @@ protected:
     //--------------------------------------------------------------------------
     // Bulk insert helper (exception-safe: clears on sort/merge failure)
     //--------------------------------------------------------------------------
-    template <bool WasSorted, typename InputIt>
-    constexpr void bulk_insert( this auto && self, InputIt const first, InputIt const last ) {
+    template <bool WasSorted, typename InputIt, typename Sentinel = InputIt>
+    constexpr void bulk_insert( this auto && self, InputIt const first, Sentinel const last ) {
         auto const oldSize{ self.size() };
         detail::storage_append_range( self.storage_, std::ranges::subrange( first, last ) );
         try {

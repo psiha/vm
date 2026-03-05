@@ -354,8 +354,9 @@ public:
     //!   T's constructor/assignment from dereferencing InpIt throws.
     //!
     //! <b>Complexity</b>: Linear to n.
-    template <std::input_iterator It>
-    void assign( It first, It const last )
+    template <std::input_iterator It, typename Sentinel = It>
+    requires std::sentinel_for<Sentinel, It>
+    void assign( It first, Sentinel const last )
     {
         // Overwrite all elements we can from [first, last)
         auto const overwritten{ detail::overwrite_from_range( data(), this->size(), first, last ) };
