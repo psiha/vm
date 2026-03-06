@@ -213,18 +213,22 @@ void bptree_base::unlink_left( node_header & nd ) noexcept
 {
     if ( !nd.left )
         return;
-    auto & left_link{ left( nd ).right };
-    BOOST_ASSUME( left_link == slot_of( nd ) );
-    left_link = nd.left = {};
+    auto & left_nd{ left( nd ) };
+    BOOST_ASSUME( left_nd.right == slot_of( nd ) );
+    left_nd.right = nd.left = {};
+    left_nd.mark_dirty();
+    nd     .mark_dirty();
 }
 
 void bptree_base::unlink_right( node_header & nd ) noexcept
 {
     if ( !nd.right )
         return;
-    auto & right_link{ right( nd ).left };
-    BOOST_ASSUME( right_link == slot_of( nd ) );
-    right_link = nd.right = {};
+    auto & right_nd{ right( nd ) };
+    BOOST_ASSUME( right_nd.left == slot_of( nd ) );
+    right_nd.left = nd.right = {};
+    right_nd.mark_dirty();
+    nd      .mark_dirty();
 }
 
 void bptree_base::link( node_header & left, node_header & right ) const noexcept
