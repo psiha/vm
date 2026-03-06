@@ -789,8 +789,8 @@ public:
     constexpr iterator try_emplace( const_iterator hint, K && key, Args &&... args ) {
         auto const hintIdx{ this->iter_index( hint ) };
         bool const hintValid{
-            ( hintIdx == 0            || this->le( this->storage_.keys[ hintIdx - 1 ], key ) ) &&
-            ( hintIdx >= this->size() || this->le( key, this->storage_.keys[ hintIdx ] ) )
+            ( hintIdx == 0            || this->lt( this->storage_.keys[ hintIdx - 1 ], key ) ) &&
+            ( hintIdx >= this->size() || this->lt( key, this->storage_.keys[ hintIdx ] ) )
         };
         if ( hintValid ) {
             this->storage_.insert_element_at( hintIdx, key_type( std::forward<K>( key ) ), mapped_type( std::forward<Args>( args )... ) );

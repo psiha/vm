@@ -472,7 +472,7 @@ public:
     //--------------------------------------------------------------------------
     template <typename... Args>
     constexpr auto & emplace_back( this auto && self, key_type key, Args &&... args ) {
-        BOOST_ASSERT( self.empty() || self.ge( key, self.keys().back() ) );
+        BOOST_ASSERT( self.empty() || self.gt( key, self.keys().back() ) );
         storage_emplace_back( self.storage_, std::move( key ), std::forward<Args>( args )... );
         return storage_back( self.storage_ );
     }
@@ -569,10 +569,10 @@ public:
                 auto const sn{ source.size() };
                 auto const tn{ self  .size() };
                 while ( si < sn && ti < tn ) {
-                    if ( self.le( srcKeys[ si ], dstKeys[ ti ] ) ) {
+                    if ( self.lt( srcKeys[ si ], dstKeys[ ti ] ) ) {
                         transferIndices.push_back( si );
                         ++si;
-                    } else if ( self.le( dstKeys[ ti ], srcKeys[ si ] ) ) {
+                    } else if ( self.lt( dstKeys[ ti ], srcKeys[ si ] ) ) {
                         ++ti;
                     } else {
                         ++si;
@@ -830,8 +830,8 @@ protected:
     [[nodiscard, gnu::pure]] constexpr size_type hinted_insert_pos( size_type const hintIdx, Reg auto const key ) const noexcept {
         auto const & keys{ keys_of( storage_ ) };
         auto const   sz  { keys.size() };
-        if ( ( hintIdx == 0  || this->leq( keys[ hintIdx - 1 ], key ) ) &&
-             ( hintIdx >= sz || this->leq( key, keys[ hintIdx ] ) ) )
+        if ( ( hintIdx == 0  || this->le( keys[ hintIdx - 1 ], key ) ) &&
+             ( hintIdx >= sz || this->le( key, keys[ hintIdx ] ) ) )
             return hintIdx;
         // Narrowed search: upper_bound left (closest to hint from below) or
         // lower_bound right (closest to hint from above).

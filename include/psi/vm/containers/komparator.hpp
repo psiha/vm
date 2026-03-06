@@ -3,9 +3,9 @@
 /// containers.
 ///
 /// Contents:
-///   - is_simple_comparator<T>     -- trait: can == replace double-negation test?
-///   - comp_eq(comp, a, b)         -- optimised equality from strict-weak comparator
-///   - Komparator<Comparator>      -- EBO wrapper with le/ge/eq/leq/geq + sort
+///   - is_simple_comparator<T>   -- trait: can == replace double-negation test?
+///   - comp_eq(comp, a, b)       -- optimised equality from strict-weak comparator
+///   - Komparator<Comparator>    -- EBO wrapper with lt/gt/eq/le/ge + sort
 ///
 /// Containers (flat_set, flat_map, b+tree) inherit from Komparator to get
 /// zero-overhead comparator storage + derived comparison helpers + sort.
@@ -91,7 +91,7 @@ template <typename Comp>
 /// means no forwarding constructors are needed -- aggregate initialization
 /// handles all cases: Komparator<C>{ c } or Komparator<C>{}.
 ///
-/// Provides derived comparison operations (le, ge, eq, leq, geq) and a
+/// Provides derived comparison operations (lt, gt, eq, le, ge) and a
 /// sort() method that dispatches to the best available pdqsort variant.
 template <typename Comparator>
 struct Komparator : Comparator
@@ -102,16 +102,16 @@ struct Komparator : Comparator
     [[ nodiscard ]] constexpr Comparator const & comp() const noexcept { return *this; }
     [[ nodiscard ]] constexpr Comparator       & comp()       noexcept { return *this; }
 
-    [[ gnu::pure ]] constexpr bool le ( auto const & left, auto const & right ) const noexcept { return comp()( left, right ); }
-    [[ gnu::pure ]] constexpr bool ge ( auto const & left, auto const & right ) const noexcept { return comp()( right, left ); }
-    [[ gnu::pure ]] constexpr bool eq ( auto const & left, auto const & right ) const noexcept { return comp_eq( comp(), left, right ); }
-    [[ gnu::pure ]] constexpr bool leq( auto const & left, auto const & right ) const noexcept
+    [[ gnu::pure ]] constexpr bool lt( auto const & left, auto const & right ) const noexcept { return comp()( left, right ); }
+    [[ gnu::pure ]] constexpr bool gt( auto const & left, auto const & right ) const noexcept { return comp()( right, left ); }
+    [[ gnu::pure ]] constexpr bool eq( auto const & left, auto const & right ) const noexcept { return comp_eq( comp(), left, right ); }
+    [[ gnu::pure ]] constexpr bool le( auto const & left, auto const & right ) const noexcept
     {
         if constexpr ( requires{ comp().leq( left, right ); } )
             return comp().leq( left, right );
         return !comp()( right, left );
     }
-    [[ gnu::pure ]] constexpr bool geq( auto const & left, auto const & right ) const noexcept
+    [[ gnu::pure ]] constexpr bool ge( auto const & left, auto const & right ) const noexcept
     {
         if constexpr ( requires{ comp().geq( left, right ); } )
             return comp().geq( left, right );
