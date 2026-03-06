@@ -472,7 +472,7 @@ public:
     //--------------------------------------------------------------------------
     template <typename... Args>
     constexpr auto & emplace_back( this auto && self, key_type key, Args &&... args ) {
-        BOOST_ASSERT( self.empty() || self.ge( key, self.keys().back() ) );
+        BOOST_ASSERT( self.empty() || self.gt( key, self.keys().back() ) );
         storage_emplace_back( self.storage_, std::move( key ), std::forward<Args>( args )... );
         return storage_back( self.storage_ );
     }
@@ -484,6 +484,11 @@ public:
     constexpr void insert( this auto && self, InputIt first, InputIt last ) {
         self.template bulk_insert<false>( first, last );
     }
+    template <std::input_iterator InputIt, std::sentinel_for<InputIt> Sentinel>
+    requires ( !std::same_as<InputIt, Sentinel> )
+    constexpr void insert( this auto && self, InputIt first, Sentinel last ) {
+        self.template bulk_insert<false>( first, last );
+    }
 
     constexpr void insert( this auto && self, std::initializer_list<value_type> il ) {
         self.insert( il.begin(), il.end() );
@@ -491,6 +496,11 @@ public:
 
     template <sorted_insert_tag SortedTag, std::input_iterator InputIt>
     constexpr void insert( this auto && self, SortedTag, InputIt first, InputIt last ) {
+        self.template bulk_insert<true>( first, last );
+    }
+    template <sorted_insert_tag SortedTag, std::input_iterator InputIt, std::sentinel_for<InputIt> Sentinel>
+    requires ( !std::same_as<InputIt, Sentinel> )
+    constexpr void insert( this auto && self, SortedTag, InputIt first, Sentinel last ) {
         self.template bulk_insert<true>( first, last );
     }
 
@@ -559,10 +569,10 @@ public:
                 auto const sn{ source.size() };
                 auto const tn{ self  .size() };
                 while ( si < sn && ti < tn ) {
-                    if ( self.le( srcKeys[ si ], dstKeys[ ti ] ) ) {
+                    if ( self.lt( srcKeys[ si ], dstKeys[ ti ] ) ) {
                         transferIndices.push_back( si );
                         ++si;
-                    } else if ( self.le( dstKeys[ ti ], srcKeys[ si ] ) ) {
+                    } else if ( self.lt( dstKeys[ ti ], srcKeys[ si ] ) ) {
                         ++ti;
                     } else {
                         ++si;
@@ -820,8 +830,8 @@ protected:
     [[nodiscard, gnu::pure]] constexpr size_type hinted_insert_pos( size_type const hintIdx, Reg auto const key ) const noexcept {
         auto const & keys{ keys_of( storage_ ) };
         auto const   sz  { keys.size() };
-        if ( ( hintIdx == 0  || this->leq( keys[ hintIdx - 1 ], key ) ) &&
-             ( hintIdx >= sz || this->leq( key, keys[ hintIdx ] ) ) )
+        if ( ( hintIdx == 0  || this->le( keys[ hintIdx - 1 ], key ) ) &&
+             ( hintIdx >= sz || this->le( key, keys[ hintIdx ] ) ) )
             return hintIdx;
         // Narrowed search: upper_bound left (closest to hint from below) or
         // lower_bound right (closest to hint from above).
@@ -864,8 +874,8 @@ protected:
     //--------------------------------------------------------------------------
     // Bulk insert helper (exception-safe: clears on sort/merge failure)
     //--------------------------------------------------------------------------
-    template <bool WasSorted, typename InputIt>
-    constexpr void bulk_insert( this auto && self, InputIt const first, InputIt const last ) {
+    template <bool WasSorted, typename InputIt, typename Sentinel = InputIt>
+    constexpr void bulk_insert( this auto && self, InputIt const first, Sentinel const last ) {
         auto const oldSize{ self.size() };
         detail::storage_append_range( self.storage_, std::ranges::subrange( first, last ) );
         try {

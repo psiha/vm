@@ -89,7 +89,7 @@ struct [[ clang::trivial_abi ]] unique_nonowned_ptr {
 // \class bptree_base
 ////////////////////////////////////////////////////////////////////////////////
 
-class bptree_base
+class [[ gsl::Owner ]] bptree_base
 {
 public:
     using size_type       = std::size_t;
@@ -226,8 +226,8 @@ protected:
         bool operator==( this iter_pos const self, iter_pos const other ) noexcept { return ( self.node == other.node ) && ( self.value_offset == other.value_offset ); }
     };
 
-    class [[ clang::trivial_abi ]] base_iterator;
-    class [[ clang::trivial_abi ]] base_random_access_iterator;
+    class [[ clang::trivial_abi, gsl::Pointer ]] base_iterator;
+    class [[ clang::trivial_abi, gsl::Pointer ]] base_random_access_iterator;
 
     struct insert_pos_t { node_slot node; node_size_type next_insert_offset; }; // TODO 'merge' with iter_pos
 
@@ -473,12 +473,7 @@ bptree_base::map_file( auto const file, flags::named_object_construction_policy 
 ////////////////////////////////////////////////////////////////////////////////
 // \class bptree_base::base_iterator
 ////////////////////////////////////////////////////////////////////////////////
-// TODO decorate pointers with lifetime related attributes
-// gsl:: Owner, Pointer https://clang.llvm.org/docs/AttributeReference.html#owner
-// clang:: lifetimebound, lifetime_capture_by https://clang.llvm.org/docs/AttributeReference.html#lifetime-capture-by
-// msvc:: lifetimebound
-////////////////////////////////////////////////////////////////////////////////
-class [[ clang::trivial_abi ]] bptree_base::base_iterator
+class [[ clang::trivial_abi, gsl::Pointer ]] bptree_base::base_iterator
 {
 public:
     constexpr base_iterator() noexcept = default;
@@ -519,7 +514,7 @@ protected: friend class bptree_base;
         node_placeholder * __restrict;
 #   endif
 
-    base_iterator( node_pool &, iter_pos ) noexcept;
+    base_iterator( [[ clang::lifetimebound ]] node_pool &, iter_pos ) noexcept;
 
     [[ gnu::pure ]] node_header & node() const noexcept;
 
@@ -552,7 +547,7 @@ private: template <typename T, typename Comparator> friend class bp_tree_impl;
 // \class bptree_base::base_random_access_iterator
 ////////////////////////////////////////////////////////////////////////////////
 
-class bptree_base::base_random_access_iterator : public base_iterator
+class [[ clang::trivial_abi, gsl::Pointer ]] bptree_base::base_random_access_iterator : public base_iterator
 {
 public:
     constexpr base_random_access_iterator() noexcept = default;
@@ -660,8 +655,8 @@ public:
     using key_rv_arg    = std::conditional_t<can_be_passed_in_reg<Key>, Key const, pass_rv_in_reg<Key>>;
     using key_const_arg = std::conditional_t<can_be_passed_in_reg<Key>, Key const, pass_in_reg   <Key>>;
 
-    class [[ clang::trivial_abi ]] fwd_iterator;
-    class [[ clang::trivial_abi ]]  ra_iterator;
+    class [[ clang::trivial_abi, gsl::Pointer ]] fwd_iterator;
+    class [[ clang::trivial_abi, gsl::Pointer ]]  ra_iterator;
 
     using       iterator = fwd_iterator;
     using const_iterator = std::basic_const_iterator<iterator>;
@@ -680,27 +675,29 @@ public:
     storage_result map_memory( size_type initial_capacity = 0 ) noexcept { return bptree_base::map_memory( node_count_required_for_values( initial_capacity ) ); }
     size_type capacity() const noexcept
     {
-        // TODO WiP playground
         auto const n{ nodes_.capacity() };
         if ( !n ) [[ unlikely ]]
             return 0;
 
-        node_slot::value_type inner_nodes{ 0 };
-        node_slot::value_type current_level_count{ 1 };
-        while ( ( current_level_count * inner_node::max_children ) < ( n - inner_nodes ) )
+        // Iteratively compute how many of n node slots can be leaves:
+        // start by assuming all are leaves, compute the inner node overhead
+        // for that many leaves (maximally branching), subtract, converge.
+        auto leaf_count{ n };
+        for ( ;; )
         {
-            inner_nodes         += current_level_count;
-            current_level_count *= inner_node::max_children;
+            node_slot::value_type inner_count{ 0 };
+            auto level{ leaf_count };
+            while ( level > 1 )
+            {
+                level = divide_up( level, inner_node::max_children );
+                inner_count += level;
+            }
+            auto const new_leaf_count{ n - inner_count };
+            if ( new_leaf_count == leaf_count )
+                break;
+            leaf_count = new_leaf_count;
         }
-
-        std::uint8_t const depth{ hdr().depth_ };
-        std::uint8_t max_inner_node_count{ depth > 1 };
-        for ( auto d{ 3 }; d < depth; ++d )
-        {
-            max_inner_node_count += static_cast<std::uint8_t>( max_inner_node_count * inner_node::max_children );
-        }
-        BOOST_ASSUME( max_inner_node_count < n );
-        return ( n - max_inner_node_count ) * leaf_node::max_values;
+        return leaf_count * leaf_node::max_values;
     }
 
     void reserve_additional( size_type const additional_values ) { bptree_base::reserve_additional( node_count_required_for_values( additional_values ) ); }
@@ -1555,8 +1552,8 @@ protected: // 'other'
                 // Move/rotate the largest key from left sibling to the current node 'through' the parent
 
                 // no comparator in base classes :/ (also would need adjustments for non-unique support)
-                //BOOST_ASSERT( le( left_keys.back()  , left_separator_key ) );
-                //BOOST_ASSERT( le( left_separator_key, node_keys.front()  ) );
+                //BOOST_ASSERT( lt( left_keys.back()  , left_separator_key ) );
+                //BOOST_ASSERT( lt( left_separator_key, node_keys.front()  ) );
                 node_keys.front()  = std::move( left_separator_key );
                 left_separator_key = std::move( left_keys.back() );
 
@@ -1596,8 +1593,8 @@ protected: // 'other'
                 // Move/rotate the smallest key from the right sibling to the current node 'through' the parent
 
                 // no comparator in base classes :/ (also would need adjustments for non-unique support)
-                //BOOST_ASSUME( le( parent.keys[ parent_child_idx ], p_right_sibling->keys[ 0 ] ) );
-                //BOOST_ASSERT( le( *( node_keys.end() - 2 ), right_separator_key ) );
+                //BOOST_ASSUME( lt( parent.keys[ parent_child_idx ], p_right_sibling->keys[ 0 ] ) );
+                //BOOST_ASSERT( lt( *( node_keys.end() - 2 ), right_separator_key ) );
                 node_keys.back()    = std::move( right_separator_key );
                 right_separator_key = std::move( keys( *p_right_sibling ).front() );
                 insrt_child( node, num_chldrn( node ) - 1, children( *p_right_sibling ).front(), this_slot );
@@ -1630,7 +1627,7 @@ protected: // 'other'
                 verify_min_max( *p_right_sibling );
                 BOOST_ASSUME( parent_key_idx == 0 );
                 // no comparator in base classes :/
-                //BOOST_ASSUME( leq( parent.keys[ parent_key_idx ], p_right_sibling->keys[ 0 ] ) );
+                //BOOST_ASSUME( le( parent.keys[ parent_key_idx ], p_right_sibling->keys[ 0 ] ) );
                 // Merge right sibling -> node
                 merge_right_into_left( parent, node, *p_right_sibling );
             }
@@ -1779,7 +1776,7 @@ private:
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename Key>
-class [[ clang::trivial_abi ]] bptree_base_wkey<Key>::fwd_iterator
+class [[ clang::trivial_abi, gsl::Pointer ]] bptree_base_wkey<Key>::fwd_iterator
     :
     public base_iterator,
     public iter_impl<fwd_iterator, std::bidirectional_iterator_tag>
@@ -1823,7 +1820,7 @@ public:
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename Key>
-class [[ clang::trivial_abi ]] bptree_base_wkey<Key>::ra_iterator
+class [[ clang::trivial_abi, gsl::Pointer ]] bptree_base_wkey<Key>::ra_iterator
     :
     public base_random_access_iterator,
     public iter_impl<ra_iterator, std::random_access_iterator_tag>
@@ -2212,8 +2209,7 @@ public:
     [[ gnu::pure ]] const_ra_iterator ra_end  () const noexcept { return static_cast<ra_iterator &&>( mutable_this().base::ra_end  () ); }
 
     // Forward-only lower_bound: returns the first element >= key, starting from pos.
-    // Unlike find_after (exact match only → end()), this always returns a valid
-    // position (or end() only when key > all elements).
+    // Returns end() only when key > all elements.
     [[ nodiscard ]] const_iterator lower_bound_from( const_iterator const pos, LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return lower_bound_from_impl( pos.base().pos(), pass_in_reg{ key } ); }
     [[ nodiscard ]] bool           contains        (                           LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return contains_impl        (                   pass_in_reg{ key } ); }
 
@@ -2223,11 +2219,11 @@ public:
     void swap( bp_tree_impl & other ) noexcept { base::swap( other ); }
 
     using Komp::comp;
+    using Komp::lt;
+    using Komp::gt;
+    using Komp::eq;
     using Komp::le;
     using Komp::ge;
-    using Komp::eq;
-    using Komp::leq;
-    using Komp::geq;
 
     // UB if the comparator is changed in such a way as to invalidate the order of elements already in the container
     [[ nodiscard, gnu::pure ]] Comparator & mutable_comp() noexcept { return this->comp(); }
@@ -2248,25 +2244,14 @@ protected: // pass-in-reg public function overloads/impls
         return end();
     }
 
-    [[ using gnu: pure, sysv_abi ]]
-    const_iterator find_after_impl( iter_pos const pos, Reg auto const key ) const noexcept
-    {
-        BOOST_ASSUME( !empty() ); // otherwise where do we get pos from?
-        auto const [p_leaf, next_pos]{ find_next( leaf( pos.node ), pos.value_offset, key ) };
-        if ( next_pos.exact_find ) [[ likely ]] {
-            return base::make_iter( *p_leaf, next_pos.pos );
-        }
-        return end();
-    }
-
     // Forward-only lower_bound: returns the first element >= key starting from pos.
-    // Reuses find_next() which already computes the insertion point — but instead
+    // Reuses find_from() which already computes the insertion point — but instead
     // of discarding non-exact positions, returns the lower_bound iterator.
     [[ using gnu: pure, sysv_abi ]]
     const_iterator lower_bound_from_impl( iter_pos const pos, Reg auto const key ) const noexcept
     {
         BOOST_ASSUME( !empty() );
-        auto const [p_leaf, next_pos]{ find_next( leaf( pos.node ), pos.value_offset, key ) };
+        auto const [p_leaf, next_pos]{ find_from( leaf( pos.node ), pos.value_offset, key ) };
         // next_pos.pos is the insertion point (first element >= key) regardless of exact_find
         if ( next_pos.pos < p_leaf->num_vals ) {
             return base::make_iter( *p_leaf, next_pos.pos );
@@ -2323,8 +2308,8 @@ protected: // pass-in-reg public function overloads/impls
     {
         // yes, for starters, generic 'hint as just a hint' is not supported
         BOOST_ASSUME( !empty() );
-        BOOST_ASSERT_MSG( le( v, *pos_hint ), "Invalid insertion hint" );
-        BOOST_ASSERT_MSG( !unique || ge( v, *std::prev( pos_hint ) ), "Invalid insertion hint" );
+        BOOST_ASSERT_MSG( lt( v, *pos_hint ), "Invalid insertion hint" );
+        BOOST_ASSERT_MSG( !unique || gt( v, *std::prev( pos_hint ) ), "Invalid insertion hint" );
 
         auto const [hint_slot, hint_slot_offset]{ pos_hint.base().pos() };
         auto & hint_leaf{ leaf( hint_slot ) };
@@ -2402,10 +2387,12 @@ private:
 
 protected:
     size_type replace_keys_inplace( std::span<Key const> old_keys, std::span<Key const> new_keys, bool unique ) noexcept;
-    size_type erase_sorted        ( std::span<Key const> keys_to_remove                         , bool unique ) noexcept;
+    template <bool require_exact_equality = false>
+    size_type erase_sorted_impl   ( std::span<Key const> keys_to_remove                         , bool unique ) noexcept;
+    size_type erase_sorted        ( std::span<Key const> keys_to_remove                         , bool unique ) noexcept { return erase_sorted_impl<false>( keys_to_remove, unique ); }
     // Like erase_sorted, but requires exact key equality (==) not just equivalence by comparator.
     // Useful when keys are indirect indices and comparison is by looked-up values.
-    size_type erase_sorted_exact  ( std::span<Key const> keys_to_remove                         , bool unique ) noexcept;
+    size_type erase_sorted_exact  ( std::span<Key const> keys_to_remove                         , bool unique ) noexcept { return erase_sorted_impl<true >( keys_to_remove, unique ); }
 
     // upper_bound find >limited to/within a node<
     [[ using gnu: pure, hot, noinline, sysv_abi, leaf ]]
@@ -2449,7 +2436,7 @@ protected:
         // 'optimized' (simplified to linear across the leaves) for the
         // assumption/prevalence of shorter equal-range spans that will mostly
         // fit within a single node (making it not worth it to go up the tree
-        // like find_next, the lower_bound version, does).
+        // like find_from, the lower_bound version, does).
         auto * p_node{ &node };
         // extracted the initial call to upper_bound as it is the only one that
         // has to take the offset in to account (simplifies the loop slightly)
@@ -2513,7 +2500,7 @@ protected:
                 if
                 (
                     nonuniques_span_across_nodes_check_not_needed ||
-                    le( keys( this->leaf( node.children[ pos ] ) ).back(), key )
+                    lt( keys( this->leaf( node.children[ pos ] ) ).back(), key )
                 ) [[ likely ]]
                 {
                     // BOOST_ASSUME( !separator_key_node || !unique ); // exact_find may happen at most once (in unique trees :/)
@@ -2559,9 +2546,10 @@ protected:
 
     insertion_point_t find_next_insertion_point( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, Reg auto const key, bool const unique ) const noexcept
     {
-        return unique
-            ? find_next( starting_leaf, starting_leaf_offset, key )
-            : find_insertion_point( key, false ); // TODO fast nonunique version
+        if ( unique )
+            return find_from         ( starting_leaf, starting_leaf_offset, key );
+        else
+            return find_from_nonunique( starting_leaf, starting_leaf_offset, key );
     }
 
     size_type insert( typename base::bulk_copied_input, bool unique );
@@ -2579,19 +2567,13 @@ protected:
     using base::verify_min_max;
 
 private:
-    insertion_point_t find_next( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, Reg auto const key ) const noexcept
+    // Shared tree-climbing middle used by find_from and find_from_nonunique.
+    // Precondition: key > starting_leaf.back() AND starting_leaf.right != null.
+    // Climbs the parent chain until a node whose key range contains key, then
+    // descends back to the containing leaf. Returns that leaf for the caller to
+    // apply its own lower_bound / upper_bound epilogue.
+    leaf_node & find_from_climb( leaf_node const & starting_leaf, Reg auto const key ) const noexcept
     {
-        if ( leq( key, keys( starting_leaf ).back() ) )
-        {
-            auto const pos{ lower_bound( starting_leaf, starting_leaf_offset, key ) };
-            BOOST_ASSUME( pos.pos != starting_leaf.num_vals );
-            BOOST_ASSUME( pos.pos >= starting_leaf_offset   );
-            return { const_cast<leaf_node *>( &starting_leaf ), pos };
-        }
-
-        if ( !starting_leaf.right ) [[ unlikely ]] // we are at the end of the tree/leaf level: key not present at all
-            return { const_cast<leaf_node *>( &starting_leaf ), { starting_leaf.num_vals, false } };
-
         // Key in tree but not in starting leaf - go up the tree:
         auto const * prnt{ &parent( starting_leaf ) };
         auto         parent_offset{ starting_leaf.tail.parent_child_idx };
@@ -2599,10 +2581,10 @@ private:
         // element) - those which have a key on the same/corresponding index
         // should have a strictily less-than starting key value than the parent
         // (separator key).
-        BOOST_ASSUME( ( parent_offset == prnt->num_vals ) || le( starting_leaf.keys[ 0 ], prnt->keys[ parent_offset ] ) );
+        BOOST_ASSUME( ( parent_offset == prnt->num_vals ) || lt( starting_leaf.keys[ 0 ], prnt->keys[ parent_offset ] ) );
         auto const depth{ this->hdr().depth_ }; BOOST_ASSUME( depth >= 1 );
         auto       level{ depth - 1 };
-        while ( le( keys( *prnt ).back(), key ) )
+        while ( lt( keys( *prnt ).back(), key ) )
         {
             if ( level == 1 ) [[ unlikely ]]
             {
@@ -2638,7 +2620,48 @@ private:
             parent_offset = 0;
         }
         BOOST_ASSUME( parent_offset == 0 );
-        auto const & containing_leaf{ this->template as<leaf_node>( *prnt ) };
+        return const_cast<leaf_node &>( this->template as<leaf_node>( *prnt ) );
+    }
+
+    // Forward-only insertion-point search for unique trees (lower_bound semantics).
+    // Exploits sorted-input invariant to avoid repeated root-to-leaf traversals.
+    insertion_point_t find_from( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, Reg auto const key ) const noexcept
+    {
+        if ( le( key, keys( starting_leaf ).back() ) )
+        {
+            // Fast path: check the immediate next element before binary search.
+            // In cursor-walk patterns the next key is almost always at offset.
+            auto const leaf_keys{ keys( starting_leaf ) };
+            if ( le( key, leaf_keys[ starting_leaf_offset ] ) ) // key <= keys[offset]
+                return { const_cast<leaf_node *>( &starting_leaf ), find_pos{ starting_leaf_offset, eq( key, leaf_keys[ starting_leaf_offset ] ) } };
+            // Fall back to binary search within the leaf, skipping the tested slot
+            auto const search_from{ static_cast<node_size_type>( starting_leaf_offset + 1 ) };
+            auto const pos{ lower_bound( starting_leaf, search_from, key ) };
+            BOOST_ASSUME( pos.pos != starting_leaf.num_vals );
+            BOOST_ASSUME( pos.pos >= starting_leaf_offset   );
+            return { const_cast<leaf_node *>( &starting_leaf ), pos };
+        }
+
+        if ( !starting_leaf.right ) [[ unlikely ]] // we are at the end of the tree/leaf level: key not present at all
+            return { const_cast<leaf_node *>( &starting_leaf ), find_pos{ starting_leaf.num_vals, false } };
+
+        // Right-sibling fast path: should work but needs investigation — crashes
+        // in bp_tree.playground test (erase returns false → access violation).
+        // Hypothesis: during bulk insert/merge the tree traversal path (up parent
+        // chain, back down) correctly accounts for structural changes (splits,
+        // pool reallocations) that the direct right-sibling jump bypasses.
+#   if 0
+        {
+            auto const & right_leaf{ leaf( starting_leaf.right ) };
+            if ( le( key, keys( right_leaf ).back() ) )
+            {
+                auto const pos{ lower_bound( right_leaf, 0, key ) };
+                return { const_cast<leaf_node *>( &right_leaf ), pos };
+            }
+        }
+#   endif
+
+        auto const & containing_leaf{ find_from_climb( starting_leaf, key ) };
         auto const pos{ lower_bound( containing_leaf, key ) };
         BOOST_ASSUME
         (
@@ -2648,6 +2671,33 @@ private:
             ( pos.pos == containing_leaf.num_vals )
         );
         return { const_cast<leaf_node *>( &containing_leaf ), pos };
+    }
+
+    // Forward-only insertion-point search for non-unique trees (upper_bound semantics).
+    // Inserts after all equal keys; exact_find is always false.
+    insertion_point_t find_from_nonunique( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, Reg auto const key ) const noexcept
+    {
+        if ( le( key, keys( starting_leaf ).back() ) )
+        {
+            auto const leaf_keys{ keys( starting_leaf ) };
+            // Quick-probe: if key < keys[offset], upper_bound stops here — no search needed.
+            if ( lt( key, leaf_keys[ starting_leaf_offset ] ) )
+                return { const_cast<leaf_node *>( &starting_leaf ), find_pos{ starting_leaf_offset, false } };
+            auto const pos{ upper_bound( starting_leaf, starting_leaf_offset, key ) };
+            return { const_cast<leaf_node *>( &starting_leaf ), find_pos{ pos, false } };
+        }
+
+        if ( !starting_leaf.right ) [[ unlikely ]] // we are at the end of the tree/leaf level
+            return { const_cast<leaf_node *>( &starting_leaf ), find_pos{ starting_leaf.num_vals, false } };
+
+        auto const & containing_leaf{ find_from_climb( starting_leaf, key ) };
+        auto const pos{ upper_bound( containing_leaf, key ) };
+        BOOST_ASSUME
+        (
+            ( &starting_leaf != &containing_leaf  ) ||
+            ( pos == containing_leaf.num_vals )
+        );
+        return { const_cast<leaf_node *>( &containing_leaf ), find_pos{ pos, false } };
     }
 
     // bulk insert helper: merge a new, presorted leaf into an existing leaf
@@ -2743,8 +2793,8 @@ bp_tree_impl<Key, Comparator>::replace_keys_inplace( std::span<Key const> const 
             }
         }
 
-        // Key not in current leaf - use find_next to jump to it
-        auto const [next_leaf, next_pos]{ find_next( *p_leaf, offset, old_keys[ key_idx ] ) };
+        // Key not in current leaf - use find_from to jump to it
+        auto const [next_leaf, next_pos]{ find_from( *p_leaf, offset, old_keys[ key_idx ] ) };
         if ( !next_pos.exact_find ) [[ unlikely ]] {
             BOOST_ASSUME( !this->all_bulk_erase_keys_must_exist );
             break; // Key not found
@@ -2762,7 +2812,11 @@ bp_tree_impl<Key, Comparator>::replace_keys_inplace( std::span<Key const> const 
 // Bulk erase with pre-sorted keys.
 //
 // Removes multiple keys using find_nodes_for for the first key, then
-// find_next for subsequent keys to avoid repeated tree traversals.
+// find_from for subsequent keys to avoid repeated tree traversals.
+//
+// When require_exact_equality is true, keys must match by operator== (not
+// just comparator equivalence). This is useful when keys are indirect indices
+// and comparison is done by looking up external values.
 //
 // Preconditions:
 // - keys_to_remove is sorted by the tree's comparator ordering
@@ -2771,8 +2825,9 @@ bp_tree_impl<Key, Comparator>::replace_keys_inplace( std::span<Key const> const 
 //--------------------------------------------------------------------------
 
 template <typename Key, typename Comparator>
+template <bool require_exact_equality>
 bp_tree_impl<Key, Comparator>::size_type
-bp_tree_impl<Key, Comparator>::erase_sorted( std::span<Key const> const keys_to_remove, bool const unique ) noexcept
+bp_tree_impl<Key, Comparator>::erase_sorted_impl( std::span<Key const> const keys_to_remove, bool const unique ) noexcept
 {
     BOOST_ASSERT( this->size() >= keys_to_remove.size() || !this->all_bulk_erase_keys_must_exist );
     if ( keys_to_remove.empty() || ( !this->all_bulk_erase_keys_must_exist && this->empty() ) )
@@ -2783,28 +2838,60 @@ bp_tree_impl<Key, Comparator>::erase_sorted( std::span<Key const> const keys_to_
     size_type erased_count{ 0 };
     size_t    key_idx     { 0 };
 
-    // Find first key with full tree traversal
-    leaf_node * p_leaf{ nullptr };
-    node_size_type offset{ 0 };
-    // TODO a loop is not necessary - simply use the first result of find_nodes_for - if no exact hit was found the find_next in the main loop should find the next hit
-    // (probably requires a restructuring of the main loop)
-    while ( key_idx < keys_to_remove.size() )
+    // Helper: checks if the key at a given position is a valid match.
+    // For equivalence-only mode, any comparator-equivalent key suffices.
+    // For exact mode, also requires operator== identity.
+    auto const is_match{ [&]( leaf_node const & lf, node_size_type pos, size_t kidx )
     {
-        auto const location{ find_nodes_for( keys_to_remove[ key_idx ], unique ) };
-        if ( location.leaf_offset.exact_find )
+        if constexpr ( require_exact_equality )
+            return eq( lf.keys[ pos ], keys_to_remove[ kidx ] ) && lf.keys[ pos ] == keys_to_remove[ kidx ];
+        else
+            return eq( lf.keys[ pos ], keys_to_remove[ kidx ] );
+    } };
+
+    // Helper: scan keys_to_remove[key_idx..] using find_nodes_for until a match is found.
+    auto const find_from_scratch{ [&]( leaf_node *& lf, node_size_type & off ) -> bool
+    {
+        while ( key_idx < keys_to_remove.size() )
         {
-            p_leaf = &location.leaf;
-            offset = location.leaf_offset.pos;
-            break;
+            auto location{ find_nodes_for( keys_to_remove[ key_idx ], unique ) };
+            if ( location.leaf_offset.exact_find && ( !require_exact_equality || location.leaf.keys[ location.leaf_offset.pos ] == keys_to_remove[ key_idx ] ) )
+            {
+                lf  = &location.leaf;
+                off = location.leaf_offset.pos;
+                return true;
+            }
+            ++key_idx;
         }
+        return false;
+    } };
+
+    // Find first key's position with full tree traversal — use the returned
+    // location (exact or not) as the starting point for find_from on subsequent keys.
+    auto const first_location{ find_nodes_for( keys_to_remove[ 0 ], unique ) };
+    auto * p_leaf { &first_location.leaf };
+    auto   offset { first_location.leaf_offset.pos };
+    if ( !first_location.leaf_offset.exact_find || ( require_exact_equality && p_leaf->keys[ offset ] != keys_to_remove[ 0 ] ) )
+    {
+        // First key not found — try remaining keys using find_from from this position
         ++key_idx;
+        if ( !find_from_scratch( p_leaf, offset ) )
+            return 0;
     }
-    if ( !p_leaf )
-        return 0;
 
     while ( key_idx < keys_to_remove.size() )
     {
-        // Verify key at current position
+        // Verify and handle match at current position
+        if constexpr ( require_exact_equality )
+        {
+            if ( p_leaf->keys[ offset ] != keys_to_remove[ key_idx ] )
+            {
+                ++key_idx;
+                if ( !find_from_scratch( p_leaf, offset ) )
+                    break;
+                continue;
+            }
+        }
         BOOST_ASSERT( eq( p_leaf->keys[ offset ], keys_to_remove[ key_idx ] ) );
 
         // Update separator key if erasing at position 0
@@ -2821,37 +2908,22 @@ bp_tree_impl<Key, Comparator>::erase_sorted( std::span<Key const> const keys_to_
         if ( key_idx >= keys_to_remove.size() || this->empty() )
             break;
 
-        // Find next key using find_next from current position
+        // Find next key using find_from from current position
         if ( !next_pos.node ) [[ unlikely ]]
-        {
-            // At end of tree - should not happen if keys exist
             break;
-        }
 
         p_leaf = &this->leaf( next_pos.node );
         offset = next_pos.value_offset;
 
         // Check if next key is at the current position
-        if ( offset < p_leaf->num_vals && eq( p_leaf->keys[ offset ], keys_to_remove[ key_idx ] ) )
+        if ( offset < p_leaf->num_vals && is_match( *p_leaf, offset, key_idx ) )
             continue;
 
-        // Use find_next to locate the next key
-        auto [next_leaf, found_pos]{ find_next( *p_leaf, offset, keys_to_remove[ key_idx ] ) };
-        if ( !found_pos.exact_find ) [[ unlikely ]]
+        // Use find_from to locate the next key
+        auto [next_leaf, found_pos]{ find_from( *p_leaf, offset, keys_to_remove[ key_idx ] ) };
+        if ( !found_pos.exact_find || ( require_exact_equality && next_leaf->keys[ found_pos.pos ] != keys_to_remove[ key_idx ] ) ) [[ unlikely ]]
         {
-            // Key not found via find_next - fall back to find_nodes_for
-            while ( key_idx < keys_to_remove.size() )
-            {
-                auto location{ find_nodes_for( keys_to_remove[ key_idx ], unique ) };
-                if ( location.leaf_offset.exact_find )
-                {
-                    p_leaf = &location.leaf;
-                    offset = location.leaf_offset.pos;
-                    break;
-                }
-                ++key_idx;
-            }
-            if ( key_idx >= keys_to_remove.size() )
+            if ( !find_from_scratch( p_leaf, offset ) )
                 break;
             continue;
         }
@@ -2863,171 +2935,6 @@ bp_tree_impl<Key, Comparator>::erase_sorted( std::span<Key const> const keys_to_
     return erased_count;
 }
 
-
-//--------------------------------------------------------------------------
-// erase_sorted_exact
-//
-// Like erase_sorted, but requires exact key equality (key_in_tree == key_to_remove)
-// not just equivalence by comparator. This is useful when keys are indirect
-// indices and comparison is done by looking up external values - two different
-// keys could compare as equivalent but we only want to erase the exact key.
-//
-// Preconditions:
-// - keys_to_remove is sorted by the tree's comparator ordering
-//
-// Returns: number of keys actually removed
-// 
-// TODO deduplicate w/ erase_sorted
-//--------------------------------------------------------------------------
-
-template <typename Key, typename Comparator>
-bp_tree_impl<Key, Comparator>::size_type
-bp_tree_impl<Key, Comparator>::erase_sorted_exact( std::span<Key const> const keys_to_remove, bool const unique ) noexcept
-{
-    BOOST_ASSERT( this->size() >= keys_to_remove.size() || !this->all_bulk_erase_keys_must_exist );
-    if ( keys_to_remove.empty() || ( !this->all_bulk_erase_keys_must_exist && this->empty() ) )
-        return 0;
-
-    BOOST_ASSERT( std::ranges::is_sorted( keys_to_remove, comp() ) );
-
-    size_type erased_count{ 0 };
-    size_t    key_idx     { 0 };
-
-    // Find first key with full tree traversal
-    leaf_node * p_leaf{ nullptr };
-    node_size_type offset{ 0 };
-
-    while ( key_idx < keys_to_remove.size() )
-    {
-        auto const location{ find_nodes_for( keys_to_remove[ key_idx ], unique ) };
-        if ( location.leaf_offset.exact_find )
-        {
-            // Check for exact key equality, not just equivalence
-            if ( location.leaf.keys[ location.leaf_offset.pos ] == keys_to_remove[ key_idx ] )
-            {
-                p_leaf = &location.leaf;
-                offset = location.leaf_offset.pos;
-                break;
-            }
-        }
-        ++key_idx;
-    }
-    if ( !p_leaf )
-        return 0;
-
-    while ( key_idx < keys_to_remove.size() )
-    {
-        // Verify exact key equality before erasing
-        if ( p_leaf->keys[ offset ] != keys_to_remove[ key_idx ] )
-        {
-            // Found equivalent key but not exact match - skip this key
-            ++key_idx;
-            if ( key_idx >= keys_to_remove.size() )
-                break;
-
-            // Try to find the next key
-            while ( key_idx < keys_to_remove.size() )
-            {
-                auto const location{ find_nodes_for( keys_to_remove[ key_idx ], unique ) };
-                if
-                (
-                    location.leaf_offset.exact_find &&
-                    location.leaf.keys[ location.leaf_offset.pos ] == keys_to_remove[ key_idx ]
-                )
-                {
-                    p_leaf = &location.leaf;
-                    offset = location.leaf_offset.pos;
-                    break;
-                }
-                ++key_idx;
-            }
-            if ( key_idx >= keys_to_remove.size() )
-                break;
-            continue;
-        }
-
-        // Update separator key if erasing at position 0
-        if ( offset == 0 && p_leaf->num_vals > 1 ) [[ unlikely ]]
-        {
-            this->update_separator( *p_leaf, p_leaf->keys[ 1 ] );
-        }
-
-        // Erase the key
-        auto next_pos{ this->erase( *p_leaf, offset ) };
-        ++erased_count;
-        ++key_idx;
-
-        if ( key_idx >= keys_to_remove.size() || this->empty() )
-            break;
-
-        // Find next key using find_next from current position
-        if ( !next_pos.node ) [[ unlikely ]]
-        {
-            // At end of tree - should not happen if keys exist
-            break;
-        }
-
-        p_leaf = &this->leaf( next_pos.node );
-        offset = next_pos.value_offset;
-
-        // Check if next key is at the current position (with exact match)
-        if
-        (
-            offset < p_leaf->num_vals &&
-            eq( p_leaf->keys[ offset ],   keys_to_remove[ key_idx ] ) &&
-                p_leaf->keys[ offset ] == keys_to_remove[ key_idx ]
-        )
-            continue;
-
-        // Use find_next to locate the next key
-        auto [next_leaf, found_pos]{ find_next( *p_leaf, offset, keys_to_remove[ key_idx ] ) };
-        if ( !found_pos.exact_find ) [[ unlikely ]]
-        {
-            // Key not found via find_next - fall back to find_nodes_for
-            while ( key_idx < keys_to_remove.size() )
-            {
-                auto location{ find_nodes_for( keys_to_remove[ key_idx ], unique ) };
-                if ( location.leaf_offset.exact_find &&
-                     location.leaf.keys[ location.leaf_offset.pos ] == keys_to_remove[ key_idx ] )
-                {
-                    p_leaf = &location.leaf;
-                    offset = location.leaf_offset.pos;
-                    break;
-                }
-                ++key_idx;
-            }
-            if ( key_idx >= keys_to_remove.size() )
-                break;
-            continue;
-        }
-
-        // Found via find_next - verify exact match
-        if ( next_leaf->keys[ found_pos.pos ] != keys_to_remove[ key_idx ] )
-        {
-            // Equivalent but not exact - need to search from scratch
-            while ( key_idx < keys_to_remove.size() )
-            {
-                auto const location{ find_nodes_for( keys_to_remove[ key_idx ], unique ) };
-                if ( location.leaf_offset.exact_find &&
-                     location.leaf.keys[ location.leaf_offset.pos ] == keys_to_remove[ key_idx ] )
-                {
-                    p_leaf = &location.leaf;
-                    offset = location.leaf_offset.pos;
-                    break;
-                }
-                ++key_idx;
-            }
-            if ( key_idx >= keys_to_remove.size() )
-                break;
-            continue;
-        }
-
-        p_leaf = next_leaf;
-        offset = found_pos.pos;
-    }
-
-    return erased_count;
-}
 
 
 template <typename Key, typename Comparator>
@@ -3113,7 +3020,7 @@ bp_tree_impl<Key, Comparator>::merge
     if ( target_offset == 0 ) [[ unlikely ]]
     {
         auto const & new_separator{ src_keys[ 0 ] };
-        BOOST_ASSERT( le( new_separator, tgt_keys[ 0 ] ) );
+        BOOST_ASSERT( lt( new_separator, tgt_keys[ 0 ] ) );
         base::update_separator( target, new_separator );
         // TODO rather simply insert the source leaf into the parent (if all of
         // its keys come before the first key in target)
@@ -3126,13 +3033,19 @@ bp_tree_impl<Key, Comparator>::merge
     if ( target.right )
     {
         auto const & right_delimiter{ right( target ).keys[ 0 ] };
-        auto const   leq_right_pos  { lower_bound( src_keys, copy_size, key_const_arg{ right_delimiter } ) };
-        BOOST_ASSUME( !leq_right_pos.exact_find || !unique );
-        if ( leq_right_pos.pos != copy_size )
+        // For unique trees: stop before any key >= right_delimiter (no duplicates allowed).
+        // For non-unique trees: equal keys may span leaf boundaries, so stop only before
+        // keys strictly greater than right_delimiter (equal keys go into the current leaf).
+        node_size_type const cut_pos
+        { unique
+            ? lower_bound( src_keys, copy_size, key_const_arg{ right_delimiter } ).pos
+            : upper_bound( src_keys, copy_size, key_const_arg{ right_delimiter } )
+        };
+        if ( cut_pos != copy_size )
         {
-            BOOST_ASSUME( leq_right_pos.pos >  0         );
-            BOOST_ASSUME( leq_right_pos.pos <  copy_size );
-            copy_size = static_cast<node_size_type>( leq_right_pos.pos );
+            BOOST_ASSUME( cut_pos > 0         );
+            BOOST_ASSUME( cut_pos < copy_size );
+            copy_size = cut_pos;
         }
     }
 
@@ -3519,18 +3432,17 @@ template <typename Key, typename Comparator>
 bp_tree_impl<Key, Comparator>::size_type
 bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const unique )
 {
-    // This function follows nearly the same logic as bulk insert (consult it
-    // for more comments), the main differences being:
+    // Shares the same high-level structure as insert_presorted (empty-tree fast
+    // path → find insertion point → merge/bulk_append loop → find_next), but the
+    // input source differences (span vs cross-tree leaf chain with separate node
+    // pool) are woven into every phase, making extraction of a common template
+    // impractical without an input-source abstraction that would add complexity
+    // without clear benefit.
+    // Key differences from insert_presorted:
     //  - no need to copy and sort the input
-    //  - the bulk_append phase has to first copy the remainder of the source
-    //    nodes (they are not somehow 'extractable' from the source tree)
-    //  - the source leaves are coming from a different tree instance (i.e. from
-    //    a different container):
-    //    - care has to be taken e.g. when resolving slots to node references
-    //    - at the same time this means we do not have to care about calling
-    //      update_pool_ptr on input iterators as the input container is not
-    //      being modified.
-    // TODO further deduplicate with insert
+    //  - bulk_append must first copy source nodes (not extractable from other tree)
+    //  - node slot resolution goes through other's pool, not this->
+    //  - no need to call update_pool_ptr since the source tree is not modified
 
     // (this is a refurbished move-merge implementation that only had its
     // explicitly other-destructive calls removed - good enough while only
@@ -3780,7 +3692,7 @@ public:
     using impl_base::end;
     using impl_base::erase;
     using impl_base::eq;
-    using impl_base::le;
+    using impl_base::lt;
 
     [[ nodiscard ]] const_iterator find       ( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return impl_base::find_impl       ( pass_in_reg{ key }, unique ); }
     [[ nodiscard ]] const_iterator lower_bound( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return impl_base::lower_bound_impl( pass_in_reg{ key }, unique ); }
@@ -3799,8 +3711,8 @@ public:
     }
 
     // bulk insert
-    // performance note: insertion of existing values into a unique bp_tree_impl is
-    // supported and accounted for (the input values are skipped) but it is
+    // performance note: insertion of existing values into a unique bp_tree_impl
+    // is supported and accounted for (the input values are skipped) but it is
     // considered an 'unlikely' event and as such it is handled by sad/cold paths
     // TODO complete std insert interface (w/ ranges, iterators, hints...)
     template <std::input_iterator InIter>
@@ -3814,7 +3726,7 @@ public:
     size_type merge( bp_tree       && other ) { return impl_base::merge( std::move( other ), unique ); }
     size_type merge( bp_tree const &  other ) { return impl_base::merge(            other  , unique ); }
 
-    [[ nodiscard ]] [[ gnu::sysv_abi, gnu::noinline ]]
+    [[ gnu::sysv_abi, gnu::noinline ]]
     bool erase( key_const_arg key ) noexcept
     requires( unique )
     {
@@ -3852,10 +3764,10 @@ public:
         (
             (
                 ( ( leaf_key_offset + 1 ) < leaf.num_vals ) &&
-                le( key, leaf.keys[ leaf_key_offset + 1 ] )
+                lt( key, leaf.keys[ leaf_key_offset + 1 ] )
             ) ||
             ( !leaf.right ) ||
-            le( key, this->right( leaf ).keys[ 0 ] )
+            lt( key, this->right( leaf ).keys[ 0 ] )
         ) [[ likely ]]
         {
             return this->erase_single( location );

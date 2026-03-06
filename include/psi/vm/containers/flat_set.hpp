@@ -379,8 +379,8 @@ public:
         value_type v( std::forward<decltype( args )>( args )... );
         auto const hintIdx{ this->iter_index( hint ) };
         bool const hintValid{
-            ( hintIdx == 0             || this->le( this->storage_[ hintIdx - 1 ], v ) ) &&
-            ( hintIdx >= this->size()  || this->le( v, this->storage_[ hintIdx ] ) )
+            ( hintIdx == 0             || this->lt( this->storage_[ hintIdx - 1 ], v ) ) &&
+            ( hintIdx >= this->size()  || this->lt( v, this->storage_[ hintIdx ] ) )
         };
         if ( hintValid ) {
             this->storage_.insert( this->storage_.begin() + static_cast<difference_type>( hintIdx ), std::move( v ) );

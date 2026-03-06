@@ -410,10 +410,10 @@
 
 
     <!-- ================================================================== -->
-    <!-- psi::vm::bptree_base / bp_tree_impl                                 -->
-    <!--                                                                     -->
-    <!-- B+ trees use memory-mapped node pools -- full element iteration is  -->
-    <!-- not feasible in natvis. Show size, depth, and the header.           -->
+    <!-- psi::vm::bptree_base / bp_tree_impl                                -->
+    <!--                                                                    -->
+    <!-- B+ trees use memory-mapped node pools; full element iteration is   -->
+    <!-- not feasible in natvis. Show size, depth, and the header.          -->
     <!-- ================================================================== -->
 
     <Type Name="psi::vm::bptree_base">

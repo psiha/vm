@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <numeric>
 #include <print>
 #include <random>
 #include <ranges>
@@ -1290,7 +1291,7 @@ TEST( bp_tree, lower_bound_from )
         ASSERT_NE( it, e );
         EXPECT_EQ( *it, 12 );
 
-        // key before pos (9): find_next searches from offset, key < keys[offset]
+        // key before pos (9): find_from searches from offset, key < keys[offset]
         // should still return 10 (the element at pos — first >= key from offset)
         it = bpt.lower_bound_from( mid, 9 );
         ASSERT_NE( it, e );
@@ -1361,6 +1362,196 @@ TEST( bp_tree, lower_bound_from )
             pos = it;
         }
     }
+}
+
+TEST( bp_tree, find_from_fast_path )
+{
+    // Test find_from fast path + binary search fallback:
+    //  1. key <= keys[offset]       (immediate hit at offset)
+    //  2. key > keys[offset]        (falls back to binary search from offset+1)
+    //  3. key in right sibling leaf (cross-leaf, tree traversal)
+    //  4. key deeper in right side  (cross-leaf, multi-level tree traversal)
+
+    bptree_set<unsigned> bpt;
+    bpt.map_memory( 100000 );
+
+    auto constexpr max_per_node{ decltype(bpt)::leaf_node::max_values };
+
+    // Create a tree with multiple leaves worth of even numbers.
+    // This gives us gaps (odd numbers) to test non-exact lower_bound_from hits.
+    auto const test_size{ max_per_node * 6U };
+    for ( unsigned i{ 0 }; i < test_size * 2; i += 2 )
+        bpt.insert( i );
+
+    auto const e{ bpt.end() };
+
+    // --- Sequential cursor walk: each key is at offset or offset+1 ---
+    // Searching for every present element in order exercises path 1 (exact hit at offset).
+    {
+        auto pos{ bpt.begin() };
+        for ( unsigned i{ 0 }; i < test_size * 2; i += 2 ) {
+            auto it{ bpt.lower_bound_from( pos, i ) };
+            ASSERT_NE( it, e ) << "Failed to find " << i;
+            EXPECT_EQ( *it, i );
+            pos = it;
+        }
+    }
+
+    // --- Searching for odd numbers: key > keys[offset] ---
+    // Exercises path 2 (binary search fallback, non-exact).
+    {
+        auto pos{ bpt.begin() };
+        for ( unsigned i{ 1 }; i < ( test_size * 2 ) - 2; i += 2 ) {
+            auto it{ bpt.lower_bound_from( pos, i ) };
+            ASSERT_NE( it, e ) << "Failed lower_bound for " << i;
+            EXPECT_EQ( *it, i + 1 ); // next even number
+            pos = it;
+        }
+    }
+
+    // --- Larger jumps within a leaf: skip several elements ---
+    // Exercises path 2 (binary search fallback with larger skip).
+    {
+        auto pos{ bpt.begin() };
+        for ( unsigned i{ 0 }; i < test_size * 2; i += 10 ) {
+            auto it{ bpt.lower_bound_from( pos, i ) };
+            ASSERT_NE( it, e ) << "Failed at key " << i;
+            EXPECT_EQ( *it, i ); // exact even number
+            pos = it;
+        }
+    }
+
+    // --- Cross-leaf boundary: first element of right sibling ---
+    // Exercises path 3 (cross-leaf via tree traversal up and back down).
+    {
+        auto pos{ bpt.begin() };
+        // Walk to near the end of the first leaf
+        unsigned steps{ max_per_node - 2 };
+        for ( unsigned s{ 0 }; s < steps; ++s )
+            ++pos;
+        // Now search for a value that must be in the next leaf
+        auto const target{ static_cast<unsigned>( *pos + max_per_node ) };
+        if ( target < test_size * 2 ) {
+            auto it{ bpt.lower_bound_from( pos, target ) };
+            ASSERT_NE( it, e ) << "Cross-leaf lookup failed for " << target;
+            EXPECT_GE( *it, target );
+        }
+    }
+
+    // --- Large jump across multiple leaves ---
+    // Exercises path 4 (full tree traversal up and back down).
+    {
+        auto pos{ bpt.begin() };
+        auto const far_target{ ( test_size * 2 ) - 4 }; // near the end
+        auto it{ bpt.lower_bound_from( pos, far_target ) };
+        ASSERT_NE( it, e );
+        EXPECT_EQ( *it, far_target );
+    }
+}
+
+//------------------------------------------------------------------------------
+// Tests targeting find_from_nonunique and find_from_climb (introduced when
+// find_next_insertion_point for non-unique trees was unified with find_from by
+// extracting the shared tree-climbing middle into find_from_climb).
+//------------------------------------------------------------------------------
+
+// Verifies that insert_presorted on a multiset produces correct sorted order
+// when inserting the same sorted sequence twice.  The second pass specifically
+// exercises find_from_nonunique: each key equals an existing key, and keys that
+// equal the back() of a leaf (previously missed by the lt() guard, now caught
+// by le()) are handled in-leaf rather than falling back to a full root walk.
+TEST( bp_tree, nonunique_find_from_repeated_presorted )
+{
+    auto constexpr max_per_node{ bptree_multiset<int>::leaf_node::max_values };
+    // Enough elements to span several leaves and produce a multi-level tree.
+    auto const n{ static_cast<int>( max_per_node * 5 + max_per_node / 2 ) };
+
+    bptree_multiset<int> bpt;
+    bpt.map_memory( static_cast<std::size_t>( n * 2 ) );
+
+    std::vector<int> sorted_vals( static_cast<std::size_t>( n ) );
+    std::iota( sorted_vals.begin(), sorted_vals.end(), 0 );
+
+    EXPECT_EQ( bpt.insert_presorted( sorted_vals ), static_cast<std::size_t>( n ) );
+
+    // Second pass: every key is a duplicate of an existing one.
+    // Keys equal to leaf back() values now trigger the le() in-leaf path in
+    // find_from_nonunique instead of falling through to find_insertion_point.
+    EXPECT_EQ( bpt.insert_presorted( sorted_vals ), static_cast<std::size_t>( n ) );
+
+    EXPECT_EQ( bpt.size(), static_cast<std::size_t>( n * 2 ) );
+    EXPECT_TRUE( std::ranges::is_sorted( bpt, bpt.comp() ) );
+
+    // Each value must appear exactly twice.
+    for ( int v : sorted_vals )
+    {
+        auto const er{ bpt.equal_range( v ) };
+        EXPECT_EQ( std::distance( er.begin(), er.end() ), 2 )
+            << "value " << v << " does not appear exactly twice";
+    }
+}
+
+// Verifies find_from_nonunique's tree-climbing path (find_from_climb).
+// The second batch consists entirely of keys larger than any key in the first
+// batch, so every call to find_from_nonunique must climb the parent chain
+// (key > back() of the last visited leaf, right sibling unavailable or also
+// exhausted) rather than finding the insertion point within the current leaf.
+TEST( bp_tree, nonunique_find_from_climb )
+{
+    auto constexpr max_per_node{ bptree_multiset<int>::leaf_node::max_values };
+    auto const first_n { static_cast<int>( max_per_node * 6 ) }; // fills ~6+ leaves → depth ≥ 2
+    auto const second_n{ static_cast<int>( max_per_node * 3 ) };
+
+    bptree_multiset<int> bpt;
+    bpt.map_memory( static_cast<std::size_t>( first_n + second_n ) );
+
+    std::vector<int> first_batch( static_cast<std::size_t>( first_n ) );
+    std::iota( first_batch.begin(), first_batch.end(), 0 );
+    EXPECT_EQ( bpt.insert_presorted( first_batch ), static_cast<std::size_t>( first_n ) );
+
+    // Second batch starts strictly beyond all existing keys.
+    // find_from_nonunique will see key > back() of the last leaf and invoke
+    // find_from_climb to locate the correct leaf via the parent chain.
+    std::vector<int> second_batch( static_cast<std::size_t>( second_n ) );
+    std::iota( second_batch.begin(), second_batch.end(), first_n );
+    EXPECT_EQ( bpt.insert_presorted( second_batch ), static_cast<std::size_t>( second_n ) );
+
+    EXPECT_EQ( bpt.size(), static_cast<std::size_t>( first_n + second_n ) );
+    EXPECT_TRUE( std::ranges::is_sorted( bpt, bpt.comp() ) );
+    EXPECT_TRUE( std::ranges::equal( bpt, std::views::iota( 0, first_n + second_n ) ) );
+}
+
+// Verifies that lower_bound_from (which uses find_from — the unique/lower_bound
+// path — internally) still produces correct results on a multiset after the
+// refactor that extracted find_from_climb from find_from.
+TEST( bp_tree, nonunique_lower_bound_from )
+{
+    auto constexpr max_per_node{ bptree_multiset<int>::leaf_node::max_values };
+    auto const n{ static_cast<int>( max_per_node * 4 ) };
+
+    bptree_multiset<int> bpt;
+    bpt.map_memory( static_cast<std::size_t>( n * 3 ) );
+
+    std::vector<int> vals( static_cast<std::size_t>( n ) );
+    std::iota( vals.begin(), vals.end(), 0 );
+    // Each value appears exactly 3 times.
+    bpt.insert_presorted( vals );
+    bpt.insert_presorted( vals );
+    bpt.insert_presorted( vals );
+    EXPECT_EQ( bpt.size(), static_cast<std::size_t>( n * 3 ) );
+
+    // Walk the tree with lower_bound_from, jumping from the first occurrence of
+    // each distinct value to the first occurrence of the next.  This exercises
+    // find_from / find_from_climb with a live iterator on each step.
+    auto it{ bpt.begin() };
+    for ( int expected{ 0 }; expected < n; ++expected )
+    {
+        it = bpt.lower_bound_from( it, expected );
+        ASSERT_NE( it, bpt.end() ) << "lower_bound_from returned end for value " << expected;
+        EXPECT_EQ( *it, expected );
+        std::advance( it, 3 ); // skip the three copies of this value
+    }
+    EXPECT_EQ( it, bpt.end() );
 }
 
 //------------------------------------------------------------------------------

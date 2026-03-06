@@ -354,8 +354,9 @@ public:
     //!   T's constructor/assignment from dereferencing InpIt throws.
     //!
     //! <b>Complexity</b>: Linear to n.
-    template <std::input_iterator It>
-    void assign( It first, It const last )
+    template <std::input_iterator It, typename Sentinel = It>
+    requires std::sentinel_for<Sentinel, It>
+    void assign( It first, Sentinel const last )
     {
         // Overwrite all elements we can from [first, last)
         auto const overwritten{ detail::overwrite_from_range( data(), this->size(), first, last ) };
@@ -390,13 +391,17 @@ public:
             auto const input_size{ static_cast<size_type>( std::size( data ) ) };
             if constexpr ( std::is_trivially_destructible_v<value_type> )
             {
-                // Trivially destructible: no-init resize + uninitialized_* construction.
+                // Pedantic exception-safety for weirdos which may throw on copy
+                // or move yet are trivially destructible (!?). Reserve first,
+                // construct all elements, then commit the new size.
                 // Uses construction (not assignment) to handle type conversions.
-                resize( input_size, no_init );
+                this->reserve( input_size );
+                this->storage_shrink_size_to( 0 ); // basic guarantee
                 if constexpr ( std::is_rvalue_reference_v<Rng &&> )
                     std::uninitialized_move_n( std::ranges::begin( data ), input_size, this->data() );
                 else
                     std::uninitialized_copy_n( std::ranges::begin( data ), input_size, this->data() );
+                this->storage_grow_to( input_size );
                 return;
             }
             else
@@ -980,7 +985,7 @@ public:
     //!
     //! <b>Complexity</b>: Linear to the number of elements in the container.
     [[ gnu::cold ]]
-    void clear( ) noexcept
+    void clear() noexcept
     {
         std::destroy( begin(), end() );
 #   if 0 // default to STL behaviour (keep capacity) - TODO make this configurable?
