@@ -2780,21 +2780,8 @@ bp_tree_impl<Key, Comparator>::replace_keys_inplace( std::span<Key const> const 
         if ( key_idx >= old_keys.size() )
             break;
 
-        // Find next key - first optimistically try within current leaf
-        ++offset;
-        if ( offset < p_leaf->num_vals ) [[ likely ]]
-        {
-            // Try in-leaf lower_bound for next key
-            auto const pos{ lower_bound( *p_leaf, offset, old_keys[ key_idx ] ) };
-            if ( pos.exact_find ) [[ likely ]]
-            {
-                offset = pos.pos;
-                continue;
-            }
-        }
-
-        // Key not in current leaf - use find_from to jump to it
-        auto const [next_leaf, next_pos]{ find_from( *p_leaf, offset, old_keys[ key_idx ] ) };
+        // Find next key using find_from (O(1) quick-probe + in-leaf binary search + tree climbing)
+        auto const [next_leaf, next_pos]{ find_from( *p_leaf, offset + 1, old_keys[ key_idx ] ) };
         if ( !next_pos.exact_find ) [[ unlikely ]] {
             BOOST_ASSUME( !this->all_bulk_erase_keys_must_exist );
             break; // Key not found
@@ -2849,18 +2836,21 @@ bp_tree_impl<Key, Comparator>::erase_sorted_impl( std::span<Key const> const key
             return eq( lf.keys[ pos ], keys_to_remove[ kidx ] );
     } };
 
-    // Helper: scan keys_to_remove[key_idx..] using find_nodes_for until a match is found.
-    auto const find_from_scratch{ [&]( leaf_node *& lf, node_size_type & off ) -> bool
+    // Helper: scan keys_to_remove[key_idx..] using find_from until a match is found.
+    // Uses forward-only cursor walk (keys_to_remove is sorted).
+    auto const find_next_match{ [&]( leaf_node *& lf, node_size_type & off ) -> bool
     {
         while ( key_idx < keys_to_remove.size() )
         {
-            auto location{ find_nodes_for( keys_to_remove[ key_idx ], unique ) };
-            if ( location.leaf_offset.exact_find && ( !require_exact_equality || location.leaf.keys[ location.leaf_offset.pos ] == keys_to_remove[ key_idx ] ) )
+            auto [next_leaf, found_pos]{ find_from( *lf, off, keys_to_remove[ key_idx ] ) };
+            if ( found_pos.exact_find && ( !require_exact_equality || next_leaf->keys[ found_pos.pos ] == keys_to_remove[ key_idx ] ) )
             {
-                lf  = &location.leaf;
-                off = location.leaf_offset.pos;
+                lf  = next_leaf;
+                off = found_pos.pos;
                 return true;
             }
+            lf  = next_leaf;
+            off = found_pos.pos;
             ++key_idx;
         }
         return false;
@@ -2869,13 +2859,13 @@ bp_tree_impl<Key, Comparator>::erase_sorted_impl( std::span<Key const> const key
     // Find first key's position with full tree traversal — use the returned
     // location (exact or not) as the starting point for find_from on subsequent keys.
     auto const first_location{ find_nodes_for( keys_to_remove[ 0 ], unique ) };
-    auto * p_leaf { &first_location.leaf };
-    auto   offset { first_location.leaf_offset.pos };
+    auto * p_leaf{ &first_location.leaf };
+    auto   offset{ first_location.leaf_offset.pos };
     if ( !first_location.leaf_offset.exact_find || ( require_exact_equality && p_leaf->keys[ offset ] != keys_to_remove[ 0 ] ) )
     {
         // First key not found — try remaining keys using find_from from this position
         ++key_idx;
-        if ( !find_from_scratch( p_leaf, offset ) )
+        if ( !find_next_match( p_leaf, offset ) )
             return 0;
     }
 
@@ -2887,7 +2877,7 @@ bp_tree_impl<Key, Comparator>::erase_sorted_impl( std::span<Key const> const key
             if ( p_leaf->keys[ offset ] != keys_to_remove[ key_idx ] )
             {
                 ++key_idx;
-                if ( !find_from_scratch( p_leaf, offset ) )
+                if ( !find_next_match( p_leaf, offset ) )
                     break;
                 continue;
             }
@@ -2923,7 +2913,7 @@ bp_tree_impl<Key, Comparator>::erase_sorted_impl( std::span<Key const> const key
         auto [next_leaf, found_pos]{ find_from( *p_leaf, offset, keys_to_remove[ key_idx ] ) };
         if ( !found_pos.exact_find || ( require_exact_equality && next_leaf->keys[ found_pos.pos ] != keys_to_remove[ key_idx ] ) ) [[ unlikely ]]
         {
-            if ( !find_from_scratch( p_leaf, offset ) )
+            if ( !find_next_match( p_leaf, offset ) )
                 break;
             continue;
         }
