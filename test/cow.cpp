@@ -849,6 +849,45 @@ TEST( bptree_cow, commit_multiset_clone )
     EXPECT_TRUE( std::ranges::is_sorted( src, src.comp() ) );
 }
 
+TEST( bptree_cow, commit_bulk_erase )
+{
+    // Regression test for missing mark_dirty() in unlink_left/unlink_right.
+    // Bulk erase (sorted span) goes through erase_sorted_impl which frees
+    // nodes via unlink_right. The sibling whose .left pointer was cleared
+    // must be marked dirty for commit_to's memcmp check to pass.
+    bptree_set<int> src;
+    src.map_memory();
+
+    auto constexpr N{ 2000 };
+    std::vector<int> values( N );
+    std::iota( values.begin(), values.end(), 0 );
+    src.insert( values );
+
+    bptree_set<int> clone{ src };
+
+    // Bulk erase a contiguous range -- triggers node unlinking/freeing
+    std::vector<int> to_erase( 500 );
+    std::iota( to_erase.begin(), to_erase.end(), 100 ); // erase keys [100..599]
+    clone.erase_sorted( to_erase );
+    EXPECT_EQ( clone.size(), static_cast<std::size_t>( N - 500 ) );
+
+    // commit_to: in Debug builds this asserts that every modified node was
+    // marked dirty. Before the fix, unlink_right left sibling nodes
+    // un-marked, causing the assertion to fire here.
+    clone.commit_to( src );
+
+    EXPECT_EQ( src.size(), static_cast<std::size_t>( N - 500 ) );
+    EXPECT_FALSE( has( src, 100 ) );
+    EXPECT_FALSE( has( src, 599 ) );
+    EXPECT_TRUE ( has( src, 99  ) );
+    EXPECT_TRUE ( has( src, 600 ) );
+    EXPECT_TRUE ( has( src, 0   ) );
+    EXPECT_TRUE ( has( src, N - 1 ) );
+#if !__SANITIZE_ADDRESS__
+    EXPECT_TRUE( std::ranges::is_sorted( src, src.comp() ) );
+#endif
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // COW expand test: clone a b+tree, grow it (trigger mapped_view::expand on the
 // COW view), verify both source and clone are intact.
