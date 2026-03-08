@@ -2682,12 +2682,16 @@ private:
 
     // Forward-only insertion-point search for non-unique trees (upper_bound semantics).
     // Inserts after all equal keys; exact_find is always false.
-    // Same precondition as find_from: starting_leaf_offset must be <= num_vals.
+    // starting_leaf_offset must be <= num_vals. When == num_vals (past-the-end,
+    // e.g. after merge fills a leaf), the caller guarantees key > back() so the
+    // in-leaf fast path is never taken and no OOB access occurs.
     insertion_point_t find_from_nonunique( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, Reg auto const key ) const noexcept
     {
         BOOST_ASSUME( starting_leaf_offset <= starting_leaf.num_vals );
         if ( le( key, keys( starting_leaf ).back() ) )
         {
+            // When offset == num_vals the le() guard above must be false (caller
+            // guarantees key > back()), so we never reach here with an OOB offset.
             BOOST_ASSUME( starting_leaf_offset < starting_leaf.num_vals );
             auto const leaf_keys{ keys( starting_leaf ) };
             // Quick-probe: if key < keys[offset], upper_bound stops here — no search needed.
@@ -2790,8 +2794,9 @@ bp_tree_impl<Key, Comparator>::replace_keys_inplace( std::span<Key const> const 
         if ( key_idx >= old_keys.size() )
             break;
 
-        // Advance past the just-processed key. If we were at the last position
-        // in the leaf, move to the right sibling (find_from requires offset < num_vals).
+        // Advance past the just-processed key. If we land at num_vals (past-the-end),
+        // move to the right sibling so offset stays in-range for find_from's in-leaf
+        // probe (replacement keys compare equivalent → key <= back() takes the fast path).
         auto next_offset{ static_cast<node_size_type>( offset + 1 ) };
         if ( next_offset == p_leaf->num_vals )
         {
