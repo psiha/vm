@@ -2625,12 +2625,19 @@ private:
 
     // Forward-only insertion-point search for unique trees (lower_bound semantics).
     // Exploits sorted-input invariant to avoid repeated root-to-leaf traversals.
+    // starting_leaf_offset must be <= num_vals. When == num_vals (past-the-end,
+    // e.g. after merge fills a leaf), the caller guarantees key > back() so the
+    // in-leaf fast path is never taken and no OOB access occurs.
     insertion_point_t find_from( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, Reg auto const key ) const noexcept
     {
+        BOOST_ASSUME( starting_leaf_offset <= starting_leaf.num_vals );
         if ( le( key, keys( starting_leaf ).back() ) )
         {
             // Fast path: check the immediate next element before binary search.
             // In cursor-walk patterns the next key is almost always at offset.
+            // When offset == num_vals the le() guard above must be false (caller
+            // guarantees key > back()), so we never reach here with an OOB offset.
+            BOOST_ASSUME( starting_leaf_offset < starting_leaf.num_vals );
             auto const leaf_keys{ keys( starting_leaf ) };
             if ( le( key, leaf_keys[ starting_leaf_offset ] ) ) // key <= keys[offset]
                 return { const_cast<leaf_node *>( &starting_leaf ), find_pos{ starting_leaf_offset, eq( key, leaf_keys[ starting_leaf_offset ] ) } };
@@ -2675,10 +2682,13 @@ private:
 
     // Forward-only insertion-point search for non-unique trees (upper_bound semantics).
     // Inserts after all equal keys; exact_find is always false.
+    // Same precondition as find_from: starting_leaf_offset must be <= num_vals.
     insertion_point_t find_from_nonunique( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, Reg auto const key ) const noexcept
     {
+        BOOST_ASSUME( starting_leaf_offset <= starting_leaf.num_vals );
         if ( le( key, keys( starting_leaf ).back() ) )
         {
+            BOOST_ASSUME( starting_leaf_offset < starting_leaf.num_vals );
             auto const leaf_keys{ keys( starting_leaf ) };
             // Quick-probe: if key < keys[offset], upper_bound stops here — no search needed.
             if ( lt( key, leaf_keys[ starting_leaf_offset ] ) )
@@ -2780,8 +2790,19 @@ bp_tree_impl<Key, Comparator>::replace_keys_inplace( std::span<Key const> const 
         if ( key_idx >= old_keys.size() )
             break;
 
+        // Advance past the just-processed key. If we were at the last position
+        // in the leaf, move to the right sibling (find_from requires offset < num_vals).
+        auto next_offset{ static_cast<node_size_type>( offset + 1 ) };
+        if ( next_offset == p_leaf->num_vals )
+        {
+            if ( !p_leaf->right ) [[ unlikely ]]
+                break; // no more leaves
+            p_leaf      = &this->leaf( p_leaf->right );
+            next_offset = 0;
+        }
+
         // Find next key using find_from (O(1) quick-probe + in-leaf binary search + tree climbing)
-        auto const [next_leaf, next_pos]{ find_from( *p_leaf, offset + 1, old_keys[ key_idx ] ) };
+        auto const [next_leaf, next_pos]{ find_from( *p_leaf, next_offset, old_keys[ key_idx ] ) };
         if ( !next_pos.exact_find ) [[ unlikely ]] {
             BOOST_ASSUME( !this->all_bulk_erase_keys_must_exist );
             break; // Key not found
