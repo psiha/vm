@@ -825,7 +825,7 @@ TEST( flat_multiset, equal_range )
 
 TEST( flat_multiset, sorted_equivalent_construction )
 {
-    std::vector<int> v{ 1, 2, 2, 3, 3, 3 };
+    heap_vector<int> v{ 1, 2, 2, 3, 3, 3 };
     FMS s( sorted_equivalent, std::move( v ) );
     EXPECT_EQ( s.size(), 6u );
     EXPECT_EQ( s.count( 3 ), 3u );
