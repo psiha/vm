@@ -51,7 +51,7 @@
 #include <span>
 #include <type_traits>
 #include <utility>
-#include <vector>
+#include "heap_vector.hpp"
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -76,8 +76,8 @@ template <typename Key, typename Compare, typename KeyContainer> class flat_mult
 template
 <
     typename Key,
-    typename Compare      = std::less<Key>,
-    typename KeyContainer = std::vector<Key>
+    typename Compare      = std::less<>,
+    typename KeyContainer = heap_vector<Key>
 >
 class flat_set_impl
     : public flat_impl<KeyContainer, Compare>
@@ -249,8 +249,8 @@ protected:
 template
 <
     typename Key,
-    typename Compare      = std::less<Key>,
-    typename KeyContainer = std::vector<Key>
+    typename Compare      = std::less<>,
+    typename KeyContainer = heap_vector<Key>
 >
 class flat_set
     : public flat_set_impl<Key, Compare, KeyContainer>
@@ -400,8 +400,8 @@ public:
 template
 <
     typename Key,
-    typename Compare      = std::less<Key>,
-    typename KeyContainer = std::vector<Key>
+    typename Compare      = std::less<>,
+    typename KeyContainer = heap_vector<Key>
 >
 class flat_multiset
     : public flat_set_impl<Key, Compare, KeyContainer>
@@ -502,39 +502,39 @@ public:
 //------------------------------------------------------------------------------
 
 // Container (unsorted)
-template <typename KC, typename Comp = std::less<typename KC::value_type>>
+template <typename KC, typename Comp = std::less<>>
 requires( !std::is_same_v<KC, sorted_unique_t> && !std::is_same_v<KC, sorted_equivalent_t> )
 flat_set( KC, Comp = Comp{} )
     -> flat_set<typename KC::value_type, Comp, KC>;
 
 // Container (sorted unique)
-template <typename KC, typename Comp = std::less<typename KC::value_type>>
+template <typename KC, typename Comp = std::less<>>
 flat_set( sorted_unique_t, KC, Comp = Comp{} )
     -> flat_set<typename KC::value_type, Comp, KC>;
 
 // Iterator range (unsorted)
-template <std::input_iterator InputIt, typename Comp = std::less<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type>>>
+template <std::input_iterator InputIt, typename Comp = std::less<>>
 requires( !std::is_same_v<InputIt, sorted_unique_t> && !std::is_same_v<InputIt, sorted_equivalent_t> )
 flat_set( InputIt, InputIt, Comp = Comp{} )
     -> flat_set<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type>, Comp>;
 
 // Iterator range (sorted unique)
-template <std::input_iterator InputIt, typename Comp = std::less<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type>>>
+template <std::input_iterator InputIt, typename Comp = std::less<>>
 flat_set( sorted_unique_t, InputIt, InputIt, Comp = Comp{} )
     -> flat_set<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type>, Comp>;
 
 // from_range_t
-template <std::ranges::input_range R, typename Comp = std::less<std::remove_const_t<std::ranges::range_value_t<R>>>>
+template <std::ranges::input_range R, typename Comp = std::less<>>
 flat_set( std::from_range_t, R &&, Comp = Comp{} )
     -> flat_set<std::remove_const_t<std::ranges::range_value_t<R>>, Comp>;
 
 // Initializer list (unsorted)
-template <typename Key, typename Comp = std::less<Key>>
+template <typename Key, typename Comp = std::less<>>
 flat_set( std::initializer_list<Key>, Comp = Comp{} )
     -> flat_set<Key, Comp>;
 
 // Initializer list (sorted unique)
-template <typename Key, typename Comp = std::less<Key>>
+template <typename Key, typename Comp = std::less<>>
 flat_set( sorted_unique_t, std::initializer_list<Key>, Comp = Comp{} )
     -> flat_set<Key, Comp>;
 
@@ -544,39 +544,39 @@ flat_set( sorted_unique_t, std::initializer_list<Key>, Comp = Comp{} )
 //------------------------------------------------------------------------------
 
 // Container (unsorted)
-template <typename KC, typename Comp = std::less<typename KC::value_type>>
+template <typename KC, typename Comp = std::less<>>
 requires( !std::is_same_v<KC, sorted_unique_t> && !std::is_same_v<KC, sorted_equivalent_t> )
 flat_multiset( KC, Comp = Comp{} )
     -> flat_multiset<typename KC::value_type, Comp, KC>;
 
 // Container (sorted equivalent)
-template <typename KC, typename Comp = std::less<typename KC::value_type>>
+template <typename KC, typename Comp = std::less<>>
 flat_multiset( sorted_equivalent_t, KC, Comp = Comp{} )
     -> flat_multiset<typename KC::value_type, Comp, KC>;
 
 // Iterator range (unsorted)
-template <std::input_iterator InputIt, typename Comp = std::less<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type>>>
+template <std::input_iterator InputIt, typename Comp = std::less<>>
 requires( !std::is_same_v<InputIt, sorted_unique_t> && !std::is_same_v<InputIt, sorted_equivalent_t> )
 flat_multiset( InputIt, InputIt, Comp = Comp{} )
     -> flat_multiset<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type>, Comp>;
 
 // Iterator range (sorted equivalent)
-template <std::input_iterator InputIt, typename Comp = std::less<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type>>>
+template <std::input_iterator InputIt, typename Comp = std::less<>>
 flat_multiset( sorted_equivalent_t, InputIt, InputIt, Comp = Comp{} )
     -> flat_multiset<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type>, Comp>;
 
 // from_range_t
-template <std::ranges::input_range R, typename Comp = std::less<std::remove_const_t<std::ranges::range_value_t<R>>>>
+template <std::ranges::input_range R, typename Comp = std::less<>>
 flat_multiset( std::from_range_t, R &&, Comp = Comp{} )
     -> flat_multiset<std::remove_const_t<std::ranges::range_value_t<R>>, Comp>;
 
 // Initializer list (unsorted)
-template <typename Key, typename Comp = std::less<Key>>
+template <typename Key, typename Comp = std::less<>>
 flat_multiset( std::initializer_list<Key>, Comp = Comp{} )
     -> flat_multiset<Key, Comp>;
 
 // Initializer list (sorted equivalent)
-template <typename Key, typename Comp = std::less<Key>>
+template <typename Key, typename Comp = std::less<>>
 flat_multiset( sorted_equivalent_t, std::initializer_list<Key>, Comp = Comp{} )
     -> flat_multiset<Key, Comp>;
 

@@ -51,7 +51,7 @@
 #include <span>
 #include <type_traits>
 #include <utility>
-#include <vector>
+#include "heap_vector.hpp"
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -486,9 +486,9 @@ template
 <
     typename Key,
     typename T,
-    typename Compare         = std::less<Key>,
-    typename KeyContainer    = std::vector<Key>,
-    typename MappedContainer = std::vector<T>
+    typename Compare         = std::less<>,
+    typename KeyContainer    = heap_vector<Key>,
+    typename MappedContainer = heap_vector<T>
 >
 class flat_map_impl
     : public flat_impl<detail::paired_storage<KeyContainer, MappedContainer>, Compare>
@@ -643,9 +643,9 @@ template
 <
     typename Key,
     typename T,
-    typename Compare         = std::less<Key>,
-    typename KeyContainer    = std::vector<Key>,
-    typename MappedContainer = std::vector<T>
+    typename Compare         = std::less<>,
+    typename KeyContainer    = heap_vector<Key>,
+    typename MappedContainer = heap_vector<T>
 >
 class flat_map
     : public flat_map_impl<Key, T, Compare, KeyContainer, MappedContainer>
@@ -843,9 +843,9 @@ template
 <
     typename Key,
     typename T,
-    typename Compare         = std::less<Key>,
-    typename KeyContainer    = std::vector<Key>,
-    typename MappedContainer = std::vector<T>
+    typename Compare         = std::less<>,
+    typename KeyContainer    = heap_vector<Key>,
+    typename MappedContainer = heap_vector<T>
 >
 class flat_multimap
     : public flat_map_impl<Key, T, Compare, KeyContainer, MappedContainer>
@@ -948,18 +948,18 @@ public:
 //------------------------------------------------------------------------------
 
 // Container pair (unsorted)
-template <typename KC, typename MC, typename Comp = std::less<typename KC::value_type>>
+template <typename KC, typename MC, typename Comp = std::less<>>
 requires( !std::is_same_v<KC, sorted_unique_t> && !std::is_same_v<KC, sorted_equivalent_t> )
 flat_map( KC, MC, Comp = Comp{} )
     -> flat_map<typename KC::value_type, typename MC::value_type, Comp, KC, MC>;
 
 // Container pair (sorted unique)
-template <typename KC, typename MC, typename Comp = std::less<typename KC::value_type>>
+template <typename KC, typename MC, typename Comp = std::less<>>
 flat_map( sorted_unique_t, KC, MC, Comp = Comp{} )
     -> flat_map<typename KC::value_type, typename MC::value_type, Comp, KC, MC>;
 
 // Iterator range (unsorted)
-template <std::input_iterator InputIt, typename Comp = std::less<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type::first_type>>>
+template <std::input_iterator InputIt, typename Comp = std::less<>>
 requires( !std::is_same_v<InputIt, sorted_unique_t> && !std::is_same_v<InputIt, sorted_equivalent_t> )
 flat_map( InputIt, InputIt, Comp = Comp{} )
     -> flat_map<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type::first_type>,
@@ -967,26 +967,26 @@ flat_map( InputIt, InputIt, Comp = Comp{} )
                 Comp>;
 
 // Iterator range (sorted unique)
-template <std::input_iterator InputIt, typename Comp = std::less<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type::first_type>>>
+template <std::input_iterator InputIt, typename Comp = std::less<>>
 flat_map( sorted_unique_t, InputIt, InputIt, Comp = Comp{} )
     -> flat_map<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type::first_type>,
                 typename std::iterator_traits<InputIt>::value_type::second_type,
                 Comp>;
 
 // from_range_t
-template <std::ranges::input_range R, typename Comp = std::less<std::remove_const_t<typename std::ranges::range_value_t<R>::first_type>>>
+template <std::ranges::input_range R, typename Comp = std::less<>>
 flat_map( std::from_range_t, R &&, Comp = Comp{} )
     -> flat_map<std::remove_const_t<typename std::ranges::range_value_t<R>::first_type>,
                 typename std::ranges::range_value_t<R>::second_type,
                 Comp>;
 
 // Initializer list (unsorted)
-template <typename Key, typename T, typename Comp = std::less<Key>>
+template <typename Key, typename T, typename Comp = std::less<>>
 flat_map( std::initializer_list<std::pair<Key, T>>, Comp = Comp{} )
     -> flat_map<Key, T, Comp>;
 
 // Initializer list (sorted unique)
-template <typename Key, typename T, typename Comp = std::less<Key>>
+template <typename Key, typename T, typename Comp = std::less<>>
 flat_map( sorted_unique_t, std::initializer_list<std::pair<Key, T>>, Comp = Comp{} )
     -> flat_map<Key, T, Comp>;
 
@@ -996,18 +996,18 @@ flat_map( sorted_unique_t, std::initializer_list<std::pair<Key, T>>, Comp = Comp
 //------------------------------------------------------------------------------
 
 // Container pair (unsorted)
-template <typename KC, typename MC, typename Comp = std::less<typename KC::value_type>>
+template <typename KC, typename MC, typename Comp = std::less<>>
 requires( !std::is_same_v<KC, sorted_unique_t> && !std::is_same_v<KC, sorted_equivalent_t> )
 flat_multimap( KC, MC, Comp = Comp{} )
     -> flat_multimap<typename KC::value_type, typename MC::value_type, Comp, KC, MC>;
 
 // Container pair (sorted equivalent)
-template <typename KC, typename MC, typename Comp = std::less<typename KC::value_type>>
+template <typename KC, typename MC, typename Comp = std::less<>>
 flat_multimap( sorted_equivalent_t, KC, MC, Comp = Comp{} )
     -> flat_multimap<typename KC::value_type, typename MC::value_type, Comp, KC, MC>;
 
 // Iterator range (unsorted)
-template <std::input_iterator InputIt, typename Comp = std::less<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type::first_type>>>
+template <std::input_iterator InputIt, typename Comp = std::less<>>
 requires( !std::is_same_v<InputIt, sorted_unique_t> && !std::is_same_v<InputIt, sorted_equivalent_t> )
 flat_multimap( InputIt, InputIt, Comp = Comp{} )
     -> flat_multimap<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type::first_type>,
@@ -1015,26 +1015,26 @@ flat_multimap( InputIt, InputIt, Comp = Comp{} )
                 Comp>;
 
 // Iterator range (sorted equivalent)
-template <std::input_iterator InputIt, typename Comp = std::less<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type::first_type>>>
+template <std::input_iterator InputIt, typename Comp = std::less<>>
 flat_multimap( sorted_equivalent_t, InputIt, InputIt, Comp = Comp{} )
     -> flat_multimap<std::remove_const_t<typename std::iterator_traits<InputIt>::value_type::first_type>,
                 typename std::iterator_traits<InputIt>::value_type::second_type,
                 Comp>;
 
 // from_range_t
-template <std::ranges::input_range R, typename Comp = std::less<std::remove_const_t<typename std::ranges::range_value_t<R>::first_type>>>
+template <std::ranges::input_range R, typename Comp = std::less<>>
 flat_multimap( std::from_range_t, R &&, Comp = Comp{} )
     -> flat_multimap<std::remove_const_t<typename std::ranges::range_value_t<R>::first_type>,
                 typename std::ranges::range_value_t<R>::second_type,
                 Comp>;
 
 // Initializer list (unsorted)
-template <typename Key, typename T, typename Comp = std::less<Key>>
+template <typename Key, typename T, typename Comp = std::less<>>
 flat_multimap( std::initializer_list<std::pair<Key, T>>, Comp = Comp{} )
     -> flat_multimap<Key, T, Comp>;
 
 // Initializer list (sorted equivalent)
-template <typename Key, typename T, typename Comp = std::less<Key>>
+template <typename Key, typename T, typename Comp = std::less<>>
 flat_multimap( sorted_equivalent_t, std::initializer_list<std::pair<Key, T>>, Comp = Comp{} )
     -> flat_multimap<Key, T, Comp>;
 
