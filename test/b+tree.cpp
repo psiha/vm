@@ -721,9 +721,6 @@ TEST( bp_tree, replace_keys_inplace_large_tree )
 
 TEST( bp_tree, replace_keys_inplace_stale_separator_underflow_repro )
 {
-#ifdef NDEBUG
-    GTEST_SKIP() << "Requires assertions enabled";
-#else
     using tree_type = psi::vm::bp_tree<unsigned, true, indirect_comparator>;
 
     tree_type bpt;
@@ -769,8 +766,24 @@ TEST( bp_tree, replace_keys_inplace_stale_separator_underflow_repro )
         EXPECT_TRUE( bpt.erase( key_to_erase ) );
     }
 
+    // Verify observable post-conditions: tree must remain structurally consistent
+    verify_invariants( bpt, "stale separator underflow repro" );
+
+    // The replaced separator key must still be findable
+    EXPECT_NE( bpt.find( stale_separator_new_key ), bpt.end() );
+
+    // Erased keys must no longer be present
+    for ( auto i{ 0U }; i < deletions_to_underflow; ++i )
+        EXPECT_EQ( bpt.find( stale_separator_old_key + 1 + i ), bpt.end() );
+
+    // Keys before the replaced separator must still be present
+    EXPECT_NE( bpt.find( stale_separator_old_key - 1 ), bpt.end() );
+
+    // Keys past the erased range must still be present
+    if ( stale_separator_old_key + deletions_to_underflow + 1 < test_size )
+        EXPECT_NE( bpt.find( stale_separator_old_key + deletions_to_underflow + 1 ), bpt.end() );
+
     indirect_values.clear();
-#endif
 }
 
 TEST( bp_tree, replace_keys_inplace_single_key )
