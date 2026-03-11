@@ -1492,7 +1492,7 @@ protected: // 'other'
         node_size_type const missing_values( node.min_values - node.num_vals );
 
         // It may happen that a leaf's separator key appears not in the
-        // immediate parent but further up - which would require more complex
+        // immediate parent but further up - which would require a more complex
         // (recursive climb) logic to update it (like other functions which call
         // update_separator) - however this is not in fact necessary since:
         // - this may happen only for the leftmost children (leaves) of a given
@@ -2515,7 +2515,7 @@ protected:
         return
         {
             leaf,
-            BOOST_LIKELY( !separator_key_node ) ? lower_bound( leaf, key ) : find_pos{ 0, true }, // short circuit since we know separator key only exist for first keys
+            BOOST_LIKELY( !separator_key_node ) ? lower_bound( leaf, key ) : find_pos{ 0, true }, // short circuit since we know separator keys only exist for first keys
             separator_key_offset,
             separator_key_node
         };
@@ -2787,6 +2787,9 @@ bp_tree_impl<Key, Comparator>::replace_keys_inplace( std::span<Key const> const 
             "Replacement key must compare equivalent to old key (same ordering position)"
         );
         p_leaf->keys[ offset ] = new_keys[ key_idx ];
+        if ( offset == 0 ) [[ unlikely ]] {
+            this->update_separator( *p_leaf, new_keys[ key_idx ] );
+        }
         p_leaf->mark_dirty();
         ++replaced;
         ++key_idx;
