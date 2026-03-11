@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <format>
 #include <numeric>
 #include <print>
 #include <random>
@@ -716,6 +717,60 @@ TEST( bp_tree, replace_keys_inplace_large_tree )
     }
 
     indirect_values.clear();
+}
+
+TEST( bp_tree, replace_keys_inplace_stale_separator_underflow_repro )
+{
+#ifdef NDEBUG
+    GTEST_SKIP() << "Requires assertions enabled";
+#else
+    using tree_type = psi::vm::bp_tree<unsigned, true, indirect_comparator>;
+
+    tree_type bpt;
+    bpt.map_memory();
+
+    auto constexpr max_per_node{ tree_type::leaf_node::max_values };
+    auto constexpr min_per_node{ tree_type::leaf_node::min_values };
+    auto const test_size{ max_per_node * 3U };
+    auto const offset{ test_size };
+
+    indirect_values.resize( test_size * 2 );
+    for ( auto i{ 0U }; i < test_size; ++i ) {
+        indirect_values[ i ] = static_cast<int>( i );
+        indirect_values[ i + offset ] = static_cast<int>( i );
+    }
+
+    std::vector<unsigned> keys( test_size );
+    for ( auto i{ 0U }; i < test_size; ++i )
+        keys[ i ] = i;
+
+    ASSERT_EQ( bpt.insert_presorted( keys ), keys.size() );
+
+    auto const stale_separator_old_key{ max_per_node };
+    auto const stale_separator_new_key{ stale_separator_old_key + offset };
+    ASSERT_EQ(
+        bpt.replace_keys_inplace(
+            std::array<unsigned, 1>{ stale_separator_old_key },
+            std::array<unsigned, 1>{ stale_separator_new_key }
+        ),
+        1
+    );
+
+    auto const deletions_to_underflow{ static_cast<unsigned>( max_per_node - min_per_node + 1 ) };
+    for ( auto i{ 0U }; i < deletions_to_underflow; ++i ) {
+        auto const key_to_erase{ stale_separator_old_key + 1 + i };
+        SCOPED_TRACE( std::format(
+            "erase iteration={}, key_to_erase={}, stale_separator_old_key={}, stale_separator_new_key={}",
+            i,
+            key_to_erase,
+            stale_separator_old_key,
+            stale_separator_new_key
+        ) );
+        EXPECT_TRUE( bpt.erase( key_to_erase ) );
+    }
+
+    indirect_values.clear();
+#endif
 }
 
 TEST( bp_tree, replace_keys_inplace_single_key )
