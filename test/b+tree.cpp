@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <format>
 #include <numeric>
 #include <print>
 #include <random>
