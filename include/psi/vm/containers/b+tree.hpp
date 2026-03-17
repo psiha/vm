@@ -2554,7 +2554,19 @@ protected:
 
     size_type insert( typename base::bulk_copied_input, bool unique );
 
-    size_type insert_presorted( std::span<Key const> presorted_input, bool unique );
+    // dedup_source: when true and unique, inline-deduplicates the presorted
+    // input at each copy/merge point (empty-tree bulk, append, interleaved merge).
+    template <bool dedup_source = false>
+    size_type insert_presorted_impl( std::span<Key const> presorted_input, bool unique );
+
+    // Assumes all keys in presorted_input are distinct (faster for unique trees).
+    size_type insert_presorted_unique( std::span<Key const> input, bool unique )
+    {
+        BOOST_ASSERT( std::ranges::adjacent_find( input, [this]( auto const & a, auto const & b ) noexcept { return eq( a, b ); } ) == input.end() );
+        return insert_presorted_impl<false>( input, unique );
+    }
+    // Handles possibly non-unique presorted input (deduplicates inline for unique trees).
+    size_type insert_presorted       ( std::span<Key const> input, bool unique ) { return insert_presorted_impl<true >( input, unique ); }
 
 #if !( defined( _MSC_VER ) && !defined( __clang__ ) )
     // ambiguous call w/ VS 17.11, 17.12
@@ -2725,14 +2737,14 @@ private:
     (
         Key const src_keys[], node_size_type input_length,
         leaf_node & target  , node_size_type target_offset,
-        bool unique
+        bool unique, bool dedup_source = false
     ) noexcept;
 
     node_size_type merge_interleaved_values
     (
         Key const source0[], node_size_type source0_size,
         Key const source1[], node_size_type source1_size,
-        Key       target [], bool unique
+        Key       target [], bool unique, bool dedup_source = false
     ) const noexcept;
 
 }; // class bp_tree_impl
@@ -2979,7 +2991,7 @@ bp_tree_impl<Key, Comparator>::merge
 (
     Key const src_keys[], node_size_type const input_length,
     leaf_node & target  , node_size_type const target_offset,
-    bool const unique
+    bool const unique, bool const dedup_source
 ) /*?*/noexcept
 {
     BOOST_ASSUME( input_length > 0 );
@@ -3073,9 +3085,18 @@ bp_tree_impl<Key, Comparator>::merge
     node_size_type next_tgt_offset;
     if ( target_offset == tgt_size ) // a simple append
     {
-        std::copy_n( src_keys, copy_size, &tgt_keys[ target_offset ] );
-        tgt_size        += copy_size;
-        inserted_size    = copy_size;
+        if ( dedup_source && unique ) [[ unlikely ]]
+        {
+            auto const out{ std::unique_copy( src_keys, src_keys + copy_size, &tgt_keys[ target_offset ],
+                [this]( auto const & a, auto const & b ) noexcept { return eq( a, b ); } ) };
+            inserted_size = static_cast<node_size_type>( out - &tgt_keys[ target_offset ] );
+        }
+        else
+        {
+            std::copy_n( src_keys, copy_size, &tgt_keys[ target_offset ] );
+            inserted_size = copy_size;
+        }
+        tgt_size        += inserted_size;
         next_tgt_offset  = tgt_size;
     }
     else
@@ -3088,7 +3109,7 @@ bp_tree_impl<Key, Comparator>::merge
         (
             &src_keys[ 0                         ], copy_size,
             &tgt_keys[ target_offset + copy_size ], tgt_size - target_offset,
-            &tgt_keys[ target_offset             ], unique
+            &tgt_keys[ target_offset             ], unique, dedup_source
         ) };
         inserted_size   = static_cast<node_size_type>( new_tgt_size - tgt_size );
         tgt_size        = static_cast<node_size_type>( new_tgt_size            );
@@ -3107,16 +3128,56 @@ bp_tree_impl<Key, Comparator>::merge_interleaved_values
 (
     Key const source0[], node_size_type const source0_size,
     Key const source1[], node_size_type const source1_size,
-    Key       target [], bool const unique
+    Key       target [], bool const unique, bool const dedup_source
 ) const noexcept
 {
     node_size_type const input_size( source0_size + source1_size );
     if ( unique )
     {
-        auto const out_pos{ std::set_union( source0, &source0[ source0_size ], source1, &source1[ source1_size ], target, comp() ) };
-        auto const merged_size{ static_cast<node_size_type>( out_pos - target ) };
-        BOOST_ASSUME( merged_size <= input_size );
-        return merged_size;
+        if ( dedup_source )
+        {
+            // Like std::set_union but also removes consecutive duplicates
+            // within source0 (the presorted input may contain dupes).
+            // source1 (existing tree keys) is already unique.
+            auto       * out    { target };
+            auto const * s0     { source0 }, * const s0_end{ &source0[ source0_size ] };
+            auto const * s1     { source1 }, * const s1_end{ &source1[ source1_size ] };
+            while ( s0 != s0_end && s1 != s1_end )
+            {
+                if ( lt( *s1, *s0 ) )
+                {
+                    *out++ = *s1++;
+                }
+                else if ( lt( *s0, *s1 ) )
+                {
+                    *out++ = *s0++;
+                    while ( s0 != s0_end && eq( *s0, out[ -1 ] ) ) ++s0;
+                }
+                else // equivalent
+                {
+                    *out++ = *s0++;
+                    ++s1;
+                    while ( s0 != s0_end && eq( *s0, out[ -1 ] ) ) ++s0;
+                }
+            }
+            while ( s0 != s0_end )
+            {
+                *out++ = *s0++;
+                while ( s0 != s0_end && eq( *s0, out[ -1 ] ) ) ++s0;
+            }
+            while ( s1 != s1_end )
+                *out++ = *s1++;
+            auto const merged_size{ static_cast<node_size_type>( out - target ) };
+            BOOST_ASSUME( merged_size <= input_size );
+            return merged_size;
+        }
+        else
+        {
+            auto const out_pos{ std::set_union( source0, &source0[ source0_size ], source1, &source1[ source1_size ], target, comp() ) };
+            auto const merged_size{ static_cast<node_size_type>( out_pos - target ) };
+            BOOST_ASSUME( merged_size <= input_size );
+            return merged_size;
+        }
     }
     else
     {
@@ -3314,8 +3375,9 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
 } // bp_tree_impl::insert()
 
 template <typename Key, typename Comparator>
+template <bool dedup_source>
 bp_tree_impl<Key, Comparator>::size_type
-bp_tree_impl<Key, Comparator>::insert_presorted( std::span<Key const> const presorted_input, bool const unique )
+bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const presorted_input, bool const unique )
 {
     BOOST_ASSERT( std::ranges::is_sorted( presorted_input, comp() ) );
 
@@ -3325,34 +3387,69 @@ bp_tree_impl<Key, Comparator>::insert_presorted( std::span<Key const> const pres
     auto const total_size{ presorted_input.size() };
 
     // Helper lambda to create linked leaves from a contiguous span of presorted keys.
-    // Returns { first_leaf_slot, last_leaf_slot, last_leaf_num_vals }.
-    auto const copy_to_nodes{ [this]( Key const * p_input, size_type count ) noexcept -> std::pair<node_slot, iter_pos>
+    // When dedup_source && unique, skips consecutive duplicates while copying.
+    // Returns { first_leaf_slot, end_pos, actual_count_copied }.
+    auto const do_dedup{ dedup_source && unique };
+    auto const copy_to_nodes{ [this, do_dedup]( Key const * p_input, size_type count ) noexcept
+        -> std::tuple<node_slot, iter_pos, size_type>
     {
         node_slot first_leaf_slot;
         node_slot prev_leaf_slot;
+        size_type actual_copied{ 0 };
+        Key const * const input_end{ p_input + count };
 
-        while ( count > 0 )
+        while ( p_input != input_end )
         {
+            if ( do_dedup )
+            {
+                // Skip leading dups against previous leaf's last key
+                if ( actual_copied > 0 )
+                {
+                    auto const & last_key{ this->leaf( prev_leaf_slot ).keys[ this->leaf( prev_leaf_slot ).num_vals - 1 ] };
+                    while ( p_input != input_end && this->eq( *p_input, last_key ) )
+                        ++p_input;
+                    if ( p_input == input_end )
+                        break;
+                }
+            }
+
             auto & new_leaf{ this->template new_node<leaf_node>() };
             auto const leaf_slot{ slot_of( new_leaf ) };
+            node_size_type fill{ 0 };
 
-            auto const copy_size{ static_cast<node_size_type>(
-                std::min<size_type>( count, leaf_node::max_values )
-            ) };
-            std::copy_n( p_input, copy_size, new_leaf.keys );
-            new_leaf.num_vals = copy_size;
+            if ( do_dedup )
+            {
+                while ( p_input != input_end && fill < leaf_node::max_values )
+                {
+                    if ( fill > 0 && this->eq( *p_input, new_leaf.keys[ fill - 1 ] ) )
+                    {
+                        ++p_input;
+                        continue;
+                    }
+                    new_leaf.keys[ fill++ ] = *p_input++;
+                }
+            }
+            else
+            {
+                fill = static_cast<node_size_type>(
+                    std::min<size_type>( static_cast<size_type>( input_end - p_input ), leaf_node::max_values )
+                );
+                std::copy_n( p_input, fill, new_leaf.keys );
+                p_input += fill;
+            }
+
+            new_leaf.num_vals = fill;
+            actual_copied += fill;
 
             if ( !first_leaf_slot ) [[ unlikely ]] {
                 first_leaf_slot = leaf_slot;
             } else {
-                base::link( leaf( prev_leaf_slot ), new_leaf );
+                base::link( this->leaf( prev_leaf_slot ), new_leaf );
             }
             prev_leaf_slot = leaf_slot;
-            p_input += copy_size;
-            count   -= copy_size;
         }
 
-        return { first_leaf_slot, { prev_leaf_slot, leaf( prev_leaf_slot ).num_vals } };
+        return { first_leaf_slot, { prev_leaf_slot, this->leaf( prev_leaf_slot ).num_vals }, actual_copied };
     }};
 
     this->reserve_additional( total_size * 4 / 3 ); // some headroom to account for splits and partial node fills
@@ -3360,10 +3457,10 @@ bp_tree_impl<Key, Comparator>::insert_presorted( std::span<Key const> const pres
     if ( empty() ) [[ unlikely ]]
     {
         // Bulk insert into empty tree: create leaves directly from presorted input
-        auto const [first_leaf_slot, end_pos]{ copy_to_nodes( presorted_input.data(), total_size ) };
-        base::bulk_insert_into_empty( first_leaf_slot, end_pos, total_size );
-        BOOST_ASSUME( this->hdr().size_ == total_size );
-        return total_size;
+        auto const [first_leaf_slot, end_pos, unique_count]{ copy_to_nodes( presorted_input.data(), total_size ) };
+        base::bulk_insert_into_empty( first_leaf_slot, end_pos, unique_count );
+        BOOST_ASSUME( this->hdr().size_ == unique_count );
+        return unique_count;
     }
 
     // Insert into non-empty tree
@@ -3385,32 +3482,64 @@ bp_tree_impl<Key, Comparator>::insert_presorted( std::span<Key const> const pres
         {
             // All remaining input goes after all existing data - use bulk append
             auto remaining_count{ total_size - input_offset };
-            
+
             // First, fill up the current target leaf if there's space
             if ( auto const missing{ static_cast<node_size_type>( tgt_leaf->max_values - tgt_leaf->num_vals ) } )
             {
-                auto const fill_size{ static_cast<node_size_type>( std::min<size_type>( remaining_count, missing ) ) };
-                std::copy_n( &presorted_input[ input_offset ], fill_size, &tgt_leaf->keys[ tgt_leaf->num_vals ] );
-                tgt_leaf->num_vals += fill_size;
-                tgt_leaf->mark_dirty();
-                input_offset       += fill_size;
-                inserted           += fill_size;
-                remaining_count    -= fill_size;
+                if ( do_dedup )
+                {
+                    node_size_type fill{ 0 };
+                    while ( input_offset < total_size && fill < missing )
+                    {
+                        bool const is_dup =
+                            ( fill > 0 ) ? eq( presorted_input[ input_offset ], tgt_leaf->keys[ tgt_leaf->num_vals + fill - 1 ] )
+                                         : ( tgt_leaf->num_vals > 0 && eq( presorted_input[ input_offset ], tgt_leaf->keys[ tgt_leaf->num_vals - 1 ] ) );
+                        if ( !is_dup )
+                            tgt_leaf->keys[ tgt_leaf->num_vals + fill++ ] = presorted_input[ input_offset ];
+                        ++input_offset;
+                    }
+                    tgt_leaf->num_vals += fill;
+                    tgt_leaf->mark_dirty();
+                    inserted        += fill;
+                    remaining_count  = total_size - input_offset;
+                }
+                else
+                {
+                    auto const fill_size{ static_cast<node_size_type>( std::min<size_type>( remaining_count, missing ) ) };
+                    std::copy_n( &presorted_input[ input_offset ], fill_size, &tgt_leaf->keys[ tgt_leaf->num_vals ] );
+                    tgt_leaf->num_vals += fill_size;
+                    tgt_leaf->mark_dirty();
+                    input_offset       += fill_size;
+                    inserted           += fill_size;
+                    remaining_count    -= fill_size;
+                }
 
                 if ( input_offset == total_size )
                     break; // to the trailing size_ update & return
             }
 
+            // Skip any trailing dups of tgt_leaf's last key before creating
+            // new leaves — copy_to_nodes has no context about tgt_leaf.
+            if ( do_dedup )
+            {
+                auto const & last_key{ tgt_leaf->keys[ tgt_leaf->num_vals - 1 ] };
+                while ( input_offset < total_size && eq( presorted_input[ input_offset ], last_key ) )
+                    ++input_offset;
+                remaining_count = total_size - input_offset;
+                if ( !remaining_count )
+                    break;
+            }
+
             // Create new linked leaves for remaining data
             auto const tgt_leaf_slot{ slot_of( *tgt_leaf ) };
-            auto [first_new_leaf, end_pos]{ copy_to_nodes( &presorted_input[ input_offset ], remaining_count ) };
+            auto [first_new_leaf, end_pos, new_count]{ copy_to_nodes( &presorted_input[ input_offset ], remaining_count ) };
             tgt_leaf = &leaf( tgt_leaf_slot );
 
             // Link to existing tree
             auto & leftmost_new_leaf{ leaf( first_new_leaf ) };
             base::link( *tgt_leaf, leftmost_new_leaf );
 
-            return base::bulk_append( *tgt_leaf, leftmost_new_leaf, inserted + remaining_count, end_pos, first_new_leaf );
+            return base::bulk_append( *tgt_leaf, leftmost_new_leaf, inserted + new_count, end_pos, first_new_leaf );
         }
         else // Regular in-the-middle insertion (TODO partial bulk-inserts)
         {
@@ -3421,7 +3550,7 @@ bp_tree_impl<Key, Comparator>::insert_presorted( std::span<Key const> const pres
                 (
                     &presorted_input[ input_offset ], static_cast<node_size_type>( std::min<size_type>( remaining_count, tgt_leaf->max_values ) ),
                     *tgt_leaf, tgt_leaf_next_pos.pos,
-                    unique
+                    unique, do_dedup
                 )
             };
             tgt_leaf = tgt_next_leaf;
@@ -3437,6 +3566,21 @@ bp_tree_impl<Key, Comparator>::insert_presorted( std::span<Key const> const pres
         if ( input_offset == total_size )
             break;
 
+        // For non-unique input into a unique tree: skip consecutive dups
+        // before calling find_next_insertion_point. This avoids violating
+        // find_from's precondition (when offset==num_vals it requires
+        // key > back(), but a dup of the last inserted key is == back()).
+        if constexpr ( dedup_source )
+        {
+            if ( unique )
+            {
+                while ( input_offset < total_size && input_offset > 0 && eq( presorted_input[ input_offset ], presorted_input[ input_offset - 1 ] ) )
+                    ++input_offset;
+                if ( input_offset == total_size )
+                    break;
+            }
+        }
+
         // Find next insertion point, leveraging sorted input
         std::tie( tgt_leaf, tgt_leaf_next_pos ) =
             find_next_insertion_point( *tgt_leaf, tgt_leaf_next_pos.pos, key_const_arg{ presorted_input[ input_offset ] }, unique );
@@ -3445,7 +3589,7 @@ bp_tree_impl<Key, Comparator>::insert_presorted( std::span<Key const> const pres
     BOOST_ASSUME( inserted <= total_size );
     this->hdr().size_ += inserted;
     return inserted;
-} // bp_tree_impl::insert_presorted()
+} // bp_tree_impl::insert_presorted_impl()
 
 template <typename Key, typename Comparator>
 bp_tree_impl<Key, Comparator>::size_type
@@ -3740,7 +3884,8 @@ public:
     size_type insert( std::initializer_list<T> const  keys ) { return impl_base::insert( this->bulk_insert_prepare( std::ranges::subrange( keys       ) ), unique ); }
     size_type insert( std::ranges::range auto const & keys ) { return impl_base::insert( this->bulk_insert_prepare( std::ranges::subrange( keys       ) ), unique ); }
 
-    size_type insert_presorted( std::span<Key const> const presorted_input ) { return impl_base::insert_presorted( presorted_input, unique ); }
+    size_type insert_presorted       ( std::span<Key const> const presorted_input ) { return impl_base::insert_presorted       ( presorted_input, unique ); }
+    size_type insert_presorted_unique( std::span<Key const> const presorted_input ) { return impl_base::insert_presorted_unique( presorted_input, unique ); }
 
     size_type merge( bp_tree       && other ) { return impl_base::merge( std::move( other ), unique ); }
     size_type merge( bp_tree const &  other ) { return impl_base::merge(            other  , unique ); }

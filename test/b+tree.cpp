@@ -383,6 +383,154 @@ TEST( bp_tree, insert_presorted )
     }
 }
 
+TEST( bp_tree, insert_presorted_nonunique_input )
+{
+    // Verify insert_presorted handles within-input duplicates correctly
+    // for both unique and non-unique trees.
+
+    // Unique tree, non-empty, duplicates in input (triggers merge assertion)
+    {
+        bptree_set<int> bpt;
+        bpt.map_memory();
+
+        std::array initial{ 1, 5, 9 };
+        EXPECT_EQ( bpt.insert_presorted( std::span<int const>{ initial } ), 3 );
+
+        std::array dupes{ 3, 3, 7, 7, 11 };
+        EXPECT_EQ( bpt.insert_presorted( std::span<int const>{ dupes } ), 3 ); // only 3, 7, 11
+        EXPECT_EQ( bpt.size(), 6 );
+        std::array expected{ 1, 3, 5, 7, 9, 11 };
+        EXPECT_TRUE( std::ranges::equal( bpt, expected ) );
+    }
+
+    // Unique tree, empty, duplicates in input
+    {
+        bptree_set<int> bpt;
+        bpt.map_memory();
+
+        std::array dupes{ 1, 1, 2, 3, 3 };
+        EXPECT_EQ( bpt.insert_presorted( std::span<int const>{ dupes } ), 3 ); // only 1, 2, 3
+        EXPECT_EQ( bpt.size(), 3 );
+        std::array expected{ 1, 2, 3 };
+        EXPECT_TRUE( std::ranges::equal( bpt, expected ) );
+    }
+
+    // Unique tree, input duplicates that also exist in tree
+    {
+        bptree_set<int> bpt;
+        bpt.map_memory();
+
+        std::array initial{ 1, 3, 5 };
+        bpt.insert_presorted( std::span<int const>{ initial } );
+
+        std::array dupes{ 3, 3, 5, 5, 7 };
+        EXPECT_EQ( bpt.insert_presorted( std::span<int const>{ dupes } ), 1 ); // only 7
+        EXPECT_EQ( bpt.size(), 4 );
+    }
+
+    // Non-unique tree (multiset): all duplicates should be kept
+    {
+        bptree_multiset<int> bpt;
+        bpt.map_memory();
+
+        std::array dupes{ 1, 1, 2, 3, 3 };
+        EXPECT_EQ( bpt.insert_presorted( std::span<int const>{ dupes } ), 5 );
+        EXPECT_EQ( bpt.size(), 5 );
+        EXPECT_TRUE( std::ranges::equal( bpt, dupes ) );
+    }
+
+    // Non-unique tree, non-empty, duplicates in input
+    {
+        bptree_multiset<int> bpt;
+        bpt.map_memory();
+
+        std::array initial{ 1, 3, 5 };
+        bpt.insert_presorted( std::span<int const>{ initial } );
+
+        std::array dupes{ 3, 3, 7, 7 };
+        EXPECT_EQ( bpt.insert_presorted( std::span<int const>{ dupes } ), 4 );
+        EXPECT_EQ( bpt.size(), 7 );
+    }
+
+    // Larger-scale: unique tree with duplicates spanning node boundaries
+    {
+        bptree_set<int> bpt;
+        auto constexpr max_per_node{ decltype(bpt)::leaf_node::max_values };
+        auto const n{ max_per_node * 4 }; // force multiple leaves
+        bpt.map_memory( n * 2 );
+
+        // Build input with each value repeated twice
+        std::vector<int> dupes;
+        dupes.reserve( n * 2 );
+        for ( int i = 0; i < static_cast<int>( n ); ++i ) {
+            dupes.push_back( i );
+            dupes.push_back( i );
+        }
+        EXPECT_EQ( bpt.insert_presorted( dupes ), n );
+        EXPECT_EQ( bpt.size(), n );
+        EXPECT_TRUE( std::ranges::is_sorted( bpt, bpt.comp() ) );
+        for ( unsigned i = 0; i < n; ++i )
+            EXPECT_NE( bpt.find( static_cast<int>( i ) ), bpt.end() );
+    }
+
+    // insert_presorted_unique still works for unique input
+    {
+        bptree_set<int> bpt;
+        bpt.map_memory();
+
+        std::array vals{ 1, 3, 5, 7, 9 };
+        EXPECT_EQ( bpt.insert_presorted_unique( std::span<int const>{ vals } ), 5 );
+        EXPECT_EQ( bpt.size(), 5 );
+        EXPECT_TRUE( std::ranges::equal( bpt, vals ) );
+    }
+
+    // Bulk-append boundary: after filling tgt_leaf's remaining space, the next
+    // input key may be a dup of tgt_leaf's last key. copy_to_nodes has no
+    // context about tgt_leaf so this dup must be skipped before the call.
+    {
+        bptree_set<int> bpt;
+        auto constexpr mpn{ decltype(bpt)::leaf_node::max_values };
+        bpt.map_memory( mpn * 4 );
+
+        // Fill one leaf with mpn-2 elements → 2 free slots
+        std::vector<int> initial( mpn - 2 );
+        std::iota( initial.begin(), initial.end(), 0 );
+        EXPECT_EQ( bpt.insert_presorted_unique( initial ), initial.size() );
+
+        auto const base_key{ static_cast<int>( mpn - 2 ) };
+
+        // Craft input so the dedup fill loop exhausts the 2 free slots and
+        // leaves input_offset pointing at a dup of the last written key:
+        //   [A, A, B, B, B, C, D, E, ...]
+        // Fill writes A (slot 1) then skips dup-A then writes B (slot 2, full).
+        // input_offset now sits on the first remaining B — a dup of tgt_leaf's
+        // last key that must be skipped before copy_to_nodes creates new leaves.
+        std::vector<int> input;
+        input.push_back( base_key );     // A
+        input.push_back( base_key );     // A (dup)
+        input.push_back( base_key + 1 ); // B
+        input.push_back( base_key + 1 ); // B (dup — boundary key)
+        input.push_back( base_key + 1 ); // B (dup — boundary key)
+        // enough unique tail to force copy_to_nodes
+        for ( int i = 2; i < static_cast<int>( mpn ) + 2; ++i )
+            input.push_back( base_key + i );
+
+        auto const unique_in_input{ static_cast<std::size_t>( mpn + 2 ) }; // A, B, B+1 … B+mpn
+        EXPECT_EQ( bpt.insert_presorted( input ), unique_in_input );
+        EXPECT_EQ( bpt.size(), initial.size() + unique_in_input );
+        EXPECT_TRUE( std::ranges::is_sorted( bpt, bpt.comp() ) );
+
+        // Verify no duplicates crept in
+        auto it{ bpt.begin() };
+        auto prev{ *it++ };
+        for ( ; it != bpt.end(); ++it )
+        {
+            EXPECT_TRUE( bpt.comp()( prev, *it ) ) << "duplicate or out-of-order: " << prev << " vs " << *it;
+            prev = *it;
+        }
+    }
+}
+
 // these generated tests below need more work (do not actually test what they purport to)
 
 TEST( bp_tree, insert_merge_at_node_boundary )
