@@ -473,6 +473,44 @@ TEST( bp_tree, insert_presorted_nonunique_input )
             EXPECT_NE( bpt.find( static_cast<int>( i ) ), bpt.end() );
     }
 
+    // Boundary condition: dup straddles the tgt_leaf → first_new_leaf boundary
+    // Exercises the skip-dups block (before copy_to_nodes) in the non-empty
+    // tree bulk-append path. The fill loop fills tgt_leaf exactly, leaving
+    // input_offset pointing at a dup of the last key — which must be skipped
+    // before copy_to_nodes creates fresh leaves (copy_to_nodes has no context
+    // about tgt_leaf's last key).
+    {
+        bptree_set<int> bpt;
+        auto constexpr M{ static_cast<int>( decltype(bpt)::leaf_node::max_values ) };
+        static_assert( M >= 4 );
+        bpt.map_memory( M * 4 );
+
+        // Half-fill the rightmost (and only) leaf with [0 .. M/2-1]
+        std::vector<int> initial;
+        for ( int i = 0; i < M / 2; ++i )
+            initial.push_back( i );
+        EXPECT_EQ( bpt.insert_presorted( initial ), static_cast<std::size_t>( M / 2 ) );
+
+        // Input that:
+        //  1. Fills the remaining M - M/2 slots in tgt_leaf with [M/2 .. M-1]
+        //  2. Has a dup of the last key (M-1) that straddles the boundary
+        //  3. Has M more unique values [M .. 2M-1] for fresh leaves
+        std::vector<int> input;
+        for ( int i = M / 2; i < M; ++i )
+            input.push_back( i );    // fills remaining slots in tgt_leaf exactly
+        input.push_back( M - 1 );    // dup of last key inserted into tgt_leaf
+        for ( int i = M; i < M * 2; ++i )
+            input.push_back( i );    // new unique keys that go into fresh leaves
+
+        auto const fill_count{ static_cast<std::size_t>( M - M / 2 ) };
+        auto const new_count { static_cast<std::size_t>( M ) };
+        EXPECT_EQ( bpt.insert_presorted( input ), fill_count + new_count );
+        EXPECT_EQ( bpt.size(), static_cast<std::size_t>( M * 2 ) );
+        EXPECT_TRUE( std::ranges::is_sorted( bpt, bpt.comp() ) );
+        for ( int i = 0; i < M * 2; ++i )
+            EXPECT_NE( bpt.find( i ), bpt.end() ) << "missing key " << i;
+    }
+
     // insert_presorted_unique still works for unique input
     {
         bptree_set<int> bpt;

@@ -1,0 +1,11 @@
+# Hashes of file build rules.
+5f0b52de4dcf2dc665cfc6f0aa7c5f7a CMakeFiles/winapi-populate
+bedb5db7c47e56a39f6bcbf776f000a6 CMakeFiles/winapi-populate-complete
+f168750616bac35edb24ed0208b4d9f6 winapi-populate-prefix/src/winapi-populate-stamp/winapi-populate-build
+ad6d18c28ae72cde7aec6699e97e6936 winapi-populate-prefix/src/winapi-populate-stamp/winapi-populate-configure
+49d2017ca9f5cffd1fd04cba9029ee3e winapi-populate-prefix/src/winapi-populate-stamp/winapi-populate-download
+00e40b242859e9ebe904751b8a881cb5 winapi-populate-prefix/src/winapi-populate-stamp/winapi-populate-install
+a6edaff9d57464bfbf06166b8ca042c2 winapi-populate-prefix/src/winapi-populate-stamp/winapi-populate-mkdir
+a704f553b23ce8a8060bd0039c9c13f2 winapi-populate-prefix/src/winapi-populate-stamp/winapi-populate-patch
+0cb473976ac1ee491096f64a3cb625d2 winapi-populate-prefix/src/winapi-populate-stamp/winapi-populate-test
+3c8e3cfb870e8cef0e788f22f0f522dc winapi-populate-prefix/src/winapi-populate-stamp/winapi-populate-update
