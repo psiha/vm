@@ -383,6 +383,108 @@ TEST( bp_tree, insert_presorted )
     }
 }
 
+TEST( bp_tree, insert_presorted_nonunique_input )
+{
+    // Verify insert_presorted handles within-input duplicates correctly
+    // for both unique and non-unique trees.
+
+    // Unique tree, non-empty, duplicates in input (triggers merge assertion)
+    {
+        bptree_set<int> bpt;
+        bpt.map_memory();
+
+        std::array initial{ 1, 5, 9 };
+        EXPECT_EQ( bpt.insert_presorted( std::span<int const>{ initial } ), 3 );
+
+        std::array dupes{ 3, 3, 7, 7, 11 };
+        EXPECT_EQ( bpt.insert_presorted( std::span<int const>{ dupes } ), 3 ); // only 3, 7, 11
+        EXPECT_EQ( bpt.size(), 6 );
+        std::array expected{ 1, 3, 5, 7, 9, 11 };
+        EXPECT_TRUE( std::ranges::equal( bpt, expected ) );
+    }
+
+    // Unique tree, empty, duplicates in input
+    {
+        bptree_set<int> bpt;
+        bpt.map_memory();
+
+        std::array dupes{ 1, 1, 2, 3, 3 };
+        EXPECT_EQ( bpt.insert_presorted( std::span<int const>{ dupes } ), 3 ); // only 1, 2, 3
+        EXPECT_EQ( bpt.size(), 3 );
+        std::array expected{ 1, 2, 3 };
+        EXPECT_TRUE( std::ranges::equal( bpt, expected ) );
+    }
+
+    // Unique tree, input duplicates that also exist in tree
+    {
+        bptree_set<int> bpt;
+        bpt.map_memory();
+
+        std::array initial{ 1, 3, 5 };
+        bpt.insert_presorted( std::span<int const>{ initial } );
+
+        std::array dupes{ 3, 3, 5, 5, 7 };
+        EXPECT_EQ( bpt.insert_presorted( std::span<int const>{ dupes } ), 1 ); // only 7
+        EXPECT_EQ( bpt.size(), 4 );
+    }
+
+    // Non-unique tree (multiset): all duplicates should be kept
+    {
+        bptree_multiset<int> bpt;
+        bpt.map_memory();
+
+        std::array dupes{ 1, 1, 2, 3, 3 };
+        EXPECT_EQ( bpt.insert_presorted( std::span<int const>{ dupes } ), 5 );
+        EXPECT_EQ( bpt.size(), 5 );
+        EXPECT_TRUE( std::ranges::equal( bpt, dupes ) );
+    }
+
+    // Non-unique tree, non-empty, duplicates in input
+    {
+        bptree_multiset<int> bpt;
+        bpt.map_memory();
+
+        std::array initial{ 1, 3, 5 };
+        bpt.insert_presorted( std::span<int const>{ initial } );
+
+        std::array dupes{ 3, 3, 7, 7 };
+        EXPECT_EQ( bpt.insert_presorted( std::span<int const>{ dupes } ), 4 );
+        EXPECT_EQ( bpt.size(), 7 );
+    }
+
+    // Larger-scale: unique tree with duplicates spanning node boundaries
+    {
+        bptree_set<int> bpt;
+        auto constexpr max_per_node{ decltype(bpt)::leaf_node::max_values };
+        auto const n{ max_per_node * 4 }; // force multiple leaves
+        bpt.map_memory( n * 2 );
+
+        // Build input with each value repeated twice
+        std::vector<int> dupes;
+        dupes.reserve( n * 2 );
+        for ( int i = 0; i < static_cast<int>( n ); ++i ) {
+            dupes.push_back( i );
+            dupes.push_back( i );
+        }
+        EXPECT_EQ( bpt.insert_presorted( dupes ), n );
+        EXPECT_EQ( bpt.size(), n );
+        EXPECT_TRUE( std::ranges::is_sorted( bpt, bpt.comp() ) );
+        for ( unsigned i = 0; i < n; ++i )
+            EXPECT_NE( bpt.find( static_cast<int>( i ) ), bpt.end() );
+    }
+
+    // insert_presorted_unique still works for unique input
+    {
+        bptree_set<int> bpt;
+        bpt.map_memory();
+
+        std::array vals{ 1, 3, 5, 7, 9 };
+        EXPECT_EQ( bpt.insert_presorted_unique( std::span<int const>{ vals } ), 5 );
+        EXPECT_EQ( bpt.size(), 5 );
+        EXPECT_TRUE( std::ranges::equal( bpt, vals ) );
+    }
+}
+
 // these generated tests below need more work (do not actually test what they purport to)
 
 TEST( bp_tree, insert_merge_at_node_boundary )
