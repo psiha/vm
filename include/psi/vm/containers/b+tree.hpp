@@ -1377,15 +1377,18 @@ protected: // 'other'
             }
             auto & rightmost_parent{ inner( rightmost_parent_pos.node ) };
             BOOST_ASSUME( rightmost_parent_pos.next_insert_offset == rightmost_parent.num_vals );
+            auto const src_slot{ slot_of( *src_leaf ) };
             rightmost_parent_pos = insert // add src_leaf into (a) parent
             (
                 rightmost_parent,
                 rightmost_parent_pos.next_insert_offset,
                 key_rv_arg{ /*mrmlj*/Key{ src_leaf->keys[ 0 ] } },
-                slot_of( *src_leaf )
+                src_slot
             );
-            if ( !next_src_slot )
+            if ( !next_src_slot ) {
+                src_leaf = &leaf( src_slot );
                 break;
+            }
             src_leaf = &leaf( next_src_slot );
         }
         set_last_leaf( hdr(), slot_of( *src_leaf ) );
