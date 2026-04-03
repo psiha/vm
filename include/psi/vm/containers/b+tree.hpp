@@ -2567,7 +2567,7 @@ protected:
     // Assumes all keys in presorted_input are distinct (faster for unique trees).
     size_type insert_presorted_unique( std::span<Key const> input, bool unique )
     {
-        BOOST_ASSERT( std::ranges::adjacent_find( input, [this]( auto const & a, auto const & b ) noexcept { return eq( a, b ); } ) == input.end() );
+        BOOST_ASSERT( std::ranges::adjacent_find( input, [this]( auto const & a, auto const & b ) noexcept { return this->eq( a, b ); } ) == input.end() );
         return insert_presorted_impl<false>( input, unique );
     }
 
@@ -3393,13 +3393,13 @@ bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const
     // When dedup_source && unique, skips consecutive duplicates while copying.
     // Returns { first_leaf_slot, end_pos, actual_count_copied }.
     auto const do_dedup{ dedup_source && unique };
-    auto const copy_to_nodes{ [this, do_dedup]( Key const * p_input, size_type count ) noexcept
+    auto const copy_to_nodes{ [this, do_dedup]( Key const * __restrict p_input, size_type count ) noexcept
         -> std::tuple<node_slot, iter_pos, size_type>
     {
         node_slot first_leaf_slot;
         node_slot prev_leaf_slot;
         size_type actual_copied{ 0 };
-        Key const * const input_end{ p_input + count };
+        auto const input_end{ p_input + count };
 
         while ( p_input != input_end )
         {
@@ -3434,15 +3434,16 @@ bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const
             }
             else
             {
-                fill = static_cast<node_size_type>(
-                    std::min<size_type>( static_cast<size_type>( input_end - p_input ), leaf_node::max_values )
-                );
+                fill = static_cast<node_size_type>( std::min<size_type>(
+                    static_cast<size_type>( input_end - p_input ),
+                    leaf_node::max_values
+                ));
                 std::copy_n( p_input, fill, new_leaf.keys );
                 p_input += fill;
             }
 
-            new_leaf.num_vals = fill;
-            actual_copied += fill;
+            new_leaf.num_vals  = fill;
+            actual_copied     += fill;
 
             if ( !first_leaf_slot ) [[ unlikely ]] {
                 first_leaf_slot = leaf_slot;
@@ -3452,8 +3453,9 @@ bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const
             prev_leaf_slot = leaf_slot;
         }
 
+        std::ignore = do_dedup; // avoid unused lambda capture warning when dedup_source is false
         return { first_leaf_slot, { prev_leaf_slot, this->leaf( prev_leaf_slot ).num_vals }, actual_copied };
-    }};
+    }}; // copy_to_nodes()
 
     this->reserve_additional( total_size * 4 / 3 ); // some headroom to account for splits and partial node fills
 
