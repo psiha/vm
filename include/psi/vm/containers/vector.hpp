@@ -671,7 +671,14 @@ public:
     template <class ...Args>
     static reference construct_at( value_type & placeholder, Args &&...args ) noexcept( std::is_nothrow_constructible_v<value_type, Args...> )
     {
-        return *std::construct_at( &placeholder, std::forward<Args>( args )... );
+        // For aggregate types with default member initializers on trailing
+        // fields, std::construct_at(ptr, args...) fails because direct-init
+        // doesn't activate aggregate init rules. Fall back to placement new
+        // with braced-init-list which does.
+        if constexpr ( !std::is_constructible_v<value_type, Args...> && std::is_aggregate_v<value_type> )
+            return *::new ( std::addressof( placeholder ) ) value_type{ std::forward<Args>( args )... };
+        else
+            return *std::construct_at( &placeholder, std::forward<Args>( args )... );
     }
     template <typename Key, typename...Args> // support for boost::container::flat_tree implementation(s)
     static reference construct_at( value_type & placeholder, boost::container::try_emplace_t &&, Key && key, Args &&...args )
