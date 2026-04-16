@@ -17,8 +17,8 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          - { os: windows-latest, name: MSVC,        cc: msvc,   cxx: msvc,    gen: '' }
-          - { os: windows-latest, name: Clang-CL,    cc: msvc,   cxx: msvc,    gen: '-T ClangCL' }
+          - { os: windows-2025,  name: MSVC,        cc: msvc,   cxx: msvc,    gen: '' }
+          - { os: windows-2025,  name: Clang-CL,    cc: msvc,   cxx: msvc,    gen: '-T ClangCL' }
           - { os: ubuntu-latest,  name: Clang,       cc: clang,  cxx: clang++, gen: '-G Ninja' }
           - { os: ubuntu-latest,  name: GCC,         cc: gcc,    cxx: g++,     gen: '-G Ninja', container: 'gcc:15' }
           - { os: macos-26,       name: Apple-Clang, cc: clang,  cxx: clang++, gen: '-G Ninja' }
