@@ -63,6 +63,7 @@ The container system is built on a single **`vector<Storage, Growth>`** class te
 | `fc_vector<T, N>` | `= vector<fixed_storage<T, N>>` | Fixed-capacity inline vector (`inplace_vector`-like) |
 | `vm_vector<T>` | `= vector<vm_storage<T>>` | VM-backed persistent vector with exact-fit growth (`{1,1}`). Supports file-backed and anonymous mappings, COW cloning, and kernel-level in-place expansion via `mremap` / placeholders / `mach_vm_remap` |
 | `small_vector<T, N>` | `= vector<sbo_hybrid<T, N>>` | Inline (stack) buffer with heap spill. Three layout modes: *embedded* (default, sz_ packed inside union), *compact* (MSB tag), *compact_lsb* (LSB tag, optimal LE addressing). Layout auto-selected or explicitly configured via `sbo_options` |
+| `strided_vector<T, MaxStride>` | — | Vector of runtime-fixed-extent entries: each entry is `stride` consecutive `T`s in a flat contiguous buffer, exposed via a deep-copy proxy reference. `MaxStride` (default 64) bounds the stride at compile time, from which the stride integer type and value_type storage are derived automatically. Supports `std::sort`, `std::reverse`, `std::rotate`, and other permuting algorithms via `iter_swap` / `iter_move` customization points |
 
 ### Allocators
 
@@ -209,6 +210,7 @@ include/psi/vm/
 │   ├── fc_vector.hpp       fc_vector<T,N> type alias (= vector<fixed_storage<T,N>>)
 │   ├── vm_vector.hpp       vm_vector<T> (memory-mapped storage)
 │   ├── small_vector.hpp    small_vector<T,N> type alias (= vector<sbo_hybrid<T,N>>)
+│   ├── strided_vector.hpp  strided_vector<T, MaxStride> — vector of runtime-strided entries with proxy reference
 │   ├── is_trivially_moveable.hpp       Trivial relocatability trait + stdlib specializations
 │   ├── trivially_destructible_after_move.hpp  Moved-from destructor elision trait + stdlib specializations
 │   ├── growth_policy.hpp   geometric_growth configurable growth factor

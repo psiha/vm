@@ -3,7 +3,7 @@
 // Covers the std::vector-compatible subset (size/capacity/element access/
 // iteration/insert/erase/resize/swap/comparisons) adapted to strided
 // "entry = span<T, dynamic_extent>" semantics, plus the strided-specific
-// extensions (ensureCapacity, push_back_fill, extractData/adoptData).
+// extensions (push_back_fill, extract_data/adopt_data).
 //
 // Parameterized on T, stride integer type and storage backend so every
 // supported configuration is exercised uniformly.
@@ -34,12 +34,12 @@ namespace psi::vm
 ////////////////////////////////////////////////////////////////////////////////
 
 using StridedVectorTestTypes = ::testing::Types<
-    strided_vector<std::uint32_t>,                                                                         // default stride=uint8_t, heap_storage
-    strided_vector<std::uint32_t, std::uint16_t>,                                                          // wider stride int
-    strided_vector<std::uint32_t, std::uint32_t>,                                                          // stride==size_type width
-    strided_vector<std::uint32_t, std::uint8_t,  heap_storage<std::uint32_t, std::uint32_t>>,              // 32-bit size backing
-    strided_vector<std::int64_t,  std::uint8_t>,                                                           // 64-bit element
-    strided_vector<char,          std::uint8_t>                                                            // single-byte element
+    strided_vector<std::uint32_t>,                                                         // default MaxStride=64
+    strided_vector<std::uint32_t, 256>,                                                    // fc_vector path (256*4=1024 > 256 → small_vector; stride_type=uint16_t at 256)
+    strided_vector<std::uint32_t, 64,  heap_storage<std::uint32_t, std::uint32_t>>,        // 32-bit size backing
+    strided_vector<std::int64_t>,                                                          // 64-bit element, default MaxStride
+    strided_vector<char>,                                                                  // 1-byte element → fc_vector path (64*1=64 ≤ 256)
+    strided_vector<char, 300>                                                              // 1-byte element, large MaxStride → small_vector path
 >;
 
 template <typename SV>
@@ -54,7 +54,7 @@ namespace
     template <typename SV>
     [[ nodiscard ]] auto make_entry( std::initializer_list<int> const vals )
     {
-        using T = typename SV::value_type;
+        using T = typename SV::element_type;
         std::vector<T> v;
         v.reserve( vals.size() );
         for ( auto const x : vals ) v.push_back( static_cast<T>( x ) );
@@ -77,7 +77,7 @@ TYPED_TEST( strided_vector_compliance, default_constructor )
     TypeParam v;
     EXPECT_TRUE( v.empty() );
     EXPECT_EQ  ( v.size (), 0u );
-    EXPECT_EQ  ( v.stride(), 0u );
+    EXPECT_EQ  ( v.stride(), 1u ); // default stride is 1, never 0
 }
 
 TYPED_TEST( strided_vector_compliance, stride_constructor )
@@ -114,7 +114,7 @@ TYPED_TEST( strided_vector_compliance, entry_range_constructor )
     auto const e1{ make_entry<TypeParam>( { 3, 4 } ) };
     auto const e2{ make_entry<TypeParam>( { 5, 6 } ) };
 
-    using T = typename TypeParam::value_type;
+    using T = typename TypeParam::element_type;
     std::vector<std::span<T const>> entries{
         std::span<T const>{ e0.data(), e0.size() },
         std::span<T const>{ e1.data(), e1.size() },
@@ -207,18 +207,11 @@ TYPED_TEST( strided_vector_compliance, capacity_scales_with_stride )
     EXPECT_GE( v.capacity(), 10u );
 }
 
-TYPED_TEST( strided_vector_compliance, capacity_bytes_matches_backing )
+TYPED_TEST( strided_vector_compliance, capacity_after_reserve )
 {
     TypeParam v( 3 );
     v.reserve( 16 );
-    using T = typename TypeParam::value_type;
-    EXPECT_GE( v.capacityBytes(), 16u * 3u * sizeof( T ) );
-}
-
-TYPED_TEST( strided_vector_compliance, max_entries_positive )
-{
-    TypeParam v( 4 );
-    EXPECT_GT( v.maxEntries(), 0u );
+    EXPECT_GE( v.capacity(), 16u );
 }
 
 TYPED_TEST( strided_vector_compliance, shrink_to_fit_reduces_capacity )
@@ -273,8 +266,8 @@ TYPED_TEST( strided_vector_compliance, data_returns_flat_buffer )
     v.push_back( as_span( make_entry<TypeParam>( { 1, 2 } ) ) );
     v.push_back( as_span( make_entry<TypeParam>( { 3, 4 } ) ) );
     auto * const p{ v.data() };
-    EXPECT_EQ( p[ 0 ], static_cast<typename TypeParam::value_type>( 1 ) );
-    EXPECT_EQ( p[ 3 ], static_cast<typename TypeParam::value_type>( 4 ) );
+    EXPECT_EQ( p[ 0 ], static_cast<typename TypeParam::element_type>( 1 ) );
+    EXPECT_EQ( p[ 3 ], static_cast<typename TypeParam::element_type>( 4 ) );
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -284,15 +277,21 @@ TYPED_TEST( strided_vector_compliance, data_returns_flat_buffer )
 TYPED_TEST( strided_vector_compliance, iterator_is_random_access )
 {
     using It = typename TypeParam::iterator;
-    static_assert( std::random_access_iterator<It> );
     static_assert( std::is_same_v<typename std::iterator_traits<It>::iterator_category,
                                   std::random_access_iterator_tag> );
+#if !( defined( _MSC_VER ) && !defined( __clang__ ) )
+    static_assert( std::random_access_iterator<It> );
+#endif // !MSVC native
 }
 
 TYPED_TEST( strided_vector_compliance, const_iterator_is_random_access )
 {
     using It = typename TypeParam::const_iterator;
+    static_assert( std::is_same_v<typename std::iterator_traits<It>::iterator_category,
+                                  std::random_access_iterator_tag> );
+#if !( defined( _MSC_VER ) && !defined( __clang__ ) )
     static_assert( std::random_access_iterator<It> );
+#endif // !MSVC native
 }
 
 TYPED_TEST( strided_vector_compliance, iterator_arithmetic )
@@ -314,7 +313,7 @@ TYPED_TEST( strided_vector_compliance, iterator_traverses_every_entry )
     for ( int i{ 0 }; i < 4; ++i )
         v.push_back( as_span( make_entry<TypeParam>( { i, i, i } ) ) );
 
-    std::size_t idx{ 0 };
+    auto idx{ 0U };
     for ( auto const entry : v )
     {
         auto const expected{ make_entry<TypeParam>( { static_cast<int>( idx ), static_cast<int>( idx ), static_cast<int>( idx ) } ) };
@@ -330,7 +329,7 @@ TYPED_TEST( strided_vector_compliance, reverse_iterator_traverses_backwards )
     for ( int i{ 0 }; i < 3; ++i )
         v.push_back( as_span( make_entry<TypeParam>( { i, i } ) ) );
 
-    std::size_t idx{ 3 };
+    auto idx{ 3U };
     for ( auto rit{ v.rbegin() }; rit != v.rend(); ++rit )
     {
         --idx;
@@ -357,7 +356,7 @@ TYPED_TEST( strided_vector_compliance, push_back_grows )
     for ( int i{ 0 }; i < 100; ++i )
         v.push_back( as_span( make_entry<TypeParam>( { i, i * 2, i * 3 } ) ) );
     EXPECT_EQ( v.size(), 100u );
-    for ( std::size_t i{ 0 }; i < v.size(); ++i )
+    for ( auto i{ 0U }; i < v.size(); ++i )
     {
         auto const expected{ make_entry<TypeParam>(
             { static_cast<int>( i ), static_cast<int>( i * 2 ), static_cast<int>( i * 3 ) } ) };
@@ -368,10 +367,10 @@ TYPED_TEST( strided_vector_compliance, push_back_grows )
 TYPED_TEST( strided_vector_compliance, push_back_fill )
 {
     TypeParam v( 4 );
-    v.push_back_fill( static_cast<typename TypeParam::value_type>( 42 ) );
+    v.push_back_fill( static_cast<typename TypeParam::element_type>( 42 ) );
     EXPECT_EQ( v.size(), 1u );
     for ( auto const x : v[ 0 ] )
-        EXPECT_EQ( x, static_cast<typename TypeParam::value_type>( 42 ) );
+        EXPECT_EQ( x, static_cast<typename TypeParam::element_type>( 42 ) );
 }
 
 TYPED_TEST( strided_vector_compliance, emplace_back_from_scalars )
@@ -436,7 +435,7 @@ TYPED_TEST( strided_vector_compliance, insert_count_copies )
     auto const proto{ make_entry<TypeParam>( { 7, 7 } ) };
     v.insert( v.begin(), 3, as_span( proto ) );
     EXPECT_EQ( v.size(), 4u );
-    for ( std::size_t i{ 0 }; i < 3; ++i )
+    for ( auto i{ 0U }; i < 3; ++i )
         EXPECT_TRUE( std::ranges::equal( v[ i ], proto ) );
     EXPECT_TRUE( std::ranges::equal( v[ 3 ], make_entry<TypeParam>( { 1, 2 } ) ) );
 }
@@ -523,13 +522,22 @@ TYPED_TEST( strided_vector_compliance, swap_free )
 // 6. Non-standard extensions
 ////////////////////////////////////////////////////////////////////////////////
 
-TYPED_TEST( strided_vector_compliance, ensure_capacity_amortizes )
+TYPED_TEST( strided_vector_compliance, geometric_growth_no_per_push_realloc )
 {
+    // Verify that push_back uses geometric growth internally (not exact-fit):
+    // after N pushes, there should be fewer than N reallocations.
     TypeParam v( 4 );
-    v.ensureCapacity( 1 );
-    EXPECT_GE( v.capacity(), 1u );
-    v.ensureCapacity( 1000 );
-    EXPECT_GE( v.capacity(), 1000u );
+    auto realloc_count{ 0U };
+    auto prev_cap{ v.capacity() };
+    for ( int i{ 0 }; i < 200; ++i ) {
+        v.push_back( as_span( make_entry<TypeParam>( { i, i, i, i } ) ) );
+        if ( v.capacity() != prev_cap ) {
+            ++realloc_count;
+            prev_cap = v.capacity();
+        }
+    }
+    // Geometric growth: O(log N) reallocations. Exact-fit would be 200.
+    EXPECT_LT( realloc_count, 20u );
 }
 
 TYPED_TEST( strided_vector_compliance, extract_adopt_round_trip )
@@ -537,13 +545,18 @@ TYPED_TEST( strided_vector_compliance, extract_adopt_round_trip )
     TypeParam v( 3 );
     for ( int i{ 0 }; i < 5; ++i )
         v.push_back( as_span( make_entry<TypeParam>( { i, i, i } ) ) );
-    auto const cap_before{ v.capacityBytes() };
-    auto buf{ v.extractData() };
-    EXPECT_GE( static_cast<std::size_t>( buf.capacity() ) * sizeof( typename TypeParam::value_type ), cap_before );
-    EXPECT_TRUE( v.empty() );
-    v.adoptData( std::move( buf ) );
-    EXPECT_TRUE( v.empty() );                    // adopt clears contents
-    EXPECT_GE  ( v.capacityBytes(), cap_before ); // but keeps capacity
+    EXPECT_EQ( v.size(), 5u );
+
+    auto buf{ v.extract_data() };
+    EXPECT_TRUE( v.empty() ); // extract leaves container empty
+
+    // adopt_data takes ownership — data is preserved, not cleared
+    TypeParam v2;
+    v2.adopt_data( std::move( buf ), 3 );
+    EXPECT_EQ( v2.size(), 5u );
+    EXPECT_EQ( v2.stride(), 3u );
+    EXPECT_TRUE( std::ranges::equal( v2[ 0 ], make_entry<TypeParam>( { 0, 0, 0 } ) ) );
+    EXPECT_TRUE( std::ranges::equal( v2[ 4 ], make_entry<TypeParam>( { 4, 4, 4 } ) ) );
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -611,6 +624,224 @@ TYPED_TEST( strided_vector_compliance, erase_if_by_predicate )
     for ( auto const entry : v )
         EXPECT_NE( entry[ 0 ] % 2, 0 );
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// 10. Deep-copy proxy semantics — the reference writes through, not aliases.
+////////////////////////////////////////////////////////////////////////////////
+
+TYPED_TEST( strided_vector_compliance, proxy_assignment_writes_through )
+{
+    TypeParam v( 3 );
+    v.push_back( as_span( make_entry<TypeParam>( { 1, 2, 3 } ) ) );
+    v.push_back( as_span( make_entry<TypeParam>( { 7, 8, 9 } ) ) );
+
+    // Copy-assign entry-1 into entry-0 via the proxy reference.
+    v[ 0 ] = v[ 1 ];
+
+    EXPECT_TRUE( std::ranges::equal( v[ 0 ], make_entry<TypeParam>( { 7, 8, 9 } ) ) );
+    EXPECT_TRUE( std::ranges::equal( v[ 1 ], make_entry<TypeParam>( { 7, 8, 9 } ) ) );
+}
+
+TYPED_TEST( strided_vector_compliance, proxy_assignment_from_span )
+{
+    TypeParam v( 3 );
+    v.push_back( as_span( make_entry<TypeParam>( { 0, 0, 0 } ) ) );
+    auto const fresh{ make_entry<TypeParam>( { 42, 43, 44 } ) };
+    v[ 0 ] = as_span( fresh );
+    EXPECT_TRUE( std::ranges::equal( v[ 0 ], fresh ) );
+}
+
+TYPED_TEST( strided_vector_compliance, iter_move_materializes_value )
+{
+    TypeParam v( 3 );
+    v.push_back( as_span( make_entry<TypeParam>( { 10, 20, 30 } ) ) );
+
+    typename TypeParam::value_type owned{ std::ranges::iter_move( v.begin() ) };
+    EXPECT_EQ  ( owned.size(), 3u );
+    EXPECT_TRUE( std::ranges::equal( owned, make_entry<TypeParam>( { 10, 20, 30 } ) ) );
+}
+
+TYPED_TEST( strided_vector_compliance, iter_swap_exchanges_data )
+{
+    TypeParam v( 3 );
+    v.push_back( as_span( make_entry<TypeParam>( { 1, 2, 3 } ) ) );
+    v.push_back( as_span( make_entry<TypeParam>( { 7, 8, 9 } ) ) );
+
+    std::ranges::iter_swap( v.begin(), v.begin() + 1 );
+
+    EXPECT_TRUE( std::ranges::equal( v[ 0 ], make_entry<TypeParam>( { 7, 8, 9 } ) ) );
+    EXPECT_TRUE( std::ranges::equal( v[ 1 ], make_entry<TypeParam>( { 1, 2, 3 } ) ) );
+}
+
+#if !( defined( _MSC_VER ) && !defined( __clang__ ) )
+TYPED_TEST( strided_vector_compliance, indirectly_writable_concept )
+{
+    using It = typename TypeParam::iterator;
+    using V  = typename TypeParam::value_type;
+    static_assert( std::indirectly_writable<It, V>         );
+    static_assert( std::indirectly_writable<It, V const &> );
+    static_assert( std::indirectly_writable<It, V &&>      );
+}
+#endif // !MSVC native
+
+
+////////////////////////////////////////////////////////////////////////////////
+// 11. Generic-algorithm compatibility (std::sort, std::reverse, std::rotate)
+////////////////////////////////////////////////////////////////////////////////
+
+#if !( defined( _MSC_VER ) && !defined( __clang__ ) )
+TYPED_TEST( strided_vector_compliance, std_sort_sorts_entries_lexicographically )
+{
+    TypeParam v( 3 );
+    v.push_back( as_span( make_entry<TypeParam>( { 3, 0, 0 } ) ) );
+    v.push_back( as_span( make_entry<TypeParam>( { 1, 9, 9 } ) ) );
+    v.push_back( as_span( make_entry<TypeParam>( { 2, 5, 5 } ) ) );
+    v.push_back( as_span( make_entry<TypeParam>( { 1, 0, 0 } ) ) );
+
+    std::sort( v.begin(), v.end() );
+
+    EXPECT_TRUE( std::ranges::equal( v[ 0 ], make_entry<TypeParam>( { 1, 0, 0 } ) ) );
+    EXPECT_TRUE( std::ranges::equal( v[ 1 ], make_entry<TypeParam>( { 1, 9, 9 } ) ) );
+    EXPECT_TRUE( std::ranges::equal( v[ 2 ], make_entry<TypeParam>( { 2, 5, 5 } ) ) );
+    EXPECT_TRUE( std::ranges::equal( v[ 3 ], make_entry<TypeParam>( { 3, 0, 0 } ) ) );
+}
+
+TYPED_TEST( strided_vector_compliance, std_sort_descending )
+{
+    TypeParam v( 2 );
+    for ( int i{ 9 }; i >= 0; --i )
+        v.push_back( as_span( make_entry<TypeParam>( { i, i } ) ) );
+
+    std::sort( v.begin(), v.end() );
+
+    for ( auto i{ 0U }; i < 10; ++i )
+        EXPECT_TRUE( std::ranges::equal( v[ i ], make_entry<TypeParam>( { static_cast<int>( i ), static_cast<int>( i ) } ) ) );
+}
+
+TYPED_TEST( strided_vector_compliance, ranges_sort_works )
+{
+    TypeParam v( 2 );
+    for ( int i{ 9 }; i >= 0; --i )
+        v.push_back( as_span( make_entry<TypeParam>( { i, i } ) ) );
+
+    std::ranges::sort( v );
+
+    for ( auto i{ 0U }; i < 10; ++i )
+        EXPECT_TRUE( std::ranges::equal( v[ i ], make_entry<TypeParam>( { static_cast<int>( i ), static_cast<int>( i ) } ) ) );
+}
+
+TYPED_TEST( strided_vector_compliance, ranges_sort_with_custom_projection )
+{
+    TypeParam v( 2 );
+    v.push_back( as_span( make_entry<TypeParam>( { 3, 0 } ) ) );
+    v.push_back( as_span( make_entry<TypeParam>( { 1, 0 } ) ) );
+    v.push_back( as_span( make_entry<TypeParam>( { 4, 0 } ) ) );
+    v.push_back( as_span( make_entry<TypeParam>( { 2, 0 } ) ) );
+
+    std::ranges::sort( v, {}, []( auto const e ) { return e[ 0 ]; } );
+
+    EXPECT_EQ( v[ 0 ][ 0 ], static_cast<typename TypeParam::element_type>( 1 ) );
+    EXPECT_EQ( v[ 1 ][ 0 ], static_cast<typename TypeParam::element_type>( 2 ) );
+    EXPECT_EQ( v[ 2 ][ 0 ], static_cast<typename TypeParam::element_type>( 3 ) );
+    EXPECT_EQ( v[ 3 ][ 0 ], static_cast<typename TypeParam::element_type>( 4 ) );
+}
+
+TYPED_TEST( strided_vector_compliance, std_reverse_works )
+{
+    TypeParam v( 2 );
+    for ( int i{ 0 }; i < 4; ++i )
+        v.push_back( as_span( make_entry<TypeParam>( { i, i * 10 } ) ) );
+
+    std::reverse( v.begin(), v.end() );
+
+    EXPECT_TRUE( std::ranges::equal( v[ 0 ], make_entry<TypeParam>( { 3, 30 } ) ) );
+    EXPECT_TRUE( std::ranges::equal( v[ 1 ], make_entry<TypeParam>( { 2, 20 } ) ) );
+    EXPECT_TRUE( std::ranges::equal( v[ 2 ], make_entry<TypeParam>( { 1, 10 } ) ) );
+    EXPECT_TRUE( std::ranges::equal( v[ 3 ], make_entry<TypeParam>( { 0,  0 } ) ) );
+}
+
+TYPED_TEST( strided_vector_compliance, std_rotate_works )
+{
+    TypeParam v( 1 );
+    for ( int i{ 0 }; i < 5; ++i )
+        v.push_back( as_span( make_entry<TypeParam>( { i } ) ) );
+
+    std::rotate( v.begin(), v.begin() + 2, v.end() );
+
+    EXPECT_EQ( v[ 0 ][ 0 ], static_cast<typename TypeParam::element_type>( 2 ) );
+    EXPECT_EQ( v[ 1 ][ 0 ], static_cast<typename TypeParam::element_type>( 3 ) );
+    EXPECT_EQ( v[ 2 ][ 0 ], static_cast<typename TypeParam::element_type>( 4 ) );
+    EXPECT_EQ( v[ 3 ][ 0 ], static_cast<typename TypeParam::element_type>( 0 ) );
+    EXPECT_EQ( v[ 4 ][ 0 ], static_cast<typename TypeParam::element_type>( 1 ) );
+}
+
+TYPED_TEST( strided_vector_compliance, sortable_concept_diagnostics )
+{
+    using It      = typename TypeParam::iterator;
+    using Val     = std::iter_value_t<It>;
+    using Ref     = std::iter_reference_t<It>;
+    using RvalRef = std::iter_rvalue_reference_t<It>;
+
+    // common_reference_with sub-checks (indirectly_readable requirements)
+    static_assert( std::common_reference_with<Ref &&, Val &>,           "CR: ref&& vs val&" );
+    static_assert( std::common_reference_with<Ref &&, RvalRef &&>,      "CR: ref&& vs rvalref&&" );
+    static_assert( std::common_reference_with<RvalRef &&, Val const &>, "CR: rvalref&& vs const val&" );
+
+    // constructible/assignable from rvalue-ref (indirectly_movable_storable)
+    static_assert( std::constructible_from<Val, RvalRef>,               "constructible_from<val, rvalref>" );
+    static_assert( std::assignable_from<Val &, RvalRef>,                "assignable_from<val&, rvalref>" );
+
+    // iterator concept chain
+    static_assert( std::indirectly_readable    <It>,                    "indirectly_readable" );
+    static_assert( std::indirectly_writable    <It, Val>,               "indirectly_writable<It, val>" );
+    static_assert( std::indirectly_movable     <It, It>,                "indirectly_movable" );
+    static_assert( std::indirectly_movable_storable<It, It>,            "indirectly_movable_storable" );
+    static_assert( std::indirectly_swappable   <It, It>,                "indirectly_swappable" );
+    static_assert( std::permutable             <It>,                    "permutable" );
+
+    // totally_ordered_with sub-checks (required by ranges::less → indirect_strict_weak_order)
+    static_assert( std::totally_ordered<Val>,                               "totally_ordered<val>" );
+    static_assert( std::totally_ordered<Ref>,                               "totally_ordered<ref>" );
+    static_assert( std::equality_comparable_with<Val, Ref>,                 "equality_comparable_with<val, ref>" );
+    // std::partially_ordered_with is exposition-only — not directly testable
+    static_assert( std::totally_ordered_with<Val, Ref>,                     "totally_ordered_with<val, ref>" );
+
+    // comparator
+    static_assert( std::strict_weak_order<std::ranges::less, Val &, Val &>,  "swo<less, val, val>" );
+    static_assert( std::strict_weak_order<std::ranges::less, Val &, Ref>,    "swo<less, val, ref>" );
+    static_assert( std::strict_weak_order<std::ranges::less, Ref, Val &>,    "swo<less, ref, val>" );
+    static_assert( std::strict_weak_order<std::ranges::less, Ref, Ref>,      "swo<less, ref, ref>" );
+    static_assert( std::indirect_strict_weak_order<std::ranges::less, It>,   "indirect_strict_weak_order" );
+
+    // final goal
+    static_assert( std::sortable<It>,                                   "sortable" );
+    static_assert( std::sortable<It, std::less<>>,                      "sortable<less<>>" );
+}
+
+TYPED_TEST( strided_vector_compliance, sort_preserves_element_identity )
+{
+    // Verify no data loss / duplication after a large-N sort: multiset of
+    // first-scalars must match before and after.
+    TypeParam v( 3 );
+    constexpr int N{ 500 };
+    for ( int i{ 0 }; i < N; ++i )
+        v.push_back( as_span( make_entry<TypeParam>( { ( i * 37 ) % 100, i, i } ) ) );
+
+    std::vector<typename TypeParam::element_type> before;
+    for ( auto const e : v ) before.push_back( e[ 0 ] );
+    std::ranges::sort( before );
+
+    std::ranges::sort( v );
+
+    std::vector<typename TypeParam::element_type> after;
+    for ( auto const e : v ) after.push_back( e[ 0 ] );
+
+    EXPECT_EQ( before, after );
+
+    EXPECT_TRUE( std::ranges::is_sorted( v ) );
+}
+
+#endif // !MSVC native
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm
