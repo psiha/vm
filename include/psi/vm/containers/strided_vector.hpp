@@ -571,9 +571,9 @@ public:
     //--------------------------------------------------------------------------
     // Capacity
     //--------------------------------------------------------------------------
-    [[ nodiscard, gnu::pure ]]        constexpr bool      empty   () const noexcept { return data_.empty(); }
-    [[ nodiscard, gnu::pure ]]        constexpr size_type size    () const noexcept { return static_cast<size_type>( data_.size    () / stride_ ); }
-    [[ nodiscard, gnu::pure ]]        constexpr size_type capacity() const noexcept { return static_cast<size_type>( data_.capacity() / stride_ ); }
+    [[ nodiscard, gnu::pure ]]        constexpr bool      empty   () const noexcept { return data_.empty() && zeroStrideCount_ == 0; }
+    [[ nodiscard, gnu::pure ]]        constexpr size_type size    () const noexcept { return stride_ ? static_cast<size_type>( data_.size    () / stride_ ) : zeroStrideCount_; }
+    [[ nodiscard, gnu::pure ]]        constexpr size_type capacity() const noexcept { return stride_ ? static_cast<size_type>( data_.capacity() / stride_ ) : zeroStrideCount_; }
     [[ nodiscard, gnu::pure ]] static constexpr size_type max_size()       noexcept { return backing_vector_type::max_size(); }
 
     constexpr void reserve      ( size_type const numEntries )          { data_.reserve( numEntries * stride_ ); }
@@ -587,13 +587,11 @@ public:
     //--------------------------------------------------------------------------
     [[ nodiscard ]] constexpr reference operator[]( size_type const i ) noexcept
     {
-        BOOST_ASSUME( stride_ >= 1 );
         return { data_.data() + i * stride_, stride_ };
     }
 
     [[ nodiscard ]] constexpr const_reference operator[]( size_type const i ) const noexcept
     {
-        BOOST_ASSUME( stride_ >= 1 );
         return { data_.data() + i * stride_, stride_ };
     }
 
@@ -644,14 +642,14 @@ public:
     //--------------------------------------------------------------------------
     // Modifiers
     //--------------------------------------------------------------------------
-    constexpr void clear() noexcept { data_.clear(); }
+    constexpr void clear() noexcept { data_.clear(); zeroStrideCount_ = 0; }
 
     /// Append a single entry. The source span must be exactly `stride`
     /// elements long.
     void push_back( std::span<T const> const entry )
     {
-        BOOST_ASSUME( stride_ >= 1 );
         BOOST_ASSUME( detail::sz( entry ) == stride_ );
+        if ( stride_ == 0 ) [[ unlikely ]] { ++zeroStrideCount_; return; }
         ensure_capacity();
         data_.append_range( entry );
     }
@@ -810,6 +808,7 @@ private:
 
     backing_vector_type data_;
     stride_type         stride_{ 1 };
+    size_type           zeroStrideCount_{ 0 }; // entry count when stride == 0 (no data stored)
 }; // class strided_vector
 
 //------------------------------------------------------------------------------
