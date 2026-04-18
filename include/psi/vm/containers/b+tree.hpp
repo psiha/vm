@@ -1900,6 +1900,16 @@ public:
     reference operator*() const noexcept
     {
         static_assert( std::random_access_iterator<ra_full_node_iterator> );
+        // Lazy leaf load: refresh_cache() and operator++ leaf-crossing set
+        // cached_leaf_ to nullptr because the iterator position may be end()
+        // (cached_node_index_ == leaf_count, i.e. one-past-last — reading
+        // leaves_[cached_node_index_] would be OOB).  By the time we get here
+        // the caller is actually dereferencing, so the position is valid and
+        // the load is safe.  On the hot steady-state path the branch is not
+        // taken (cached_leaf_ was filled by a prior deref or by operator--).
+        if ( !cached_leaf_ ) [[ unlikely ]] {
+            cached_leaf_ = leaves_[ cached_node_index_ ];
+        }
         BOOST_ASSUME( cached_offset_ < leaf_node::max_values );
         return cached_leaf_->keys[ cached_offset_ ];
     }
@@ -1919,7 +1929,11 @@ public:
         ++value_index_;
         if ( ++cached_offset_ == leaf_node::max_values ) [[ unlikely ]] {
             ++cached_node_index_;
-            cached_leaf_   = leaves_[ cached_node_index_ ];
+            // Do not read leaves_[cached_node_index_] here: the ++ may have
+            // advanced to end() (cached_node_index_ == leaf_count), in which
+            // case that slot is OOB.  operator* reloads lazily when (and if)
+            // the caller actually dereferences.
+            cached_leaf_   = nullptr;
             cached_offset_ = 0;
         }
         return *this;
@@ -1954,19 +1968,25 @@ public:
     }
 
 private:
-    void refresh_cache() noexcept
+    constexpr void refresh_cache() noexcept
     {
         cached_node_index_ = static_cast<std::uint32_t >( value_index_ / leaf_node::max_values );
         cached_offset_     = static_cast<node_size_type>( value_index_ % leaf_node::max_values );
-        cached_leaf_       = leaves_[ cached_node_index_ ];
+        // Do not eager-load leaves_[cached_node_index_] here: the constructor
+        // (and operator+=/-=) may be forming the end() position, where
+        // cached_node_index_ == leaf_count (one-past-last) and the read would
+        // be OOB.  operator* fills cached_leaf_ lazily on first actual deref.
+        cached_leaf_       = nullptr;
     }
 
     leaf_node * const * const leaves_           {};
     size_type                 value_index_      {};
     // Cache (lazily synchronized with value_index_): avoids per-deref div/mod
-    // by non-power-of-2 max_values. Updated on ++/-- via cheap inc/dec + rare
-    // leaf crossing; rebuilt from scratch on +=n / -=n.
-    leaf_node *               cached_leaf_      {};
+    // by non-power-of-2 max_values.  Updated on ++/-- via cheap inc/dec + rare
+    // leaf crossing; rebuilt from scratch on +=n / -=n.  cached_leaf_ is
+    // nullptr when the cached (node_index, offset) may be past-the-end — it
+    // is filled on demand by operator*.
+    mutable leaf_node *       cached_leaf_      {};
     std::uint32_t             cached_node_index_{};
     node_size_type            cached_offset_    {};
 }; // class ra_full_node_iterator
