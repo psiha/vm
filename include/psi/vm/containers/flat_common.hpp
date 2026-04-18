@@ -89,6 +89,18 @@ namespace detail {
         return std::lower_bound( keys.begin(), keys.end(), value, make_trivially_copyable_predicate( comp ) );
     }
 
+    // lower_bound over the [first, last) subrange.  Named-parameter key/comparator
+    // keep the function-scope lifetime that prefetch()'s decltype(auto) result
+    // may alias — a caller-inlined `enreg(key)` temporary would die at the
+    // initialising statement's `;` and leave `value` dangling for the subsequent
+    // std::lower_bound call.
+    [[nodiscard, gnu::sysv_abi, gnu::pure]] constexpr
+    auto lower_bound_iter_in( auto const first, auto const last, Reg auto const comparator, Reg auto const key ) noexcept {
+        decltype( auto ) comp { unwrap  ( comparator ) };
+        decltype( auto ) value{ prefetch( comp, key ) };
+        return std::lower_bound( first, last, value, make_trivially_copyable_predicate( comp ) );
+    }
+
     [[nodiscard, gnu::sysv_abi, gnu::pure]] constexpr
     auto upper_bound_iter( auto const & keys, Reg auto const comparator, Reg auto const key ) noexcept {
         decltype( auto ) comp { unwrap  ( comparator ) };
@@ -697,9 +709,7 @@ public:
     [[nodiscard]] constexpr auto lower_bound_from( this auto && self, auto const pos, K const & key ) noexcept {
         auto const & keys{ keys_of( self.storage_ ) };
         auto const posIt{ keys.begin() + static_cast<decltype( keys.end() - keys.begin() )>( self.iter_index( pos ) ) };
-        auto const wrappedComp{ make_trivially_copyable_predicate( self.comp() ) };
-        decltype( auto ) value{ prefetch( self.comp(), enreg( key ) ) };
-        return self.iter_from_key( std::lower_bound( posIt, keys.end(), value, wrappedComp ) );
+        return self.iter_from_key( lower_bound_iter_in( posIt, keys.end(), enreg( self.comp() ), enreg( key ) ) );
     }
 
     template <LookupType<Komp::transparent_comparator, key_type> K = key_type>
