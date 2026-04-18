@@ -357,6 +357,45 @@ TYPED_TEST( flat_map_typed, equal_range )
     EXPECT_EQ( hi - lo, 1 );
 }
 
+// lower_bound_from: unconditional [pos, end) search. Typical use is a
+// correlated two-key probe (smaller key's landing iterator gates the
+// larger key's search), e.g. looking up both `(A, B)` and `(B, A)` in a
+// map keyed by a composite pair.
+TYPED_TEST( flat_map_typed, lower_bound_from )
+{
+    using map_t = typename TypeParam::map_type;
+    map_t m{ { 1, "a" }, { 3, "c" }, { 5, "e" }, { 7, "g" }, { 9, "i" } };
+
+    // pos == begin -> equivalent to plain lower_bound
+    {
+        auto const it{ m.lower_bound_from( m.begin(), 5 ) };
+        EXPECT_EQ( it->first, 5 );
+    }
+    // correlated two-key pattern (smaller key first, landing iter gates
+    // larger key's search)
+    {
+        auto const it1{ m.lower_bound     (      3 ) };
+        auto const it2{ m.lower_bound_from( it1, 7 ) };
+        EXPECT_EQ( it1->first, 3 );
+        EXPECT_EQ( it2->first, 7 );
+    }
+    // key landing between elements of the forward slice
+    {
+        auto const it{ m.lower_bound_from( m.lower_bound( 3 ), 6 ) };
+        EXPECT_EQ( it->first, 7 );
+    }
+    // key greater than everything past pos -> end
+    {
+        auto const it{ m.lower_bound_from( m.lower_bound( 5 ), 100 ) };
+        EXPECT_EQ( it, m.end() );
+    }
+    // pos at end -> end
+    {
+        auto const it{ m.lower_bound_from( m.end(), 1 ) };
+        EXPECT_EQ( it, m.end() );
+    }
+}
+
 TYPED_TEST( flat_map_typed, contains_and_count )
 {
     using map_t = typename TypeParam::map_type;

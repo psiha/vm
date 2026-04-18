@@ -168,6 +168,65 @@ TYPED_TEST( flat_set_typed, equal_range )
     EXPECT_EQ( *hi, 30 );
 }
 
+// lower_bound_from: unconditional forward-restricted search of [pos, end).
+// Precondition (unchecked): `key`'s true lower_bound is at-or-after `pos`.
+TYPED_TEST( flat_set_typed, lower_bound_from_basic )
+{
+    typename TypeParam::set_type s{ 10, 20, 30, 40, 50 };
+
+    // pos at begin() — full-range equivalent to plain lower_bound
+    {
+        auto const it{ s.lower_bound_from( s.begin(), 30 ) };
+        EXPECT_EQ( *it, 30 );
+    }
+    // pos mid-range, key landing past it — hit
+    {
+        auto const pos{ s.lower_bound( 20 ) };
+        auto const it { s.lower_bound_from( pos, 40 ) };
+        EXPECT_EQ( *it, 40 );
+    }
+    // pos mid-range, key landing between elements of the forward slice
+    {
+        auto const pos{ s.lower_bound( 20 ) };
+        auto const it { s.lower_bound_from( pos, 35 ) };
+        EXPECT_EQ( *it, 40 );
+    }
+    // key greater than every element in forward slice -> end()
+    {
+        auto const pos{ s.lower_bound( 30 ) };
+        auto const it { s.lower_bound_from( pos, 999 ) };
+        EXPECT_EQ( it, s.end() );
+    }
+    // pos at end() -> end() regardless of key
+    {
+        auto const it{ s.lower_bound_from( s.end(), 5 ) };
+        EXPECT_EQ( it, s.end() );
+    }
+    // pos landing exactly on key — returns that same element
+    {
+        auto const pos{ s.lower_bound( 30 ) };
+        auto const it { s.lower_bound_from( pos, 30 ) };
+        EXPECT_EQ( *it, 30 );
+        EXPECT_EQ( it, pos );
+    }
+}
+
+// Typical use: correlated two-key lookups (smaller key first, then the
+// landing iterator gates the second search). Verify both orderings.
+TYPED_TEST( flat_set_typed, lower_bound_from_two_key_pattern )
+{
+    typename TypeParam::set_type s{ 1, 3, 5, 7, 9, 11, 13 };
+
+    for ( auto const [ ka, kb ] : std::initializer_list<std::pair<int,int>>{ { 3, 11 }, { 11, 3 }, { 5, 5 } } ) {
+        auto const k1{ std::min( ka, kb ) };
+        auto const k2{ std::max( ka, kb ) };
+        auto const it1{ s.lower_bound     (      k1 ) };
+        auto const it2{ s.lower_bound_from( it1, k2 ) };
+        EXPECT_EQ( *it1, k1 );
+        EXPECT_EQ( *it2, k2 );
+    }
+}
+
 //==============================================================================
 // Modifiers
 //==============================================================================
@@ -821,6 +880,50 @@ TEST( flat_multiset, equal_range )
     EXPECT_EQ( hi - lo, 3 );
     for ( auto it{ lo }; it != hi; ++it )
         EXPECT_EQ( *it, 2 );
+}
+
+// lower_bound_from on a multiset: the function does a straight
+// std::lower_bound on [pos, end) — it is the caller's responsibility to
+// supply a `pos` that is at-or-before the true lower_bound of `key`. The
+// test documents both the forward-restricted semantics and the
+// consequence of violating the precondition (pos inside an equivalence
+// run returns `pos`, not the run's first element — which is precisely
+// why the API was not rolled into a two-sided hinted variant).
+TEST( flat_multiset, lower_bound_from )
+{
+    FMS s{ 1, 2, 2, 2, 3, 4 };
+
+    // Baseline: plain lower_bound on a multiset lands on the first of a run.
+    auto const lbFirstTwo{ s.lower_bound( 2 ) };
+    EXPECT_EQ( *lbFirstTwo, 2 );
+    EXPECT_EQ( std::distance( s.begin(), lbFirstTwo ), 1 );
+
+    // Precondition satisfied: pos at begin, key == 2 -> same answer as lower_bound
+    {
+        auto const it{ s.lower_bound_from( s.begin(), 2 ) };
+        EXPECT_EQ( it, lbFirstTwo );
+    }
+    // Precondition satisfied: pos inside/before the run, key past it -> first 3
+    {
+        auto const it{ s.lower_bound_from( lbFirstTwo, 3 ) };
+        EXPECT_EQ( *it, 3 );
+    }
+    // Precondition deliberately violated: pos at the 2nd `2`, key == 2.
+    // lower_bound_from returns `pos` (the 2nd 2), NOT the true lower_bound
+    // (the 1st 2). Callers that can land mid-run must handle this
+    // themselves (see PR description for the opt-in two-sided shim).
+    {
+        auto const posInsideRun{ std::next( lbFirstTwo ) };
+        EXPECT_EQ( *posInsideRun, 2 );
+        auto const it{ s.lower_bound_from( posInsideRun, 2 ) };
+        EXPECT_EQ( it, posInsideRun );        // documented behaviour
+        EXPECT_NE( it, lbFirstTwo );          // NOT the true lower_bound
+    }
+    // pos at end -> end
+    {
+        auto const it{ s.lower_bound_from( s.end(), 1 ) };
+        EXPECT_EQ( it, s.end() );
+    }
 }
 
 TEST( flat_multiset, sorted_equivalent_construction )
