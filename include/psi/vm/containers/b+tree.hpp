@@ -1893,33 +1893,65 @@ public:
     // to be able to omit the check in the assignment operator as is required
     // for base_iterator).
     constexpr ra_full_node_iterator() noexcept { std::unreachable(); }
-    constexpr ra_full_node_iterator( leaf_node * const leaves[], size_type const value_index ) noexcept : leaves_{ leaves }, value_index_{ value_index } {};
+    constexpr ra_full_node_iterator( leaf_node * const leaves[], size_type const value_index ) noexcept
+        : leaves_{ leaves }, value_index_{ value_index } { refresh_cache(); }
     ra_full_node_iterator( ra_full_node_iterator const & ) = default;
 
     reference operator*() const noexcept
     {
         static_assert( std::random_access_iterator<ra_full_node_iterator> );
-        auto const node_index { static_cast<std::uint32_t >( value_index_ / leaf_node::max_values ) };
-        auto const node_offset{ static_cast<node_size_type>( value_index_ % leaf_node::max_values ) };
-        auto & leaf{ *leaves_[ node_index ] };
-        BOOST_ASSUME( node_offset < leaf.num_vals );
-        return leaf.keys[ node_offset ];
+        // Lazy leaf load: refresh_cache() and operator++ leaf-crossing set
+        // cached_leaf_ to nullptr because the iterator position may be end()
+        // (cached_node_index_ == leaf_count, i.e. one-past-last — reading
+        // leaves_[cached_node_index_] would be OOB).  By the time we get here
+        // the caller is actually dereferencing, so the position is valid and
+        // the load is safe.  On the hot steady-state path the branch is not
+        // taken (cached_leaf_ was filled by a prior deref or by operator--).
+        if ( !cached_leaf_ ) [[ unlikely ]] {
+            cached_leaf_ = leaves_[ cached_node_index_ ];
+        }
+        BOOST_ASSUME( cached_offset_ < leaf_node::max_values );
+        return cached_leaf_->keys[ cached_offset_ ];
     }
     reference operator[]( difference_type const n ) const noexcept { return *(*(this) + n); }
 
     PSI_WARNING_DISABLE_PUSH()
     PSI_WARNING_GCC_OR_CLANG_DISABLE( -Wsign-conversion )
     ra_full_node_iterator   operator+ ( difference_type const n ) const noexcept { return { leaves_, value_index_ + n }; }
-    ra_full_node_iterator & operator+=( difference_type const n )       noexcept { value_index_ += n; return *this; }
+    ra_full_node_iterator & operator+=( difference_type const n )       noexcept { value_index_ += n; refresh_cache(); return *this; }
     ra_full_node_iterator   operator- ( difference_type const n ) const noexcept { return { leaves_, value_index_ - n }; }
-    ra_full_node_iterator & operator-=( difference_type const n )       noexcept { value_index_ -= n; return *this; }
+    ra_full_node_iterator & operator-=( difference_type const n )       noexcept { value_index_ -= n; refresh_cache(); return *this; }
     PSI_WARNING_DISABLE_POP()
     friend ra_full_node_iterator operator+( difference_type const n, ra_full_node_iterator const iter ) noexcept { return iter + n; }
 
-    ra_full_node_iterator & operator++(   ) noexcept { return *this += 1; }
-    ra_full_node_iterator   operator++(int) noexcept { return { leaves_, value_index_++ }; }
-    ra_full_node_iterator & operator--(   ) noexcept { return *this -= 1; }
-    ra_full_node_iterator   operator--(int) noexcept { return { leaves_, value_index_-- }; }
+    ra_full_node_iterator & operator++() noexcept
+    {
+        ++value_index_;
+        if ( ++cached_offset_ == leaf_node::max_values ) [[ unlikely ]] {
+            ++cached_node_index_;
+            // Do not read leaves_[cached_node_index_] here: the ++ may have
+            // advanced to end() (cached_node_index_ == leaf_count), in which
+            // case that slot is OOB.  operator* reloads lazily when (and if)
+            // the caller actually dereferences.
+            cached_leaf_   = nullptr;
+            cached_offset_ = 0;
+        }
+        return *this;
+    }
+    ra_full_node_iterator operator++(int) noexcept { auto const tmp{ *this }; ++*this; return tmp; }
+    ra_full_node_iterator & operator--() noexcept
+    {
+        --value_index_;
+        if ( cached_offset_ == 0 ) [[ unlikely ]] {
+            --cached_node_index_;
+            cached_leaf_   = leaves_[ cached_node_index_ ];
+            cached_offset_ = leaf_node::max_values - 1;
+        } else {
+            --cached_offset_;
+        }
+        return *this;
+    }
+    ra_full_node_iterator operator--(int) noexcept { auto const tmp{ *this }; --*this; return tmp; }
 
     [[ gnu::const ]] constexpr auto            operator<=>( this ra_full_node_iterator const self, ra_full_node_iterator const other ) noexcept { BOOST_ASSUME( self.leaves_ == other.leaves_ ); return self.value_index_ <=> other.value_index_; }
     [[ gnu::const ]] constexpr bool            operator== ( this ra_full_node_iterator const self, ra_full_node_iterator const other ) noexcept { BOOST_ASSUME( self.leaves_ == other.leaves_ ); return self.value_index_ ==  other.value_index_; }
@@ -1928,13 +1960,35 @@ public:
     ra_full_node_iterator & operator=( ra_full_node_iterator const & other ) noexcept
     {
         BOOST_ASSUME( this->leaves_ == other.leaves_ );
-        this->value_index_ = other.value_index_;
+        this->value_index_       = other.value_index_;
+        this->cached_leaf_       = other.cached_leaf_;
+        this->cached_node_index_ = other.cached_node_index_;
+        this->cached_offset_     = other.cached_offset_;
         return *this;
     }
 
 private:
-    leaf_node * const * const leaves_     {};
-    size_type                 value_index_{};
+    constexpr void refresh_cache() noexcept
+    {
+        cached_node_index_ = static_cast<std::uint32_t >( value_index_ / leaf_node::max_values );
+        cached_offset_     = static_cast<node_size_type>( value_index_ % leaf_node::max_values );
+        // Do not eager-load leaves_[cached_node_index_] here: the constructor
+        // (and operator+=/-=) may be forming the end() position, where
+        // cached_node_index_ == leaf_count (one-past-last) and the read would
+        // be OOB.  operator* fills cached_leaf_ lazily on first actual deref.
+        cached_leaf_       = nullptr;
+    }
+
+    leaf_node * const * const leaves_           {};
+    size_type                 value_index_      {};
+    // Cache (lazily synchronized with value_index_): avoids per-deref div/mod
+    // by non-power-of-2 max_values.  Updated on ++/-- via cheap inc/dec + rare
+    // leaf crossing; rebuilt from scratch on +=n / -=n.  cached_leaf_ is
+    // nullptr when the cached (node_index, offset) may be past-the-end — it
+    // is filled on demand by operator*.
+    mutable leaf_node *       cached_leaf_      {};
+    std::uint32_t             cached_node_index_{};
+    node_size_type            cached_offset_    {};
 }; // class ra_full_node_iterator
 
 
