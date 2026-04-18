@@ -125,6 +125,7 @@ Highlights:
 | `shrink_to_fit()` | all | Release excess capacity |
 | `keys()` | all | Direct `const` access to the underlying key container. Note: `std::flat_set` does **not** provide `keys()` — only `std::flat_map` does — so this is an 'API uniformization' extension for sets |
 | `values()` | maps | Direct-and-safe mutable access to values as a span (TODO a subrange to also cover deques) |
+| `lower_bound_from(pos, key)` | all | Forward-restricted `lower_bound` that searches `[pos, end)` only. Precondition (unchecked): `key`'s true lower-bound is at-or-after `pos`. Intended for correlated lookups where the smaller key's landing iterator is, by construction, at-or-before the larger key — e.g. looking up both `(A, B)` and `(B, A)` in a map keyed by a composite pair: do `lower_bound(min_key)` first, then `lower_bound_from(firstIt, max_key)` to skip the top-of-tree comparisons the first walk already performed. Hint-both-sides / straddle semantics can be layered on top by the caller when the precondition isn't trivially established. |
 
 #### Iterator categories
 

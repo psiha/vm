@@ -89,6 +89,18 @@ namespace detail {
         return std::lower_bound( keys.begin(), keys.end(), value, make_trivially_copyable_predicate( comp ) );
     }
 
+    // lower_bound over the [first, last) subrange.  Named-parameter key/comparator
+    // keep the function-scope lifetime that prefetch()'s decltype(auto) result
+    // may alias — a caller-inlined `enreg(key)` temporary would die at the
+    // initialising statement's `;` and leave `value` dangling for the subsequent
+    // std::lower_bound call.
+    [[nodiscard, gnu::sysv_abi, gnu::pure]] constexpr
+    auto lower_bound_iter_in( auto const first, auto const last, Reg auto const comparator, Reg auto const key ) noexcept {
+        decltype( auto ) comp { unwrap  ( comparator ) };
+        decltype( auto ) value{ prefetch( comp, key ) };
+        return std::lower_bound( first, last, value, make_trivially_copyable_predicate( comp ) );
+    }
+
     [[nodiscard, gnu::sysv_abi, gnu::pure]] constexpr
     auto upper_bound_iter( auto const & keys, Reg auto const comparator, Reg auto const key ) noexcept {
         decltype( auto ) comp { unwrap  ( comparator ) };
@@ -664,6 +676,40 @@ public:
     template <LookupType<Komp::transparent_comparator, key_type> K = key_type>
     constexpr auto lower_bound( this auto && self, K const & key ) noexcept {
         return self.iter_from_key( self.lower_bound_keys( enreg( key ) ) );
+    }
+
+    // Forward-restricted lower_bound — search `[pos, end)` only.
+    //
+    // Precondition: the caller guarantees `key`'s lower-bound position is
+    // at or after `pos` (i.e. no element in `[begin, pos)` equals or
+    // exceeds `key`). The function performs no checks on that precondition
+    // and no fallback to a full-range search — the caller gets exactly
+    // what the name says, a `std::lower_bound` applied to `[pos, end)`.
+    //
+    // Rationale for the minimal semantics: a previous iteration of this
+    // helper (`lower_bound_hinted`) tried to pick the tighter half on
+    // each side of the hint, which is correct for unique containers but
+    // gets subtle around equal_range / multi containers — if a hint
+    // lands inside an equivalence run the "left or right" heuristic
+    // returns the hint position even when the true lower_bound is
+    // earlier (first element of the run). Rather than bake that
+    // correctness hazard in (and require callers to reason about
+    // equivalence behaviour), this overload constrains the search
+    // unconditionally — hinted-both-sides semantics can be trivially
+    // layered on top by the caller when needed.
+    //
+    // Typical use: doing two related lookups where the smaller key's
+    // landing iterator is, by construction, at-or-before the larger
+    // key. E.g. looking up both `(A, B)` and `(B, A)` in an ordered map
+    // keyed by a composite pair — first `lower_bound( min(A_AB, B_AB) )`,
+    // then `lower_bound_from( firstIt, max(A_AB, B_AB) )` which only
+    // scans the forward slice of the container, skipping the top-of-tree
+    // comparisons the first walk already performed.
+    template <LookupType<Komp::transparent_comparator, key_type> K = key_type>
+    [[nodiscard]] constexpr auto lower_bound_from( this auto && self, auto const pos, K const & key ) noexcept {
+        auto const & keys{ keys_of( self.storage_ ) };
+        auto const posIt{ keys.begin() + static_cast<decltype( keys.end() - keys.begin() )>( self.iter_index( pos ) ) };
+        return self.iter_from_key( lower_bound_iter_in( posIt, keys.end(), enreg( self.comp() ), enreg( key ) ) );
     }
 
     template <LookupType<Komp::transparent_comparator, key_type> K = key_type>
