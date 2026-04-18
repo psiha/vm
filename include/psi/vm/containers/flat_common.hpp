@@ -666,6 +666,42 @@ public:
         return self.iter_from_key( self.lower_bound_keys( enreg( key ) ) );
     }
 
+    // Forward-restricted lower_bound — search `[pos, end)` only.
+    //
+    // Precondition: the caller guarantees `key`'s lower-bound position is
+    // at or after `pos` (i.e. no element in `[begin, pos)` equals or
+    // exceeds `key`). The function performs no checks on that precondition
+    // and no fallback to a full-range search — the caller gets exactly
+    // what the name says, a `std::lower_bound` applied to `[pos, end)`.
+    //
+    // Rationale for the minimal semantics: a previous iteration of this
+    // helper (`lower_bound_hinted`) tried to pick the tighter half on
+    // each side of the hint, which is correct for unique containers but
+    // gets subtle around equal_range / multi containers — if a hint
+    // lands inside an equivalence run the "left or right" heuristic
+    // returns the hint position even when the true lower_bound is
+    // earlier (first element of the run). Rather than bake that
+    // correctness hazard in (and require callers to reason about
+    // equivalence behaviour), this overload constrains the search
+    // unconditionally — hinted-both-sides semantics can be trivially
+    // layered on top by the caller when needed.
+    //
+    // Typical use: doing two related lookups where the smaller key's
+    // landing iterator is, by construction, at-or-before the larger
+    // key. E.g. looking up both `(A, B)` and `(B, A)` in an ordered map
+    // keyed by a composite pair — first `lower_bound( min(A_AB, B_AB) )`,
+    // then `lower_bound_from( firstIt, max(A_AB, B_AB) )` which only
+    // scans the forward slice of the container, skipping the top-of-tree
+    // comparisons the first walk already performed.
+    template <LookupType<Komp::transparent_comparator, key_type> K = key_type>
+    [[nodiscard]] constexpr auto lower_bound_from( this auto && self, auto const pos, K const & key ) noexcept {
+        auto const & keys{ keys_of( self.storage_ ) };
+        auto const posIt{ keys.begin() + static_cast<decltype( keys.end() - keys.begin() )>( self.iter_index( pos ) ) };
+        auto const wrappedComp{ make_trivially_copyable_predicate( self.comp() ) };
+        decltype( auto ) value{ prefetch( self.comp(), enreg( key ) ) };
+        return self.iter_from_key( std::lower_bound( posIt, keys.end(), value, wrappedComp ) );
+    }
+
     template <LookupType<Komp::transparent_comparator, key_type> K = key_type>
     constexpr auto upper_bound( this auto && self, K const & key ) noexcept {
         return self.iter_from_key( self.upper_bound_keys( enreg( key ) ) );
