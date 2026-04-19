@@ -169,6 +169,165 @@ TYPED_TEST( strided_vector_compliance, move_assignment )
     EXPECT_EQ( b.stride(), 2u );
 }
 
+// Static checks — guard against a future refactor turning a (conditional)
+// noexcept move into an unconditionally-throwing one; the whole strided_vector
+// API assumes moves are cheap and non-throwing for heap-backed storages.
+TYPED_TEST( strided_vector_compliance, move_members_are_nothrow_for_heap_backing )
+{
+    using Backing = typename TypeParam::backing_vector_type;
+    // Only assert nothrow if the backing itself is nothrow — mirrors the
+    // noexcept specification on strided_vector's move special members.
+    if constexpr ( std::is_nothrow_move_constructible_v<Backing> ) {
+        static_assert( std::is_nothrow_move_constructible_v<TypeParam>,
+            "strided_vector move ctor must inherit backing's nothrow move" );
+    }
+    if constexpr ( std::is_nothrow_move_assignable_v<Backing> ) {
+        static_assert( std::is_nothrow_move_assignable_v<TypeParam>,
+            "strided_vector move assign must inherit backing's nothrow move" );
+    }
+    // And the structural traits that std::vector advertises:
+    static_assert( std::is_move_constructible_v<TypeParam> );
+    static_assert( std::is_move_assignable_v   <TypeParam> );
+    static_assert( std::is_copy_constructible_v<TypeParam> );
+    static_assert( std::is_copy_assignable_v   <TypeParam> );
+    static_assert( std::is_swappable_v         <TypeParam> );
+    SUCCEED();
+}
+
+TYPED_TEST( strided_vector_compliance, move_ctor_resets_source_to_default_state )
+{
+    TypeParam a( 3 );
+    a.push_back( as_span( make_entry<TypeParam>( { 1, 2, 3 } ) ) );
+    a.push_back( as_span( make_entry<TypeParam>( { 4, 5, 6 } ) ) );
+    TypeParam b{ std::move( a ) };
+    // Contract: moved-from container is indistinguishable from a fresh
+    // default-constructed one — empty buffer AND zeroed stride. Matches
+    // `std::exchange(other.stride_, 0)` in the move ctor.
+    EXPECT_TRUE( a.empty() );
+    EXPECT_EQ  ( a.size  (), 0u );
+    EXPECT_EQ  ( a.stride(), 0u );
+    // b got everything
+    EXPECT_EQ( b.size  (), 2u );
+    EXPECT_EQ( b.stride(), 3u );
+}
+
+TYPED_TEST( strided_vector_compliance, move_assignment_resets_source_to_default_state )
+{
+    TypeParam a( 2 );
+    a.push_back( as_span( make_entry<TypeParam>( { 10, 20 } ) ) );
+    a.push_back( as_span( make_entry<TypeParam>( { 30, 40 } ) ) );
+    TypeParam b;
+    b = std::move( a );
+    EXPECT_TRUE( a.empty() );
+    EXPECT_EQ  ( a.size  (), 0u );
+    EXPECT_EQ  ( a.stride(), 0u );
+    EXPECT_EQ  ( b.size  (), 2u );
+    EXPECT_EQ  ( b.stride(), 2u );
+}
+
+TYPED_TEST( strided_vector_compliance, moved_from_is_reusable_via_init )
+{
+    TypeParam a( 2 );
+    a.push_back( as_span( make_entry<TypeParam>( { 7, 8 } ) ) );
+    TypeParam b{ std::move( a ) };
+    // After move, source's stride is 0 (sentinel for fresh/uninitialised).
+    // init() re-arms it for reuse, same flow as on a default-constructed one.
+    a.init( 3 );
+    EXPECT_EQ  ( a.stride(), 3u );
+    EXPECT_TRUE( a.empty() );
+    a.push_back( as_span( make_entry<TypeParam>( { 1, 2, 3 } ) ) );
+    EXPECT_EQ( a.size(), 1u );
+}
+
+TYPED_TEST( strided_vector_compliance, self_copy_assignment_is_identity )
+{
+    TypeParam a( 2 );
+    a.push_back( as_span( make_entry<TypeParam>( { 7, 8 } ) ) );
+    a.push_back( as_span( make_entry<TypeParam>( { 9, 0 } ) ) );
+    // Bounce through a reference to defeat `-Wself-assign-overloaded`.
+    auto & a_ref{ a };
+    a = a_ref;
+    EXPECT_EQ( a.size  (), 2u );
+    EXPECT_EQ( a.stride(), 2u );
+    auto const r0{ make_entry<TypeParam>( { 7, 8 } ) };
+    auto const r1{ make_entry<TypeParam>( { 9, 0 } ) };
+    EXPECT_TRUE( std::ranges::equal( a[ 0 ], r0 ) );
+    EXPECT_TRUE( std::ranges::equal( a[ 1 ], r1 ) );
+}
+
+TYPED_TEST( strided_vector_compliance, self_move_assignment_is_well_defined )
+{
+    TypeParam a( 2 );
+    a.push_back( as_span( make_entry<TypeParam>( { 11, 22 } ) ) );
+    // Valid-but-unspecified after self-move; we only assert non-crash and
+    // that the container is still usable (size is either the original or 0,
+    // both are conforming states; pushing a new entry must work afterwards).
+    auto & a_ref{ a };
+    a = std::move( a_ref );
+    EXPECT_NO_THROW( a.clear() );
+    a.push_back( as_span( make_entry<TypeParam>( { 33, 44 } ) ) );
+    EXPECT_EQ( a.size(), 1u );
+}
+
+TYPED_TEST( strided_vector_compliance, copy_assignment_overwrites_with_different_stride )
+{
+    TypeParam a( 3 );
+    a.push_back( as_span( make_entry<TypeParam>( { 1, 2, 3 } ) ) );
+    TypeParam b( 2 );
+    b.push_back( as_span( make_entry<TypeParam>( { 10, 20 } ) ) );
+    b.push_back( as_span( make_entry<TypeParam>( { 30, 40 } ) ) );
+    b = a;
+    // Copy-assign must propagate stride (std::vector equivalent would
+    // propagate allocator behaviour; here stride is the only config).
+    EXPECT_EQ( b.stride(), 3u );
+    EXPECT_EQ( b.size  (), 1u );
+    EXPECT_EQ( a, b );
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// 1b. Assign (std::vector-compatible)
+////////////////////////////////////////////////////////////////////////////////
+
+TYPED_TEST( strided_vector_compliance, assign_count_prototype_replaces_contents )
+{
+    TypeParam v( 2 );
+    v.push_back( as_span( make_entry<TypeParam>( { 1, 2 } ) ) );
+    v.push_back( as_span( make_entry<TypeParam>( { 3, 4 } ) ) );
+    auto const proto{ make_entry<TypeParam>( { 9, 9 } ) };
+    v.assign( 3, as_span( proto ) );
+    EXPECT_EQ( v.size  (), 3u );
+    EXPECT_EQ( v.stride(), 2u );
+    for ( std::size_t i{ 0 }; i < v.size(); ++i )
+        EXPECT_TRUE( std::ranges::equal( v[ i ], proto ) );
+}
+
+TYPED_TEST( strided_vector_compliance, assign_count_zero_clears )
+{
+    TypeParam v( 2 );
+    v.push_back( as_span( make_entry<TypeParam>( { 1, 2 } ) ) );
+    auto const proto{ make_entry<TypeParam>( { 0, 0 } ) };
+    v.assign( 0, as_span( proto ) );
+    EXPECT_TRUE( v.empty() );
+    EXPECT_EQ  ( v.stride(), 2u ); // stride is preserved
+}
+
+TYPED_TEST( strided_vector_compliance, assign_range_of_entries )
+{
+    TypeParam v( 2 );
+    v.push_back( as_span( make_entry<TypeParam>( { 99, 99 } ) ) );
+    auto const e0{ make_entry<TypeParam>( { 1, 2 } ) };
+    auto const e1{ make_entry<TypeParam>( { 3, 4 } ) };
+    auto const e2{ make_entry<TypeParam>( { 5, 6 } ) };
+    std::array<std::span<typename TypeParam::element_type const>, 3> entries{
+        as_span( e0 ), as_span( e1 ), as_span( e2 )
+    };
+    v.assign( entries );
+    EXPECT_EQ( v.size(), 3u );
+    EXPECT_TRUE( std::ranges::equal( v[ 0 ], e0 ) );
+    EXPECT_TRUE( std::ranges::equal( v[ 1 ], e1 ) );
+    EXPECT_TRUE( std::ranges::equal( v[ 2 ], e2 ) );
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // 2. Capacity
 ////////////////////////////////////////////////////////////////////////////////
