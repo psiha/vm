@@ -296,12 +296,13 @@ namespace detail
         }
 
         //-- span-like read interface --------------------------------------------
-        [[ nodiscard, gnu::pure ]] constexpr T          * data () const noexcept { return ptr_;           }
-        [[ nodiscard, gnu::pure ]] constexpr stride_type  size () const noexcept { return stride_;        }
-        [[ nodiscard ]]            static constexpr bool   empty()       noexcept { return false;           }
-        [[ nodiscard, gnu::pure ]] constexpr T *          begin() const noexcept { return ptr_;           }
-        [[ nodiscard, gnu::pure ]] constexpr T *          end  () const noexcept { BOOST_ASSUME( stride_ >= 1 ); return ptr_ + stride_; }
-        [[ nodiscard, gnu::pure ]] constexpr T &          operator[]( std::size_t const i ) const noexcept { BOOST_ASSUME( stride_ >= 1 ); return ptr_[ i ]; }
+        [[ nodiscard, gnu::pure ]] constexpr T          * data () const noexcept { return ptr_;    }
+        [[ nodiscard ]]            static constexpr bool  empty()       noexcept { return false;   }
+        [[ nodiscard, gnu::pure ]] constexpr T *          begin() const noexcept { return ptr_;    }
+        [[ nodiscard, gnu::pure ]] constexpr T *          end  () const noexcept { return begin() + size(); }
+        [[ nodiscard, gnu::pure ]] constexpr stride_type  size () const noexcept { BOOST_ASSUME( stride_ >= 1 );
+                                                                                   return stride_; }
+        [[ nodiscard, gnu::pure ]] constexpr T &          operator[]( std::size_t const i ) const noexcept { return ptr_[ i ]; }
 
         //-- in-place element swap (ADL-visible — picked up by std::ranges::iter_swap)
         friend constexpr void swap( strided_reference const a, strided_reference const b ) noexcept( std::is_nothrow_swappable_v<T> )
@@ -503,18 +504,36 @@ public:
     //--------------------------------------------------------------------------
     constexpr strided_vector() noexcept = default;
 
+    constexpr strided_vector            ( strided_vector const & ) = default;
+    constexpr strided_vector & operator=( strided_vector const & ) = default;
+
+    constexpr strided_vector( strided_vector && other ) noexcept( std::is_nothrow_move_constructible_v<backing_vector_type> )
+        : data_  { std::move( other.data_ ) }
+        , stride_{ std::exchange( other.stride_, stride_type{ 0 } ) }
+    {}
+
+    constexpr strided_vector & operator=( strided_vector && other ) noexcept( std::is_nothrow_move_assignable_v<backing_vector_type> )
+    {
+        if ( this != &other ) [[ likely ]] {
+            data_   = std::move    ( other.data_ );
+            stride_ = std::exchange( other.stride_, stride_type{ 0 } );
+        }
+        return *this;
+    }
+
     // Construct empty with stride preset
-    explicit constexpr strided_vector( stride_type const stride ) noexcept : stride_{ stride } {}
+    explicit constexpr strided_vector( stride_type const stride ) noexcept : stride_{ stride } { BOOST_ASSUME( stride <= MaxStride ); }
 
     // Construct `count` default-initialized entries of the given stride
     constexpr strided_vector( stride_type const stride, size_type const count )
         : data_( static_cast<size_type>( count ) * stride ), stride_{ stride }
-    {}
+    { BOOST_ASSUME( stride <= MaxStride ); }
 
     // Construct `count` entries initialized from a prototype span
     constexpr strided_vector( stride_type const stride, size_type const count, std::span<T const> const prototype )
         : stride_{ stride }
     {
+        BOOST_ASSUME( stride <= MaxStride );
         BOOST_ASSERT( prototype.size() == stride );
         data_.reserve( count * stride );
         for ( size_type i{ 0 }; i < count; ++i ) {
@@ -527,6 +546,7 @@ public:
     requires std::convertible_to<std::ranges::range_reference_t<EntryRng>, std::span<T const>>
     constexpr strided_vector( stride_type const stride, EntryRng && entries ) : stride_{ stride }
     {
+        BOOST_ASSUME( stride <= MaxStride );
         if constexpr ( std::ranges::sized_range<EntryRng> ) {
             data_.reserve( static_cast<size_type>( std::ranges::size( entries ) ) * stride );
         }
@@ -542,11 +562,12 @@ public:
     /// Clears the container and sets a new stride.
     void init( stride_type const s ) noexcept
     {
+        BOOST_ASSUME( s <= MaxStride );
         stride_ = s;
         clear();
     }
 
-    [[ nodiscard, gnu::pure ]] constexpr stride_type stride() const noexcept { return stride_; }
+    [[ nodiscard, gnu::pure ]] constexpr stride_type stride() const noexcept { BOOST_ASSUME( stride_ <= MaxStride ); return stride_; }
 
     //--------------------------------------------------------------------------
     // Storage extraction / adoption
@@ -556,14 +577,15 @@ public:
     //--------------------------------------------------------------------------
 
     /// Move the backing buffer out, leaving this container empty (stride unchanged).
-    [[ nodiscard ]] backing_vector_type extract_data() noexcept { return std::move( data_ ); }
+    [[ nodiscard ]] backing_vector_type extract_data() noexcept { stride_ = 0; return std::move( data_ ); }
 
     /// Adopt a pre-populated backing buffer. The buffer's element count must
     /// be a multiple of `stride` (asserted). The container takes ownership of
     /// the buffer's contents — nothing is cleared.
     void adopt_data( backing_vector_type && v, stride_type const stride ) noexcept
     {
-        BOOST_ASSERT( v.size() % stride == 0 );
+        BOOST_ASSUME( stride <= MaxStride );
+        BOOST_ASSERT( v.empty() || v.size() % stride == 0 );
         stride_ = stride;
         data_   = std::move( v );
     }
@@ -584,7 +606,7 @@ public:
     [[ nodiscard, gnu::pure ]]        constexpr size_type capacity() const noexcept { return static_cast<size_type>( data_.capacity() / std::max<stride_type>( stride_, 1 ) ); }
     [[ nodiscard, gnu::pure ]] static constexpr size_type max_size()       noexcept { return backing_vector_type::max_size(); }
 
-    constexpr void reserve      ( size_type const numEntries )          { data_.reserve( numEntries * stride_ ); }
+    constexpr void reserve      ( size_type const numEntries )          { data_.reserve( numEntries * stride() ); }
     constexpr void shrink_to_fit(                            ) noexcept { data_.shrink_to_fit(); }
 
     //--------------------------------------------------------------------------
@@ -619,10 +641,10 @@ public:
         return ( *this )[ i ];
     }
 
-    [[ nodiscard ]] constexpr reference       front()       noexcept { BOOST_ASSERT( !empty() ); return ( *this )[ 0 ]; }
-    [[ nodiscard ]] constexpr const_reference front() const noexcept { BOOST_ASSERT( !empty() ); return ( *this )[ 0 ]; }
-    [[ nodiscard ]] constexpr reference       back ()       noexcept { BOOST_ASSERT( !empty() ); return ( *this )[ size() - 1 ]; }
-    [[ nodiscard ]] constexpr const_reference back () const noexcept { BOOST_ASSERT( !empty() ); return ( *this )[ size() - 1 ]; }
+    [[ nodiscard ]] constexpr reference       front()       noexcept { BOOST_ASSERT( !empty() ); return (*this)[ 0 ]; }
+    [[ nodiscard ]] constexpr const_reference front() const noexcept { BOOST_ASSERT( !empty() ); return (*this)[ 0 ]; }
+    [[ nodiscard ]] constexpr reference       back ()       noexcept { BOOST_ASSERT( !empty() ); return (*this)[ size() - 1 ]; }
+    [[ nodiscard ]] constexpr const_reference back () const noexcept { BOOST_ASSERT( !empty() ); return (*this)[ size() - 1 ]; }
 
     //--------------------------------------------------------------------------
     // Raw data access
@@ -648,6 +670,41 @@ public:
     [[ nodiscard ]] constexpr const_reverse_iterator  rend  () const noexcept { return const_reverse_iterator{ begin() }; }
     [[ nodiscard ]] constexpr const_reverse_iterator crbegin() const noexcept { return rbegin(); }
     [[ nodiscard ]] constexpr const_reverse_iterator crend  () const noexcept { return rend(); }
+
+    //--------------------------------------------------------------------------
+    // Assign (std::vector-compatible, stride-aware)
+    //
+    // Wipe current contents and repopulate. `stride_` is preserved (matches
+    // std::vector's invariant of leaving the allocator/config intact). Use
+    // `init(new_stride)` before `assign` if a stride change is also needed.
+    //--------------------------------------------------------------------------
+
+    /// Assign `count` copies of a prototype entry.
+    void assign( size_type const count, std::span<T const> const prototype )
+    {
+        BOOST_ASSUME( stride_ >= 1 );
+        BOOST_ASSERT( prototype.size() == stride_ );
+        data_.clear();
+        data_.reserve( count * stride_ );
+        for ( size_type i{ 0 }; i < count; ++i ) {
+            data_.append_range( prototype );
+        }
+    }
+
+    /// Assign from a range of span-like entries (each of length stride).
+    template <std::ranges::input_range EntryRng>
+    requires std::convertible_to<std::ranges::range_reference_t<EntryRng>, std::span<T const>>
+    void assign( EntryRng && entries )
+    {
+        BOOST_ASSUME( stride_ >= 1 );
+        data_.clear();
+        if constexpr ( std::ranges::sized_range<EntryRng> ) {
+            data_.reserve( static_cast<size_type>( std::ranges::size( entries ) ) * stride_ );
+        }
+        for ( std::span const e : entries ) {
+            push_back( e );
+        }
+    }
 
     //--------------------------------------------------------------------------
     // Modifiers
