@@ -397,8 +397,16 @@ public:
                 // Uses construction (not assignment) to handle type conversions.
                 this->reserve( input_size );
                 this->storage_shrink_size_to( 0 ); // basic guarantee
+                // NB: use `std::ranges::uninitialized_move_n` rather than
+                // `std::uninitialized_move_n` — the non-ranges version of
+                // libc++ materializes the source dereference into a temporary
+                // inside the iter_move lambda (`return std::move(*it);`),
+                // leaving the caller with a dangling rvalue reference when
+                // `*it` is a prvalue (e.g. `std::views::iota`). The ranges
+                // variant routes through `std::ranges::iter_move`, which
+                // correctly returns prvalue-yielding dereferences by value.
                 if constexpr ( std::is_rvalue_reference_v<Rng &&> )
-                    std::uninitialized_move_n( std::ranges::begin( data ), input_size, this->data() );
+                    std::ranges::uninitialized_move_n( std::ranges::begin( data ), input_size, this->data(), std::unreachable_sentinel );
                 else
                     std::uninitialized_copy_n( std::ranges::begin( data ), input_size, this->data() );
                 this->storage_grow_to( input_size );
@@ -421,8 +429,11 @@ public:
                     // Phase 2: reserve capacity (size stays at old_size for exception
                     // safety — if construction throws, the dtor sees the correct size).
                     this->reserve( input_size );
+                    // See the sized/trivial branch above: the non-ranges
+                    // std::uninitialized_move has a dangling-reference bug
+                    // for iterators whose operator* returns a prvalue.
                     if constexpr ( std::is_rvalue_reference_v<Rng &&> )
-                        std::uninitialized_move( first, last, this->data() + overwritten );
+                        std::ranges::uninitialized_move( first, last, this->data() + overwritten, std::unreachable_sentinel );
                     else
                         std::uninitialized_copy( first, last, this->data() + overwritten );
                     // Commit: capacity already reserved, just update size_.
@@ -865,7 +876,7 @@ public:
             if constexpr ( std::is_rvalue_reference_v<Rng &&> )
             {
                 if constexpr ( trivially_destructible_after_move_assignment<value_type> )
-                    std::uninitialized_move( std::ranges::begin( rng ), std::ranges::end( rng ), iter );
+                    std::ranges::uninitialized_move( std::ranges::begin( rng ), std::ranges::end( rng ), iter, std::unreachable_sentinel );
                 else
                     std::ranges::move( rng, iter );
             }
@@ -902,10 +913,20 @@ public:
             auto const target_position{ grow_by( additional_size, no_init ) + current_size };
             try
             {
-                if constexpr ( std::is_rvalue_reference_v<Rng> )
-                    std::uninitialized_move_n( input_begin, additional_size, target_position );
-                else
-                    std::uninitialized_copy_n( input_begin, additional_size, target_position );
+                // No rvalue-vs-lvalue branch on `Rng`: the prior
+                // `is_rvalue_reference_v<Rng>` check was dead code (for a
+                // forwarding-reference template parameter, `Rng` deduces as
+                // the bare (non-reference) type for rvalue args, so the
+                // trait is always false), and fixing the trait to `Rng &&`
+                // would wrongly move from range adaptors over lvalue data
+                // — e.g. a prvalue `std::ranges::subrange{lvalue_it,
+                // lvalue_it}` produced by the iterator-range ctor
+                // delegation path.  Callers that want move semantics pipe
+                // the source through `std::views::as_rvalue` (see
+                // flat_common.hpp: storage_append_move_range); `*iter`
+                // then yields an rvalue reference and uninitialized_copy_n's
+                // placement `T(*iter)` binds to T's move constructor.
+                std::uninitialized_copy_n( input_begin, additional_size, target_position );
             }
             catch (...)
             {
@@ -917,10 +938,7 @@ public:
         {
             try
             {
-                if constexpr ( std::is_rvalue_reference_v<Rng> )
-                    std::move( std::begin( rng ), std::end( rng ), std::back_inserter( *this ) );
-                else
-                    std::copy( std::begin( rng ), std::end( rng ), std::back_inserter( *this ) );
+                std::copy( std::begin( rng ), std::end( rng ), std::back_inserter( *this ) );
             }
             catch (...)
             {
