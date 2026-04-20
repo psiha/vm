@@ -296,13 +296,13 @@ namespace detail
         }
 
         //-- span-like read interface --------------------------------------------
-        [[ nodiscard, gnu::pure ]] constexpr T          * data () const noexcept { return ptr_;    }
-        [[ nodiscard ]]            static constexpr bool  empty()       noexcept { return false;   }
-        [[ nodiscard, gnu::pure ]] constexpr T *          begin() const noexcept { return ptr_;    }
-        [[ nodiscard, gnu::pure ]] constexpr T *          end  () const noexcept { return begin() + size(); }
-        [[ nodiscard, gnu::pure ]] constexpr stride_type  size () const noexcept { BOOST_ASSUME( stride_ >= 1 );
+        [[ nodiscard ]] static     constexpr bool        empty()       noexcept { return false;   }
+        [[ nodiscard, gnu::pure ]] constexpr T *         data () const noexcept { return ptr_;    }
+        [[ nodiscard, gnu::pure ]] constexpr T *         begin() const noexcept { return ptr_;    }
+        [[ nodiscard, gnu::pure ]] constexpr T *         end  () const noexcept { return begin() + size(); }
+        [[ nodiscard, gnu::pure ]] constexpr stride_type size () const noexcept { BOOST_ASSUME( stride_ >= 1 );
                                                                                    return stride_; }
-        [[ nodiscard, gnu::pure ]] constexpr T &          operator[]( std::size_t const i ) const noexcept { return ptr_[ i ]; }
+        [[ nodiscard, gnu::pure ]] constexpr T & operator[]( stride_type const i ) const noexcept { return ptr_[ i ]; }
 
         //-- in-place element swap (ADL-visible — picked up by std::ranges::iter_swap)
         friend constexpr void swap( strided_reference const a, strided_reference const b ) noexcept( std::is_nothrow_swappable_v<T> )
