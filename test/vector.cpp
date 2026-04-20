@@ -195,6 +195,32 @@ TYPED_TEST( vector_compliance, assign_range )
     EXPECT_EQ( v[ 4 ], 14 );
 }
 
+// Repro: iota_view passed as PRVALUE exercises the
+// std::is_rvalue_reference_v<Rng &&> branch of assign(Rng&&) — which
+// uses std::uninitialized_move_n on an iterator whose operator* yields a
+// prvalue. Regression: data_ was left uninitialized on Apple libc++/arm64.
+TYPED_TEST( vector_compliance, assign_range_prvalue_iota )
+{
+    TypeParam v{ 1, 2 };
+    v.assign( std::views::iota( 10, 15 ) );
+    EXPECT_EQ( v.size(), 5 );
+    EXPECT_EQ( v[ 0 ], 10 );
+    EXPECT_EQ( v[ 1 ], 11 );
+    EXPECT_EQ( v[ 2 ], 12 );
+    EXPECT_EQ( v[ 3 ], 13 );
+    EXPECT_EQ( v[ 4 ], 14 );
+}
+
+// Same, but starting from an empty vector (grow-from-nothing path).
+TYPED_TEST( vector_compliance, assign_range_prvalue_iota_from_empty )
+{
+    TypeParam v;
+    v.assign( std::views::iota( 0U, 70U ) );
+    EXPECT_EQ( v.size(), 70 );
+    for ( unsigned i{ 0 }; i < 70; ++i )
+        EXPECT_EQ( v[ i ], static_cast<int>( i ) );
+}
+
 TYPED_TEST( vector_compliance, assign_range_method )
 {
     std::vector<int> const src{ 7, 8, 9 };
