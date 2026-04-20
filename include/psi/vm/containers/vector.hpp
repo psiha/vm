@@ -913,10 +913,20 @@ public:
             auto const target_position{ grow_by( additional_size, no_init ) + current_size };
             try
             {
-                if constexpr ( std::is_rvalue_reference_v<Rng> )
-                    std::ranges::uninitialized_move_n( input_begin, additional_size, target_position, std::unreachable_sentinel );
-                else
-                    std::uninitialized_copy_n( input_begin, additional_size, target_position );
+                // No rvalue-vs-lvalue branch on `Rng`: the prior
+                // `is_rvalue_reference_v<Rng>` check was dead code (for a
+                // forwarding-reference template parameter, `Rng` deduces as
+                // the bare (non-reference) type for rvalue args, so the
+                // trait is always false), and fixing the trait to `Rng &&`
+                // would wrongly move from range adaptors over lvalue data
+                // — e.g. a prvalue `std::ranges::subrange{lvalue_it,
+                // lvalue_it}` produced by the iterator-range ctor
+                // delegation path.  Callers that want move semantics pipe
+                // the source through `std::views::as_rvalue` (see
+                // flat_common.hpp: storage_append_move_range); `*iter`
+                // then yields an rvalue reference and uninitialized_copy_n's
+                // placement `T(*iter)` binds to T's move constructor.
+                std::uninitialized_copy_n( input_begin, additional_size, target_position );
             }
             catch (...)
             {
@@ -928,10 +938,7 @@ public:
         {
             try
             {
-                if constexpr ( std::is_rvalue_reference_v<Rng> )
-                    std::move( std::begin( rng ), std::end( rng ), std::back_inserter( *this ) );
-                else
-                    std::copy( std::begin( rng ), std::end( rng ), std::back_inserter( *this ) );
+                std::copy( std::begin( rng ), std::end( rng ), std::back_inserter( *this ) );
             }
             catch (...)
             {

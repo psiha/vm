@@ -195,10 +195,12 @@ TYPED_TEST( vector_compliance, assign_range )
     EXPECT_EQ( v[ 4 ], 14 );
 }
 
-// Repro: iota_view passed as PRVALUE exercises the
-// std::is_rvalue_reference_v<Rng &&> branch of assign(Rng&&) — which
-// uses std::uninitialized_move_n on an iterator whose operator* yields a
-// prvalue. Regression: data_ was left uninitialized on Apple libc++/arm64.
+// iota_view passed as PRVALUE exercises the
+// std::is_rvalue_reference_v<Rng &&> branch of assign(Rng&&). That path
+// previously regressed when it was routed through std::uninitialized_move_n,
+// whose libc++ iter_move lambda returns a dangling rvalue reference for
+// iterators whose operator* yields a prvalue, leaving data_ uninitialized
+// (the test failed on Apple libc++/arm64 at -O2/-O3).
 TYPED_TEST( vector_compliance, assign_range_prvalue_iota )
 {
     TypeParam v{ 1, 2 };
@@ -219,6 +221,38 @@ TYPED_TEST( vector_compliance, assign_range_prvalue_iota_from_empty )
     EXPECT_EQ( v.size(), 70 );
     for ( unsigned i{ 0 }; i < 70; ++i )
         EXPECT_EQ( v[ i ], static_cast<int>( i ) );
+}
+
+// Same prvalue-iota regression coverage for insert_range + append_range.
+// The insert_range rvalue+trivially-destructible-after-move path hit
+// std::uninitialized_move; append_range's sized rvalue path hit
+// std::uninitialized_move_n (and its rvalue-detection test-trait was
+// also wrong — `is_rvalue_reference_v<Rng>` is always false for a
+// forwarding-reference `Rng`, making the move branch dead code).
+TYPED_TEST( vector_compliance, insert_range_prvalue_iota )
+{
+    TypeParam v{ 1, 2, 3 };
+    v.insert_range( v.cbegin() + 1, std::views::iota( 10, 13 ) );
+    EXPECT_EQ( v.size(), 6 );
+    EXPECT_EQ( v[ 0 ],  1 );
+    EXPECT_EQ( v[ 1 ], 10 );
+    EXPECT_EQ( v[ 2 ], 11 );
+    EXPECT_EQ( v[ 3 ], 12 );
+    EXPECT_EQ( v[ 4 ],  2 );
+    EXPECT_EQ( v[ 5 ],  3 );
+}
+
+TYPED_TEST( vector_compliance, append_range_prvalue_iota )
+{
+    TypeParam v{ 1, 2 };
+    v.append_range( std::views::iota( 10, 14 ) );
+    EXPECT_EQ( v.size(), 6 );
+    EXPECT_EQ( v[ 0 ],  1 );
+    EXPECT_EQ( v[ 1 ],  2 );
+    EXPECT_EQ( v[ 2 ], 10 );
+    EXPECT_EQ( v[ 3 ], 11 );
+    EXPECT_EQ( v[ 4 ], 12 );
+    EXPECT_EQ( v[ 5 ], 13 );
 }
 
 TYPED_TEST( vector_compliance, assign_range_method )
