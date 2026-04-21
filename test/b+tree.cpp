@@ -1780,6 +1780,44 @@ TEST( bp_tree, leaf_iterator_multi_leaf )
 
 static_assert( std::bidirectional_iterator<bptree_set<int>::leaf_iterator> );
 
+// leaf_iterator: <=> orders by each leaf's first key -- so walking forward
+// yields a monotonically non-decreasing comparison against any fixed earlier
+// iterator, and end() is strictly greater than every real leaf.
+TEST( bp_tree, leaf_iterator_ordering_by_first_key )
+{
+    auto constexpr max_per_node{ bptree_set<int>::leaf_node::max_values };
+    auto const n{ static_cast<int>( max_per_node * 4 + 1 ) };
+
+    bptree_set<int> bpt;
+    bpt.map_memory( static_cast<std::size_t>( n ) );
+
+    std::vector<int> vals( static_cast<std::size_t>( n ) );
+    std::iota( vals.begin(), vals.end(), 0 );
+    bpt.insert_presorted( vals );
+
+    auto const first{ bpt.node_begin() };
+    auto const end  { bpt.node_end  () };
+
+    EXPECT_TRUE(  first <  end );
+    EXPECT_TRUE(  first <= end );
+    EXPECT_FALSE( first >  end );
+    EXPECT_FALSE( first >= end );
+    EXPECT_TRUE(  end   >  first );
+
+    // Each successive leaf must compare strictly greater by first key (keys
+    // are 0..n-1 inserted sorted, so every leaf boundary yields a distinct
+    // first key).
+    auto prev{ first };
+    for ( auto it{ std::next( first ) }; it != end; ++it ) {
+        EXPECT_TRUE(  prev <  it );
+        EXPECT_FALSE( it   <  prev );
+        EXPECT_NE   ( prev, it );
+        prev = it;
+    }
+    // Final leaf is still strictly less than end.
+    EXPECT_TRUE( prev < end );
+}
+
 //------------------------------------------------------------------------------
 } // namespace psi::vm
 //------------------------------------------------------------------------------

@@ -709,9 +709,9 @@ public:
 
     // optimized version of std::copy( bpt.begin(), bpt.end(), vec.begin() )
     template <typename Proj = std::identity>
-    auto flatten(                                           std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, size_type available_space, Proj proj = {} ) const noexcept;
+    auto flatten(                                           std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, size_type available_space, Proj proj = {} ) const noexcept( std::is_nothrow_invocable_v<Proj &, Key const &> );
     template <typename Proj = std::identity>
-    auto flatten( const_iterator begin, const_iterator end, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, size_type available_space, Proj proj = {} ) const noexcept;
+    auto flatten( const_iterator begin, const_iterator end, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, size_type available_space, Proj proj = {} ) const noexcept( std::is_nothrow_invocable_v<Proj &, Key const &> );
 
     // Leaf-node iteration: walk the doubly-linked list of leaves directly,
     // dereferencing to std::span<Key const> of each leaf's keys.  Lets callers
@@ -1224,7 +1224,7 @@ protected: // 'other'
             if constexpr ( can_preallocate ) {
                 auto const size_to_copy{ static_cast<node_size_type>( std::min<size_type>( leaf.max_values, input_size - count ) ) };
                 BOOST_ASSUME( size_to_copy > 0 );
-                std::copy_n( p_keys, size_to_copy, leaf.keys );
+                std::copy_n ( p_keys, size_to_copy, leaf.keys );
                 std::advance( p_keys, size_to_copy );
                 leaf.num_vals  = size_to_copy;
                 count         += size_to_copy;
@@ -1749,12 +1749,20 @@ protected: // 'other'
         unlink_and_free_node( right, left );
     }
 
-    static auto copy_n( leaf_node const & lf, node_size_type const offset, node_size_type const count, auto output, auto && proj ) noexcept
+    static auto copy_n( leaf_node const & lf, node_size_type const offset, node_size_type const count, auto output, auto && proj ) noexcept( std::is_nothrow_invocable_v<decltype( proj ) &, Key const &> )
     {
         if constexpr ( std::is_same_v<std::remove_cvref_t<decltype( proj )>, std::identity> ) {
             return std::copy_n( &lf.keys[ offset ], count, output );
         } else {
-            return std::transform( &lf.keys[ offset ], &lf.keys[ offset + count ], output, proj );
+            // std::invoke so any std::invocable projection works (lambdas,
+            // function pointers, pointer-to-member, std::reference_wrapper…) —
+            // std::transform's third-argument invocation path would only accept
+            // plain `proj(x)` forms.
+            auto const end{ &lf.keys[ offset + count ] };
+            for ( auto const * p{ &lf.keys[ offset ] }; p != end; ++p ) {
+                *output++ = std::invoke( proj, *p );
+            }
+            return output;
         }
     }
 
@@ -1793,7 +1801,7 @@ private:
     }
 
     template <typename Proj = std::identity>
-    auto flatten( node_slot begin_node, node_slot end_node, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, Proj proj = {} ) const noexcept;
+    auto flatten( node_slot begin_node, node_slot end_node, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, Proj proj = {} ) const noexcept( std::is_nothrow_invocable_v<Proj &, Key const &> );
 }; // class bptree_base_wkey
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -2066,8 +2074,22 @@ public:
     }
     leaf_iterator operator--( int ) noexcept { auto const tmp{ *this }; --*this; return tmp; }
 
-    [[ gnu::pure ]] friend auto operator<=>( leaf_iterator const & lhs, leaf_iterator const & rhs ) noexcept { BOOST_ASSUME( lhs.p_tree_ == rhs.p_tree_ ); return lhs.p_leaf_ <=> rhs.p_leaf_; }
-    [[ gnu::pure ]] friend bool operator== ( leaf_iterator const & lhs, leaf_iterator const & rhs ) noexcept = default;
+    // Order by the leaf's first key, i.e. by sequence/iteration order.  end()
+    // (null p_leaf_) sorts after every real leaf.  Weak ordering because in a
+    // non-unique tree two distinct leaves may share the same first key and
+    // therefore compare equivalent here -- operator== (defaulted pointer
+    // compare) still distinguishes them.  Raw-pointer ordering on p_leaf_
+    // would be stable but meaningless (allocation order), so it's not exposed.
+    [[ gnu::pure ]] friend std::weak_ordering operator<=>( leaf_iterator const & lhs, leaf_iterator const & rhs ) noexcept
+    {
+        BOOST_ASSUME( lhs.p_tree_ == rhs.p_tree_ );
+        if ( !lhs.p_leaf_ ) return rhs.p_leaf_ ? std::weak_ordering::greater : std::weak_ordering::equivalent;
+        if ( !rhs.p_leaf_ ) return std::weak_ordering::less;
+        BOOST_ASSUME( lhs.p_leaf_->num_vals > 0 );
+        BOOST_ASSUME( rhs.p_leaf_->num_vals > 0 );
+        return lhs.p_leaf_->keys[ 0 ] <=> rhs.p_leaf_->keys[ 0 ];
+    }
+    [[ gnu::pure ]] friend bool operator==( leaf_iterator const & lhs, leaf_iterator const & rhs ) noexcept { BOOST_ASSUME( lhs.p_tree_ == rhs.p_tree_ ); return lhs.p_leaf_ == rhs.p_leaf_; }
 
 private:
     leaf_node        const * __restrict p_leaf_{};
@@ -2173,7 +2195,7 @@ bptree_base_wkey<Key>::erase( const_iterator const first, const_iterator const l
 
 template <typename Key>
 template <typename Proj>
-auto bptree_base_wkey<Key>::flatten( node_slot const begin_node, node_slot const end_node, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, Proj proj ) const noexcept {
+auto bptree_base_wkey<Key>::flatten( node_slot const begin_node, node_slot const end_node, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, Proj proj ) const noexcept( std::is_nothrow_invocable_v<Proj &, Key const &> ) {
     auto node{ begin_node };
     do {
         auto const & lf{ leaf( node ) };
@@ -2185,7 +2207,7 @@ auto bptree_base_wkey<Key>::flatten( node_slot const begin_node, node_slot const
 
 template <typename Key>
 template <typename Proj>
-auto bptree_base_wkey<Key>::flatten( std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto const output, size_type const available_space, Proj proj ) const noexcept {
+auto bptree_base_wkey<Key>::flatten( std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto const output, size_type const available_space, Proj proj ) const noexcept( std::is_nothrow_invocable_v<Proj &, Key const &> ) {
     BOOST_VERIFY( available_space >= this->size() );
     if ( empty() ) [[ unlikely ]]
         return output;
@@ -2195,7 +2217,7 @@ auto bptree_base_wkey<Key>::flatten( std::output_iterator<std::invoke_result_t<P
 
 template <typename Key>
 template <typename Proj>
-auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator const end, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, size_type available_space, Proj proj ) const noexcept {
+auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator const end, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, size_type available_space, Proj proj ) const noexcept( std::is_nothrow_invocable_v<Proj &, Key const &> ) {
     BOOST_ASSERT( available_space >= static_cast<std::size_t>( std::distance( begin, end ) ) );
     auto const   end_pos{   end.base().pos() };
     auto       start_pos{ begin.base().pos() };
