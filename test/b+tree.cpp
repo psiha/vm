@@ -1609,6 +1609,177 @@ TEST( bp_tree, nonunique_lower_bound_from )
     EXPECT_EQ( it, bpt.end() );
 }
 
+// flatten: default identity projection (pre-existing behaviour).
+TEST( bp_tree, flatten_identity )
+{
+    auto constexpr max_per_node{ bptree_set<int>::leaf_node::max_values };
+    auto const n{ static_cast<int>( max_per_node * 4 + 3 ) }; // multi-leaf + partial tail
+
+    bptree_set<int> bpt;
+    bpt.map_memory( static_cast<std::size_t>( n ) );
+
+    std::vector<int> vals( static_cast<std::size_t>( n ) );
+    std::iota( vals.begin(), vals.end(), 0 );
+    bpt.insert_presorted( vals );
+
+    std::vector<int> out( bpt.size() );
+    auto const end{ bpt.flatten( out.begin(), out.size() ) };
+    EXPECT_EQ( end - out.begin(), static_cast<std::ptrdiff_t>( bpt.size() ) );
+    EXPECT_TRUE( std::ranges::equal( out, vals ) );
+}
+
+// flatten: projection that changes the value (and optionally the type).
+TEST( bp_tree, flatten_projection )
+{
+    auto constexpr max_per_node{ bptree_set<int>::leaf_node::max_values };
+    auto const n{ static_cast<int>( max_per_node * 3 + 1 ) };
+
+    bptree_set<int> bpt;
+    bpt.map_memory( static_cast<std::size_t>( n ) );
+
+    std::vector<int> vals( static_cast<std::size_t>( n ) );
+    std::iota( vals.begin(), vals.end(), 0 );
+    bpt.insert_presorted( vals );
+
+    // Same-type projection: double each key.
+    {
+        std::vector<int> out( bpt.size() );
+        bpt.flatten( out.begin(), out.size(), []( int const v ) noexcept { return v * 2; } );
+        std::vector<int> expected( bpt.size() );
+        std::ranges::transform( vals, expected.begin(), []( int const v ) noexcept { return v * 2; } );
+        EXPECT_EQ( out, expected );
+    }
+
+    // Different-type projection: int -> long long, via indirection table.
+    {
+        std::vector<long long> table( static_cast<std::size_t>( n ) );
+        for ( int i{ 0 }; i < n; ++i ) table[ static_cast<std::size_t>( i ) ] = 1000LL + i;
+        std::vector<long long> out( bpt.size() );
+        bpt.flatten( out.begin(), out.size(),
+                     [&]( int const row ) noexcept { return table[ static_cast<std::size_t>( row ) ]; } );
+        EXPECT_EQ( out, table );
+    }
+}
+
+// flatten: range overload (begin,end) with projection -- exercises both the
+// leading-partial-node and trailing-partial-node paths that had the missing
+// output-arg bug.
+TEST( bp_tree, flatten_subrange_projection )
+{
+    auto constexpr max_per_node{ bptree_set<int>::leaf_node::max_values };
+    auto const n{ static_cast<int>( max_per_node * 5 ) };
+
+    bptree_set<int> bpt;
+    bpt.map_memory( static_cast<std::size_t>( n ) );
+
+    std::vector<int> vals( static_cast<std::size_t>( n ) );
+    std::iota( vals.begin(), vals.end(), 0 );
+    bpt.insert_presorted( vals );
+
+    auto const first{ std::next( bpt.begin(), max_per_node / 2 ) };                                  // mid-leaf
+    auto const last { std::next( bpt.begin(), static_cast<std::ptrdiff_t>( max_per_node * 3 + 2 ) ) }; // mid-leaf
+
+    auto const len{ static_cast<std::size_t>( std::distance( first, last ) ) };
+    std::vector<int> out( len );
+    bpt.flatten( first, last, out.begin(), len, []( int const v ) noexcept { return -v; } );
+
+    std::vector<int> expected( len );
+    std::ranges::transform( std::ranges::subrange( first, last ), expected.begin(),
+                            []( int const v ) noexcept { return -v; } );
+    EXPECT_EQ( out, expected );
+}
+
+// leaf_iterator: empty tree -> node_begin == node_end.
+TEST( bp_tree, leaf_iterator_empty )
+{
+    bptree_set<int> bpt;
+    bpt.map_memory();
+    EXPECT_EQ( bpt.node_begin(), bpt.node_end() );
+}
+
+// leaf_iterator: single-leaf tree yields exactly one span matching the tree.
+TEST( bp_tree, leaf_iterator_single_leaf )
+{
+    bptree_set<int> bpt;
+    bpt.map_memory();
+
+    bpt.insert( 7 );
+    bpt.insert( 3 );
+    bpt.insert( 5 );
+
+    auto it{ bpt.node_begin() };
+    ASSERT_NE( it, bpt.node_end() );
+    auto const span{ *it };
+    EXPECT_EQ( span.size(), 3u );
+    EXPECT_TRUE( std::ranges::equal( span, std::initializer_list<int>{ 3, 5, 7 } ) );
+    ++it;
+    EXPECT_EQ( it, bpt.node_end() );
+}
+
+// leaf_iterator: multi-leaf tree -- each span contiguous, non-empty, concatenation
+// equals the tree's full sorted sequence.
+TEST( bp_tree, leaf_iterator_multi_leaf )
+{
+    auto constexpr max_per_node{ bptree_set<int>::leaf_node::max_values };
+    auto const n{ static_cast<int>( max_per_node * 7 + 5 ) };
+
+    bptree_set<int> bpt;
+    bpt.map_memory( static_cast<std::size_t>( n ) );
+
+    std::vector<int> vals( static_cast<std::size_t>( n ) );
+    std::iota( vals.begin(), vals.end(), 0 );
+    bpt.insert_presorted( vals );
+
+    std::vector<int> collected;
+    collected.reserve( bpt.size() );
+    std::size_t leaf_count{ 0 };
+    for ( auto it{ bpt.node_begin() }; it != bpt.node_end(); ++it ) {
+        auto const span{ *it };
+        EXPECT_GT( span.size(), 0u );
+        EXPECT_LE( span.size(), static_cast<std::size_t>( max_per_node ) );
+        // Strictly ascending within a leaf.
+        EXPECT_TRUE( std::ranges::is_sorted( span, std::less<>{} ) );
+        collected.insert( collected.end(), span.begin(), span.end() );
+        ++leaf_count;
+    }
+    EXPECT_GT( leaf_count, 1u ); // sanity: really multiple leaves
+    EXPECT_EQ( collected, vals );
+
+    // Post-increment iterator variant + boundary concatenation check.
+    std::vector<int> collected2;
+    collected2.reserve( bpt.size() );
+    for ( auto it{ bpt.node_begin() }, end{ bpt.node_end() }; it != end; ) {
+        auto const span{ *it++ };
+        collected2.insert( collected2.end(), span.begin(), span.end() );
+    }
+    EXPECT_EQ( collected2, vals );
+
+    // Reverse walk via operator--: start at end() and decrement, concatenating
+    // in reverse-leaf order should reproduce the same full sorted sequence
+    // after std::reverse.
+    std::vector<int> reverse_collected;
+    reverse_collected.reserve( bpt.size() );
+    auto rit{ bpt.node_end() };
+    auto const rbegin{ bpt.node_begin() };
+    while ( rit != rbegin ) {
+        --rit;
+        auto const span{ *rit };
+        reverse_collected.insert( reverse_collected.begin(), span.begin(), span.end() );
+    }
+    EXPECT_EQ( reverse_collected, vals );
+
+    // Round-trip: --end() -> last leaf; ++ back to end().
+    auto back{ bpt.node_end() };
+    --back;
+    EXPECT_NE( back, bpt.node_end() );
+    auto const last_span{ *back };
+    EXPECT_FALSE( last_span.empty() );
+    ++back;
+    EXPECT_EQ( back, bpt.node_end() );
+}
+
+static_assert( std::bidirectional_iterator<bptree_set<int>::leaf_iterator> );
+
 //------------------------------------------------------------------------------
 } // namespace psi::vm
 //------------------------------------------------------------------------------

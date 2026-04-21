@@ -657,6 +657,7 @@ public:
 
     class [[ clang::trivial_abi, gsl::Pointer ]] fwd_iterator;
     class [[ clang::trivial_abi, gsl::Pointer ]]  ra_iterator;
+    class [[ clang::trivial_abi, gsl::Pointer ]] leaf_iterator;
 
     using       iterator = fwd_iterator;
     using const_iterator = std::basic_const_iterator<iterator>;
@@ -707,8 +708,19 @@ public:
     const_iterator erase( const_iterator first, const_iterator last ) noexcept;
 
     // optimized version of std::copy( bpt.begin(), bpt.end(), vec.begin() )
-    auto flatten(                                           std::output_iterator<Key> auto output, size_type available_space ) const noexcept;
-    auto flatten( const_iterator begin, const_iterator end, std::output_iterator<Key> auto output, size_type available_space ) const noexcept;
+    template <typename Proj = std::identity>
+    auto flatten(                                           std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, size_type available_space, Proj proj = {} ) const noexcept;
+    template <typename Proj = std::identity>
+    auto flatten( const_iterator begin, const_iterator end, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, size_type available_space, Proj proj = {} ) const noexcept;
+
+    // Leaf-node iteration: walk the doubly-linked list of leaves directly,
+    // dereferencing to std::span<Key const> of each leaf's keys.  Lets callers
+    // express a two-level loop ('for each leaf { for each key }') that avoids
+    // the per-step bookkeeping of fwd_iterator.
+    [[ gnu::pure ]] leaf_iterator node_begin() const noexcept;
+    [[ gnu::pure ]] leaf_iterator node_end  () const noexcept;
+    // Range facade: `for ( auto span : tree.leaves() ) { for ( auto k : span ) ... }`.
+    [[ gnu::pure ]] auto leaves() const noexcept { return std::ranges::subrange{ node_begin(), node_end() }; }
 
     // solely a debugging helper (include b+tree_print.hpp)
     void print() const;
@@ -1737,6 +1749,15 @@ protected: // 'other'
         unlink_and_free_node( right, left );
     }
 
+    static auto copy_n( leaf_node const & lf, node_size_type const offset, node_size_type const count, auto output, auto && proj ) noexcept
+    {
+        if constexpr ( std::is_same_v<std::remove_cvref_t<decltype( proj )>, std::identity> ) {
+            return std::copy_n( &lf.keys[ offset ], count, output );
+        } else {
+            return std::transform( &lf.keys[ offset ], &lf.keys[ offset + count ], output, proj );
+        }
+    }
+
     static void verify( auto const & node ) noexcept
     {
         //...mrmlj...need not hold for nonunique trees
@@ -1771,7 +1792,8 @@ private:
         return total_count;
     }
 
-    auto flatten( node_slot begin_node, node_slot end_node, std::output_iterator<Key> auto output ) const noexcept;
+    template <typename Proj = std::identity>
+    auto flatten( node_slot begin_node, node_slot end_node, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, Proj proj = {} ) const noexcept;
 }; // class bptree_base_wkey
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1992,6 +2014,81 @@ private:
 }; // class ra_full_node_iterator
 
 
+////////////////////////////////////////////////////////////////////////////////
+// \class bptree_base_wkey::leaf_iterator
+////////////////////////////////////////////////////////////////////////////////
+// Bidirectional iterator over the doubly-linked list of leaf nodes: dereferences
+// to std::span<Key const> of the leaf's keys.  Enables two-level loops that
+// skip the per-step pos_ bookkeeping inside fwd_iterator.
+template <typename Key>
+class [[ clang::trivial_abi, gsl::Pointer ]] bptree_base_wkey<Key>::leaf_iterator
+{
+public:
+    using iterator_category = std::bidirectional_iterator_tag;
+    using iterator_concept  = std::bidirectional_iterator_tag;
+    using value_type        = std::span<Key const>;
+    using reference         = std::span<Key const>;
+    using difference_type   = std::ptrdiff_t;
+    using pointer           = void;
+
+    constexpr leaf_iterator() noexcept = default;
+    constexpr leaf_iterator( bptree_base_wkey const & tree, leaf_node const * const lf ) noexcept
+        : p_leaf_{ lf }, p_tree_{ &tree } {}
+
+    [[ gnu::pure ]]
+    std::span<Key const> operator*() const noexcept
+    {
+        BOOST_ASSUME( p_leaf_ );
+        BOOST_ASSUME( p_leaf_->num_vals <= leaf_node::max_values );
+        return { p_leaf_->keys, p_leaf_->num_vals };
+    }
+
+    leaf_iterator & operator++() noexcept
+    {
+        BOOST_ASSUME( p_leaf_ );
+        p_leaf_ = BOOST_LIKELY( bool( p_leaf_->right ) ) ? &p_tree_->leaf( p_leaf_->right ) : nullptr;
+        return *this;
+    }
+    leaf_iterator operator++( int ) noexcept { auto const tmp{ *this }; ++*this; return tmp; }
+
+    // Decrementing end() yields the last leaf; decrementing begin() is
+    // undefined (matches std::bidirectional_iterator contract).
+    leaf_iterator & operator--() noexcept
+    {
+        if ( !p_leaf_ ) [[ unlikely ]] { // end -> last leaf
+            BOOST_ASSUME( !p_tree_->empty() );
+            p_leaf_ = &p_tree_->leaf( p_tree_->hdr().last_leaf_ );
+        } else {
+            BOOST_ASSUME( bool( p_leaf_->left ) );
+            p_leaf_ = &p_tree_->leaf( p_leaf_->left );
+        }
+        return *this;
+    }
+    leaf_iterator operator--( int ) noexcept { auto const tmp{ *this }; --*this; return tmp; }
+
+    [[ gnu::pure ]] friend auto operator<=>( leaf_iterator const & lhs, leaf_iterator const & rhs ) noexcept { BOOST_ASSUME( lhs.p_tree_ == rhs.p_tree_ ); return lhs.p_leaf_ <=> rhs.p_leaf_; }
+    [[ gnu::pure ]] friend bool operator== ( leaf_iterator const & lhs, leaf_iterator const & rhs ) noexcept = default;
+
+private:
+    leaf_node        const * __restrict p_leaf_{};
+    bptree_base_wkey const * __restrict p_tree_{};
+}; // class leaf_iterator
+
+template <typename Key>
+typename bptree_base_wkey<Key>::leaf_iterator
+bptree_base_wkey<Key>::node_begin() const noexcept
+{
+    return { *this, empty() ? nullptr : &leaf( first_leaf() ) };
+}
+
+template <typename Key>
+typename bptree_base_wkey<Key>::leaf_iterator
+bptree_base_wkey<Key>::node_end() const noexcept
+{
+    return { *this, nullptr };
+}
+
+
 template <typename Key>
 typename
 bptree_base_wkey<Key>::const_iterator
@@ -2075,27 +2172,30 @@ bptree_base_wkey<Key>::erase( const_iterator const first, const_iterator const l
 }
 
 template <typename Key>
-auto bptree_base_wkey<Key>::flatten( node_slot const begin_node, node_slot const end_node, std::output_iterator<Key> auto output ) const noexcept {
+template <typename Proj>
+auto bptree_base_wkey<Key>::flatten( node_slot const begin_node, node_slot const end_node, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, Proj proj ) const noexcept {
     auto node{ begin_node };
     do {
         auto const & lf{ leaf( node ) };
-        output = std::uninitialized_copy_n( lf.keys, lf.num_vals, output );
+        output = copy_n( lf, 0, lf.num_vals, output, proj );
         node   = lf.right;
     } while ( node != end_node );
     return output;
 }
 
 template <typename Key>
-auto bptree_base_wkey<Key>::flatten( std::output_iterator<Key> auto const output, size_type const available_space ) const noexcept {
+template <typename Proj>
+auto bptree_base_wkey<Key>::flatten( std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto const output, size_type const available_space, Proj proj ) const noexcept {
     BOOST_VERIFY( available_space >= this->size() );
     if ( empty() ) [[ unlikely ]]
         return output;
     BOOST_ASSERT( !leaf( hdr().last_leaf_ ).right ); // broken last_leaf (should have null-right sibling)
-    return flatten( first_leaf(), {}, output );
+    return flatten( first_leaf(), {}, output, std::move( proj ) );
 }
 
 template <typename Key>
-auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator const end, std::output_iterator<Key> auto output, size_type available_space ) const noexcept {
+template <typename Proj>
+auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator const end, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, size_type available_space, Proj proj ) const noexcept {
     BOOST_ASSERT( available_space >= static_cast<std::size_t>( std::distance( begin, end ) ) );
     auto const   end_pos{   end.base().pos() };
     auto       start_pos{ begin.base().pos() };
@@ -2110,7 +2210,7 @@ auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator 
         node_header::size_type const copy_end { start_node_is_end_node ? end_pos.value_offset : lf.num_vals };
         node_header::size_type const copy_size( copy_end - start_pos.value_offset );
         BOOST_ASSUME( copy_size <= available_space );
-        output = std::uninitialized_copy_n( &lf.keys[ start_pos.value_offset ], copy_size, output );
+        output = copy_n( lf, start_pos.value_offset, copy_size, output, proj );
         if ( copy_size == available_space ) { // single (partial) node data
             // not simply testing start_node_is_end_node as it does not cover
             // the edge case of where start_pos is the last value of a node and
@@ -2124,14 +2224,14 @@ auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator 
         start_pos = { lf.right, 0 };
     }
 
-    if ( start_pos.node != end_pos.node )
-        output = flatten( start_pos.node, end_pos.node, output );
+    if ( start_pos.node != end_pos.node ) {
+        output = flatten( start_pos.node, end_pos.node, output, proj );
+    }
 
     if ( end_pos.node ) // handle trailing partial node
     {
         auto const & lf{ leaf( end_pos.node ) };
-        auto const lf_keys{ keys( lf ).subspan( 0, end_pos.value_offset ) };
-        output = std::uninitialized_copy( lf_keys.begin(), lf_keys.end(), output );
+        output = copy_n( lf, 0, end_pos.value_offset, output, proj );
     }
 
     return output;
