@@ -297,7 +297,7 @@ TYPED_TEST( strided_vector_compliance, assign_count_prototype_replaces_contents 
     v.assign( 3, as_span( proto ) );
     EXPECT_EQ( v.size  (), 3u );
     EXPECT_EQ( v.stride(), 2u );
-    for ( std::size_t i{ 0 }; i < v.size(); ++i )
+    for ( typename TypeParam::size_type i{ 0 }; i < v.size(); ++i )
         EXPECT_TRUE( std::ranges::equal( v[ i ], proto ) );
 }
 
