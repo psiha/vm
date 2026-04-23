@@ -555,11 +555,22 @@ public:
     //! <b>Throws</b>: If memory allocation throws, or T's copy/move constructor throws.
     //!
     //! <b>Complexity</b>: Linear to the difference between this->size() and new_size.
-    template <typename Initializer>
-    void resize( size_type const new_size, Initializer && initializer )
+    void resize( size_type const new_size, init_policy auto const initializer )
     {
-        if ( new_size > this->size() )   grow_to( new_size, std::forward<Initializer>( initializer ) );
-        else                           shrink_to( new_size                                           );
+        if ( new_size > this->size() )   grow_to( new_size, initializer );
+        else                           shrink_to( new_size              );
+    }
+
+    // Value-fill overload: new entries get constructed from `default_value`.
+    // Kept as a separate overload — constrained on `constructible_from` —
+    // so the init-policy tag path is the privileged resolution (a bare
+    // tag can't accidentally bind to this value-fill form).
+    template <typename U>
+    requires( !init_policy<std::remove_cvref_t<U>> && std::constructible_from<value_type, U> )
+    void resize( size_type const new_size, U && default_value )
+    {
+        if ( new_size > this->size() )   grow_to( new_size, std::forward<U>( default_value ) );
+        else                           shrink_to( new_size                                   );
     }
 
     void shrink_to_fit( ) noexcept { this->storage_shrink_to( this->size() ); }

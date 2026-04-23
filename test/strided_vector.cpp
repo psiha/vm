@@ -76,8 +76,8 @@ TYPED_TEST( strided_vector_compliance, default_constructor )
 {
     TypeParam v;
     EXPECT_TRUE( v.empty() );
-    EXPECT_EQ  ( v.size (), 0u );
-    EXPECT_EQ  ( v.stride(), 1u ); // default stride is 1, never 0
+    EXPECT_EQ  ( v.size  (), 0u );
+    EXPECT_EQ  ( v.stride(), 0u ); // default stride is the zero sentinel — "fresh / unconfigured"
 }
 
 TYPED_TEST( strided_vector_compliance, stride_constructor )
@@ -231,8 +231,8 @@ TYPED_TEST( strided_vector_compliance, moved_from_is_reusable_via_init )
     a.push_back( as_span( make_entry<TypeParam>( { 7, 8 } ) ) );
     TypeParam b{ std::move( a ) };
     // After move, source's stride is 0 (sentinel for fresh/uninitialised).
-    // init() re-arms it for reuse, same flow as on a default-constructed one.
-    a.init( 3 );
+    // reset() re-arms it for reuse, same flow as on a default-constructed one.
+    a.reset( 3 );
     EXPECT_EQ  ( a.stride(), 3u );
     EXPECT_TRUE( a.empty() );
     a.push_back( as_span( make_entry<TypeParam>( { 1, 2, 3 } ) ) );
@@ -332,15 +332,18 @@ TYPED_TEST( strided_vector_compliance, assign_range_of_entries )
 // 2. Capacity
 ////////////////////////////////////////////////////////////////////////////////
 
-TYPED_TEST( strided_vector_compliance, init_sets_stride_and_resets )
+TYPED_TEST( strided_vector_compliance, reset_sets_stride_and_clears )
 {
     TypeParam v;
-    v.init( 3 );
+    // Default-constructed: stride is the zero sentinel (fresh / unconfigured).
+    EXPECT_EQ  ( v.stride(), 0u );
+    EXPECT_TRUE( v.empty ()     );
+    v.reset( 3 );
     EXPECT_EQ  ( v.stride(), 3u );
     EXPECT_TRUE( v.empty ()     );
     v.push_back( as_span( make_entry<TypeParam>( { 1, 2, 3 } ) ) );
     EXPECT_EQ( v.size(), 1u );
-    v.init( 2 );
+    v.reset( 2 );
     EXPECT_EQ  ( v.stride(), 2u );
     EXPECT_TRUE( v.empty ()     );
 }

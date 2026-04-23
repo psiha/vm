@@ -508,7 +508,7 @@ public:
     constexpr strided_vector & operator=( strided_vector const & ) = default;
 
     constexpr strided_vector( strided_vector && other ) noexcept( std::is_nothrow_move_constructible_v<backing_vector_type> )
-        : data_  { std::move( other.data_ ) }
+        : data_  { std::move    ( other.data_ ) }
         , stride_{ std::exchange( other.stride_, stride_type{ 0 } ) }
     {}
 
@@ -526,18 +526,34 @@ public:
 
     // Construct `count` default-initialized entries of the given stride
     constexpr strided_vector( stride_type const stride, size_type const count )
-        : data_( static_cast<size_type>( count ) * stride ), stride_{ stride }
-    { BOOST_ASSUME( stride <= MaxStride ); }
+        : data_( static_cast<size_type>( count * stride ) ), stride_{ stride }
+    {
+        BOOST_ASSUME( stride <= MaxStride );
+        BOOST_ASSUME( stride > 0 || count == 0 ); // zero-stride only supported when empty
+    }
 
     // Construct `count` entries initialized from a prototype span
     constexpr strided_vector( stride_type const stride, size_type const count, std::span<T const> const prototype )
         : stride_{ stride }
     {
         BOOST_ASSUME( stride <= MaxStride );
+        BOOST_ASSUME( stride > 0 || count == 0 ); // zero-stride only supported when empty
         BOOST_ASSERT( prototype.size() == stride );
-        data_.reserve( count * stride );
-        for ( size_type i{ 0 }; i < count; ++i ) {
-            data_.append_range( prototype );
+        if constexpr ( std::is_trivially_destructible_v<T> )
+        {
+            // Single reserve-and-resize with no per-slot construction, then
+            // stamp `prototype` into each slot. Avoids N append_range calls.
+            data_.resize( count * stride, no_init );
+            auto * dst{ data_.data() };
+            for ( size_type i{ 0 }; i < count; ++i, dst += stride )
+                std::ranges::copy( prototype, dst );
+        }
+        else
+        {
+            data_.reserve( count * stride );
+            for ( size_type i{ 0 }; i < count; ++i ) {
+                data_.append_range( prototype );
+            }
         }
     }
 
@@ -559,8 +575,11 @@ public:
     // Stride control
     //--------------------------------------------------------------------------
 
-    /// Clears the container and sets a new stride.
-    void init( stride_type const s ) noexcept
+    /// Clears the container and sets a new stride. Idempotent reset: can be
+    /// called repeatedly, can be called on a default-constructed (stride_==0)
+    /// instance. Call-site-wise this replaces both "fresh init" and
+    /// "reconfigure stride" uses — hence the rename from init() to reset().
+    void reset( stride_type const s ) noexcept
     {
         BOOST_ASSUME( s <= MaxStride );
         stride_ = s;
@@ -685,9 +704,19 @@ public:
         BOOST_ASSUME( stride_ >= 1 );
         BOOST_ASSERT( prototype.size() == stride_ );
         data_.clear();
-        data_.reserve( count * stride_ );
-        for ( size_type i{ 0 }; i < count; ++i ) {
-            data_.append_range( prototype );
+        if constexpr ( std::is_trivially_destructible_v<T> )
+        {
+            data_.resize( count * stride_, no_init );
+            auto * dst{ data_.data() };
+            for ( size_type i{ 0 }; i < count; ++i, dst += stride_ )
+                std::ranges::copy( prototype, dst );
+        }
+        else
+        {
+            data_.reserve( count * stride_ );
+            for ( size_type i{ 0 }; i < count; ++i ) {
+                data_.append_range( prototype );
+            }
         }
     }
 
@@ -808,6 +837,15 @@ public:
     /// Resize to `count` entries. New entries are default-initialized.
     void resize( size_type const count ) { data_.resize( count * stride_ ); }
 
+    /// Resize to `count` entries, forwarding init-policy to the backing
+    /// vector (no_init / default_init / value_init — see psi::vm::vector).
+    /// `no_init` requires a trivially-destructible element type; for other
+    /// types use `default_init` or `value_init`, or the span-prototype form.
+    void resize( size_type const count, init_policy auto const initializer )
+    {
+        data_.resize( count * stride_, initializer );
+    }
+
     /// Resize to `count` entries. New entries are filled from `prototype`.
     void resize( size_type const count, std::span<T const> const prototype )
     {
@@ -817,6 +855,18 @@ public:
         if ( count <= old_entries )
         {
             data_.resize( count * stride_ );
+        }
+        else if constexpr ( std::is_trivially_destructible_v<T> )
+        {
+            // Grow in one shot with no per-slot construction, then stamp
+            // `prototype` into the new tail — one reserve + tight copy loop
+            // beats N append_range calls (each re-checks capacity and
+            // increments size).
+            auto const first_new{ old_entries };
+            data_.resize( count * stride_, no_init );
+            auto * dst{ data_.data() + first_new * stride_ };
+            for ( auto i{ first_new }; i < count; ++i, dst += stride_ )
+                std::ranges::copy( prototype, dst );
         }
         else
         {
@@ -874,7 +924,16 @@ private:
     }
 
     backing_vector_type data_;
-    stride_type         stride_{ 1 };
+    // Default stride is 0: the container is in the fully-uninitialized
+    // "scalar/empty" state. A zero-stride strided_vector has size()==0,
+    // capacity()==0, and empty()==true; all mutation methods assert
+    // stride_ >= 1 so callers that want to mutate must first call
+    // reset(stride). This gives callers a sentinel — `numDims()==0` means
+    // "never configured" — which matches what every "is this freshly
+    // constructed?" site in the rama code wanted anyway (the old default
+    // of 1 was a silent foot-gun; see hemofarm regression, psi.vm commit
+    // c7a35c1's follow-ups).
+    stride_type         stride_{ 0 };
 }; // class strided_vector
 
 //------------------------------------------------------------------------------
