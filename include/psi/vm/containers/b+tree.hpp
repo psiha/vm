@@ -2426,11 +2426,26 @@ protected: // pass-in-reg public function overloads/impls
     // Forward-only lower_bound: returns the first element >= key starting from pos.
     // Reuses find_from() which already computes the insertion point — but instead
     // of discarding non-exact positions, returns the lower_bound iterator.
+    //
+    // Contract (FORWARD-ONLY): the key must be ≥ the key currently at `pos`.
+    // I.e. either `pos` is past-the-end of its leaf (value_offset == num_vals,
+    // nothing to compare against), or `key ≥ keys(leaf(pos.node))[pos.value_offset]`.
+    // Passing a smaller key would require walking *backward* in the leaf — a case
+    // `find_from`'s one-leaf fast path doesn't support and which later trips the
+    // `starting_leaf != containing_leaf || pos.pos == num_vals` assumption inside
+    // `find_from` with no caller context.
     [[ using gnu: pure, sysv_abi ]]
     const_iterator lower_bound_from_impl( iter_pos const pos, Reg auto const key ) const noexcept
     {
         BOOST_ASSUME( !empty() );
-        auto const [p_leaf, next_pos]{ find_from( leaf( pos.node ), pos.value_offset, key ) };
+        auto const & starting_leaf{ leaf( pos.node ) };
+        BOOST_ASSERT_MSG
+        (
+            pos.value_offset == starting_leaf.num_vals ||
+            !lt( key, keys( starting_leaf )[ pos.value_offset ] ),
+            "lower_bound_from() contract violation: 'key' is smaller than the key at the given position"
+        );
+        auto const [p_leaf, next_pos]{ find_from( starting_leaf, pos.value_offset, key ) };
         // next_pos.pos is the insertion point (first element >= key) regardless of exact_find
         if ( next_pos.pos < p_leaf->num_vals ) {
             return base::make_iter( *p_leaf, next_pos.pos );
@@ -2725,10 +2740,8 @@ protected:
 
     insertion_point_t find_next_insertion_point( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, Reg auto const key, bool const unique ) const noexcept
     {
-        if ( unique )
-            return find_from         ( starting_leaf, starting_leaf_offset, key );
-        else
-            return find_from_nonunique( starting_leaf, starting_leaf_offset, key );
+        if ( unique ) return find_from          ( starting_leaf, starting_leaf_offset, key );
+        else          return find_from_nonunique( starting_leaf, starting_leaf_offset, key );
     }
 
     size_type insert( typename base::bulk_copied_input, bool unique );
