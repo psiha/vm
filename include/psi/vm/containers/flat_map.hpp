@@ -776,7 +776,16 @@ public:
     constexpr iterator insert( const_iterator hint, value_type const & v ) { return emplace_hint( hint, v.first, v.second ); }
     constexpr iterator insert( const_iterator hint, value_type &&      v ) { return emplace_hint( hint, std::move( v.first ), std::move( v.second ) ); }
 
+    // SFINAE on the non-hinted overload: a `K` convertible to
+    // `const_iterator` would otherwise out-rank the hinted overload's
+    // implicit iterator->const_iterator conversion in overload
+    // resolution, sending a `try_emplace(end(), key, val)` call into
+    // this 3-arg-K-is-iterator path with key_type(iterator) construction
+    // that fails deep inside. Standard-library `map::try_emplace`
+    // resolves this via separate iterator-typed hint overloads; this
+    // template-pack form needs the explicit constraint.
     template <typename K, typename... Args>
+    requires ( !std::convertible_to<K &&, const_iterator> )
     constexpr std::pair<iterator, bool> try_emplace( K && key, Args &&... args ) {
         auto const pos{ this->lower_bound_index( key ) };
         if ( this->key_eq_at( pos, key ) )
@@ -801,7 +810,9 @@ public:
         return try_emplace( std::forward<K>( key ), std::forward<Args>( args )... ).first;
     }
 
+    // See try_emplace SFINAE comment above — same overload-rank issue.
     template <typename K, typename M>
+    requires ( !std::convertible_to<K &&, const_iterator> )
     constexpr std::pair<iterator, bool> insert_or_assign( K && key, M && value ) {
         auto const pos{ this->lower_bound_index( key ) };
         if ( this->key_eq_at( pos, key ) ) {
@@ -822,9 +833,16 @@ public:
         return insert_or_assign( std::forward<K>( key ), std::forward<M>( value ) ).first;
     }
 
-    template <typename... Args>
-    constexpr std::pair<iterator, bool> emplace( Args &&... args ) {
-        value_type v( std::forward<Args>( args )... );
+    // See try_emplace SFINAE comment above — same overload-rank issue
+    // applies when the first argument is iterator-convertible.
+    template <typename First, typename... Rest>
+    requires ( !std::convertible_to<First &&, const_iterator> )
+    constexpr std::pair<iterator, bool> emplace( First && first, Rest &&... rest ) {
+        value_type v( std::forward<First>( first ), std::forward<Rest>( rest )... );
+        return try_emplace( std::move( v.first ), std::move( v.second ) );
+    }
+    constexpr std::pair<iterator, bool> emplace() {
+        value_type v{};
         return try_emplace( std::move( v.first ), std::move( v.second ) );
     }
     template <typename... Args>
@@ -925,9 +943,18 @@ public:
     constexpr iterator insert( const_iterator hint, value_type const & v ) { return emplace_hint( hint, v.first, v.second ); }
     constexpr iterator insert( const_iterator hint, value_type &&      v ) { return emplace_hint( hint, std::move( v.first ), std::move( v.second ) ); }
 
-    template <typename... Args>
-    constexpr iterator emplace( Args &&... args ) {
-        value_type v( std::forward<Args>( args )... );
+    // See try_emplace SFINAE comment in flat_map_impl — same overload-rank
+    // issue applies when the first argument is iterator-convertible.
+    template <typename First, typename... Rest>
+    requires ( !std::convertible_to<First &&, const_iterator> )
+    constexpr iterator emplace( First && first, Rest &&... rest ) {
+        value_type v( std::forward<First>( first ), std::forward<Rest>( rest )... );
+        auto const pos{ this->lower_bound_index( v.first ) };
+        this->storage_.insert_element_at( pos, std::move( v.first ), std::move( v.second ) );
+        return this->make_iter( pos );
+    }
+    constexpr iterator emplace() {
+        value_type v{};
         auto const pos{ this->lower_bound_index( v.first ) };
         this->storage_.insert_element_at( pos, std::move( v.first ), std::move( v.second ) );
         return this->make_iter( pos );
