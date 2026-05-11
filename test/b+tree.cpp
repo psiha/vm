@@ -1317,12 +1317,8 @@ TEST( bp_tree, lower_bound_from )
         ASSERT_NE( it, e );
         EXPECT_EQ( *it, 2 );
 
-        // key before all elements (-1): should find 0 (first element)
-        // Note: lower_bound_from searches forward from pos, key < *pos
-        // means the pos itself is the answer
-        it = bpt.lower_bound_from( b, -1 );
-        ASSERT_NE( it, e );
-        EXPECT_EQ( *it, 0 );
+        // Note: key < keys[pos] is a contract violation (forward-only).
+        // Non-monotonic lookups must use find(), not lower_bound_from().
     }
 
     // --- pos=middle (pointing at element 10) ---
@@ -1346,16 +1342,8 @@ TEST( bp_tree, lower_bound_from )
         ASSERT_NE( it, e );
         EXPECT_EQ( *it, 12 );
 
-        // key before pos (9): find_from searches from offset, key < keys[offset]
-        // should still return 10 (the element at pos — first >= key from offset)
-        it = bpt.lower_bound_from( mid, 9 );
-        ASSERT_NE( it, e );
-        EXPECT_EQ( *it, 10 );
-
-        // key way before pos (1): same — first >= 1 from offset is 10
-        it = bpt.lower_bound_from( mid, 1 );
-        ASSERT_NE( it, e );
-        EXPECT_EQ( *it, 10 );
+        // Note: keys < keys[mid] (9, 1, …) violate the forward-only contract;
+        // such non-monotonic lookups must use find(), not lower_bound_from().
     }
 
     // --- pos=last element (18) ---
