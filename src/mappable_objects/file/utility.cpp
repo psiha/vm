@@ -87,6 +87,18 @@ namespace detail0
             desired_size = get_size( file_handle );
         }
 
+        // Empty file → empty mapped_view. `windows_mmap` and POSIX `mmap`
+        // both reject a zero-size view (Windows hits
+        // STATUS_MAPPED_FILE_SIZE_ZERO inside NtCreateSection; POSIX
+        // returns EINVAL); the design contract is that callers handle the
+        // zero-size case themselves (see the `BOOST_ASSUME( desired_size )`
+        // in `windows_mmap`). Returning a default-constructed empty view
+        // gives consumers a successful "0 bytes mapped" result that they
+        // can iterate over as a zero-length range.
+        if ( desired_size == 0 ) {
+            return mapped_view{};
+        }
+
         using ap    = flags::access_privileges;
         using flags = flags::mapping;
         return mapped_view::map
@@ -116,6 +128,12 @@ namespace detail0
         /// know the size of the mapping/mapped view.
         ///                               (23.03.2018.) (Domagoj Saric)
         auto const size( get_size( file_handle ) );
+
+        // Empty file → empty read_only_mapped_view. See the writable
+        // sibling above for the rationale.
+        if ( size == 0 ) {
+            return read_only_mapped_view{};
+        }
 
         using ap    = flags::access_privileges;
         using flags = flags::mapping;
