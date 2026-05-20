@@ -1274,7 +1274,7 @@ public:
 template <std::ranges::range L, std::ranges::range R> requires( psi_vm_vector<L> || psi_vm_vector<R> )
 [[ nodiscard ]] constexpr auto operator<=>( L const & left, R const & right ) noexcept { return std::lexicographical_compare_three_way( left.begin(), left.end(), right.begin(), right.end() ); }
 template <std::ranges::range L, std::ranges::range R> requires( psi_vm_vector<L> || psi_vm_vector<R> )
-[[ nodiscard ]] constexpr auto operator== ( L const & left, R const & right ) noexcept { return std::equal                            ( left.begin(), left.end(), right.begin(), right.end() ); }
+[[ nodiscard ]] constexpr bool operator== ( L const & left, R const & right ) noexcept { return std::equal                            ( left.begin(), left.end(), right.begin(), right.end() ); }
 
 PSI_WARNING_DISABLE_POP()
 
