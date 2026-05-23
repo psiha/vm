@@ -26,11 +26,11 @@ namespace psi::vm
 // conservative on this platform.
 TEST( vector_traits, variant_not_trivially_moveable_on_msvc )
 {
-#if defined( _MSC_VER )
+#if defined( _MSVC_STL_VERSION )
     using variant_type = std::variant<heap_vector<int, std::uint32_t>, std::vector<int>>;
     EXPECT_FALSE( ( is_trivially_moveable<variant_type> ) );
 #else
-    GTEST_SKIP() << "MSVC-only regression guard";
+    GTEST_SKIP() << "MS STL-specific regression guard";
 #endif
 }
 
