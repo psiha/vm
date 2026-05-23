@@ -144,7 +144,11 @@ template <typename E, typename T, typename A> bool constexpr is_trivially_moveab
 #if defined( __GLIBCXX__ )
 template <typename S> bool constexpr is_trivially_moveable<std::function<S>>{ true };
 #endif
+#ifdef _MSC_VER
+template <typename... T> bool constexpr is_trivially_moveable<std::variant<T...>>{ false };
+#else
 template <typename... T> bool constexpr is_trivially_moveable<std::variant<T...>>{( is_trivially_moveable<T> && ... )};
+#endif
 
 
 //------------------------------------------------------------------------------

@@ -14,11 +14,25 @@
 #include <ranges>
 #include <span>
 #include <string>
+#include <variant>
 #include <vector>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
 //------------------------------------------------------------------------------
+
+// Regression: on MSVC ABI, treating std::variant as trivially moveable can lead
+// to unsafe realloc-based relocation in heap_storage users. Keep the trait
+// conservative on this platform.
+TEST( vector_traits, variant_not_trivially_moveable_on_msvc )
+{
+#if defined( _MSC_VER )
+    using variant_type = std::variant<heap_vector<int, std::uint32_t>, std::vector<int>>;
+    EXPECT_FALSE( ( is_trivially_moveable<variant_type> ) );
+#else
+    GTEST_SKIP() << "MSVC-only regression guard";
+#endif
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // Typed test suite -- runs every test against all vector types
