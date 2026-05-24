@@ -14,11 +14,54 @@
 #include <ranges>
 #include <span>
 #include <string>
+#include <variant>
 #include <vector>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
 //------------------------------------------------------------------------------
+
+// Regression harness: stress heap_vector growth/relocation with variant payloads.
+// This guards the fast relocation path used when the trait marks the variant
+// as trivially moveable on a given STL/toolchain.
+TEST( vector_traits, heap_vector_variant_growth_preserves_values )
+{
+    using payload = std::variant<std::vector<int>, std::string>;
+    heap_vector<payload, std::uint32_t> v;
+
+    auto const expect_value = []( payload const & p, std::uint32_t const i ) {
+        if ( ( i & 1U ) == 0U ) {
+            ASSERT_TRUE( std::holds_alternative<std::vector<int>>( p ) );
+            auto const & vec{ std::get<std::vector<int>>( p ) };
+            ASSERT_EQ( vec.size(), 3U );
+            EXPECT_EQ( vec[ 0 ], static_cast<int>( i ) );
+            EXPECT_EQ( vec[ 1 ], static_cast<int>( i + 1U ) );
+            EXPECT_EQ( vec[ 2 ], static_cast<int>( i + 2U ) );
+        } else {
+            ASSERT_TRUE( std::holds_alternative<std::string>( p ) );
+            EXPECT_EQ( std::get<std::string>( p ), std::to_string( i ) );
+        }
+    };
+
+    for ( std::uint32_t i{ 0 }; i < 20000; ++i ) {
+        if ( ( i & 1U ) == 0U ) {
+            payload p{ std::vector<int>{
+                static_cast<int>( i ),
+                static_cast<int>( i + 1U ),
+                static_cast<int>( i + 2U )
+            } };
+            v.push_back( std::move( p ) );
+        } else {
+            payload p{ std::to_string( i ) };
+            v.push_back( std::move( p ) );
+        }
+    }
+
+    ASSERT_EQ( v.size(), 20000U );
+    for ( std::uint32_t i{ 0 }; i < v.size(); ++i ) {
+        expect_value( v[ i ], i );
+    }
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // Typed test suite -- runs every test against all vector types
