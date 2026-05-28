@@ -888,6 +888,92 @@ TEST( bptree_cow, commit_bulk_erase )
 #endif
 }
 
+TEST( bptree_cow, commit_bulk_insert_reuses_freed_leaves )
+{
+    // Regression test for missing mark_dirty() in bulk_insert_prepare's
+    // free-list reuse path.
+    //
+    // Sequence that exposes the bug:
+    //   1. Populate src with N keys (allocates several leaves).
+    //   2. COW clone + erase a contiguous range so multiple whole leaves
+    //      get freed; commit back so src ends up with a non-empty free
+    //      list whose nodes are clean from the master's point of view.
+    //   3. COW clone again + bulk-insert keys via the sized-range insert
+    //      overload. bulk_insert_prepare's `can_preallocate` branch then
+    //      walks the free list directly (no `new_node()` call) and fills
+    //      the freed leaves with new keys. Before the fix it did NOT call
+    //      mark_dirty() on those populated leaves.
+    //   4. commit_to: selective dirty-node copy skips the populated leaves
+    //      (their dirty bit was left at the post-erase clean state from
+    //      the master) and src never receives the new key bytes.
+    //   5. Reading src would then return wrong contents — `has()` for the
+    //      inserted keys would fail, and tree walks could even hit stale
+    //      bytes left over from the freed nodes.
+    //
+    // To stress the bug, the inserted batch must span multiple leaves so
+    // the middle ones (which no incidental mark_dirty path reaches) are
+    // exercised, not just the head/tail.
+    bptree_set<int> src;
+    src.map_memory();
+
+    auto constexpr N        { 4000 };
+    auto constexpr erase_lo { 500  };
+    auto constexpr erased   { 1500 };
+    auto constexpr erase_hi { erase_lo + erased }; // 2000
+    auto constexpr inserts  { 1500 }; // disjoint keys [N..N+inserts)
+    static_assert( erase_hi <= N );
+
+    {
+        std::vector<int> values( N );
+        std::iota( values.begin(), values.end(), 0 );
+        src.insert( values );
+    }
+    ASSERT_EQ( src.size(), static_cast<std::size_t>( N ) );
+
+    // Step 2: drop a contiguous middle range so several whole leaves end up
+    // on src's free list after the commit.
+    {
+        bptree_set<int> clone{ src };
+        std::vector<int> to_erase( erased );
+        std::iota( to_erase.begin(), to_erase.end(), erase_lo );
+        clone.erase_sorted( to_erase );
+        ASSERT_EQ( clone.size(), static_cast<std::size_t>( N - erased ) );
+        clone.commit_to( src );
+    }
+    ASSERT_EQ( src.size(), static_cast<std::size_t>( N - erased ) );
+
+    // Step 3+4: bulk-insert a sized range so bulk_insert_prepare takes the
+    // can_preallocate branch and pulls leaves straight off src's free list.
+    {
+        bptree_set<int> clone{ src };
+        std::vector<int> to_insert( inserts );
+        std::iota( to_insert.begin(), to_insert.end(), N );
+        EXPECT_EQ( clone.insert( to_insert ), static_cast<std::size_t>( inserts ) );
+        ASSERT_EQ( clone.size(), static_cast<std::size_t>( N - erased + inserts ) );
+        clone.commit_to( src );
+    }
+
+    // Step 5: every freshly inserted key must be visible in src.  Before the
+    // fix, leaves drawn from the free list were populated but not marked
+    // dirty, so commit_to skipped them and these lookups would fail
+    // (or worse, blow up while traversing stale free-list bytes).
+    EXPECT_EQ( src.size(), static_cast<std::size_t>( N - erased + inserts ) );
+    for ( int k{ N }; k < N + inserts; ++k )
+    {
+        EXPECT_TRUE( has( src, k ) ) << "missing inserted key " << k;
+    }
+    // Surviving keys from the initial population are untouched.
+    EXPECT_TRUE ( has( src, 0              ) );
+    EXPECT_TRUE ( has( src, erase_lo - 1   ) );
+    EXPECT_TRUE ( has( src, erase_hi       ) );
+    EXPECT_TRUE ( has( src, N - 1          ) );
+    EXPECT_FALSE( has( src, erase_lo       ) );
+    EXPECT_FALSE( has( src, erase_hi - 1   ) );
+#if !__SANITIZE_ADDRESS__
+    EXPECT_TRUE( std::ranges::is_sorted( src, src.comp() ) );
+#endif
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // COW expand test: clone a b+tree, grow it (trigger mapped_view::expand on the
 // COW view), verify both source and clone are intact.
