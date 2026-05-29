@@ -1227,6 +1227,12 @@ protected: // 'other'
                 std::copy_n ( p_keys, size_to_copy, leaf.keys );
                 std::advance( p_keys, size_to_copy );
                 leaf.num_vals  = size_to_copy;
+                // The leaf is being pulled directly off the free list (not via
+                // new_node()), so its persisted dirty bit is whatever the prior
+                // commit_to left behind — typically clean. Without re-marking,
+                // the next commit_to would skip this freshly-populated leaf and
+                // leave stale bytes in master, blowing up later tree walks.
+                leaf.mark_dirty();
                 count         += size_to_copy;
                 *p_node++      = &leaf;
                 BOOST_ASSUME( hdr().free_node_count_ ); // manual/local free node accounting
