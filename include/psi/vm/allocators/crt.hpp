@@ -247,8 +247,17 @@ struct crt_allocator
     static constexpr bool try_expand_supports_null  { false }; // _expand(nullptr) is UB
     // _expand works in-place for shrink, but only on non-aligned (regular malloc)
     // allocations. Callers with alignment > guaranteed_alignment must use shrink_to.
+// __has_feature is a Clang builtin; MSVC's (cl.exe) preprocessor errors on a bare
+// __has_feature(...) token inside #if even when guarded by defined(__has_feature)
+// (it does not short-circuit the parse). Funnel it through a macro so cl.exe never
+// sees the call; clang-cl (which also defines _MSC_VER) still resolves it.
+#if defined( __has_feature )
+#   define PSI_VM_DETAIL_ASAN_ENABLED __has_feature( address_sanitizer )
+#else
+#   define PSI_VM_DETAIL_ASAN_ENABLED 0
+#endif
 #ifdef _MSC_VER
-#   if defined( __SANITIZE_ADDRESS__ ) || ( defined( __has_feature ) && __has_feature( address_sanitizer ) ) || defined( PSI_VM_NO_INPLACE_SHRINK )
+#   if defined( __SANITIZE_ADDRESS__ ) || PSI_VM_DETAIL_ASAN_ENABLED || defined( PSI_VM_NO_INPLACE_SHRINK )
     // AddressSanitizer intercepts the CRT _expand and does NOT honor in-place
     // shrink (its interceptor reports failure), which trips the BOOST_VERIFY in
     // heap_storage::storage_shrink_to. Report shrink as non-guaranteed under ASan
