@@ -263,11 +263,38 @@ private:
         return { const_cast<vector &>( *this ).make_iterator( offset ) };
     }
 
+    // Permanent debug poison (MSVC-debug-heap style). Fills freshly-acquired
+    // `no_init` element storage with 0xCD so a read-before-write surfaces as an
+    // obviously-wild value (0xCDCDCDCD as an index ~= 3.45e9 -> wild store; as a
+    // pointer -> unmapped) AT the misuse site, instead of silently inheriting
+    // heap garbage that only intermittently corrupts a neighbour allocation.
+    // Guards:
+    //   - !storage_zero_initialized: zero-init (VM/mmap) storage carries no
+    //     garbage AND value_init relies on its zero-promise -> never poison it.
+    //   - is_trivially_copyable: only raw POD element storage; non-trivial types
+    //     get proper construction over this region anyway.
+    //   - runtime only (skipped during constant evaluation).
+    // 0xCD (not 0xFF) deliberately avoids colliding with the -1 / SIZE_MAX /
+    // calc_na-style sentinels that are frequently valid values.
+    static constexpr void poison_no_init( [[ maybe_unused ]] value_type * const first, [[ maybe_unused ]] size_type const count ) noexcept
+    {
+#   ifndef NDEBUG
+        if constexpr ( std::is_trivially_copyable_v<value_type> && !storage_t::storage_zero_initialized )
+        {
+            if ( count && !std::is_constant_evaluated() )
+            {
+                std::memset( static_cast<void *>( first ), 0xCD, static_cast<std::size_t>( count ) * sizeof( value_type ) );
+            }
+        }
+#   endif
+    }
+
     // constructor helpers - for initializing the vector during construction
     constexpr void initialized_impl( size_type const initial_size, no_init_t ) noexcept
     {
         storage_t::storage_init( initial_size );
         BOOST_ASSUME( this->size() == initial_size );
+        poison_no_init( this->data(), initial_size );
     }
 
     // GCC 15.2.1 bug: when a base-class constructor inherited via
@@ -1059,7 +1086,13 @@ public:
 
     // Explicit sizing: always exact-fit (no geometric headroom).
     // Append operations (emplace_back) use storage_grow_to() with Growth instead.
-    value_type * grow_to( size_type const target_size, no_init_t ) { return storage_t::template storage_grow_to<geometric_growth{ 1, 1 }>( target_size ); }
+    value_type * grow_to( size_type const target_size, no_init_t )
+    {
+        auto const old_size{ this->size() };
+        auto const p{ storage_t::template storage_grow_to<geometric_growth{ 1, 1 }>( target_size ) };
+        if ( target_size > old_size ) { poison_no_init( p + old_size, target_size - old_size ); }
+        return p;
+    }
     value_type * grow_to( size_type const target_size, default_init_t )
     {
         auto const current_size{ this->size() };
