@@ -248,7 +248,23 @@ struct crt_allocator
     // _expand works in-place for shrink, but only on non-aligned (regular malloc)
     // allocations. Callers with alignment > guaranteed_alignment must use shrink_to.
 #ifdef _MSC_VER
+#   if defined( __SANITIZE_ADDRESS__ ) || ( defined( __has_feature ) && __has_feature( address_sanitizer ) ) || defined( PSI_VM_NO_INPLACE_SHRINK )
+    // AddressSanitizer intercepts the CRT _expand and does NOT honor in-place
+    // shrink (its interceptor reports failure), which trips the BOOST_VERIFY in
+    // heap_storage::storage_shrink_to. Report shrink as non-guaranteed under ASan
+    // so the container falls back to the realloc shrink path. (The GROW path via
+    // try_expand already tolerates failure -> relocate_to, so only the shrink
+    // guarantee needs the carve-out; in_place_ops_require_default_alignment stays
+    // true because _expand is UB on _aligned_malloc'd blocks regardless of ASan.)
+    // PSI_VM_NO_INPLACE_SHRINK: opt-in carve-out for consumers running the plain
+    // system CRT (no mi/je override) under full PageHeap / Application Verifier —
+    // there _expand(ptr, 0) (an empty-container shrink_to_fit) is routed through
+    // _aligned_offset_malloc(0) -> _invalid_parameter -> abort; the realloc shrink
+    // path (realloc(ptr,0) == free) is instrumentation-safe.
+    static constexpr bool guaranteed_in_place_shrink{ false };
+#   else
     static constexpr bool guaranteed_in_place_shrink{ true };
+#   endif
     // True: _expand only works on regular malloc allocations (not _aligned_malloc).
     // Callers must not call try_expand / try_shrink_in_place when alignment > guaranteed.
     static constexpr bool in_place_ops_require_default_alignment{ true };
