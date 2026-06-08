@@ -800,7 +800,18 @@ public:
             }
         }
         auto const iter{ make_space_for_insert( position, 1 ) };
-        if constexpr ( trivially_destructible_after_move_assignment<value_type> )
+        // Placement-construct vs assign into the made-room slot, matching the
+        // state shift_elements_right left it in:
+        //   * is_trivially_moveable        => memmove => RAW byte-duplicate slot
+        //     => MUST construct (assign would run the moved-out type's destructor
+        //     on the duplicate and free the relocated element's resources — a UAF;
+        //     e.g. a std::variant with a std::vector alternative that is
+        //     is_trivially_moveable yet whose move-assign is not noexcept, so it is
+        //     NOT trivially_destructible_after_move).
+        //   * else (element-move)          => moved-from HUSK slot => constructing
+        //     over it (skipping its dtor) is safe iff that dtor is elidable, i.e.
+        //     trivially_destructible_after_move; otherwise assign.
+        if constexpr ( is_trivially_moveable<value_type> || trivially_destructible_after_move_assignment<value_type> )
             construct_at( *iter, std::forward<Args>( args )... );
         else
             *iter = { std::forward<Args>( args )... };
@@ -863,7 +874,7 @@ public:
     iterator insert( const_iterator const position, size_type const n, param_const_ref x )
     {
         auto const iter{ make_space_for_insert( position, n ) };
-        if constexpr ( trivially_destructible_after_move_assignment<value_type> )
+        if constexpr ( is_trivially_moveable<value_type> || trivially_destructible_after_move_assignment<value_type> ) // see emplace()
             std::uninitialized_fill_n( iter, n, x );
         else
             std::fill_n( iter, n, x );
@@ -885,7 +896,7 @@ public:
     {
         auto const n{ static_cast<size_type>( std::distance( first, last ) ) };
         auto const iter{ make_space_for_insert( position, n ) };
-        if constexpr ( trivially_destructible_after_move_assignment<value_type> )
+        if constexpr ( is_trivially_moveable<value_type> || trivially_destructible_after_move_assignment<value_type> ) // see emplace()
             std::uninitialized_copy_n( first, n, iter );
         else
             std::copy_n( first, n, iter );
@@ -913,14 +924,14 @@ public:
             auto const iter{ make_space_for_insert( position, n ) };
             if constexpr ( std::is_rvalue_reference_v<Rng &&> )
             {
-                if constexpr ( trivially_destructible_after_move_assignment<value_type> )
+                if constexpr ( is_trivially_moveable<value_type> || trivially_destructible_after_move_assignment<value_type> ) // see emplace()
                     std::ranges::uninitialized_move( std::ranges::begin( rng ), std::ranges::end( rng ), iter, std::unreachable_sentinel );
                 else
                     std::ranges::move( rng, iter );
             }
             else
             {
-                if constexpr ( trivially_destructible_after_move_assignment<value_type> )
+                if constexpr ( is_trivially_moveable<value_type> || trivially_destructible_after_move_assignment<value_type> ) // see emplace()
                     std::uninitialized_copy( std::ranges::begin( rng ), std::ranges::end( rng ), iter );
                 else
                     std::ranges::copy( rng, iter );

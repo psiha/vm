@@ -63,6 +63,57 @@ TEST( vector_traits, heap_vector_variant_growth_preserves_values )
     }
 }
 
+// Regression: middle-insert relocation must not free a relocated element's
+// owned heap buffer. The insert-shift (shift_elements_right) chooses
+// memmove-vs-element-move on is_trivially_moveable<T>; the made-room slot must
+// then be filled with the SAME discriminator. A type that is is_trivially_moveable
+// (memmove relocation valid) yet NOT trivially_destructible_after_move_assignment
+// (non-noexcept move-assignment) used to take the memmove shift path (slot left a
+// raw byte-duplicate) but the assign fill path (`*iter = {...}`), whose move-assign
+// destructor ran on the stale duplicate and freed the relocated element's buffer
+// -> use-after-free. (Real-world trigger: psi::vm::flat_map<string, ast::QueryFilter>
+//  where QueryFilter is a std::variant with a heap_vector alternative.)
+namespace {
+    inline std::atomic<int> reloc_owner_net_allocs{ 0 };
+    struct reloc_heap_owner {
+        int * p{ nullptr };
+        reloc_heap_owner() noexcept = default;
+        reloc_heap_owner( int const v ) : p{ new int{ v } } { ++reloc_owner_net_allocs; }
+        reloc_heap_owner( reloc_heap_owner && o ) noexcept : p{ o.p } { o.p = nullptr; } // genuine move (nulls source)
+        reloc_heap_owner & operator=( reloc_heap_owner && o ) noexcept( false ) // NOT noexcept -> not trivially_destructible_after_move
+        {
+            if ( this != &o ) { reset(); p = o.p; o.p = nullptr; }
+            return *this;
+        }
+        reloc_heap_owner( reloc_heap_owner const & ) = delete;
+        reloc_heap_owner & operator=( reloc_heap_owner const & ) = delete;
+        ~reloc_heap_owner() noexcept { reset(); }
+        void reset() noexcept { if ( p ) { delete p; p = nullptr; --reloc_owner_net_allocs; } }
+        // memcpy-relocation is valid (just a pointer); force the classification
+        // the way a variant-with-heap-member ends up is_trivially_moveable == true.
+        static constexpr bool is_trivially_moveable = true;
+    };
+}
+
+TEST( vector_insert, middle_insert_relocates_heap_owner_without_uaf )
+{
+    using T = reloc_heap_owner;
+    static_assert(  is_trivially_moveable<T> );                          // memmove shift path
+    static_assert( !trivially_destructible_after_move_assignment<T> );   // assign fill path -> the mismatch
+
+    reloc_owner_net_allocs.store( 0 );
+    {
+        heap_vector<T, std::uint32_t> v;
+        v.emplace_back( 100 );                  // [0] = 100
+        v.emplace( v.begin(), 200 );            // shift [0]->[1], place 200 at [0]
+        ASSERT_EQ( v.size(), 2U );
+        EXPECT_EQ( *v[ 0 ].p, 200 );
+        ASSERT_NE( v[ 1 ].p, nullptr );         // freed by the bug (move-assign over memmove'd stale dup)
+        EXPECT_EQ( *v[ 1 ].p, 100 );            // UAF read under the bug (ASAN traps)
+    }
+    EXPECT_EQ( reloc_owner_net_allocs.load(), 0 ); // bug double-frees -> ends negative
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Typed test suite -- runs every test against all vector types
 ////////////////////////////////////////////////////////////////////////////////
