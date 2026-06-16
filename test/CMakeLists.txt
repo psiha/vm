@@ -9,10 +9,10 @@ if ( MSVC )
 else()
     target_compile_options( gtest PRIVATE -fno-fast-math )
 endif()
-# Clang-CL + gtest 1.15: char8_t printer triggers -Wcharacter-conversion as error in Debug CI.
+# Clang-CL + gtest 1.15: char8_t printer can trip -Wcharacter-conversion under -Werror (Debug CI).
 if ( CLANG_CL )
-    target_compile_options( gtest PRIVATE -Wno-character-conversion )
-    target_compile_options( gtest_main PRIVATE -Wno-character-conversion )
+    target_compile_options( gtest PRIVATE -Wno-error )
+    target_compile_options( gtest_main PRIVATE -Wno-error )
 endif()
 
 set( vm_test_sources
