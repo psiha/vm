@@ -71,6 +71,17 @@ namespace detail
     template <typename sz_t>
     using heap_shell_allocator = crt_allocator<std::byte, sz_t>;
 #endif
+
+    // if constexpr — a ternary with alignof(T) is ill-formed for incomplete T even
+    // on the discarded branch (both operands are checked at class-template scope).
+    template <typename U>
+    consteval std::uint8_t heap_default_alignment() noexcept
+    {
+        if constexpr ( complete<U> )
+            return std::uint8_t{ alignof( U ) };
+        else
+            return std::uint8_t{ alignof( std::max_align_t ) };
+    }
 } // namespace detail
 
 template <typename T, typename sz_t = std::size_t, typename Allocator = void, heap_options options = {}>
@@ -87,9 +98,7 @@ public:
     // Use alignof(T) when T is complete; fall back to max_align_t for incomplete
     // recursive strong-typedefs so heap_storage<> never touches alignof(T) at class scope.
     static std::uint8_t constexpr alignment{
-        options.alignment ? options.alignment : std::uint8_t{
-            complete<T> ? alignof( T ) : alignof( std::max_align_t )
-        }
+        options.alignment ? options.alignment : detail::heap_default_alignment<T>()
     };
 
     static bool constexpr storage_zero_initialized{ false };
