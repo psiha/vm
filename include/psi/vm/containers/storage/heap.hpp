@@ -85,8 +85,7 @@ class [[ nodiscard, clang::trivial_abi ]] heap_storage
 
 public:
     // Default to max_align_t so incomplete value_types (recursive strong-typedefs)
-    // never touch alignof(T) during heap_storage<> class instantiation — MSVC
-    // pulls the element type's variant SMF traits if we do (filter_ast pattern).
+    // never touch alignof(T) during heap_storage<> class instantiation.
     static std::uint8_t constexpr alignment{
         options.alignment ? options.alignment : std::uint8_t{ alignof( std::max_align_t ) }
     };
@@ -112,6 +111,11 @@ private:
         return static_cast<std::size_t>( element_count ) * sizeof( value_type );
     }
 
+    [[nodiscard]] static constexpr typename shell_t::size_type shell_byte_count( size_type const element_count ) noexcept
+    {
+        return static_cast<typename shell_t::size_type>( byte_count( element_count ) );
+    }
+
     constexpr shell_t       & shell()       noexcept { return static_cast<shell_t       &>( *this ); }
     constexpr shell_t const & shell() const noexcept { return static_cast<shell_t const &>( *this ); }
 
@@ -121,21 +125,21 @@ private:
 
     [[ nodiscard ]] pointer shell_allocate( size_type const element_count )
     {
-        return reinterpret_cast<pointer>( shell().template allocate<alignment>( byte_count( element_count ) ) );
+        return reinterpret_cast<pointer>( shell().template allocate<alignment>( shell_byte_count( element_count ) ) );
     }
     void shell_deallocate( pointer const ptr, size_type const element_capacity ) noexcept
     {
-        shell().template deallocate<alignment>( reinterpret_cast<typename shell_t::pointer>( ptr ), byte_count( element_capacity ) );
+        shell().template deallocate<alignment>( reinterpret_cast<typename shell_t::pointer>( ptr ), shell_byte_count( element_capacity ) );
     }
     [[ nodiscard ]] pointer shell_grow_to( pointer const ptr, size_type const current_capacity, size_type const target_capacity )
     {
         return reinterpret_cast<pointer>( shell().template grow_to<alignment>(
-            reinterpret_cast<typename shell_t::pointer>( ptr ), byte_count( current_capacity ), byte_count( target_capacity ) ) );
+            reinterpret_cast<typename shell_t::pointer>( ptr ), shell_byte_count( current_capacity ), shell_byte_count( target_capacity ) ) );
     }
     [[ nodiscard ]] pointer shell_shrink_to( pointer const ptr, size_type const current_size, size_type const target_size ) noexcept
     {
         return reinterpret_cast<pointer>( shell().template shrink_to<alignment>(
-            reinterpret_cast<typename shell_t::pointer>( ptr ), byte_count( current_size ), byte_count( target_size ) ) );
+            reinterpret_cast<typename shell_t::pointer>( ptr ), shell_byte_count( current_size ), shell_byte_count( target_size ) ) );
     }
     [[ nodiscard ]] size_type shell_capacity( pointer const ptr ) const noexcept
     {
@@ -143,7 +147,7 @@ private:
     }
     bool shell_try_expand( pointer const ptr, size_type const target_capacity ) noexcept
     {
-        return shell().try_expand( reinterpret_cast<typename shell_t::pointer>( ptr ), byte_count( target_capacity ) );
+        return shell().try_expand( reinterpret_cast<typename shell_t::pointer>( ptr ), shell_byte_count( target_capacity ) );
     }
 
 public:
@@ -232,13 +236,14 @@ public:
         swap( capacity_, other.capacity_ );
     }
 
-    // Raw element-count allocate/deallocate for external owners (v8 backing stores, etc.).
+    // Raw element-count allocate/deallocate for external owners (backing stores, etc.).
     // Void-Allocator path uses the byte shell; custom-Allocator path uses element semantics.
     [[nodiscard]] static pointer allocate_external( size_type const element_count )
     {
         if constexpr ( std::is_void_v<Allocator> )
             return reinterpret_cast<pointer>(
-                detail::heap_shell_allocator<sz_t>::template allocate<alignment>( byte_count( element_count ) ) );
+                detail::heap_shell_allocator<sz_t>::template allocate<alignment>(
+                    static_cast<typename detail::heap_shell_allocator<sz_t>::size_type>( byte_count( element_count ) ) ) );
         else
             return allocator_type::template allocate<alignment>( element_count );
     }
@@ -248,7 +253,7 @@ public:
         if constexpr ( std::is_void_v<Allocator> )
             detail::heap_shell_allocator<sz_t>::template deallocate<alignment>(
                 reinterpret_cast<typename detail::heap_shell_allocator<sz_t>::pointer>( ptr ),
-                byte_count( element_count ) );
+                static_cast<typename detail::heap_shell_allocator<sz_t>::size_type>( byte_count( element_count ) ) );
         else
             allocator_type::template deallocate<alignment>( ptr, element_count );
     }
@@ -303,7 +308,7 @@ public:
             if constexpr ( has_try_shrink_in_place<al> )
             {
                 if constexpr ( std::is_void_v<Allocator> )
-                    BOOST_VERIFY( shell().try_shrink_in_place( reinterpret_cast<typename shell_t::pointer>( p_array_ ), byte_count( size_ ), byte_count( target_size ) ) );
+                    BOOST_VERIFY( shell().try_shrink_in_place( reinterpret_cast<typename shell_t::pointer>( p_array_ ), shell_byte_count( size_ ), shell_byte_count( target_size ) ) );
                 else
                     BOOST_VERIFY( alloc().try_shrink_in_place( p_array_, size_, target_size ) );
             }

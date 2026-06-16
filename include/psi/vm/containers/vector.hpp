@@ -68,8 +68,7 @@ namespace detail
     template <bool support_incomplete_types, typename value_type>
     struct vector_value_types
     {
-        // Default path: pass_in_reg (works for complete T; avoids class-scope
-        // can_be_passed_in_reg / complete<T> queries that break recursive typedefs).
+        // Default path: pass_in_reg (works for complete T).
         using param_const_ref = pass_in_reg<value_type>;
 #if defined( _LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR )
         using       iterator         = std::__bounded_iter<value_type *>;
@@ -86,8 +85,8 @@ namespace detail
     template <typename value_type>
     struct vector_value_types<true, value_type>
     {
-        // Recursive strong-typedef / incomplete value_type: never touch complete<T>
-        // or checked iterators at class scope (MSVC pulls variant SMF traits).
+        // Incomplete / recursive strong-typedef value_type: avoid complete<T>
+        // and checked iterators at class scope.
         using param_const_ref        = value_type const &;
         using       iterator         = value_type *;
         using const_iterator         = value_type const *;
