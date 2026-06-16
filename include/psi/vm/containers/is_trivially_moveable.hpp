@@ -104,38 +104,32 @@ namespace psi::vm
 // https://github.com/llvm/llvm-project/issues/69394 is_trivially_relocatable isn't correct under Windows
 // https://github.com/llvm/llvm-project/issues/86354 is_trivially_relocatable isn't correct under Apple Clang
 
-namespace detail
-{
 PSI_WARNING_DISABLE_PUSH()
 PSI_WARNING_CLANG_DISABLE( -Wdeprecated-builtins )
+// allowed/expected to be user-specialized for custom types.
+// NB: like the standard relocatability traits, this requires a complete T (the
+// builtins below are ill-formed for incomplete types). Incomplete-value_type
+// tolerance is a property of the *container* (vector's support_incomplete_types
+// template parameter routes around any class-scope query of this trait), not of
+// this trait itself — keeping the trait a pure function of a complete type
+// avoids the ODR hazard of a value that silently flips with completeness.
 template <typename T>
-consteval bool is_trivially_moveable_primary()
+bool constexpr is_trivially_moveable
 {
-    if ( !complete<T> )
-        return false;
 #if defined( __cpp_trivial_relocatability ) || __has_builtin( __builtin_is_cpp_trivially_relocatable )
-    if ( __builtin_is_cpp_trivially_relocatable( T ) )
-        return true;
+    __builtin_is_cpp_trivially_relocatable( T ) ||
 #endif
 #if defined( __clang__ ) // with Clang support both P1144 and the older builtin
-    if ( __is_trivially_relocatable( T ) )
-        return true;
+    __is_trivially_relocatable( T ) ||
 #endif
 #if defined( __cpp_lib_trivially_relocatable ) // P1144 or P2786 library support
-    if ( std::is_trivially_relocatable<T> )
-        return true;
+    std::is_trivially_relocatable<T> ||
 #endif
-    return
-        std::is_trivially_copyable_v<T> || // implies trivial destructibility https://eel.is/c++draft/class.prop#1
-        std::is_trivially_move_assignable_v<T> ||
-        std::is_trivially_move_constructible_v<T>; // beyond P2786 optimistic heuristic https://github.com/psiha/vm/pull/34#discussion_r1914536293
-} // is_trivially_moveable_primary
+    std::is_trivially_copyable_v<T> || // implies trivial destructibility https://eel.is/c++draft/class.prop#1
+    std::is_trivially_move_assignable_v<T> ||
+    std::is_trivially_move_constructible_v<T> // beyond P2786 optimistic heuristic https://github.com/psiha/vm/pull/34#discussion_r1914536293
+}; // is_trivially_moveable
 PSI_WARNING_DISABLE_POP()
-} // namespace detail
-
-// allowed/expected to be user-specialized for custom types
-template <typename T>
-bool constexpr is_trivially_moveable{ detail::is_trivially_moveable_primary<T>() };
 
 template <typename T>
 requires complete<T> and requires{ T::is_trivially_moveable; }
