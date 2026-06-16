@@ -24,6 +24,8 @@
 
 #include <boost/assert.hpp>
 
+#include <cstdlib>
+
 #ifndef NDEBUG
 #include <cstdio> // for fputs
 #endif
@@ -216,6 +218,11 @@ void flush_async( mapped_span const range ) noexcept
 void flush_blocking( mapped_span const range, file_handle::const_reference const source_file ) noexcept
 {
     flush_async( range );
+    // RAMA_TEST_NO_DURABLE_FLUSH=1 skips FlushFileBuffers for test/CI runs where
+    // crash-recovery durability is not required (model harness no-commit mode).
+    if ( char const * const v{ std::getenv( "RAMA_TEST_NO_DURABLE_FLUSH" ) }; v && v[ 0 ] && v[ 0 ] != '0' ) {
+        return;
+    }
     // https://devblogs.microsoft.com/oldnewthing/20100909-00/?p=12913 Flushing your performance down the drain, that is
     BOOST_VERIFY( ::FlushFileBuffers( source_file.value ) );
 }
