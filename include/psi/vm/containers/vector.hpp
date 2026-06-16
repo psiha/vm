@@ -260,13 +260,17 @@ private:
     constexpr auto   end_ptr( this auto & self ) noexcept { return self.data() + self.size(); }
     constexpr iterator make_iterator( value_type * const ptr ) noexcept
     {
-        return
+        if constexpr ( support_incomplete_types )
+            return ptr;
 #   if defined( _LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR )
-            std::__make_bounded_iter( ptr, begin_ptr(), end_ptr() );
+        else if constexpr ( true )
+            return std::__make_bounded_iter( ptr, begin_ptr(), end_ptr() );
 #   elif defined( _ITERATOR_DEBUG_LEVEL ) && _ITERATOR_DEBUG_LEVEL
-            std::_Span_iterator{ ptr, begin_ptr(), end_ptr() };
+        else if constexpr ( true )
+            return std::_Span_iterator{ ptr, begin_ptr(), end_ptr() };
 #   else
-            ptr;
+        else
+            return ptr;
 #   endif
     }
     constexpr iterator make_iterator( size_type const offset ) noexcept
