@@ -240,10 +240,53 @@ struct incomplete_type; // forward declaration only -- never completed in this T
 // an incomplete type. The key: sizeof(T) is only needed in method bodies
 // (deferred instantiation), not in the class definition.
 static_assert( sizeof( heap_storage<incomplete_type> ) > 0 );
-static_assert( sizeof( vector<heap_storage<incomplete_type>> ) > 0 );
+static_assert( sizeof( vector<heap_storage<incomplete_type>, geometric_growth{}, true> ) > 0 );
 
-// heap_vector<T> = vector<heap_storage<T>> so it should also work
-static_assert( sizeof( heap_vector<incomplete_type> ) > 0 );
+// heap_vector<T, ..., support_incomplete_types=true> for recursive / incomplete T
+static_assert( sizeof( heap_vector<incomplete_type, std::size_t, {}, {}, true> ) > 0 );
+
+// Recursive strong-typedef: struct Body : vector<Rec> while Rec is still incomplete.
+// std::vector<Rec> tolerates this; psi::vm::vector must too (rama filter_ast pattern).
+struct recursive_record;
+using recursive_vec = heap_vector<recursive_record, std::size_t, {}, {}, true>;
+struct recursive_body : recursive_vec {
+    using recursive_vec::recursive_vec;
+};
+static_assert( sizeof( recursive_body ) > 0 );
+
+// Recursive variant + vector body (simplified filter_ast shape).
+struct variant_record;
+using variant_body_vec = heap_vector<variant_record, std::size_t, {}, {}, true>;
+struct variant_body : variant_body_vec {
+    using variant_body_vec::variant_body_vec;
+};
+using variant_record_variant = std::variant<int, variant_body>;
+struct variant_record : variant_record_variant {
+    using variant_record_variant::variant_record_variant;
+};
+static_assert( sizeof( variant_record ) > 0 );
+
+// filter_ast-shaped: nested class inside template + external member triggers inst (ast.hpp:161).
+struct filter_mmbr { int x; };
+template <typename... FilterTypes>
+struct filter_xpr {
+    using filter  = struct filter;
+    using filters = heap_vector<filter, std::uint32_t, {}, {}, true>;
+    struct [[ clang::trivial_abi ]] conjoined_filters : filters {
+        static constexpr bool is_trivially_moveable{ false };
+        using filters::filters;
+    };
+    struct conjoined_filters_ref { conjoined_filters const * target; };
+    using filter_variant = std::variant<FilterTypes..., conjoined_filters, conjoined_filters_ref>;
+};
+template <typename... FilterTypes>
+struct filter : filter_xpr<FilterTypes...>::filter_variant {
+    using filter_xpr<FilterTypes...>::filter_variant::filter_variant;
+};
+struct rollup_holder {
+    filter_xpr<filter_mmbr>::conjoined_filters filters;
+};
+static_assert( sizeof( rollup_holder ) > 0 );
 
 
 ////////////////////////////////////////////////////////////////////////////////
