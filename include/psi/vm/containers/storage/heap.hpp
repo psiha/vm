@@ -84,10 +84,12 @@ class [[ nodiscard, clang::trivial_abi ]] heap_storage
     using shell_t = std::conditional_t<std::is_void_v<Allocator>, detail::heap_shell_allocator<sz_t>, Allocator>;
 
 public:
-    // Default to max_align_t so incomplete value_types (recursive strong-typedefs)
-    // never touch alignof(T) during heap_storage<> class instantiation.
+    // Use alignof(T) when T is complete; fall back to max_align_t for incomplete
+    // recursive strong-typedefs so heap_storage<> never touches alignof(T) at class scope.
     static std::uint8_t constexpr alignment{
-        options.alignment ? options.alignment : std::uint8_t{ alignof( std::max_align_t ) }
+        options.alignment ? options.alignment : std::uint8_t{
+            complete<T> ? alignof( T ) : alignof( std::max_align_t )
+        }
     };
 
     static bool constexpr storage_zero_initialized{ false };
