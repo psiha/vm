@@ -379,6 +379,8 @@ public:
 
     void storage_free() noexcept
     {
+        if constexpr ( complete<T> )
+            std::destroy_n( p_array_, size_ );
         if constexpr ( std::is_void_v<Allocator> )
             shell_deallocate( data(), options.cache_capacity ? capacity() : size_type{} );
         else

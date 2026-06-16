@@ -1250,9 +1250,13 @@ public:
     {}
 
     // --- destructor ---
+    // Incomplete-value_type vectors defer element destroy to heap_storage::storage_free
+    // so `std::is_trivially_destructible` stays true during recursive strong-typedef /
+    // variant formation (Filter AST).  Complete value types on the default path still
+    // destroy here for non-incomplete vectors.
     constexpr ~vector() noexcept
     {
-        if constexpr ( complete<value_type> )
+        if constexpr ( !support_incomplete_types )
             std::destroy_n( this->data(), this->size() );
     }
 
