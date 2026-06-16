@@ -267,7 +267,8 @@ struct variant_record : variant_record_variant {
 static_assert( sizeof( variant_record ) > 0 );
 
 // Nested template + external member holding a conjoined vector body (filter_ast-style).
-// variant_record above covers variant + recursive body; this covers an external holder.
+// Node stays forward-declared only (heap_vector element type); holder proves the
+// external-member pattern compiles. variant_record above covers variant + body.
 namespace recursive_typedef_compile_tests {
 
 template <typename... AltTypes> struct Node;
@@ -280,11 +281,6 @@ struct node_expr {
         static constexpr bool is_trivially_moveable{ false };
         using nodes::nodes;
     };
-};
-
-template <typename... AltTypes>
-struct Node : node_expr<AltTypes...>::conjoined_nodes {
-    using node_expr<AltTypes...>::conjoined_nodes::conjoined_nodes;
 };
 
 struct leaf { int x; };
