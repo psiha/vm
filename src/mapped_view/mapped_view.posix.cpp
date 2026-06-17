@@ -17,6 +17,8 @@
 #include <psi/vm/mapped_view/ops.hpp>
 
 #include <boost/assert.hpp>
+
+#include <cstdlib>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -164,6 +166,12 @@ void flush_async( mapped_span const range ) noexcept
 
 void flush_blocking( mapped_span const range ) noexcept
 {
+    // RAMA_TEST_NO_DURABLE_FLUSH=1 skips MS_SYNC for test/CI runs where crash-
+    // recovery durability is not required (model harness no-commit mode).
+    if ( char const * const v{ std::getenv( "RAMA_TEST_NO_DURABLE_FLUSH" ) }; v && v[ 0 ] && v[ 0 ] != '0' ) {
+        call_msync( range, MS_ASYNC );
+        return;
+    }
     // MS_INVALIDATE should not be necessary on OSes with coherent/unified
     // caches? Even if it is necessary it is not clear that the user would want
     // it in all use cases (certainly not for mappings to which only a single
