@@ -293,6 +293,51 @@ static_assert( sizeof( holder ) > 0 );
 
 } // namespace recursive_typedef_compile_tests
 
+// Forward-declared element members inside a forward-declared row payload,
+// wrapped in an outer vector payload (sheet dispatch pattern from rama).
+namespace incomplete_nested_member_vector_tests {
+
+struct EmittedCell;
+struct EmittedTableCell;
+
+using EmittedCellVector      = heap_vector<EmittedCell,      std::uint32_t, {}, {}, true>;
+using EmittedTableCellVector = heap_vector<EmittedTableCell, std::uint32_t, {}, {}, true>;
+
+struct RowCombo {
+    EmittedCellVector      cells;
+    EmittedTableCellVector tableCells;
+};
+
+struct DispatchedSheetData {
+    heap_vector<RowCombo, std::uint32_t, {}, {}, true> rows;
+};
+
+static_assert( sizeof( RowCombo ) > 0 );
+static_assert( sizeof( DispatchedSheetData ) > 0 );
+
+struct EmittedCell {
+    double value{};
+};
+
+struct EmittedTableCell {
+    std::uint32_t value{};
+};
+
+TEST( vector_storage, incomplete_nested_member_vectors )
+{
+    heap_vector<DispatchedSheetData, std::uint32_t, {}, {}, true> dispatches;
+    dispatches.emplace_back();
+    dispatches.back().rows.emplace_back();
+    dispatches.back().rows.back().cells.emplace_back( EmittedCell{ 1.0 } );
+    dispatches.back().rows.back().tableCells.emplace_back( EmittedTableCell{ 7 } );
+    EXPECT_EQ( dispatches.size(), 1u );
+    EXPECT_EQ( dispatches.back().rows.size(), 1u );
+    EXPECT_EQ( dispatches.back().rows.back().cells.size(), 1u );
+    EXPECT_EQ( dispatches.back().rows.back().tableCells.size(), 1u );
+}
+
+} // namespace incomplete_nested_member_vector_tests
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // Storage non-copyability: storages manage raw memory, not elements
