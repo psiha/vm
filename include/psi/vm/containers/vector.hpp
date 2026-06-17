@@ -28,6 +28,7 @@
 
 #include <psi/vm/align.hpp>
 #include <psi/vm/containers/abi.hpp>
+#include <psi/vm/containers/complete.hpp>
 #include <psi/vm/containers/growth_policy.hpp>
 #include <psi/vm/containers/is_trivially_moveable.hpp>
 #include <psi/vm/containers/trivially_destructible_after_move.hpp>
@@ -64,6 +65,33 @@ namespace detail
 {
     // throw_out_of_range declared in abi.hpp, defined in vm_vector.cpp
 
+    template <bool support_incomplete_types, typename value_type>
+    struct vector_value_types
+    {
+        // Default path: pass_in_reg (works for complete T).
+        using param_const_ref = pass_in_reg<value_type>;
+#if defined( _LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR )
+        using       iterator         = std::__bounded_iter<value_type *>;
+        using const_iterator         = std::basic_const_iterator<iterator>;
+#elif defined( _ITERATOR_DEBUG_LEVEL ) && _ITERATOR_DEBUG_LEVEL
+        using       iterator         = std::_Span_iterator<value_type>;
+        using const_iterator         = std::basic_const_iterator<iterator>;
+#else
+        using       iterator         = value_type *;
+        using const_iterator         = value_type const *;
+#endif
+    };
+
+    template <typename value_type>
+    struct vector_value_types<true, value_type>
+    {
+        // Incomplete / recursive strong-typedef value_type: avoid complete<T>
+        // and checked iterators at class scope.
+        using param_const_ref        = value_type const &;
+        using       iterator         = value_type *;
+        using const_iterator         = value_type const *;
+    };
+
     template <typename T>
     constexpr T * mutable_iter( T const * const ptr ) noexcept { return const_cast<T *>( ptr ); }
 
@@ -72,7 +100,7 @@ namespace detail
 #if defined( _LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR )
     template <typename T>
     auto mutable_iter( std::__bounded_iter<T const *> const iter ) noexcept { return reinterpret_cast<std::__bounded_iter<T *> const &>( iter ); }
-#elif _ITERATOR_DEBUG_LEVEL
+#elif defined( _ITERATOR_DEBUG_LEVEL ) && _ITERATOR_DEBUG_LEVEL
     template <typename T>
     auto mutable_iter( std::_Span_iterator<T const> const iter ) noexcept { return reinterpret_cast<std::_Span_iterator<T> const &>( iter ); }
 #endif
@@ -204,12 +232,13 @@ concept psi_vm_vector = requires { typename std::remove_cvref_t<T>::psi_vm_vecto
 ///
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename Storage, geometric_growth Growth = geometric_growth{}>
+template <typename Storage, geometric_growth Growth = geometric_growth{}, bool support_incomplete_types = false>
 class [[ nodiscard, clang::trivial_abi ]] vector
     :
     public Storage
 {
     using storage_t = Storage;
+    using value_types = detail::vector_value_types<support_incomplete_types, typename storage_t::value_type>;
 
 public:
     using psi_vm_vector_tag      = void; // tag for constraining free comparison operators
@@ -219,23 +248,10 @@ public:
     using const_pointer          = value_type const *;
     using       reference        = value_type       &;
     using const_reference        = value_type const &;
-#if 0 // fails for incomplete T
-    using param_const_ref        = std::conditional_t<can_be_passed_in_reg<value_type>, value_type const, pass_in_reg<value_type>>;
-#else
-    using param_const_ref        = pass_in_reg<value_type>;
-#endif
+    using param_const_ref        = typename value_types::param_const_ref;
     using difference_type        = std::make_signed_t<size_type>;
-#if defined( _LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR )
-    using       iterator         = std::__bounded_iter<pointer>;
-    using const_iterator         = std::basic_const_iterator<iterator>; // __bounded_iter<T> is not convertible to __bounded_iter<T const> so we have to use the std wrapper
-#elif _ITERATOR_DEBUG_LEVEL
-    // checked_array_iterator is deprecated so use the span iterator wrapper
-    using       iterator         = std::_Span_iterator<value_type>;
-    using const_iterator         = std::basic_const_iterator<iterator>; // same as for __bounded_iter
-#else
-    using       iterator         =       pointer;
-    using const_iterator         = const_pointer;
-#endif
+    using       iterator         = typename value_types::iterator;
+    using const_iterator         = typename value_types::const_iterator;
     using       reverse_iterator = std::reverse_iterator<      iterator>;
     using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 
@@ -244,13 +260,17 @@ private:
     constexpr auto   end_ptr( this auto & self ) noexcept { return self.data() + self.size(); }
     constexpr iterator make_iterator( value_type * const ptr ) noexcept
     {
-        return
+        if constexpr ( support_incomplete_types )
+            return ptr;
 #   if defined( _LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR )
-            std::__make_bounded_iter( ptr, begin_ptr(), end_ptr() );
-#   elif _ITERATOR_DEBUG_LEVEL
-            std::_Span_iterator{ ptr, begin_ptr(), end_ptr() };
+        else if constexpr ( true )
+            return std::__make_bounded_iter( ptr, begin_ptr(), end_ptr() );
+#   elif defined( _ITERATOR_DEBUG_LEVEL ) && _ITERATOR_DEBUG_LEVEL
+        else if constexpr ( true )
+            return std::_Span_iterator{ ptr, begin_ptr(), end_ptr() };
 #   else
-            ptr;
+        else
+            return ptr;
 #   endif
     }
     constexpr iterator make_iterator( size_type const offset ) noexcept
@@ -1229,9 +1249,9 @@ public:
         : storage_t{ std::move( init ) }
     {}
 
-    // --- destructor ---
     constexpr ~vector() noexcept
     {
+        static_assert( complete<value_type>, "vector destructor requires a complete value_type" );
         std::destroy_n( this->data(), this->size() );
     }
 
@@ -1249,6 +1269,8 @@ public:
     //     element-level copy semantics live here at the vector level.
     constexpr vector( vector const & other ) requires ( !std::is_copy_constructible_v<storage_t> )
     {
+        if constexpr ( !support_incomplete_types )
+            static_assert( complete<value_type>, "vector copy requires a complete value_type" );
         // Optimization for small trivially-copyable fixed-capacity vectors:
         // memcpy the entire object (size + inline array) with a handful of
         // register-width instructions instead of a dynamic memcpy call.
@@ -1287,7 +1309,7 @@ public:
     {
         if ( this != &other )
         {
-            // Destroy current elements
+            static_assert( complete<value_type>, "vector move assignment requires a complete value_type" );
             std::destroy_n( this->data(), this->size() );
             // Move storage from other
             static_cast<storage_t &>( *this ) = std::move( static_cast<storage_t &>( other ) );
@@ -1326,9 +1348,9 @@ PSI_WARNING_DISABLE_POP()
 
 // is_trivially_moveable: heap_storage is always trivially moveable (just pointer+sizes);
 // fixed_storage delegates to element type.
-template <typename Storage, geometric_growth Growth>
+template <typename Storage, geometric_growth Growth, bool support_incomplete_types>
 requires( is_trivially_moveable<Storage> )
-bool constexpr is_trivially_moveable<vector<Storage, Growth>>{ true };
+bool constexpr is_trivially_moveable<vector<Storage, Growth, support_incomplete_types>>{ true };
 
 //------------------------------------------------------------------------------
 

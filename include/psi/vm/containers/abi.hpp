@@ -2,6 +2,8 @@
 
 #include <psi/build/disable_warnings.hpp>
 
+#include <psi/vm/containers/complete.hpp>
+
 #include <boost/config.hpp>
 
 #include <span>
@@ -29,19 +31,21 @@ PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
 template <typename T>
 bool constexpr can_be_passed_in_reg
 {
-    (
-        std::is_trivial_v<T> &&
-        ( sizeof( T ) <= 2 * sizeof( void * ) ) // assuming a sane ABI like SysV (ignoring the MS x64 disaster)
-    )
+    complete<T> && (
+        (
+            std::is_trivial_v<T> &&
+            ( sizeof( T ) <= 2 * sizeof( void * ) ) // assuming a sane ABI like SysV (ignoring the MS x64 disaster)
+        )
 #if defined( __GNUC__ ) || defined( __clang__ )
-    || // detect SIMD types (this could also produce false positives for large compiler-native vectors that do not fit into the register file)
-    requires{ __builtin_convertvector( T{}, T ); }
+        || // detect SIMD types (this could also produce false positives for large compiler-native vectors that do not fit into the register file)
+        requires{ __builtin_convertvector( T{}, T ); }
 #endif
-    // This is certainly not an exhaustive list/'trait' - certain types that can
-    // be passed in reg cannot be detected as such by existing compiler
-    // functionality, e.g. Homogeneous Vector Aggregates
-    // https://devblogs.microsoft.com/cppblog/introducing-vector-calling-convention
-    // users are encouraged to provide specializations for such types.
+        // This is certainly not an exhaustive list/'trait' - certain types that can
+        // be passed in reg cannot be detected as such by existing compiler
+        // functionality, e.g. Homogeneous Vector Aggregates
+        // https://devblogs.microsoft.com/cppblog/introducing-vector-calling-convention
+        // users are encouraged to provide specializations for such types.
+    )
 }; // can_be_passed_in_reg
 
 template <typename T>
