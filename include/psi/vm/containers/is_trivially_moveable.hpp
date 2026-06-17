@@ -15,6 +15,8 @@
 
 #include <psi/build/disable_warnings.hpp>
 
+#include <psi/vm/containers/complete.hpp>
+
 #include <type_traits>
 //------------------------------------------------------------------------------
 namespace std
@@ -104,7 +106,13 @@ namespace psi::vm
 
 PSI_WARNING_DISABLE_PUSH()
 PSI_WARNING_CLANG_DISABLE( -Wdeprecated-builtins )
-// allowed/expected to be user-specialized for custom types
+// allowed/expected to be user-specialized for custom types.
+// NB: like the standard relocatability traits, this requires a complete T (the
+// builtins below are ill-formed for incomplete types). Incomplete-value_type
+// tolerance is a property of the *container* (vector's support_incomplete_types
+// template parameter routes around any class-scope query of this trait), not of
+// this trait itself — keeping the trait a pure function of a complete type
+// avoids the ODR hazard of a value that silently flips with completeness.
 template <typename T>
 bool constexpr is_trivially_moveable
 {
@@ -122,9 +130,6 @@ bool constexpr is_trivially_moveable
     std::is_trivially_move_constructible_v<T> // beyond P2786 optimistic heuristic https://github.com/psiha/vm/pull/34#discussion_r1914536293
 }; // is_trivially_moveable
 PSI_WARNING_DISABLE_POP()
-
-template <typename T>
-concept complete = sizeof( T ) >= 0 || false;
 
 template <typename T>
 requires complete<T> and requires{ T::is_trivially_moveable; }
