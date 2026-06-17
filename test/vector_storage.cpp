@@ -293,47 +293,47 @@ static_assert( sizeof( holder ) > 0 );
 
 } // namespace recursive_typedef_compile_tests
 
-// Forward-declared element members inside a forward-declared row payload,
-// wrapped in an outer vector payload (sheet dispatch pattern from rama).
+// Forward-declared element members inside a nested payload hierarchy.
+// This mirrors std::vector-tolerated incomplete-type composition.
 namespace incomplete_nested_member_vector_tests {
 
-struct EmittedCell;
-struct EmittedTableCell;
+struct PayloadValueA;
+struct PayloadValueB;
 
-using EmittedCellVector      = heap_vector<EmittedCell,      std::uint32_t, {}, {}, true>;
-using EmittedTableCellVector = heap_vector<EmittedTableCell, std::uint32_t, {}, {}, true>;
+using ValueVectorA = heap_vector<PayloadValueA, std::uint32_t, {}, {}, true>;
+using ValueVectorB = heap_vector<PayloadValueB, std::uint32_t, {}, {}, true>;
 
-struct RowCombo {
-    EmittedCellVector      cells;
-    EmittedTableCellVector tableCells;
+struct NestedRow {
+    ValueVectorA valuesA;
+    ValueVectorB valuesB;
 };
 
-struct DispatchedSheetData {
-    heap_vector<RowCombo, std::uint32_t, {}, {}, true> rows;
+struct NestedPayload {
+    heap_vector<NestedRow, std::uint32_t, {}, {}, true> rows;
 };
 
-static_assert( sizeof( RowCombo ) > 0 );
-static_assert( sizeof( DispatchedSheetData ) > 0 );
+static_assert( sizeof( NestedRow ) > 0 );
+static_assert( sizeof( NestedPayload ) > 0 );
 
-struct EmittedCell {
+struct PayloadValueA {
     double value{};
 };
 
-struct EmittedTableCell {
+struct PayloadValueB {
     std::uint32_t value{};
 };
 
 TEST( vector_storage, incomplete_nested_member_vectors )
 {
-    heap_vector<DispatchedSheetData, std::uint32_t, {}, {}, true> dispatches;
-    dispatches.emplace_back();
-    dispatches.back().rows.emplace_back();
-    dispatches.back().rows.back().cells.emplace_back( EmittedCell{ 1.0 } );
-    dispatches.back().rows.back().tableCells.emplace_back( EmittedTableCell{ 7 } );
-    EXPECT_EQ( dispatches.size(), 1u );
-    EXPECT_EQ( dispatches.back().rows.size(), 1u );
-    EXPECT_EQ( dispatches.back().rows.back().cells.size(), 1u );
-    EXPECT_EQ( dispatches.back().rows.back().tableCells.size(), 1u );
+    heap_vector<NestedPayload, std::uint32_t, {}, {}, true> payloads;
+    payloads.emplace_back();
+    payloads.back().rows.emplace_back();
+    payloads.back().rows.back().valuesA.emplace_back( PayloadValueA{ 1.0 } );
+    payloads.back().rows.back().valuesB.emplace_back( PayloadValueB{ 7 } );
+    EXPECT_EQ( payloads.size(), 1u );
+    EXPECT_EQ( payloads.back().rows.size(), 1u );
+    EXPECT_EQ( payloads.back().rows.back().valuesA.size(), 1u );
+    EXPECT_EQ( payloads.back().rows.back().valuesB.size(), 1u );
 }
 
 } // namespace incomplete_nested_member_vector_tests
