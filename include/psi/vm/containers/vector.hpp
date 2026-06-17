@@ -1251,7 +1251,8 @@ public:
 
     constexpr ~vector() noexcept
     {
-        static_assert( complete<value_type>, "vector destructor requires a complete value_type" );
+        if constexpr ( !support_incomplete_types )
+            static_assert( complete<value_type>, "vector destructor requires a complete value_type" );
         std::destroy_n( this->data(), this->size() );
     }
 
@@ -1309,7 +1310,8 @@ public:
     {
         if ( this != &other )
         {
-            static_assert( complete<value_type>, "vector move assignment requires a complete value_type" );
+            if constexpr ( !support_incomplete_types )
+                static_assert( complete<value_type>, "vector move assignment requires a complete value_type" );
             std::destroy_n( this->data(), this->size() );
             // Move storage from other
             static_cast<storage_t &>( *this ) = std::move( static_cast<storage_t &>( other ) );
