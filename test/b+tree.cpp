@@ -152,7 +152,14 @@ TEST( bp_tree, playground )
         EXPECT_FALSE( bpt.insert( 42 ).second );
         EXPECT_EQ   ( *bpt.insert( 42 ).first, 42 );
         EXPECT_TRUE( std::ranges::equal(                      bpt.random_access()  ,                      sorted_numbers   ) );
+#   if defined( _MSC_VER ) && defined( __clang__ ) // clang-cl
+        // clang-cl + MSVC STL <concepts> recurses satisfying basic_const_iterator's
+        // comparison constraints under reverse_view here; compare a materialized copy.
+        auto const bpt_ra{ std::ranges::to<std::vector>( bpt.random_access() ) };
+        EXPECT_TRUE( std::ranges::equal( std::views::reverse( bpt_ra ), std::views::reverse( sorted_numbers ) ) );
+#   else
         EXPECT_TRUE( std::ranges::equal( std::views::reverse( bpt.random_access() ), std::views::reverse( sorted_numbers ) ) );
+#   endif
 
         EXPECT_TRUE( bpt.erase( 42 ) );
         auto const hint42{ bpt.lower_bound( 42 ) };

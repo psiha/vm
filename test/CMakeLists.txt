@@ -6,6 +6,11 @@ CPMAddPackage( "gh:google/googletest@1.15.2" )
 include( GoogleTest )
 if ( MSVC )
     target_compile_options( gtest PRIVATE /fp:precise )
+    if ( CMAKE_CXX_COMPILER_ID MATCHES "Clang" ) # clang-cl
+        # GTest's value printers convert char8_t -> char32_t, which clang-cl flags
+        # as -Wcharacter-conversion; with the toolchain's -Werror that fails gtest.
+        target_compile_options( gtest PRIVATE -Wno-character-conversion )
+    endif()
 else()
     target_compile_options( gtest PRIVATE -fno-fast-math )
 endif()
