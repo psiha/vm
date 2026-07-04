@@ -1204,6 +1204,25 @@ public:
         return grow_to( this->size() + delta, init_policy );
     }
 
+    // Amortized-O(1) bulk append. Unlike grow_by/grow_to (exact-fit), this sizes
+    // capacity with the container's geometric Growth policy — the same headroom
+    // emplace_back gets — so callers that append in a loop and cannot pre-reserve
+    // (e.g. a variable-length column whose element sizes are only known one cell at
+    // a time) extend the backing store O(log n) times instead of once per call.
+    // reserve()/grow_by() stay exact so one-shot sizing keeps file-backed data
+    // compact; the geometric target is computed here and reserved explicitly,
+    // leaving reserve()/expand_capacity() semantics untouched.
+    value_type * grow_by_amortized( size_type const delta, auto const init_policy )
+    {
+        auto const target{ static_cast<size_type>( this->size() + delta ) };
+        if constexpr ( static_cast<bool>( Growth ) ) {
+            if ( target > this->capacity() ) {
+                this->reserve( Growth( target, this->capacity() ) );
+            }
+        }
+        return grow_to( target, init_policy ); // capacity already sized -> no per-call extend
+    }
+
     void shrink_to( size_type const target_size ) noexcept
     {
         BOOST_ASSUME( target_size <= this->size() );
