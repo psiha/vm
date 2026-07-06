@@ -33,6 +33,7 @@
 #include <boost/config_ex.hpp>
 #include <boost/integer.hpp>
 
+#include <cstring>
 #include <memory>
 #include <utility>
 //------------------------------------------------------------------------------
