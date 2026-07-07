@@ -1686,6 +1686,83 @@ TEST( lifecycle_tracked_sanity, growth_preserves_count )
     }
 }
 
+// Handle-like owning type for which trivially_destructible_after_move_assignment
+// is TRUE (nothrow move-assignable; moved-from = empty, destructor a no-op on it).
+// Regression coverage for erase() skipping the destructors of erased elements
+// that the tail move-assign never overwrote (tail-range erase, back-element
+// erase, front erase wider than the remaining tail) — those elements still own
+// their payload and leaked.
+static std::atomic<int> owning_live_count{ 0 };
+
+struct lifecycle_owning_handle
+{
+    int  value;
+    bool owns;
+
+    explicit lifecycle_owning_handle( int v = 0 ) noexcept : value{ v }, owns{ true } { owning_live_count.fetch_add( 1, std::memory_order_seq_cst ); }
+    lifecycle_owning_handle( lifecycle_owning_handle const & o ) noexcept : value{ o.value }, owns{ o.owns } { if ( owns ) owning_live_count.fetch_add( 1, std::memory_order_seq_cst ); }
+    lifecycle_owning_handle( lifecycle_owning_handle && o ) noexcept : value{ o.value }, owns{ std::exchange( o.owns, false ) } {}
+    lifecycle_owning_handle & operator=( lifecycle_owning_handle const & o ) noexcept
+    {
+        if ( this != &o ) { release(); value = o.value; owns = o.owns; if ( owns ) owning_live_count.fetch_add( 1, std::memory_order_seq_cst ); }
+        return *this;
+    }
+    lifecycle_owning_handle & operator=( lifecycle_owning_handle && o ) noexcept
+    {
+        if ( this != &o ) { release(); value = o.value; owns = std::exchange( o.owns, false ); }
+        return *this;
+    }
+    ~lifecycle_owning_handle() noexcept { release(); }
+
+    void release() noexcept { if ( std::exchange( owns, false ) ) owning_live_count.fetch_sub( 1, std::memory_order_seq_cst ); }
+};
+static_assert(  trivially_destructible_after_move_assignment<lifecycle_owning_handle> );
+static_assert( !std::is_trivially_destructible_v<lifecycle_owning_handle> );
+
+TEST( lifecycle_owning_handle_erase, back_element_destroyed )
+{
+    owning_live_count.store( 0, std::memory_order_seq_cst );
+    {
+        heap_vector<lifecycle_owning_handle> v;
+        for ( int i{ 0 }; i < 5; ++i ) v.emplace_back( i );
+        ASSERT_EQ( owning_live_count.load( std::memory_order_seq_cst ), 5 );
+        v.erase( v.end() - 1 );  // nothing shifts over the back element — it is live
+        EXPECT_EQ( owning_live_count.load( std::memory_order_seq_cst ), 4 ) << "erased back element's payload leaked";
+        EXPECT_EQ( v.size(), 4u );
+    }
+    EXPECT_EQ( owning_live_count.load( std::memory_order_seq_cst ), 0 );
+}
+
+TEST( lifecycle_owning_handle_erase, tail_range_destroyed )
+{
+    owning_live_count.store( 0, std::memory_order_seq_cst );
+    {
+        heap_vector<lifecycle_owning_handle> v;
+        for ( int i{ 0 }; i < 8; ++i ) v.emplace_back( i );
+        ASSERT_EQ( owning_live_count.load( std::memory_order_seq_cst ), 8 );
+        v.erase( v.begin() + 3, v.end() );  // no tail follows — all 5 erased elements are live
+        EXPECT_EQ( owning_live_count.load( std::memory_order_seq_cst ), 3 ) << "erased tail elements' payloads leaked";
+        EXPECT_EQ( v.size(), 3u );
+    }
+    EXPECT_EQ( owning_live_count.load( std::memory_order_seq_cst ), 0 );
+}
+
+TEST( lifecycle_owning_handle_erase, front_majority_destroyed )
+{
+    owning_live_count.store( 0, std::memory_order_seq_cst );
+    {
+        heap_vector<lifecycle_owning_handle> v;
+        for ( int i{ 0 }; i < 8; ++i ) v.emplace_back( i );
+        ASSERT_EQ( owning_live_count.load( std::memory_order_seq_cst ), 8 );
+        v.erase( v.begin(), v.begin() + 6 );  // only 2 tail elements move down — indices [2, 6) are live
+        EXPECT_EQ( owning_live_count.load( std::memory_order_seq_cst ), 2 ) << "erased front elements' payloads leaked";
+        EXPECT_EQ( v.size(), 2u );
+        EXPECT_EQ( v[ 0 ].value, 6 );
+        EXPECT_EQ( v[ 1 ].value, 7 );
+    }
+    EXPECT_EQ( owning_live_count.load( std::memory_order_seq_cst ), 0 );
+}
+
 // Trivially-moveable variant: required by small_vector (sbo_hybrid uses memcpy).
 // IMPORTANT: live_count tracking is NOT compatible with trivial relocation
 // (bitwise copy skips ctors), so we only use this for tests that don't

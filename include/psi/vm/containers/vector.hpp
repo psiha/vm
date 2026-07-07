@@ -1045,7 +1045,13 @@ public:
         auto const mutable_pos{ nth( pos_index ) };
         std::shift_left( mutable_pos, end(), 1 );
         if constexpr ( trivially_destructible_after_move_assignment<value_type> )
+        {
+            // The last element is moved-from only if the shift actually moved
+            // something over it; erasing the back element leaves it live.
+            if ( mutable_pos == end() - 1 )
+                std::destroy_at( std::to_address( mutable_pos ) );
             this->storage_dec_size();
+        }
         else
             pop_back();
         return nth( pos_index );
@@ -1068,7 +1074,14 @@ public:
         auto const new_end      { std::move( mutable_end, end(), mutable_start ) };
         auto const new_size     { static_cast<size_type>( new_end - begin() ) };
         if constexpr ( trivially_destructible_after_move_assignment<value_type> )
+        {
+            // Elements in [new_end, last) were neither moved-from nor
+            // move-assigned over (the erased range extends past what the tail
+            // could refill) — they are live and must be destroyed.
+            if ( mutable_end > new_end )
+                std::destroy( new_end, mutable_end );
             this->storage_shrink_size_to( new_size );
+        }
         else
             shrink_to( new_size );
         return nth( first_index );
