@@ -31,7 +31,11 @@ namespace psi::vm
 // The 'void' Allocator default auto-computes to crt_allocator with correct alignment.
 // Growth policy lives at the vector<> level, not inside storage.
 template <typename T, typename sz_t = std::size_t, heap_options options = {}, geometric_growth growth = {}, bool support_incomplete_types = false>
-using heap_vector = vector<heap_storage<T, sz_t, void, options>, growth, support_incomplete_types>;
+using heap_vector = vector<
+    // propagate support_incomplete_types into the storage so its class-scope
+    // alignment constant defers alignof(T) (avoids a recursive completeness probe)
+    heap_storage<T, sz_t, void, heap_options{ options.alignment, options.cache_capacity, options.defer_alignment || support_incomplete_types }>,
+    growth, support_incomplete_types>;
 
 // Generic erase_if / erase are provided in vector.hpp for all psi_vm_vector types.
 
