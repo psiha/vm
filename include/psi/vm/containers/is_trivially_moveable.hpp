@@ -104,6 +104,24 @@ namespace psi::vm
 // https://github.com/llvm/llvm-project/issues/69394 is_trivially_relocatable isn't correct under Windows
 // https://github.com/llvm/llvm-project/issues/86354 is_trivially_relocatable isn't correct under Apple Clang
 
+// Microsoft STL with debug iterators (_ITERATOR_DEBUG_LEVEL != 0) gives every
+// container an extra heap-allocated _Container_proxy whose _Mycont back-pointer
+// is maintained by the move constructor but NOT by a raw memmove: such objects
+// are therefore NOT bitwise relocatable. Additionally, Clang's relocatability
+// builtins are unreliable under the Windows ABI (llvm#69394) and would wrongly
+// green-light a memmove of these proxy-bearing types (directly, when derived
+// from a container, or when a [[clang::trivial_abi]] attribute is ABI-ignored
+// yet still flips __is_trivially_relocatable). Mirror the _LIBCPP_DEBUG handling
+// below: in such builds ignore those builtins and drop the container
+// specializations, so classification falls back to the honest core triviality
+// traits (which are false for any proxy-bearing type). Release (IDL==0) is
+// unaffected — the fast bitwise-relocation path is retained.
+#if defined( _MSVC_STL_VERSION ) && ( _ITERATOR_DEBUG_LEVEL != 0 )
+#   define PSI_VM_STL_DEBUG_ITERATORS 1
+#else
+#   define PSI_VM_STL_DEBUG_ITERATORS 0
+#endif
+
 PSI_WARNING_DISABLE_PUSH()
 PSI_WARNING_CLANG_DISABLE( -Wdeprecated-builtins )
 // allowed/expected to be user-specialized for custom types.
@@ -116,6 +134,7 @@ PSI_WARNING_CLANG_DISABLE( -Wdeprecated-builtins )
 template <typename T>
 bool constexpr is_trivially_moveable
 {
+#if !PSI_VM_STL_DEBUG_ITERATORS // see note above: Clang relocatability builtins are unreliable under Windows debug STL
 #if defined( __cpp_trivial_relocatability ) || __has_builtin( __builtin_is_cpp_trivially_relocatable )
     __builtin_is_cpp_trivially_relocatable( T ) ||
 #endif
@@ -125,6 +144,7 @@ bool constexpr is_trivially_moveable
 #if defined( __cpp_lib_trivially_relocatable ) // P1144 or P2786 library support
     std::is_trivially_relocatable<T> ||
 #endif
+#endif // !PSI_VM_STL_DEBUG_ITERATORS
     std::is_trivially_copyable_v<T> || // implies trivial destructibility https://eel.is/c++draft/class.prop#1
     std::is_trivially_move_assignable_v<T> ||
     std::is_trivially_move_constructible_v<T> // beyond P2786 optimistic heuristic https://github.com/psiha/vm/pull/34#discussion_r1914536293
@@ -140,10 +160,15 @@ bool constexpr is_trivially_moveable<std::pair<T1, T2>>{ is_trivially_moveable<T
 template <typename T, std::size_t size>
 bool constexpr is_trivially_moveable<std::array<T, size>>{ is_trivially_moveable<T> };
 #if !defined( _LIBCPP_DEBUG )
-template <typename T            , typename A> bool constexpr is_trivially_moveable<std::vector      <T, A   >>{ is_trivially_moveable<A> };
 template <typename T            , typename D> bool constexpr is_trivially_moveable<std::unique_ptr  <T, D   >>{ is_trivially_moveable<D> };
 #endif
-#if !defined( _LIBCPP_DEBUG ) && !defined( __GLIBCXX__ )
+// std::vector / std::basic_string carry a _Container_proxy back-pointer under
+// MSVC debug iterators — suppress the allocator-only "trivially moveable" claim
+// there (as for _LIBCPP_DEBUG), leaving them to the honest fallback traits.
+#if !defined( _LIBCPP_DEBUG ) && !PSI_VM_STL_DEBUG_ITERATORS
+template <typename T            , typename A> bool constexpr is_trivially_moveable<std::vector      <T, A   >>{ is_trivially_moveable<A> };
+#endif
+#if !defined( _LIBCPP_DEBUG ) && !defined( __GLIBCXX__ ) && !PSI_VM_STL_DEBUG_ITERATORS
 template <typename E, typename T, typename A> bool constexpr is_trivially_moveable<std::basic_string<E, T, A>>{ is_trivially_moveable<A> };
 #endif
 #if defined( __GLIBCXX__ )

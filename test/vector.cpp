@@ -71,8 +71,8 @@ TEST( vector_traits, heap_vector_variant_growth_preserves_values )
 // (non-noexcept move-assignment) used to take the memmove shift path (slot left a
 // raw byte-duplicate) but the assign fill path (`*iter = {...}`), whose move-assign
 // destructor ran on the stale duplicate and freed the relocated element's buffer
-// -> use-after-free. (Real-world trigger: psi::vm::flat_map<string, ast::QueryFilter>
-//  where QueryFilter is a std::variant with a heap_vector alternative.)
+// -> use-after-free. (Real-world trigger: a flat_map<string, T> where T is a
+//  std::variant with a heap_vector alternative.)
 namespace {
     inline std::atomic<int> reloc_owner_net_allocs{ 0 };
     struct reloc_heap_owner {
@@ -112,6 +112,125 @@ TEST( vector_insert, middle_insert_relocates_heap_owner_without_uaf )
         EXPECT_EQ( *v[ 1 ].p, 100 );            // UAF read under the bug (ASAN traps)
     }
     EXPECT_EQ( reloc_owner_net_allocs.load(), 0 ); // bug double-frees -> ends negative
+}
+
+// Regression: is_trivially_moveable must never green-light a memmove of an STL
+// container that is not bitwise relocatable. Under Microsoft's STL with debug
+// iterators (_ITERATOR_DEBUG_LEVEL != 0) std::vector / std::string / any type
+// derived-from or transitively-containing them carry a heap-allocated
+// _Container_proxy whose _Mycont back-pointer is re-seated by the move
+// constructor but NOT by a raw memmove — so relocating them bitwise dangles the
+// proxy (crash / UAF, e.g. a flat_map<string, T> whose value T is a
+// std::variant with a std::vector alternative). At IDL==0 they are plain
+// pointer+size handles and remain trivially moveable. (Also guards llvm#69394:
+// an ABI-ignored [[clang::trivial_abi]] on a container-derived class must not
+// flip the classification.) The whole contract is compiled-checked on the MSVC
+// STL, where both the buggy and correct configurations exist.
+#if defined( _MSVC_STL_VERSION )
+namespace {
+    struct [[ clang::trivial_abi ]] vec_derived    : std::vector<int>          { using std::vector<int>::vector;          };
+    struct [[ clang::trivial_abi ]] str_wrapper     { std::string s; };
+    using variant_with_container = std::variant<std::vector<int>, std::string>;
+#if _ITERATOR_DEBUG_LEVEL != 0
+    static_assert( !is_trivially_moveable<std::vector<int>>        );
+    static_assert( !is_trivially_moveable<std::string>            );
+    static_assert( !is_trivially_moveable<variant_with_container> );
+    static_assert( !is_trivially_moveable<vec_derived>           );
+    static_assert( !is_trivially_moveable<str_wrapper>          );
+#else
+    static_assert(  is_trivially_moveable<std::vector<int>>        );
+    static_assert(  is_trivially_moveable<std::string>            );
+    static_assert(  is_trivially_moveable<variant_with_container> );
+#endif
+} // anonymous namespace
+#endif // _MSVC_STL_VERSION
+
+// Runtime companion: force BOTH relocation paths (geometric-growth realloc and
+// middle-insert shift) on a heap_vector of proxy-bearing variant payloads, then
+// read every element back THROUGH CHECKED ITERATORS (range-for), which is what
+// dereferences the container proxy under debug iterators. With the memmove fast
+// path wrongly enabled this corrupts / traps at _ITERATOR_DEBUG_LEVEL != 0; with
+// the trait corrected the elements relocate via the move constructor and stay
+// intact. At IDL==0 it simply documents the (still-correct) fast path.
+TEST( vector_insert, middle_insert_relocates_stl_container_payload )
+{
+    using payload = std::variant<std::vector<int>, std::string>;
+    heap_vector<payload, std::uint32_t> v;
+
+    // Grow (realloc-relocate) then repeatedly insert at the FRONT
+    // (shift-relocate) so every element is relocated many times over.
+    for ( std::uint32_t i{ 0 }; i < 2000; ++i )
+        v.emplace_back( std::vector<int>{ static_cast<int>( i ), static_cast<int>( i + 1 ), static_cast<int>( i + 2 ) } );
+    for ( std::uint32_t i{ 0 }; i < 2000; ++i )
+        v.emplace( v.begin(), std::to_string( i ) );
+
+    ASSERT_EQ( v.size(), 4000U );
+    // First half (after 2000 front-inserts) holds the strings in reverse; the
+    // second half holds the original vectors. Verify via range-for (checked
+    // iterators) plus per-element content.
+    std::uint32_t idx{ 0 };
+    for ( auto const & p : v ) {
+        if ( idx < 2000U ) {
+            ASSERT_TRUE( std::holds_alternative<std::string>( p ) );
+            EXPECT_EQ( std::get<std::string>( p ), std::to_string( 1999U - idx ) );
+        } else {
+            auto const orig{ idx - 2000U };
+            ASSERT_TRUE( std::holds_alternative<std::vector<int>>( p ) );
+            auto const & iv{ std::get<std::vector<int>>( p ) };
+            ASSERT_EQ( iv.size(), 3U );
+            EXPECT_EQ( iv[ 0 ], static_cast<int>( orig ) );
+            EXPECT_EQ( iv[ 2 ], static_cast<int>( orig + 2 ) );
+        }
+        ++idx;
+    }
+}
+
+// Regression: a heap_vector with support_incomplete_types=true must be usable as
+// a std::variant alternative for a RECURSIVE strong-typedef value_type while that
+// type is still incomplete — including when a by-value member of another struct
+// forces the alternative's completion (which pulls std::variant's SMF-control
+// is_trivially_{destructible,move/copy_constructible} queries in). The shape is a
+// node type N = variant<..., B, ...> where B derives from heap_vector<N> and B is
+// also embedded by value in an enclosing struct (the by-value member forces B's
+// completion). Such a recursive AST modelled on heap_vector used to fail
+// to compile because heap_storage::alignment probed complete<T> at class scope
+// (a ternary operand is always instantiated) and recursed into the still-forming
+// type. If this TU compiles at all, that recursion is broken (heap_options::
+// defer_alignment / heap_alignment()'s `if constexpr`). The runtime body also
+// exercises growth + middle-insert relocation of the recursive nodes.
+namespace incomplete_recursive_heap_vector {
+    template <typename Tag> struct Node;
+    template <typename Tag>
+    struct NodeXpr {
+        using N        = Node<Tag>;
+        using Children = heap_vector<N, std::uint32_t, heap_options{}, geometric_growth{}, /*support_incomplete_types*/ true>;
+        struct Branch : Children { using Children::Children; static constexpr bool is_trivially_moveable{ true }; };
+        using Variant  = std::variant<Tag, Branch>;
+    };
+    template <typename Tag>
+    struct Node : NodeXpr<Tag>::Variant {
+        using Variant = typename NodeXpr<Tag>::Variant;
+        using Variant::Variant;
+        Node( Node && n, bool ) noexcept : Variant{ std::move( n ) } {}
+    };
+    struct leaf { int v; };
+    using TreeNode   = Node<leaf>;
+    using TreeBranch = NodeXpr<leaf>::Branch;
+    struct Owner { TreeBranch children; }; // by-value member -> forces TreeBranch completion (the trigger)
+} // namespace incomplete_recursive_heap_vector
+
+TEST( vector_incomplete_types, recursive_heap_vector_as_variant_alternative )
+{
+    using namespace incomplete_recursive_heap_vector;
+    TreeBranch b;
+    b.emplace_back( TreeNode{ leaf{ 1 } } );
+    b.emplace( b.begin(), TreeNode{ leaf{ 2 } } ); // middle-insert relocation of the recursive nodes
+    ASSERT_EQ( b.size(), 2u );
+    Owner o{ std::move( b ) };
+    ASSERT_EQ( o.children.size(), 2u );
+    ASSERT_TRUE( std::holds_alternative<leaf>( static_cast<TreeNode::Variant const &>( o.children[ 0 ] ) ) );
+    EXPECT_EQ( std::get<leaf>( static_cast<TreeNode::Variant const &>( o.children[ 0 ] ) ).v, 2 );
+    EXPECT_EQ( std::get<leaf>( static_cast<TreeNode::Variant const &>( o.children[ 1 ] ) ).v, 1 );
 }
 
 ////////////////////////////////////////////////////////////////////////////////

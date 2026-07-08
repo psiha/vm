@@ -47,6 +47,13 @@ struct heap_options
 {
     std::uint8_t alignment     { 0    }; // 0 -> default
     bool         cache_capacity{ true }; // if your crt_alloc_size is slow (MSVC)
+    // When the value_type is an incomplete/recursive strong-typedef (the vector's
+    // support_incomplete_types mode), the class-scope alignment constant must not
+    // probe complete<T>/alignof(T): that probe is an ODR hazard that can flip to
+    // `true` on a late instantiation and pull the (still-incomplete) value_type's
+    // full layout in — a hard recursion for e.g. a std::variant alternative whose
+    // own completion is what triggered the query. Fall back to max_align_t instead.
+    bool         defer_alignment{ false };
 }; // struct heap_options
 
 
@@ -86,6 +93,24 @@ namespace detail
         else
             return std::uint8_t{ alignof( std::max_align_t ) };
     }
+
+    // Resolve the storage alignment with `if constexpr` (NOT a ternary): the
+    // heap_default_alignment<U>() branch must not even be *instantiated* when the
+    // caller opts out of alignof(U) via options.defer_alignment, because that
+    // instantiation evaluates complete<U> — an ODR-hazardous probe that flips to
+    // `true` on a late instantiation and drags U's full layout in (a hard
+    // recursion for a recursive strong-typedef whose completion is what asked).
+    // A ternary operand is always instantiated; `if constexpr` genuinely discards.
+    template <typename U, heap_options options>
+    consteval std::uint8_t heap_alignment() noexcept
+    {
+        if constexpr ( options.alignment )
+            return options.alignment;
+        else if constexpr ( options.defer_alignment )
+            return std::uint8_t{ alignof( std::max_align_t ) };
+        else
+            return heap_default_alignment<U>();
+    }
 } // namespace detail
 
 template <typename T, typename sz_t = std::size_t, typename Allocator = void, heap_options options = {}>
@@ -101,9 +126,10 @@ class [[ nodiscard, clang::trivial_abi ]] heap_storage
 public:
     // Use alignof(T) when T is complete; fall back to max_align_t for incomplete
     // recursive strong-typedefs so heap_storage<> never touches alignof(T) at class scope.
-    static std::uint8_t constexpr alignment{
-        options.alignment ? options.alignment : detail::heap_default_alignment<T>()
-    };
+    // With options.defer_alignment (support_incomplete_types), skip the complete<T>
+    // probe entirely — even a discarded `if constexpr (complete<T>)` can flip late
+    // and recurse into the value_type's still-forming layout (see heap_options).
+    static std::uint8_t constexpr alignment{ detail::heap_alignment<T, options>() };
 
     static bool constexpr storage_zero_initialized{ false };
     static bool constexpr fixed_sized_copy        { false }; // only true for small fixed_storage (MSVC workaround having to define this everywhere)
