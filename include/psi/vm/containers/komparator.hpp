@@ -125,12 +125,25 @@ struct Komparator : Comparator
     template <std::random_access_iterator It>
     constexpr void sort( It const first, It const last ) const noexcept
     {
+        // For non-reg-passable comparators over register-scalar keys erase the
+        // comparator type: the by-ref wrapper closure otherwise minted by
+        // make_trivially_copyable_predicate is a distinct type per deduced
+        // Pred, i.e. per Comparator here, re-stamping the whole pdqsort family
+        // once per comparator type (see erased_ref_predicate in abi.hpp).
+        constexpr bool erase_comparator{ !can_be_passed_in_reg<Comparator> && std::is_scalar_v<std::iter_value_t<It>> };
         if constexpr ( requires{ comp().sort( first, last ); } )
             comp().sort( first, last );
-        else if constexpr ( requires{ Comparator::is_branchless; requires( Comparator::is_branchless ); } )
-            PSI_VM_PDQSORT_BRANCHLESS( first, last, make_trivially_copyable_predicate( comp() ) );
-        else
-            PSI_VM_PDQSORT( first, last, make_trivially_copyable_predicate( comp() ) );
+        else if constexpr ( requires{ Comparator::is_branchless; requires( Comparator::is_branchless ); } ) {
+            if constexpr ( erase_comparator )
+                PSI_VM_PDQSORT_BRANCHLESS( first, last, erased_ref_predicate<std::iter_value_t<It>>::bind( comp() ) );
+            else
+                PSI_VM_PDQSORT_BRANCHLESS( first, last, make_trivially_copyable_predicate( comp() ) );
+        } else {
+            if constexpr ( erase_comparator )
+                PSI_VM_PDQSORT( first, last, erased_ref_predicate<std::iter_value_t<It>>::bind( comp() ) );
+            else
+                PSI_VM_PDQSORT( first, last, make_trivially_copyable_predicate( comp() ) );
+        }
     }
 }; // struct Komparator
 

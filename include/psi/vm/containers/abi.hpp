@@ -202,6 +202,53 @@ constexpr decltype( auto ) make_trivially_copyable_predicate( Pred && __restrict
 } // make_trivially_copyable_predicate
 
 
+// Type-erased flavour of the above for register-scalar keys: the by-ref wrapper
+// closure minted by make_trivially_copyable_predicate is a DISTINCT type per
+// specialization (i.e. per deduced Pred — each comparator type, and each
+// cv/ref flavour it is deduced with, mints its own closure type), so
+// algorithms taking the predicate as a deduced template parameter (pdqsort &
+// co) get re-stamped along the comparator axis even though every wrapper does
+// the exact same thing. This named 16-byte (fn pointer + predicate pointer),
+// still trivially copyable, predicate collapses that axis to a single type per
+// key. The indirect call target is unique per sort call and thus perfectly
+// predicted.
+#if defined( __x86_64__ ) || defined( _M_X64 )
+// Use the SysV convention for the comparator thunk even under the MS ABI:
+// more argument registers and far fewer callee-saved XMMs make the indirect
+// leaf call cost close to a plain jump.
+#   define PSI_VM_ERASED_PRED_ABI __attribute__(( sysv_abi ))
+#else
+#   define PSI_VM_ERASED_PRED_ABI
+#endif
+template <typename Key>
+struct erased_ref_predicate
+{
+    using fn_t = bool ( PSI_VM_ERASED_PRED_ABI * )( void const * __restrict pred, Key left, Key right ) noexcept;
+
+    fn_t         fn;
+    void const * pred;
+
+    [[ gnu::hot, gnu::pure ]] bool operator()( Key const left, Key const right ) const noexcept {
+        return fn( pred, left, right );
+    }
+
+    template <typename Pred>
+    static erased_ref_predicate bind( Pred const & __restrict p ) noexcept {
+        return { &thunk<Pred>, &p };
+    }
+
+private:
+    template <typename Pred>
+    [[ gnu::pure ]] static PSI_VM_ERASED_PRED_ABI bool thunk
+    (
+        [[ clang::noescape ]] void const * __restrict pp,
+        Key const left, Key const right
+    ) noexcept {
+        return static_cast<bool>( (*static_cast<Pred const *>( pp ))( left, right ) );
+    }
+}; // erased_ref_predicate
+
+
 namespace detail { [[ noreturn, gnu::cold ]] void throw_out_of_range( char const * msg ); }
 
 PSI_WARNING_DISABLE_POP()
