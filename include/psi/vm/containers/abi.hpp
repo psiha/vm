@@ -214,9 +214,15 @@ constexpr decltype( auto ) make_trivially_copyable_predicate( Pred && __restrict
 // predicted.
 // Use the SysV convention for the comparator thunk even under the MS ABI:
 // more argument registers and far fewer callee-saved XMMs make the indirect
-// leaf call cost close to a plain jump (a silent no-op on non-x86-64
-// targets, so no gating needed).
-#define PSI_VM_ERASED_PRED_ABI __attribute__(( sysv_abi ))
+// leaf call cost close to a plain jump. Silently ignored on non-x86-64
+// targets, so no architecture gate — but the GNU attribute syntax (required
+// in the fn-pointer declarator position, where [[gnu::sysv_abi]] does not
+// parse) is unavailable under MSVC, which keeps its native convention.
+#if defined( __GNUC__ ) || defined( __clang__ )
+#   define PSI_VM_ERASED_PRED_ABI __attribute__(( sysv_abi ))
+#else
+#   define PSI_VM_ERASED_PRED_ABI
+#endif
 template <typename Key>
 struct erased_ref_predicate
 {
