@@ -82,6 +82,25 @@ template <typename Comp>
 }
 
 
+namespace detail
+{
+    // Out-of-line pdqsort entry for the type-erased comparator path. The
+    // noinline barrier is load-bearing: erased_ref_predicate's thunk pointer
+    // is a compile-time constant at every Komparator::sort call site, so an
+    // inlined sort body gets the indirect call devirtualized and the whole
+    // pdqsort family re-duplicated per caller (defeating the erasure; observed
+    // with LTO on linux). Kept out-of-line the family is stamped once per
+    // (iterator, key) and the thunk stays a shared indirect call.
+    template <bool Branchless, std::random_access_iterator It>
+    [[ gnu::noinline ]] void erased_sort( It const first, It const last, erased_ref_predicate<std::iter_value_t<It>> const comp ) noexcept
+    {
+        if constexpr ( Branchless )
+            PSI_VM_PDQSORT_BRANCHLESS( first, last, comp );
+        else
+            PSI_VM_PDQSORT( first, last, comp );
+    }
+} // namespace detail
+
 //==============================================================================
 // Komparator -- comparator wrapper (EBO via public inheritance)
 //==============================================================================
@@ -135,12 +154,12 @@ struct Komparator : Comparator
             comp().sort( first, last );
         else if constexpr ( requires{ Comparator::is_branchless; requires( Comparator::is_branchless ); } ) {
             if constexpr ( erase_comparator )
-                PSI_VM_PDQSORT_BRANCHLESS( first, last, erased_ref_predicate<std::iter_value_t<It>>::bind( comp() ) );
+                detail::erased_sort<true >( first, last, erased_ref_predicate<std::iter_value_t<It>>::bind( comp() ) );
             else
                 PSI_VM_PDQSORT_BRANCHLESS( first, last, make_trivially_copyable_predicate( comp() ) );
         } else {
             if constexpr ( erase_comparator )
-                PSI_VM_PDQSORT( first, last, erased_ref_predicate<std::iter_value_t<It>>::bind( comp() ) );
+                detail::erased_sort<false>( first, last, erased_ref_predicate<std::iter_value_t<It>>::bind( comp() ) );
             else
                 PSI_VM_PDQSORT( first, last, make_trivially_copyable_predicate( comp() ) );
         }
