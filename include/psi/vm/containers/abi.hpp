@@ -212,14 +212,11 @@ constexpr decltype( auto ) make_trivially_copyable_predicate( Pred && __restrict
 // still trivially copyable, predicate collapses that axis to a single type per
 // key. The indirect call target is unique per sort call and thus perfectly
 // predicted.
-#if defined( __x86_64__ ) || defined( _M_X64 )
 // Use the SysV convention for the comparator thunk even under the MS ABI:
 // more argument registers and far fewer callee-saved XMMs make the indirect
-// leaf call cost close to a plain jump.
-#   define PSI_VM_ERASED_PRED_ABI __attribute__(( sysv_abi ))
-#else
-#   define PSI_VM_ERASED_PRED_ABI
-#endif
+// leaf call cost close to a plain jump (a silent no-op on non-x86-64
+// targets, so no gating needed).
+#define PSI_VM_ERASED_PRED_ABI __attribute__(( sysv_abi ))
 template <typename Key>
 struct erased_ref_predicate
 {
