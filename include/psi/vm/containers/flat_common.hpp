@@ -254,6 +254,27 @@ namespace detail {
 
 
     //==============================================================================
+    // adaptive_merge_erased -- out-of-line adaptive_merge behind a type-erased
+    // comparator. Every flat container that reaches the adaptive path merges a
+    // register-scalar key vector (u32 row indices / keys); erasing the comparator
+    // collapses the per-comparator-type boost::movelib::adaptive_merge
+    // instantiations over the same iterator (measured: 3 hot call sites,
+    // ~25 KB each over `unsigned int*` -> one). COLD path (bulk insert / index
+    // build, never a hot per-element loop), so the erased indirect comparator
+    // call carries no hot-loop cost. [[gnu::noinline]] keeps the out-of-line
+    // boundary so LTO cannot constant-fold the thunk address and re-duplicate
+    // the merge body per caller (the erased-fn-pointer devirtualization trap).
+    //==============================================================================
+    template <typename T>
+    [[ gnu::noinline ]] void adaptive_merge_erased(
+        T * const first, T * const middle, T * const last,
+        erased_ref_predicate<T> const comp, T * const buffer, std::size_t const bufLen
+    ) noexcept {
+        boost::movelib::adaptive_merge( first, middle, last, comp, buffer, bufLen );
+    }
+
+
+    //==============================================================================
     // do_inplace_merge -- merge helper, chooses between std::inplace_merge and
     // boost::movelib::adaptive_merge (which uses spare capacity as scratch buffer)
     //==============================================================================
@@ -267,11 +288,21 @@ namespace detail {
             // Use spare capacity past size() as uninitialized scratch buffer
             auto * const buffer { keys.data() + keys.size() };
             auto   const bufLen { keys.capacity() - keys.size() };
-            boost::movelib::adaptive_merge(
-                keys.data(),
-                keys.data() + static_cast<std::ptrdiff_t>( oldSize ),
-                keys.data() + static_cast<std::ptrdiff_t>( keys.size() ),
-                wrappedComp, buffer, bufLen );
+            using elem_t = std::remove_cvref_t<decltype( *keys.data() )>;
+            if constexpr ( can_be_passed_in_reg<elem_t> ) {
+                // Fold the per-comparator adaptive_merge instantiations to one.
+                adaptive_merge_erased<elem_t>(
+                    keys.data(),
+                    keys.data() + static_cast<std::ptrdiff_t>( oldSize ),
+                    keys.data() + static_cast<std::ptrdiff_t>( keys.size() ),
+                    erased_ref_predicate<elem_t>::bind( comp ), buffer, bufLen );
+            } else {
+                boost::movelib::adaptive_merge(
+                    keys.data(),
+                    keys.data() + static_cast<std::ptrdiff_t>( oldSize ),
+                    keys.data() + static_cast<std::ptrdiff_t>( keys.size() ),
+                    wrappedComp, buffer, bufLen );
+            }
         } else
     #endif
         {
