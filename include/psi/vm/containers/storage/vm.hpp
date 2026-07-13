@@ -243,11 +243,11 @@ public:
     [[ nodiscard, gnu::pure ]] size_type storage_size() const noexcept { return get_size( mapping_ ); }
     [[ nodiscard, gnu::pure ]] size_type  mapped_size() const noexcept { return view_.size(); }
 
-    void flush_async   () const noexcept { flush_async   ( 0, mapped_size() ); }
-    void flush_blocking() const noexcept { flush_blocking( 0, mapped_size() ); }
+    void                        flush_async   () const noexcept {        flush_async   ( 0, mapped_size() ); }
+    err::fallible_result<void, error> flush_blocking() const noexcept { return flush_blocking( 0, mapped_size() ); }
 
-    void flush_async   ( size_type beginning, size_type size ) const noexcept;
-    void flush_blocking( size_type beginning, size_type size ) const noexcept;
+    void                        flush_async   ( size_type beginning, size_type size ) const noexcept;
+    err::fallible_result<void, error> flush_blocking( size_type beginning, size_type size ) const noexcept;
 
     [[ nodiscard, gnu::pure ]] bool file_backed() const noexcept { return mapping_.is_file_based(); }
 
