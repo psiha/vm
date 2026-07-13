@@ -288,8 +288,16 @@ namespace detail {
             // Use spare capacity past size() as uninitialized scratch buffer
             auto * const buffer { keys.data() + keys.size() };
             auto   const bufLen { keys.capacity() - keys.size() };
-            using elem_t = std::remove_cvref_t<decltype( *keys.data() )>;
-            if constexpr ( can_be_passed_in_reg<elem_t> ) {
+            using elem_t       = std::remove_cvref_t<decltype( *keys.data() )>;
+            using comparator_t = std::remove_cvref_t<decltype( comp )>;
+            // Erasure only pays off for non-reg-passable comparators (the
+            // ones make_trivially_copyable_predicate mints a distinct
+            // closure type for): a reg-passable comparator like std::less<T>
+            // is already free to instantiate per-type, so routing it through
+            // the erased predicate would just add an indirect call for no
+            // codegen win -- a strict pessimization. Mirrors the
+            // !can_be_passed_in_reg<Comparator> gate in komparator.hpp.
+            if constexpr ( can_be_passed_in_reg<elem_t> && !can_be_passed_in_reg<comparator_t> ) {
                 // Fold the per-comparator adaptive_merge instantiations to one.
                 adaptive_merge_erased<elem_t>(
                     keys.data(),
