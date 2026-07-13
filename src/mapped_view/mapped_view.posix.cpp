@@ -17,6 +17,10 @@
 #include <psi/vm/mapped_view/ops.hpp>
 
 #include <boost/assert.hpp>
+
+#include <cerrno>
+#include <fcntl.h>
+#include <unistd.h>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -133,7 +137,7 @@ void discard( mapped_span const range ) noexcept
 
 namespace {
     __attribute__(( nothrow ))
-    void call_msync( mapped_span const range, int const flags ) {
+    fallible_result<void> call_msync( mapped_span const range, int const flags ) {
         BOOST_ASSERT( is_aligned( range.data(), page_size ) );
         // It is OK (efficiency-wise) to call msync on the entire file regardless of how small the change is
         // https://stackoverflow.com/questions/68832263/does-msync-performance-depend-on-the-size-of-the-provided-range
@@ -148,7 +152,9 @@ namespace {
         // https://wiki.postgresql.org/wiki/Fsync_Errors 'fsyncgate 2018'
         // https://stackoverflow.com/questions/42434872/writing-programs-to-cope-with-i-o-errors-causing-lost-writes-on-linux
         // https://lwn.net/Articles/684828 DAX, mmap(), and a "go faster" flag
-        BOOST_VERIFY( ::msync( range.data(), range.size(), flags ) == 0 || range.empty() );
+        if ( ( ::msync( range.data(), range.size(), flags ) == 0 ) || range.empty() ) [[ likely ]]
+            return err::success;
+        return error{};
     }
 }
 
@@ -159,10 +165,10 @@ void flush_async( mapped_span const range ) noexcept
     // MS_ASYNC is a no-op on Linux yet it states that for portability it should
     // be specified. Also this article https://lwn.net/Articles/502612 points to
     // patches adding this functionality to Linux 'at some point'.
-    call_msync( range, MS_ASYNC );
+    call_msync( range, MS_ASYNC ).ignore_failure(); // fire-and-forget: result intentionally not observed
 }
 
-void flush_blocking( mapped_span const range ) noexcept
+fallible_result<void> flush_blocking( mapped_span const range ) noexcept
 {
     // MS_INVALIDATE should not be necessary on OSes with coherent/unified
     // caches? Even if it is necessary it is not clear that the user would want
@@ -170,10 +176,46 @@ void flush_blocking( mapped_span const range ) noexcept
     // view ever exists)...
     // https://stackoverflow.com/questions/60547532/whats-the-exact-meaning-of-the-flag-ms-invalidate-in-msync
     // https://linux-fsdevel.vger.kernel.narkive.com/ytPKRHNt/munmap-msync-synchronization
-    call_msync( range, MS_SYNC /*| MS_INVALIDATE*/ );
+    return call_msync( range, MS_SYNC /*| MS_INVALIDATE*/ ).propagate();
     // sync_file_range, fdatasync...
 }
-void flush_blocking( mapped_span const range, file_handle::const_reference ) noexcept { flush_blocking( range ); }
+// msync(MS_SYNC) alone does not guarantee the data has reached the storage
+// device: on Linux it is a range integrity sync equivalent to fdatasync (dirty
+// pages + i_size, no dirent), but on macOS/*BSD msync/fsync do not flush the
+// drive write cache - only F_FULLFSYNC does (Apple's fsync(2) man page; see
+// also https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fsync.2.html).
+// Without this extra step, callers relying on flush_blocking(range, file) for
+// power-loss durability (not just process-crash durability) silently do not
+// get it on macOS, even though the call "succeeds".
+fallible_result<void> flush_blocking( mapped_span const range, file_handle::const_reference const source_file ) noexcept
+{
+#ifndef NDEBUG
+    if ( flush_observer ) [[ unlikely ]] flush_observer( range, source_file );
+    if ( flush_force_failure ) [[ unlikely ]] { errno = ENOSPC; return error{}; }
+#endif
+    if ( auto result{ flush_blocking( range )() }; !result ) [[ unlikely ]]
+        return result.error();
+#if defined( __APPLE__ )
+    if ( ::fcntl( source_file.value, F_FULLFSYNC ) == -1 ) [[ unlikely ]]
+        return error{};
+#elif defined( __linux__ )
+    // No extra fdatasync() here: the msync(MS_SYNC) call above already did the
+    // equivalent work. The kernel's msync(MS_SYNC) handler (mm/msync.c) calls
+    // vfs_fsync_range( file, start, end, /*datasync=*/1 ) - the exact same VFS
+    // entry point fdatasync() itself calls. A second fdatasync() would just
+    // repeat that traversal for zero additional durability.
+#else
+    // POSIX-compliant fallback for every other *nix (the BSDs, illumos, ...):
+    // POSIX only requires msync() to make mmap'd stores visible to processes
+    // that read the file directly - it does not require, and isn't verified
+    // here to imply (unlike the Linux case above), that fsync()/fdatasync() on
+    // the fd alone would already have picked up those pages without it. Keep
+    // both calls until/unless a given OS's equivalence is actually confirmed.
+    if ( ::fdatasync( source_file.value ) != 0 ) [[ unlikely ]]
+        return error{};
+#endif
+    return err::success;
+}
 
 //------------------------------------------------------------------------------
 } // psi::vm

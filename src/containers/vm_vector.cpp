@@ -56,8 +56,8 @@ void mem_mapping::close() noexcept
     mapping_.close();
 }
 
-void mem_mapping::flush_async   ( std::size_t const beginning, std::size_t const size ) const noexcept { vm::flush_async   ( mapped_span({ view_.subspan( beginning, size ) }) ); }
-void mem_mapping::flush_blocking( std::size_t const beginning, std::size_t const size ) const noexcept { vm::flush_blocking( mapped_span({ view_.subspan( beginning, size ) }), mapping_.underlying_file() ); }
+void                              mem_mapping::flush_async   ( std::size_t const beginning, std::size_t const size ) const noexcept {        vm::flush_async   ( mapped_span({ view_.subspan( beginning, size ) }) ); }
+err::fallible_result<void, error> mem_mapping::flush_blocking( std::size_t const beginning, std::size_t const size ) const noexcept { return vm::flush_blocking( mapped_span({ view_.subspan( beginning, size ) }), mapping_.underlying_file() ); }
 [[ gnu::pure ]]
 mem_mapping::size_type
 mem_mapping::client_to_storage_size( size_type const sz ) const noexcept

@@ -213,11 +213,19 @@ void flush_async( mapped_span const range ) noexcept
     }
 }
 
-void flush_blocking( mapped_span const range, file_handle::const_reference const source_file ) noexcept
+fallible_result<void> flush_blocking( mapped_span const range, file_handle::const_reference const source_file ) noexcept
 {
-    flush_async( range );
+#ifndef NDEBUG
+    if ( flush_observer ) [[ unlikely ]] flush_observer( range, source_file );
+    if ( flush_force_failure ) [[ unlikely ]] { ::SetLastError( ERROR_DISK_FULL ); return error{}; }
+#endif
+    // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwflushvirtualmemory
+    if ( !::FlushViewOfFile( range.data(), range.size() ) ) [[ unlikely ]]
+        return error{};
     // https://devblogs.microsoft.com/oldnewthing/20100909-00/?p=12913 Flushing your performance down the drain, that is
-    BOOST_VERIFY( ::FlushFileBuffers( source_file.value ) );
+    if ( !::FlushFileBuffers( source_file.value ) ) [[ unlikely ]]
+        return error{};
+    return err::success;
 }
 
 //------------------------------------------------------------------------------
