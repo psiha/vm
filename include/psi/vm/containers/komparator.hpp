@@ -102,6 +102,35 @@ namespace detail
 } // namespace detail
 
 //==============================================================================
+// erased_pdqsort -- public type-erased pdqsort over register-scalar keys
+//==============================================================================
+
+/// Sort [first, last) of register-scalar keys with an arbitrary strict-weak
+/// predicate WITHOUT stamping a pdqsort family per predicate type: the
+/// predicate is erased behind erased_ref_predicate (a (thunk, ref) pair using
+/// the SysV convention where available -- see abi.hpp), so the whole pdqsort
+/// instantiation is shared once per (iterator, key) pair across every caller
+/// and every predicate type. The out-of-line detail::erased_sort body is the
+/// load-bearing LTO devirtualization barrier: the thunk pointer is a
+/// compile-time constant at each call site and an inlined sort body would get
+/// the indirect call devirtualized and the family re-duplicated per caller.
+///
+/// The predicate is captured BY REFERENCE and must outlive the call (pass it
+/// directly -- never a temporary bound elsewhere). Intended for callers whose
+/// predicate is too large to pass in a register or is a per-call-site closure
+/// type (index argsorts, column comparators); for register-passable trivial
+/// predicates over scalar keys the direct (non-erased) pdqsort is typically
+/// better -- Komparator::sort below performs exactly that dispatch.
+template <bool Branchless = false, std::random_access_iterator It, typename Pred>
+requires std::is_scalar_v<std::iter_value_t<It>>
+void erased_pdqsort( It const first, It const last, Pred const & __restrict pred ) noexcept
+{
+    detail::erased_sort<Branchless>(
+        first, last, erased_ref_predicate<std::iter_value_t<It>>::bind( pred )
+    );
+}
+
+//==============================================================================
 // Komparator -- comparator wrapper (EBO via public inheritance)
 //==============================================================================
 
@@ -154,12 +183,12 @@ struct Komparator : Comparator
             comp().sort( first, last );
         else if constexpr ( requires{ Comparator::is_branchless; requires( Comparator::is_branchless ); } ) {
             if constexpr ( erase_comparator )
-                detail::erased_sort<true >( first, last, erased_ref_predicate<std::iter_value_t<It>>::bind( comp() ) );
+                erased_pdqsort<true >( first, last, comp() );
             else
                 PSI_VM_PDQSORT_BRANCHLESS( first, last, make_trivially_copyable_predicate( comp() ) );
         } else {
             if constexpr ( erase_comparator )
-                detail::erased_sort<false>( first, last, erased_ref_predicate<std::iter_value_t<It>>::bind( comp() ) );
+                erased_pdqsort<false>( first, last, comp() );
             else
                 PSI_VM_PDQSORT( first, last, make_trivially_copyable_predicate( comp() ) );
         }
