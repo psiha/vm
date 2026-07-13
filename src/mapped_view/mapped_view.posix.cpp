@@ -198,7 +198,19 @@ fallible_result<void> flush_blocking( mapped_span const range, file_handle::cons
 #if defined( __APPLE__ )
     if ( ::fcntl( source_file.value, F_FULLFSYNC ) == -1 ) [[ unlikely ]]
         return error{};
+#elif defined( __linux__ )
+    // No extra fdatasync() here: the msync(MS_SYNC) call above already did the
+    // equivalent work. The kernel's msync(MS_SYNC) handler (mm/msync.c) calls
+    // vfs_fsync_range( file, start, end, /*datasync=*/1 ) - the exact same VFS
+    // entry point fdatasync() itself calls. A second fdatasync() would just
+    // repeat that traversal for zero additional durability.
 #else
+    // POSIX-compliant fallback for every other *nix (the BSDs, illumos, ...):
+    // POSIX only requires msync() to make mmap'd stores visible to processes
+    // that read the file directly - it does not require, and isn't verified
+    // here to imply (unlike the Linux case above), that fsync()/fdatasync() on
+    // the fd alone would already have picked up those pages without it. Keep
+    // both calls until/unless a given OS's equivalence is actually confirmed.
     if ( ::fdatasync( source_file.value ) != 0 ) [[ unlikely ]]
         return error{};
 #endif
