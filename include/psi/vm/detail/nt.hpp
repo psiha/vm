@@ -266,6 +266,29 @@ inline auto const NtAllocateVirtualMemoryEx{ detail::get_nt_proc<NtAllocateVirtu
 inline auto const NtMapViewOfSectionEx     { detail::get_nt_proc<NtMapViewOfSectionEx_t     >( "NtMapViewOfSectionEx"      ) };
 inline auto const NtUnmapViewOfSectionEx   { detail::get_nt_proc<NtUnmapViewOfSectionEx_t   >( "NtUnmapViewOfSectionEx"    ) };
 
+////////////////////////////////////////////////////////////////////////////////
+// File flush APIs
+////////////////////////////////////////////////////////////////////////////////
+
+// NtFlushBuffersFileEx - finer-grained alternative to FlushFileBuffers(): the
+// FlushFlagsNoSync-equivalent flag (see caller-side FLUSH_FLAGS_* constants -
+// deliberately not named here, values are the only documented part of this
+// undocumented NT API) flushes cached data to the device without also issuing
+// the (device-global, not per-handle) hardware write-cache flush - useful for
+// ordering many writes before a single, separate FlushFileBuffers() covers the
+// device-wide cache flush once. Present since Windows 8, unconditionally
+// available on this project's Windows 11 25H2 minimum - looked up the same
+// way as the Win11+ placeholder VM APIs above, no fallback needed.
+using NtFlushBuffersFileEx_t = NTSTATUS (NTAPI*)
+(
+    HANDLE          FileHandle,
+    ULONG           Flags,
+    PVOID           Parameters,
+    ULONG           ParametersSize,
+    PIO_STATUS_BLOCK IoStatusBlock
+) noexcept;
+inline auto const NtFlushBuffersFileEx{ detail::get_nt_proc<NtFlushBuffersFileEx_t>( "NtFlushBuffersFileEx" ) };
+
 //------------------------------------------------------------------------------
 } // psi::vm::nt
 //------------------------------------------------------------------------------
