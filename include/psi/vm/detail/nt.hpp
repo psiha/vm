@@ -266,6 +266,33 @@ inline auto const NtAllocateVirtualMemoryEx{ detail::get_nt_proc<NtAllocateVirtu
 inline auto const NtMapViewOfSectionEx     { detail::get_nt_proc<NtMapViewOfSectionEx_t     >( "NtMapViewOfSectionEx"      ) };
 inline auto const NtUnmapViewOfSectionEx   { detail::get_nt_proc<NtUnmapViewOfSectionEx_t   >( "NtUnmapViewOfSectionEx"    ) };
 
+////////////////////////////////////////////////////////////////////////////////
+// File flush APIs
+////////////////////////////////////////////////////////////////////////////////
+
+// NtFlushBuffersFileEx - finer-grained alternative to FlushFileBuffers(): its
+// Flags parameter takes the FLUSH_FLAGS_* macros (FLUSH_FLAGS_NO_SYNC et al.)
+// already provided, unconditionally, by <winioctl.h> (transitively included
+// via <windows.h> above) - no wrapper needed here, and none would even work:
+// they are preprocessor macros, so a caller must use the bare name, never
+// namespace-qualified (psi::vm::nt::FLUSH_FLAGS_NO_SYNC macro-expands to
+// psi::vm::nt::0x00000002 - not a valid expression). FLUSH_FLAGS_NO_SYNC
+// flushes cached data to the device without also issuing the (device-
+// global, not per-handle) hardware write-cache flush - useful for ordering
+// many writes before a single, separate FlushFileBuffers() covers the
+// device-wide cache flush once. Present since Windows 8, unconditionally
+// available on this project's Windows 11 25H2 minimum - looked up the same
+// way as the Win11+ placeholder VM APIs above, no fallback needed.
+using NtFlushBuffersFileEx_t = NTSTATUS (NTAPI*)
+(
+    HANDLE          FileHandle,
+    ULONG           Flags,
+    PVOID           Parameters,
+    ULONG           ParametersSize,
+    PIO_STATUS_BLOCK IoStatusBlock
+) noexcept;
+inline auto const NtFlushBuffersFileEx{ detail::get_nt_proc<NtFlushBuffersFileEx_t>( "NtFlushBuffersFileEx" ) };
+
 //------------------------------------------------------------------------------
 } // psi::vm::nt
 //------------------------------------------------------------------------------
