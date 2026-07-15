@@ -226,7 +226,10 @@ constexpr decltype( auto ) make_trivially_copyable_predicate( Pred && __restrict
 template <typename Key>
 struct erased_ref_predicate
 {
-    using fn_t = bool ( PSI_VM_ERASED_PRED_ABI * )( void const * __restrict pred, Key left, Key right ) noexcept;
+    // [[clang::noescape]] is part of the function type: without it here the
+    // pointer's type differs from thunk's actual type and every call through
+    // fn is formally UB (caught by UBSan's 'function' check).
+    using fn_t = bool ( PSI_VM_ERASED_PRED_ABI * )( [[ clang::noescape ]] void const * __restrict pred, Key left, Key right ) noexcept;
 
     fn_t         fn;
     void const * pred;
