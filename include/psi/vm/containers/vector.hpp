@@ -124,7 +124,11 @@ namespace detail
             PSI_WARNING_CLANG_DISABLE( -Wnontrivial-memcall ) // e.g. for trivial_abi std::string
             // Clang does not use is_trivially_moveable/trivial_abi and is incorrect
             // (i.e. an uninitialized_move_backwards is required)
-            std::memmove( &data[ position + n ], &data[ position ], elements_to_move * sizeof( T ) );
+            // guard the degenerate call: with nothing to move on an empty
+            // container data is null and memmove's nonnull attribute makes
+            // even a zero-count call UB (flagged by UBSan)
+            if ( elements_to_move ) [[ likely ]]
+                std::memmove( &data[ position + n ], &data[ position ], elements_to_move * sizeof( T ) );
             PSI_WARNING_DISABLE_POP()
         }
         else
