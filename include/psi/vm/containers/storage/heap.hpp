@@ -300,7 +300,9 @@ public:
         return data();
     }
     template <geometric_growth G = {1, 1}>
-    [[ using gnu: assume_aligned( alignment ), returns_nonnull ]]
+    // no returns_nonnull: grow_to( 0 ) on an empty container never allocates
+    // and legitimately returns data() == nullptr (UBSan-verified reachable).
+    [[ using gnu: assume_aligned( alignment ) ]]
     constexpr value_type * storage_grow_to( size_type const target_size )
     {
         auto const current_capacity{ capacity() };
@@ -313,7 +315,9 @@ public:
         return data();
     }
 
-    [[ using gnu: assume_aligned( alignment ), returns_nonnull, cold ]]
+    // no returns_nonnull: shrink_to( 0 ) frees (mark_freed) and returns
+    // data() == nullptr.
+    [[ using gnu: assume_aligned( alignment ), cold ]]
     constexpr value_type * storage_shrink_to( size_type const target_size ) noexcept
     {
         BOOST_ASSUME( target_size <= size_ );
