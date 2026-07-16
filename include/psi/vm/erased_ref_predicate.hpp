@@ -140,7 +140,12 @@ private:
         // memcpy+launder dance (kept only for the sub-pointer-size remainder)
         // is known to still trip optimizers into an actual stack round-trip.
 #ifdef __cpp_lib_start_lifetime_as
-        return static_cast<bool>( ( *std::start_lifetime_as<Pred>( &pp ) )( left, right ) );
+        // un-restrict first: &pp is pointer-to-__restrict-pointer, which does
+        // not convert to (const) void * (clang rejects the qualification
+        // conversion — broke the Linux libstdc++ build, where the feature
+        // macro is defined, while MS STL without it took the bit_cast path).
+        void const * const slot{ pp };
+        return static_cast<bool>( ( *std::start_lifetime_as<Pred>( &slot ) )( left, right ) );
 #else
         if constexpr ( sizeof( Pred ) == sizeof( pp ) ) {
             return static_cast<bool>( std::bit_cast<Pred>( pp )( left, right ) );
