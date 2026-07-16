@@ -72,12 +72,39 @@ namespace detail
         boost::movelib::adaptive_merge( first, middle, last, comp, buffer, bufLen );
     }
 #endif // PSI_VM_HAS_ADAPTIVE_MERGE
+
+    // The same treatment for the std::inplace_merge route: the noinline
+    // out-of-line boundary, the comparator erasure and the iterator stripping
+    // are each orthogonal to WHICH merge implementation runs, so the erased
+    // callers collapse per key type on this route too —
+    //   * erased_std_inplace_merge      — contiguous ranges, naked pointers:
+    //     ONE instantiation per key type;
+    //   * erased_iter_std_inplace_merge — non-contiguous random-access
+    //     iterators: the comparator axis still collapses, one instantiation
+    //     per (iterator, key) remains.
+    template <typename T>
+    [[ gnu::noinline ]] void erased_std_inplace_merge(
+        T * const first, T * const middle, T * const last,
+        erased_ref_predicate<T> const comp
+    ) noexcept {
+        std::inplace_merge( first, middle, last, comp );
+    }
+
+    template <std::random_access_iterator It>
+    [[ gnu::noinline ]] void erased_iter_std_inplace_merge(
+        It const first, It const middle, It const last,
+        erased_ref_predicate<std::iter_value_t<It>> const comp
+    ) noexcept {
+        std::inplace_merge( first, middle, last, comp );
+    }
 } // namespace detail
 
 /// In-place merge of [first, middle) and [middle, last), optionally using
 /// uninitialized scratch `buffer` of `bufLen` elements (spare container
 /// capacity). With scratch and movelib available, dispatches to
-/// boost::movelib::adaptive_merge; falls back to std::inplace_merge.
+/// boost::movelib::adaptive_merge; falls back to std::inplace_merge. The
+/// erasure policy applies on EITHER route — the noinline boundary, comparator
+/// erasure and iterator stripping are orthogonal to the implementation choice.
 template <comparator_erasure Erasure = comparator_erasure::never, std::random_access_iterator It, typename Comparator>
 constexpr void inplace_merge(
     It const first, It const middle, It const last,
@@ -107,6 +134,21 @@ constexpr void inplace_merge(
         }
     }
 #endif // PSI_VM_HAS_ADAPTIVE_MERGE
+    if constexpr ( Erasure == comparator_erasure::allowed && detail::erasure_applies<Comparator, key_t> )
+    {
+        if !consteval
+        {
+            if constexpr ( std::contiguous_iterator<It> ) {
+                detail::erased_std_inplace_merge<key_t>(
+                    std::to_address( first ), std::to_address( middle ), std::to_address( last ),
+                    erased_ref_predicate<key_t>::bind( comp ) );
+            } else {
+                detail::erased_iter_std_inplace_merge(
+                    first, middle, last, erased_ref_predicate<key_t>::bind( comp ) );
+            }
+            return;
+        }
+    }
     std::inplace_merge( first, middle, last, make_trivially_copyable_predicate( comp ) );
 }
 
