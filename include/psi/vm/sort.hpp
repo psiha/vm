@@ -29,7 +29,8 @@
 //------------------------------------------------------------------------------
 #pragma once
 
-#include "containers/abi.hpp"
+#include "containers/abi.hpp" // can_be_passed_in_reg, make_trivially_copyable_predicate
+#include "erased_ref_predicate.hpp"
 
 #if __has_include( <boost/sort/pdqsort/pdqsort.hpp> )
 #include <boost/sort/pdqsort/pdqsort.hpp>
