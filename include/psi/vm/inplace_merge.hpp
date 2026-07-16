@@ -42,6 +42,20 @@ namespace psi::vm
 
 namespace detail
 {
+    // adaptive_merge uses spare capacity past size() as scratch buffer which
+    // trips ASan's container-overflow detection (writes between size/capacity).
+#if defined( __SANITIZE_ADDRESS__ )
+    inline constexpr bool use_adaptive_merge{ false };
+#elif defined( __has_feature )
+#   if __has_feature( address_sanitizer )
+    inline constexpr bool use_adaptive_merge{ false };
+#   else
+    inline constexpr bool use_adaptive_merge{ true  };  // boost::movelib::adaptive_merge (vs. std::inplace_merge)
+#   endif
+#else
+    inline constexpr bool use_adaptive_merge{ true  };  // boost::movelib::adaptive_merge (vs. std::inplace_merge)
+#endif
+
 #if PSI_VM_HAS_ADAPTIVE_MERGE
     // Out-of-line adaptive_merge behind a type-erased comparator over naked
     // pointers: one instantiation per key type serves every caller. COLD path
@@ -73,7 +87,7 @@ constexpr void inplace_merge(
 {
     using key_t = std::iter_value_t<It>;
 #if PSI_VM_HAS_ADAPTIVE_MERGE
-    if constexpr ( std::contiguous_iterator<It> )
+    if constexpr ( detail::use_adaptive_merge && std::contiguous_iterator<It> )
     {
         if !consteval
         {
@@ -94,6 +108,25 @@ constexpr void inplace_merge(
     }
 #endif // PSI_VM_HAS_ADAPTIVE_MERGE
     std::inplace_merge( first, middle, last, make_trivially_copyable_predicate( comp ) );
+}
+
+/// Container-level overload: merge the sorted [0, oldSize) prefix with the
+/// sorted [oldSize, size()) tail of `keys` in place, feeding the container's
+/// spare capacity past size() to adaptive_merge as uninitialized scratch when
+/// the container exposes it (data() + capacity()); plain in-place merge
+/// otherwise. The std-vs-movelib selection (including the ASan opt-out — the
+/// spare-capacity writes trip container-overflow poisoning) is built in.
+template <comparator_erasure Erasure = comparator_erasure::never, typename KC, typename Comparator>
+constexpr void inplace_merge( KC & keys, typename KC::size_type const oldSize, Comparator const & __restrict comp ) noexcept
+{
+    auto const middle{ keys.begin() + static_cast<std::ptrdiff_t>( oldSize ) };
+    if constexpr ( requires { keys.data(); keys.capacity(); } ) {
+        vm::inplace_merge<Erasure>(
+            keys.begin(), middle, keys.end(), comp,
+            keys.data() + keys.size(), keys.capacity() - keys.size() );
+    } else {
+        vm::inplace_merge<Erasure>( keys.begin(), middle, keys.end(), comp );
+    }
 }
 
 //------------------------------------------------------------------------------

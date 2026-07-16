@@ -135,19 +135,8 @@ namespace detail {
     // Only affect the single-container (set) overload of sort_merge_storage.
     //==============================================================================
     inline constexpr bool use_set_difference_dedup{ true  };  // filter tail against prefix before merge (vs. merge-then-unique)
-    // adaptive_merge uses spare capacity past size() as scratch buffer which
-    // trips ASan's container-overflow detection (writes between size/capacity).
-#if defined( __SANITIZE_ADDRESS__ )
-    inline constexpr bool use_adaptive_merge      { false };
-#elif defined( __has_feature )
-#   if __has_feature( address_sanitizer )
-    inline constexpr bool use_adaptive_merge      { false };
-#   else
-    inline constexpr bool use_adaptive_merge      { true  };  // boost::movelib::adaptive_merge (vs. std::inplace_merge)
-#   endif
-#else
-    inline constexpr bool use_adaptive_merge      { true  };  // boost::movelib::adaptive_merge (vs. std::inplace_merge)
-#endif
+    // (the std-vs-movelib in-place-merge selection, incl. the ASan opt-out,
+    // lives in psi/vm/inplace_merge.hpp)
 
 
     //==============================================================================
@@ -247,29 +236,6 @@ namespace detail {
     }
 
 
-    //==============================================================================
-    // do_inplace_merge -- merge helper, chooses between std::inplace_merge and
-    // boost::movelib::adaptive_merge (which uses spare capacity as scratch
-    // buffer) via psi::vm::inplace_merge, with the comparator-trait-derived
-    // erasure policy (see psi/vm/sort.hpp).
-    //==============================================================================
-    template <typename KC>
-    constexpr void do_inplace_merge( KC & keys, typename KC::size_type const oldSize, auto const & comp ) noexcept {
-        constexpr auto erasure{ comparator_erasure_of<std::remove_cvref_t<decltype( comp )>> };
-        auto const middle{ keys.begin() + static_cast<std::ptrdiff_t>( oldSize ) };
-    #if PSI_VM_HAS_ADAPTIVE_MERGE
-        if constexpr ( use_adaptive_merge && requires { keys.data(); keys.capacity(); } )
-        {
-            // Use spare capacity past size() as uninitialized scratch buffer
-            vm::inplace_merge<erasure>(
-                keys.begin(), middle, keys.end(), comp,
-                keys.data() + keys.size(), keys.capacity() - keys.size() );
-        } else
-    #endif
-        {
-            std::inplace_merge( keys.begin(), middle, keys.end(), make_trivially_copyable_predicate( comp ) );
-        }
-    }
 
 
     //==============================================================================
@@ -330,13 +296,13 @@ namespace detail {
                 auto const newTailEnd{ inplace_set_unique_difference( appendStart, keys.end(), keys.begin(), appendStart, enreg( comp ) ) };
                 truncate_to( keys, static_cast<key_sz_t>( newTailEnd - keys.begin() ) );
                 if ( static_cast<key_sz_t>( keys.size() ) > oldSize )
-                    do_inplace_merge( keys, oldSize, comp );
+                    vm::inplace_merge<comparator_erasure_of<std::remove_cvref_t<decltype( comp )>>>( keys, oldSize, comp );
             } else {
                 unique_truncate( keys, comp );
             }
         } else {
             if ( oldSize > 0 )
-                do_inplace_merge( keys, oldSize, comp );
+                vm::inplace_merge<comparator_erasure_of<std::remove_cvref_t<decltype( comp )>>>( keys, oldSize, comp );
             if constexpr ( Unique )
                 unique_truncate( keys, comp );
         }
