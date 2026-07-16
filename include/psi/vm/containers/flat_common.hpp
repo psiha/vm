@@ -485,18 +485,18 @@ public:
         self.insert( s, il.begin(), il.end() );
     }
 
-    template <std::ranges::input_range R>
+    template <comparator_erasure Erasure = comparator_erasure_of<Compare>, std::ranges::input_range R>
     requires std::convertible_to<std::ranges::range_reference_t<R>, value_type>
     constexpr void insert_range( this auto && self, R && rg ) {
         auto common{ std::forward<R>( rg ) | std::views::common };
-        self.insert( std::ranges::begin( common ), std::ranges::end( common ) );
+        self.template insert<Erasure>( std::ranges::begin( common ), std::ranges::end( common ) );
     }
 
-    template <sorted_insert_tag SortedTag, std::ranges::input_range R>
+    template <comparator_erasure Erasure = comparator_erasure_of<Compare>, sorted_insert_tag SortedTag, std::ranges::input_range R>
     requires std::convertible_to<std::ranges::range_reference_t<R>, value_type>
     constexpr void insert_range( this auto && self, SortedTag s, R && rg ) {
         auto common{ std::forward<R>( rg ) | std::views::common };
-        self.insert( s, std::ranges::begin( common ), std::ranges::end( common ) );
+        self.template insert<Erasure>( s, std::ranges::begin( common ), std::ranges::end( common ) );
     }
 
     //--------------------------------------------------------------------------
@@ -531,6 +531,7 @@ public:
     // Lvalue merge -- unique: selective transfer of non-duplicate elements;
     //                multi:  move all elements from source.
     // Exception-safe: clears destination on failure (basic guarantee).
+    template <comparator_erasure Erasure = comparator_erasure_of<Compare>>
     constexpr void merge( this auto && self, flat_impl & source ) {
         if ( &self == &source )
             return;
@@ -565,7 +566,7 @@ public:
             try {
                 for ( auto const idx : transferIndices )
                     storage_emplace_back_from( self.storage_, source.storage_, idx );
-                self.template init_sort_merge<true>( oldSize );
+                self.template init_sort_merge<true, Erasure>( oldSize );
             } catch ( ... ) {
                 self.clear();
                 throw;
@@ -586,17 +587,18 @@ public:
                 truncate_to( source.storage_, dst );
             }
         } else {
-            self.merge( std::move( source ) ); // forward to rvalue merge (move all)
+            self.template merge<Erasure>( std::move( source ) ); // forward to rvalue merge (move all)
         }
     }
 
     // Rvalue merge -- always move all (source is expiring)
     // Exception-safe: clears destination on failure (basic guarantee).
+    template <comparator_erasure Erasure = comparator_erasure_of<Compare>>
     constexpr void merge( this auto && self, flat_impl && source ) {
         auto const oldSize{ self.size() };
         storage_move_append( self.storage_, source.storage_ );
         try {
-            self.template init_sort_merge<true>( oldSize );
+            self.template init_sort_merge<true, Erasure>( oldSize );
         } catch ( ... ) {
             self.clear();
             throw;
