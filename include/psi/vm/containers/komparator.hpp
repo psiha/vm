@@ -24,16 +24,7 @@
 #pragma once
 
 #include "abi.hpp"
-
-#if __has_include( <boost/sort/pdqsort/pdqsort.hpp> )
-#include <boost/sort/pdqsort/pdqsort.hpp>
-#define PSI_VM_PDQSORT(            first, last, comp ) boost::sort::pdqsort           ( first, last, comp )
-#define PSI_VM_PDQSORT_BRANCHLESS( first, last, comp ) boost::sort::pdqsort_branchless( first, last, comp )
-#else
-#include <boost/move/algo/detail/pdqsort.hpp>
-#define PSI_VM_PDQSORT(            first, last, comp ) boost::movelib::pdqsort( first, last, comp )
-#define PSI_VM_PDQSORT_BRANCHLESS( first, last, comp ) boost::movelib::pdqsort( first, last, comp )
-#endif
+#include "../sort.hpp"
 
 #include <functional>
 #include <iterator>
@@ -82,25 +73,6 @@ template <typename Comp>
 }
 
 
-namespace detail
-{
-    // Out-of-line pdqsort entry for the type-erased comparator path. The
-    // noinline barrier is load-bearing: erased_ref_predicate's thunk pointer
-    // is a compile-time constant at every Komparator::sort call site, so an
-    // inlined sort body gets the indirect call devirtualized and the whole
-    // pdqsort family re-duplicated per caller (defeating the erasure; observed
-    // with LTO on linux). Kept out-of-line the family is stamped once per
-    // (iterator, key) and the thunk stays a shared indirect call.
-    template <bool Branchless, std::random_access_iterator It>
-    [[ gnu::noinline ]] void erased_sort( It const first, It const last, erased_ref_predicate<std::iter_value_t<It>> const comp ) noexcept
-    {
-        if constexpr ( Branchless )
-            PSI_VM_PDQSORT_BRANCHLESS( first, last, comp );
-        else
-            PSI_VM_PDQSORT( first, last, comp );
-    }
-} // namespace detail
-
 //==============================================================================
 // Komparator -- comparator wrapper (EBO via public inheritance)
 //==============================================================================
@@ -137,32 +109,27 @@ struct Komparator : Comparator
         return !comp()( left, right );
     }
 
+    /// Comparator-trait-derived erasure policy (see psi/vm/sort.hpp): the
+    /// containers sort and merge with this, so a user picks the
+    /// size-optimised-erased vs fully-typed-monomorphic shape per container
+    /// instantiation through the comparator's allow_comparator_erasure member.
+    static constexpr comparator_erasure erasure{ comparator_erasure_of<Comparator> };
+
     /// Sort a range using the best available algorithm:
     ///   1. Comparator's own sort() if provided (e.g. radix sort)
     ///   2. pdqsort_branchless if Comparator::is_branchless
     ///   3. pdqsort (default fallback)
+    /// (2) and (3) route through psi::vm::sort with the trait-derived erasure
+    /// policy above.
     template <std::random_access_iterator It>
     constexpr void sort( It const first, It const last ) const noexcept
     {
-        // For non-reg-passable comparators over register-scalar keys erase the
-        // comparator type: the by-ref wrapper closure otherwise minted by
-        // make_trivially_copyable_predicate is a distinct type per deduced
-        // Pred, i.e. per Comparator here, re-stamping the whole pdqsort family
-        // once per comparator type (see erased_ref_predicate in abi.hpp).
-        constexpr bool erase_comparator{ !can_be_passed_in_reg<Comparator> && std::is_scalar_v<std::iter_value_t<It>> };
         if constexpr ( requires{ comp().sort( first, last ); } )
             comp().sort( first, last );
-        else if constexpr ( requires{ Comparator::is_branchless; requires( Comparator::is_branchless ); } ) {
-            if constexpr ( erase_comparator )
-                detail::erased_sort<true >( first, last, erased_ref_predicate<std::iter_value_t<It>>::bind( comp() ) );
-            else
-                PSI_VM_PDQSORT_BRANCHLESS( first, last, make_trivially_copyable_predicate( comp() ) );
-        } else {
-            if constexpr ( erase_comparator )
-                detail::erased_sort<false>( first, last, erased_ref_predicate<std::iter_value_t<It>>::bind( comp() ) );
-            else
-                PSI_VM_PDQSORT( first, last, make_trivially_copyable_predicate( comp() ) );
-        }
+        else if constexpr ( requires{ Comparator::is_branchless; requires( Comparator::is_branchless ); } )
+            vm::sort<erasure, true >( first, last, comp() );
+        else
+            vm::sort<erasure, false>( first, last, comp() );
     }
 }; // struct Komparator
 

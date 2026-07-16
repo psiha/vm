@@ -25,15 +25,9 @@
 #include "komparator.hpp"
 #include "lookup.hpp"
 #include "heap_vector.hpp"
+#include "../inplace_merge.hpp" // vm::inplace_merge, PSI_VM_HAS_ADAPTIVE_MERGE
 
 #include <boost/assert.hpp>
-
-#if __has_include( <boost/move/algo/adaptive_merge.hpp> )
-#include <boost/move/algo/adaptive_merge.hpp>
-#define PSI_VM_HAS_ADAPTIVE_MERGE 1
-#else
-#define PSI_VM_HAS_ADAPTIVE_MERGE 0
-#endif
 
 #include <algorithm>
 #include <compare>
@@ -255,27 +249,25 @@ namespace detail {
 
     //==============================================================================
     // do_inplace_merge -- merge helper, chooses between std::inplace_merge and
-    // boost::movelib::adaptive_merge (which uses spare capacity as scratch buffer)
+    // boost::movelib::adaptive_merge (which uses spare capacity as scratch
+    // buffer) via psi::vm::inplace_merge, with the comparator-trait-derived
+    // erasure policy (see psi/vm/sort.hpp).
     //==============================================================================
     template <typename KC>
     constexpr void do_inplace_merge( KC & keys, typename KC::size_type const oldSize, auto const & comp ) noexcept {
-        auto const wrappedComp{ make_trivially_copyable_predicate( comp ) };
+        constexpr auto erasure{ comparator_erasure_of<std::remove_cvref_t<decltype( comp )>> };
         auto const middle{ keys.begin() + static_cast<std::ptrdiff_t>( oldSize ) };
     #if PSI_VM_HAS_ADAPTIVE_MERGE
         if constexpr ( use_adaptive_merge && requires { keys.data(); keys.capacity(); } )
         {
             // Use spare capacity past size() as uninitialized scratch buffer
-            auto * const buffer { keys.data() + keys.size() };
-            auto   const bufLen { keys.capacity() - keys.size() };
-            boost::movelib::adaptive_merge(
-                keys.data(),
-                keys.data() + static_cast<std::ptrdiff_t>( oldSize ),
-                keys.data() + static_cast<std::ptrdiff_t>( keys.size() ),
-                wrappedComp, buffer, bufLen );
+            vm::inplace_merge<erasure>(
+                keys.begin(), middle, keys.end(), comp,
+                keys.data() + keys.size(), keys.capacity() - keys.size() );
         } else
     #endif
         {
-            std::inplace_merge( keys.begin(), middle, keys.end(), wrappedComp);
+            std::inplace_merge( keys.begin(), middle, keys.end(), make_trivially_copyable_predicate( comp ) );
         }
     }
 
