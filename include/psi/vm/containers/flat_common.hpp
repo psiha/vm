@@ -25,15 +25,9 @@
 #include "komparator.hpp"
 #include "lookup.hpp"
 #include "heap_vector.hpp"
+#include "../inplace_merge.hpp" // vm::inplace_merge, PSI_VM_HAS_ADAPTIVE_MERGE
 
 #include <boost/assert.hpp>
-
-#if __has_include( <boost/move/algo/adaptive_merge.hpp> )
-#include <boost/move/algo/adaptive_merge.hpp>
-#define PSI_VM_HAS_ADAPTIVE_MERGE 1
-#else
-#define PSI_VM_HAS_ADAPTIVE_MERGE 0
-#endif
 
 #include <algorithm>
 #include <compare>
@@ -141,19 +135,8 @@ namespace detail {
     // Only affect the single-container (set) overload of sort_merge_storage.
     //==============================================================================
     inline constexpr bool use_set_difference_dedup{ true  };  // filter tail against prefix before merge (vs. merge-then-unique)
-    // adaptive_merge uses spare capacity past size() as scratch buffer which
-    // trips ASan's container-overflow detection (writes between size/capacity).
-#if defined( __SANITIZE_ADDRESS__ )
-    inline constexpr bool use_adaptive_merge      { false };
-#elif defined( __has_feature )
-#   if __has_feature( address_sanitizer )
-    inline constexpr bool use_adaptive_merge      { false };
-#   else
-    inline constexpr bool use_adaptive_merge      { true  };  // boost::movelib::adaptive_merge (vs. std::inplace_merge)
-#   endif
-#else
-    inline constexpr bool use_adaptive_merge      { true  };  // boost::movelib::adaptive_merge (vs. std::inplace_merge)
-#endif
+    // (the std-vs-movelib in-place-merge selection, incl. the ASan opt-out,
+    // lives in psi/vm/inplace_merge.hpp)
 
 
     //==============================================================================
@@ -253,31 +236,6 @@ namespace detail {
     }
 
 
-    //==============================================================================
-    // do_inplace_merge -- merge helper, chooses between std::inplace_merge and
-    // boost::movelib::adaptive_merge (which uses spare capacity as scratch buffer)
-    //==============================================================================
-    template <typename KC>
-    constexpr void do_inplace_merge( KC & keys, typename KC::size_type const oldSize, auto const & comp ) noexcept {
-        auto const wrappedComp{ make_trivially_copyable_predicate( comp ) };
-        auto const middle{ keys.begin() + static_cast<std::ptrdiff_t>( oldSize ) };
-    #if PSI_VM_HAS_ADAPTIVE_MERGE
-        if constexpr ( use_adaptive_merge && requires { keys.data(); keys.capacity(); } )
-        {
-            // Use spare capacity past size() as uninitialized scratch buffer
-            auto * const buffer { keys.data() + keys.size() };
-            auto   const bufLen { keys.capacity() - keys.size() };
-            boost::movelib::adaptive_merge(
-                keys.data(),
-                keys.data() + static_cast<std::ptrdiff_t>( oldSize ),
-                keys.data() + static_cast<std::ptrdiff_t>( keys.size() ),
-                wrappedComp, buffer, bufLen );
-        } else
-    #endif
-        {
-            std::inplace_merge( keys.begin(), middle, keys.end(), wrappedComp);
-        }
-    }
 
 
     //==============================================================================
@@ -311,15 +269,15 @@ namespace detail {
     // Single container (set): Komp is Komparator -- .sort() dispatches to
     // pdqsort_branchless when available; .comp() yields the raw comparator
     // for STL functions (fewer template instantiations).
-    template <bool Unique, typename KC, typename Komp>
+    template <bool Unique, comparator_erasure Erasure, typename KC, typename Komp>
     constexpr void sort_storage( KC & keys, Komp const & komp ) {
-        komp.sort( keys.begin(), keys.end() );
+        komp.template sort<Erasure>( keys.begin(), keys.end() );
         if constexpr ( Unique )
             unique_truncate( keys, komp.comp() );
     }
 
     // sort_merge_storage -- sort appended tail, merge with sorted prefix, conditional dedup
-    template <bool Unique, bool WasSorted, typename KC, typename Komp>
+    template <bool Unique, bool WasSorted, comparator_erasure Erasure, typename KC, typename Komp>
     constexpr void sort_merge_storage( KC & keys, Komp const & komp, typename KC::size_type const oldSize ) {
         using key_sz_t = typename KC::size_type;
         if ( keys.size() <= oldSize )
@@ -328,7 +286,7 @@ namespace detail {
         auto const & comp{ komp.comp() };
 
         if constexpr ( !WasSorted )
-            komp.sort( appendStart, keys.end() );
+            komp.template sort<Erasure>( appendStart, keys.end() );
 
         if constexpr ( Unique && use_set_difference_dedup ) {
             // Filter tail against prefix: removes (a) elements already in prefix,
@@ -338,13 +296,13 @@ namespace detail {
                 auto const newTailEnd{ inplace_set_unique_difference( appendStart, keys.end(), keys.begin(), appendStart, enreg( comp ) ) };
                 truncate_to( keys, static_cast<key_sz_t>( newTailEnd - keys.begin() ) );
                 if ( static_cast<key_sz_t>( keys.size() ) > oldSize )
-                    do_inplace_merge( keys, oldSize, comp );
+                    vm::inplace_merge<Erasure>( keys, oldSize, comp );
             } else {
                 unique_truncate( keys, comp );
             }
         } else {
             if ( oldSize > 0 )
-                do_inplace_merge( keys, oldSize, comp );
+                vm::inplace_merge<Erasure>( keys, oldSize, comp );
             if constexpr ( Unique )
                 unique_truncate( keys, comp );
         }
@@ -491,29 +449,35 @@ public:
 
     //--------------------------------------------------------------------------
     // Bulk insert -- append + sort + merge (+/- dedup based on derived class's unique)
+    //
+    // The Erasure parameter selects the type-erased sort/merge codegen PER
+    // CALL (default: the comparator-derived policy). The sort/merge family is
+    // where the per-comparator instantiation bloat lives; lookups, iteration
+    // and the container type itself are unaffected, so differently-policied
+    // call sites share every other instantiation.
     //--------------------------------------------------------------------------
-    template <std::input_iterator InputIt>
+    template <comparator_erasure Erasure = comparator_erasure_of<Compare>, std::input_iterator InputIt>
     constexpr void insert( this auto && self, InputIt first, InputIt last ) {
-        self.template bulk_insert<false>( first, last );
+        self.template bulk_insert<false, Erasure>( first, last );
     }
-    template <std::input_iterator InputIt, std::sentinel_for<InputIt> Sentinel>
+    template <comparator_erasure Erasure = comparator_erasure_of<Compare>, std::input_iterator InputIt, std::sentinel_for<InputIt> Sentinel>
     requires ( !std::same_as<InputIt, Sentinel> )
     constexpr void insert( this auto && self, InputIt first, Sentinel last ) {
-        self.template bulk_insert<false>( first, last );
+        self.template bulk_insert<false, Erasure>( first, last );
     }
 
     constexpr void insert( this auto && self, std::initializer_list<value_type> il ) {
         self.insert( il.begin(), il.end() );
     }
 
-    template <sorted_insert_tag SortedTag, std::input_iterator InputIt>
+    template <comparator_erasure Erasure = comparator_erasure_of<Compare>, sorted_insert_tag SortedTag, std::input_iterator InputIt>
     constexpr void insert( this auto && self, SortedTag, InputIt first, InputIt last ) {
-        self.template bulk_insert<true>( first, last );
+        self.template bulk_insert<true, Erasure>( first, last );
     }
-    template <sorted_insert_tag SortedTag, std::input_iterator InputIt, std::sentinel_for<InputIt> Sentinel>
+    template <comparator_erasure Erasure = comparator_erasure_of<Compare>, sorted_insert_tag SortedTag, std::input_iterator InputIt, std::sentinel_for<InputIt> Sentinel>
     requires ( !std::same_as<InputIt, Sentinel> )
     constexpr void insert( this auto && self, SortedTag, InputIt first, Sentinel last ) {
-        self.template bulk_insert<true>( first, last );
+        self.template bulk_insert<true, Erasure>( first, last );
     }
 
     template <sorted_insert_tag SortedTag>
@@ -778,7 +742,7 @@ protected:
     constexpr flat_impl( Derived &, Compare const & comp, Storage storage )
         : Komp{ comp }, storage_{ std::move( storage ) }
     {
-        sort_storage<Derived::unique>( storage_, this->komp() );
+        sort_storage<Derived::unique, comparator_erasure_of<Compare>>( storage_, this->komp() );
     }
 
     // Unsorted iterator pair -- construct storage from [first, last), then sort
@@ -786,7 +750,7 @@ protected:
     constexpr flat_impl( Derived &, Compare const & comp, InputIt first, InputIt last )
         : Komp{ comp }, storage_{ first, last }
     {
-        sort_storage<Derived::unique>( storage_, this->komp() );
+        sort_storage<Derived::unique, comparator_erasure_of<Compare>>( storage_, this->komp() );
     }
 
     // Pre-sorted iterator pair -- no sorting needed
@@ -801,7 +765,7 @@ protected:
         : Komp{ comp }
     {
         detail::storage_append_range( storage_, std::forward<R>( rg ) );
-        sort_storage<Derived::unique>( storage_, this->komp() );
+        sort_storage<Derived::unique, comparator_erasure_of<Compare>>( storage_, this->komp() );
     }
 
     constexpr flat_impl( flat_impl const & ) = default;
@@ -898,14 +862,17 @@ protected:
     template <typename Self>
     static constexpr bool is_unique{ std::remove_cvref_t<Self>::unique };
 
-    // Auto-detects unique from derived class
+    // Auto-detects unique from derived class. The Erasure parameter defaults
+    // to the comparator-derived policy and flows down to the sort/merge
+    // workers — see Komparator::sort for the per-call-override rationale.
+    template <comparator_erasure Erasure = comparator_erasure_of<Compare>>
     constexpr void init_sort( this auto && self ) {
-        sort_storage<is_unique<decltype( self )>>( self.storage_, self.komp() );
+        sort_storage<is_unique<decltype( self )>, Erasure>( self.storage_, self.komp() );
     }
 
-    template <bool WasSorted>
+    template <bool WasSorted, comparator_erasure Erasure = comparator_erasure_of<Compare>>
     constexpr void init_sort_merge( this auto && self, size_type const oldSize ) {
-        sort_merge_storage<is_unique<decltype( self )>, WasSorted>( self.storage_, self.komp(), oldSize );
+        sort_merge_storage<is_unique<decltype( self )>, WasSorted, Erasure>( self.storage_, self.komp(), oldSize );
     }
 
     //--------------------------------------------------------------------------
@@ -920,12 +887,12 @@ protected:
     //--------------------------------------------------------------------------
     // Bulk insert helper (exception-safe: clears on sort/merge failure)
     //--------------------------------------------------------------------------
-    template <bool WasSorted, typename InputIt, typename Sentinel = InputIt>
+    template <bool WasSorted, comparator_erasure Erasure = comparator_erasure_of<Compare>, typename InputIt, typename Sentinel = InputIt>
     constexpr void bulk_insert( this auto && self, InputIt const first, Sentinel const last ) {
         auto const oldSize{ self.size() };
         detail::storage_append_range( self.storage_, std::ranges::subrange( first, last ) );
         try {
-            self.template init_sort_merge<WasSorted>( oldSize );
+            self.template init_sort_merge<WasSorted, Erasure>( oldSize );
         } catch ( ... ) {
             self.clear();
             throw;

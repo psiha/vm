@@ -363,8 +363,11 @@ constexpr void proxy_inplace_merge( Iter first, Iter middle, Iter last, Comp com
 }
 #endif
 
-// sort_storage -- paired_storage overload (zip-view sort)
-template <bool Unique, typename KC, typename MC, typename Comp>
+// sort_storage -- paired_storage overload (zip-view sort). The Erasure
+// parameter is accepted for signature parity with the set overload (the
+// shared flat_impl::init_sort* callers pass it) — the zip-proxy
+// std::ranges::sort path has no type-erasure seam (yet), so it is unused.
+template <bool Unique, comparator_erasure Erasure, typename KC, typename MC, typename Comp>
 constexpr void sort_storage( paired_storage<KC,MC> & storage, Comp const & comp ) {
     auto zv{ storage.zip_view() };
     std::ranges::sort( zv, comp, key_proj() );
@@ -374,8 +377,9 @@ constexpr void sort_storage( paired_storage<KC,MC> & storage, Comp const & comp 
     }
 }
 
-// sort_merge_storage -- paired_storage overload (zip-view sort + merge)
-template <bool Unique, bool WasSorted, typename KC, typename MC, typename Comp>
+// sort_merge_storage -- paired_storage overload (zip-view sort + merge).
+// Erasure accepted-but-unused: see the sort_storage overload note above.
+template <bool Unique, bool WasSorted, comparator_erasure Erasure, typename KC, typename MC, typename Comp>
 constexpr void sort_merge_storage( paired_storage<KC,MC> & storage, Comp const & comp, typename paired_storage<KC,MC>::size_type const oldSize ) {
     if ( storage.keys.size() <= oldSize )
         return;

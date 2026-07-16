@@ -4,13 +4,22 @@
 CPMAddPackage( "gh:google/googletest@1.15.2" )
 
 include( GoogleTest )
-if ( MSVC )
+if ( MSVC AND NOT CLANG_CL )
     target_compile_options( gtest PRIVATE /fp:precise )
-    if ( CMAKE_CXX_COMPILER_ID MATCHES "Clang" ) # clang-cl
-        # GTest's value printers convert char8_t -> char32_t, which clang-cl flags
-        # as -Wcharacter-conversion; with the toolchain's -Werror that fails gtest.
-        target_compile_options( gtest PRIVATE -Wno-character-conversion )
-    endif()
+elseif ( CLANG_CL )
+    # GTest's value printers convert char8_t -> char32_t, which clang-cl flags
+    # as -Wcharacter-conversion; with the toolchain's -Werror that fails gtest.
+    # /fp:precise alone leaves the complex-arithmetic range clang-cl inherited
+    # from the project's global -ffast-math ("basic") in place, which clang
+    # then flags (as an error, under -WX) for silently overriding it back to
+    # "full" -- so the gcc-style flags need the explicit /clang: passthrough
+    # to actually turn fast-math off for this target.
+    target_compile_options( gtest PRIVATE
+        -Wno-character-conversion
+        /clang:-fno-fast-math
+        /clang:-fcomplex-arithmetic=full
+        /clang:-Wno-error=overriding-option
+    )
 else()
     target_compile_options( gtest PRIVATE -fno-fast-math )
 endif()
