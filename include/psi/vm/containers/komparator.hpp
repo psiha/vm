@@ -52,6 +52,9 @@ template <> inline constexpr bool is_simple_comparator<std::greater<void>>{ true
 // C++20 constrained transparent comparators (same reasoning)
 template <> inline constexpr bool is_simple_comparator<std::ranges::less   >{ true };
 template <> inline constexpr bool is_simple_comparator<std::ranges::greater>{ true };
+// The erasure adapters (sort.hpp) forward the wrapped comparator's simplicity.
+template <typename C> inline constexpr bool is_simple_comparator<erasure_opt_in <C>>{ is_simple_comparator<C> };
+template <typename C> inline constexpr bool is_simple_comparator<erasure_opt_out<C>>{ is_simple_comparator<C> };
 
 
 //==============================================================================

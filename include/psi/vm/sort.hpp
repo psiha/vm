@@ -68,6 +68,30 @@ constexpr comparator_erasure comparator_erasure_of{
         : comparator_erasure::never
 };
 
+/// Container-level opt-in/opt-out adapters: wrap the comparator at the
+/// container instantiation site —
+///     flat_set<K, erasure_opt_in<MyComp>>
+///     bp_tree <T, erasure_opt_in<MyComp>>
+/// — to select the type-erased sort/merge codegen for THAT container type
+/// only, leaving the comparator type itself untouched (whose own
+/// allow_comparator_erasure member remains the type-wide alternative).
+/// Aggregates deriving from the comparator: EBO-friendly, inherit the full
+/// comparator interface (eq/leq/val/sort customizations, is_transparent),
+/// preserve trivial-copyability/aggregate initialization, and — being
+/// distinct types — give differently-policied containers distinct types,
+/// exactly as a container NTTP would.
+template <typename Comparator>
+struct erasure_opt_in : Comparator
+{
+    static constexpr bool allow_comparator_erasure{ true };
+};
+
+template <typename Comparator>
+struct erasure_opt_out : Comparator
+{
+    static constexpr bool allow_comparator_erasure{ false };
+};
+
 namespace detail
 {
     /// The heuristic gate: erasure can win only for a fat (non-reg-passable)
