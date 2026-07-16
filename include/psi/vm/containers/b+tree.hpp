@@ -2750,6 +2750,7 @@ protected:
         else          return find_from_nonunique( starting_leaf, starting_leaf_offset, key );
     }
 
+    template <comparator_erasure Erasure = Komp::erasure>
     size_type insert( typename base::bulk_copied_input, bool unique );
 
     // dedup_source: when true and unique, inline-deduplicates the presorted
@@ -3387,6 +3388,7 @@ bp_tree_impl<Key, Comparator>::merge_interleaved_values
 
 
 template <typename Key, typename Comparator>
+template <comparator_erasure Erasure>
 bp_tree_impl<Key, Comparator>::size_type
 bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, bool const unique )
 {
@@ -3405,7 +3407,7 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
         // full)
         typename base::ra_full_node_iterator const sort_begin{ input.nodes.data(), 0          };
         typename base::ra_full_node_iterator const sort_end  { input.nodes.data(), total_size };
-        this->sort( sort_begin, sort_end );
+        this->template sort<Erasure>( sort_begin, sort_end );
         input.nodes.clear();
     }
 
@@ -4078,11 +4080,16 @@ public:
     // is supported and accounted for (the input values are skipped) but it is
     // considered an 'unlikely' event and as such it is handled by sad/cold paths
     // TODO complete std insert interface (w/ ranges, iterators, hints...)
-    template <std::input_iterator InIter>
-    size_type insert( InIter const begin, InIter const end ) { return impl_base::insert( this->bulk_insert_prepare( std::ranges::subrange( begin, end ) ), unique ); }
-    template <std::convertible_to<Key> T>
-    size_type insert( std::initializer_list<T> const  keys ) { return impl_base::insert( this->bulk_insert_prepare( std::ranges::subrange( keys       ) ), unique ); }
-    size_type insert( std::ranges::range auto const & keys ) { return impl_base::insert( this->bulk_insert_prepare( std::ranges::subrange( keys       ) ), unique ); }
+    // The Erasure parameter selects the type-erased bulk-sort codegen PER
+    // CALL (default: the comparator-derived policy) — the bulk-load sort is
+    // where the per-comparator instantiation bloat lives; lookups, iteration
+    // and the container type itself stay unaffected/shared.
+    template <comparator_erasure Erasure = Komparator<Comparator>::erasure, std::input_iterator InIter>
+    size_type insert( InIter const begin, InIter const end ) { return impl_base::template insert<Erasure>( this->bulk_insert_prepare( std::ranges::subrange( begin, end ) ), unique ); }
+    template <comparator_erasure Erasure = Komparator<Comparator>::erasure, std::convertible_to<Key> T>
+    size_type insert( std::initializer_list<T> const  keys ) { return impl_base::template insert<Erasure>( this->bulk_insert_prepare( std::ranges::subrange( keys       ) ), unique ); }
+    template <comparator_erasure Erasure = Komparator<Comparator>::erasure>
+    size_type insert( std::ranges::range auto const & keys ) { return impl_base::template insert<Erasure>( this->bulk_insert_prepare( std::ranges::subrange( keys       ) ), unique ); }
 
     size_type insert_presorted       ( std::span<Key const> const presorted_input ) { return impl_base::insert_presorted       ( presorted_input, unique ); }
     size_type insert_presorted_unique( std::span<Key const> const presorted_input ) { return impl_base::insert_presorted_unique( presorted_input, unique ); }

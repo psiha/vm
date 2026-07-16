@@ -122,17 +122,21 @@ struct Komparator : Comparator
     ///   1. Comparator's own sort() if provided (e.g. radix sort)
     ///   2. pdqsort_branchless if Comparator::is_branchless
     ///   3. pdqsort (default fallback)
-    /// (2) and (3) route through psi::vm::sort with the trait-derived erasure
-    /// policy above.
-    template <std::random_access_iterator It>
+    /// (2) and (3) route through psi::vm::sort. The erasure policy defaults
+    /// to the comparator-trait-derived one above and can be overridden PER
+    /// CALL — the sort/merge family is where the per-comparator instantiation
+    /// bloat lives, so a caller can erase its bulk-write paths while every
+    /// other member (lookups, iteration) stays monomorphic and the container
+    /// TYPE stays the same across differently-policied call sites.
+    template <comparator_erasure Erasure = erasure, std::random_access_iterator It>
     constexpr void sort( It const first, It const last ) const noexcept
     {
         if constexpr ( requires{ comp().sort( first, last ); } )
             comp().sort( first, last );
         else if constexpr ( requires{ Comparator::is_branchless; requires( Comparator::is_branchless ); } )
-            vm::sort<erasure, true >( first, last, comp() );
+            vm::sort<Erasure, true >( first, last, comp() );
         else
-            vm::sort<erasure, false>( first, last, comp() );
+            vm::sort<Erasure, false>( first, last, comp() );
     }
 }; // struct Komparator
 
