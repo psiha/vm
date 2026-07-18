@@ -151,15 +151,23 @@ inline bool commit_view_pages( void * const address, std::size_t const size, ULO
 {
     PVOID  addr{ address };
     SIZE_T sz  { size };
-    return nt::NtAllocateVirtualMemory
+    if
     (
-        nt::current_process,
-        &addr,
-        0,
-        &sz,
-        MEM_COMMIT,
-        page_protection
-    ) == nt::STATUS_SUCCESS;
+        nt::NtAllocateVirtualMemory
+        (
+            nt::current_process,
+            &addr,
+            0,
+            &sz,
+            MEM_COMMIT,
+            page_protection
+        ) == nt::STATUS_SUCCESS
+    )
+        return true;
+    // SEC_COMMIT sections (e.g. regular file mappings) commit their pages as
+    // part of the map operation itself and reject an explicit MEM_COMMIT -
+    // treat an already-committed view as success.
+    return query_vm( address ).State == MEM_COMMIT;
 }
 
 // ----------------------------------------------------------------------------
@@ -347,6 +355,77 @@ inline std::byte * overreserve_section_map(
 
     // Trailing placeholder at base + aligned_size remains for future expansion.
     return base;
+}
+
+
+/// Map a section view into the head of a caller-provided placeholder
+/// reservation. The placeholder at [base, base+reservation_size) is split into
+/// [aligned_view_size | rest] and the section's [0, aligned_view_size) range is
+/// mapped (and committed) into the head. On failure the whole reservation is
+/// released. Returns true on success.
+[[ nodiscard, gnu::cold ]]
+inline bool reserved_section_map(
+    HANDLE      const section_handle,
+    std::byte * const base,
+    std::size_t const reservation_size,
+    std::size_t const aligned_view_size,
+    ULONG       const page_protection
+) noexcept
+{
+    BOOST_ASSUME( is_aligned( aligned_view_size, reserve_granularity ) );
+    BOOST_ASSUME( aligned_view_size <= reservation_size );
+
+    auto const was_split{ aligned_view_size < reservation_size };
+    if ( was_split && !split_placeholder( base, aligned_view_size ) )
+    {
+        free_placeholder( base );
+        return false;
+    }
+
+    PVOID         view_base{ base };
+    LARGE_INTEGER nt_offset{ .QuadPart = 0 };
+    SIZE_T        view_size{ aligned_view_size };
+    auto const map_status
+    {
+        nt::NtMapViewOfSectionEx
+        (
+            section_handle,
+            nt::current_process,
+            &view_base,
+            &nt_offset,
+            &view_size,
+            MEM_REPLACE_PLACEHOLDER,
+            page_protection,
+            nullptr, 0
+        )
+    };
+    if ( map_status != nt::STATUS_SUCCESS )
+    {
+        free_placeholder( base );
+        if ( was_split )
+            free_placeholder( base + aligned_view_size );
+        return false;
+    }
+
+    // NtMapViewOfSectionEx has no CommitSize — commit SEC_RESERVE pages explicitly.
+    if ( !commit_view_pages( base, aligned_view_size, page_protection ) )
+    {
+        BOOST_VERIFY
+        (
+            nt::NtUnmapViewOfSectionEx
+            (
+                nt::current_process,
+                base,
+                MEM_PRESERVE_PLACEHOLDER
+            ) == nt::STATUS_SUCCESS
+        );
+        if ( was_split )
+            BOOST_VERIFY( coalesce_placeholders( base, reservation_size ) );
+        free_placeholder( base );
+        return false;
+    }
+
+    return true;
 }
 
 
