@@ -120,7 +120,17 @@ struct header_info
     constexpr header_info add_header( bool const _extendable = false ) const noexcept // support chained headers (class hierarchies)
     {
         auto const subheader_alignment{ std::max<std::uint8_t>( alignof( AdditionalHeader ), minimal_subheader_alignment ) };
-        auto const padded_size        { align_up( __datasizeof( AdditionalHeader ), subheader_alignment ) };
+        // Pad the prepended header to the TAIL stack's alignment as well as its
+        // own: header_data<Tail>() aligns the tail's base up to alignof(Tail)
+        // at retrieval time, so if the prepended header's padded size is not a
+        // multiple of that alignment (a) the total size computed here comes up
+        // short by up to final_alignment()-minimal_subheader_alignment bytes,
+        // and (b) any caller that advances past the prepended header manually
+        // (raw subspan arithmetic) lands at a different offset than
+        // header_data's aligned one - a silent split between two views of the
+        // same header stack. Padding to max(own, tail) makes the retrieval-time
+        // fixup a no-op by construction and the size exact.
+        auto const padded_size        { align_up( __datasizeof( AdditionalHeader ), std::max( subheader_alignment, final_alignment() ) ) };
         return
         {
             static_cast<std::uint32_t>( padded_size + this->size ),
