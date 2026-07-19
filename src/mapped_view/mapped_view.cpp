@@ -19,6 +19,12 @@
 #include <psi/vm/align.hpp>
 #include <psi/vm/mapped_view/mapped_view.hpp>
 
+#ifndef _WIN32
+#include <psi/vm/detail/posix.hpp>
+#include <sys/mman.h>
+#endif
+
+#include <algorithm> // max
 #include <cstring> // memcpy, memcmp
 
 //------------------------------------------------------------------------------
@@ -330,6 +336,181 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
 
 template class basic_mapped_view<false>;
 template class basic_mapped_view<true >;
+
+
+////////////////////////////////////////////////////////////////////////////////
+// reserving_basic_mapped_view
+////////////////////////////////////////////////////////////////////////////////
+
+template <bool read_only>
+err::fallible_result<reserving_basic_mapped_view<read_only>, error>
+reserving_basic_mapped_view<read_only>::map
+(
+    mapping     &       source_mapping,
+    std::size_t   const reservation_size,
+    std::size_t   const desired_size
+) noexcept
+{
+    auto const aligned_reservation{ align_up( reservation_size, reserve_granularity ) };
+    auto const aligned_desired    { align_up( desired_size    , reserve_granularity ) };
+    if ( !aligned_reservation || ( aligned_desired > aligned_reservation ) ) [[ unlikely ]]
+    {
+        return error_t{};
+    }
+
+#ifdef _WIN32
+    auto * const base{ detail::reserve_placeholder( aligned_reservation ) };
+    if ( !base ) [[ unlikely ]]
+    {
+        return error_t{};
+    }
+
+    if ( aligned_desired )
+    {
+        if
+        (
+            !detail::reserved_section_map
+            (
+                source_mapping.get(),
+                base,
+                aligned_reservation,
+                aligned_desired,
+                source_mapping.view_mapping_flags.page_protection
+            )
+        ) [[ unlikely ]]
+            return error_t{}; // reserved_section_map released the reservation
+    }
+#else // POSIX
+    auto * const base
+    {
+        static_cast<std::byte *>
+        (
+            posix::mmap
+            (
+                nullptr,
+                aligned_reservation,
+                PROT_NONE,
+#           ifdef MAP_NORESERVE
+                MAP_NORESERVE |
+#           endif
+                MAP_PRIVATE | MAP_ANONYMOUS,
+                -1,
+                0
+            )
+        )
+    };
+    if ( !base ) [[ unlikely ]]
+        return error_t{};
+
+    if ( aligned_desired )
+    {
+        auto const & flags{ source_mapping.view_mapping_flags };
+        if
+        (
+            posix::mmap
+            (
+                base,
+                aligned_desired,
+                flags.protection,
+                flags.flags | MAP_FIXED,
+                source_mapping.get(),
+                0
+            ) != base
+        ) [[ unlikely ]]
+        {
+            BOOST_VERIFY( ::munmap( base, aligned_reservation ) == 0 );
+            return error_t{};
+        }
+    }
+#endif // platform
+
+    return reserving_basic_mapped_view
+    {
+        span{ static_cast<value_type *>( static_cast<void *>( base ) ), desired_size },
+        aligned_reservation,
+        aligned_desired
+    };
+}
+
+
+template <bool read_only> BOOST_NOINLINE
+fallible_result<void>
+reserving_basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & original_mapping ) noexcept
+{
+    BOOST_ASSERT_MSG( reservation_size_, "expand() on an unmapped reserving view" );
+
+    // Fast path: already backed by mapping pages - just widen the span.
+    if ( target_size <= kernel_mapped_size_ ) [[ likely ]]
+    {
+        static_cast<span &>( *this ) = { this->data(), std::max( target_size, this->size() ) };
+        return err::success;
+    }
+
+    auto const aligned_target{ align_up( target_size, reserve_granularity ) };
+    if ( aligned_target > reservation_size_ ) [[ unlikely ]]
+        return error_t{}; // reservation exhausted - by contract no relocating fallback
+
+    auto const additional_size{ aligned_target - kernel_mapped_size_ };
+
+#ifdef _WIN32
+    if
+    (
+        !detail::try_placeholder_section_expand
+        (
+            original_mapping.get(),
+            base(),
+            kernel_mapped_size_,
+            additional_size,
+            reservation_size_ - kernel_mapped_size_,
+            original_mapping.view_mapping_flags.page_protection
+        )
+    ) [[ unlikely ]]
+        return error_t{};
+#else // POSIX
+    auto const & flags{ original_mapping.view_mapping_flags };
+    auto * const tail_target_address{ base() + kernel_mapped_size_ };
+    if
+    (
+        posix::mmap
+        (
+            tail_target_address,
+            additional_size,
+            flags.protection,
+            flags.flags | MAP_FIXED,
+            original_mapping.get(),
+            kernel_mapped_size_
+        ) != tail_target_address
+    ) [[ unlikely ]]
+        return error_t{}; // MAP_FIXED failure leaves the existing mappings untouched
+#endif // platform
+
+    kernel_mapped_size_ = aligned_target;
+    static_cast<span &>( *this ) = { this->data(), target_size };
+    return err::success;
+}
+
+
+template <bool read_only>
+void reserving_basic_mapped_view<read_only>::do_unmap() noexcept
+{
+    if ( !reservation_size_ )
+        return;
+#ifdef _WIN32
+    if ( kernel_mapped_size_ == 0 )
+    {
+        detail::free_placeholder( base() );
+    }
+    else
+    {
+        vm::unmap( { base(), kernel_mapped_size_ }, reservation_size_ - kernel_mapped_size_ );
+    }
+#else // POSIX
+    BOOST_VERIFY( ::munmap( base(), reservation_size_ ) == 0 );
+#endif // platform
+}
+
+template class reserving_basic_mapped_view<false>;
+template class reserving_basic_mapped_view<true >;
 
 #ifdef _WIN32
 template <bool read_only>
