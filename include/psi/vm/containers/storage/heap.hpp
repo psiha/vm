@@ -36,6 +36,9 @@
 #include <boost/assert.hpp>
 
 #include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <limits>
 #include <memory>
 #include <utility>
 //------------------------------------------------------------------------------
@@ -152,8 +155,47 @@ private:
         return static_cast<std::size_t>( element_count ) * sizeof( value_type );
     }
 
-    [[nodiscard]] static constexpr typename shell_t::size_type shell_byte_count( size_type const element_count ) noexcept
+    // The container counts ELEMENTS while the byte shell counts BYTES, so the
+    // two ceilings are not the same one: a 32-bit size_type paired with a
+    // 4-byte value_type runs out of addressable bytes four times sooner than
+    // it runs out of representable element counts. Converting a byte count
+    // that no longer fits the shell's size_type used to truncate silently and
+    // hand back a drastically undersized block - the caller then wrote past
+    // its end, i.e. a size overflow degenerating into heap corruption rather
+    // than a diagnosable failure.
+public:
+    //! Largest element count this storage can actually address - `min` of what
+    //! the container's `size_type` can count and what the shell allocator's
+    //! `size_type` can express in bytes.
+    [[ nodiscard ]] static constexpr size_type max_size() noexcept
     {
+        auto constexpr shell_max{ static_cast<std::uintmax_t>( std::numeric_limits<typename shell_t::size_type>::max() ) };
+        auto constexpr count_max{ static_cast<std::uintmax_t>( std::numeric_limits<                  size_type>::max() ) };
+        auto constexpr by_bytes { shell_max / sizeof( value_type ) };
+        return static_cast<size_type>( ( by_bytes < count_max ) ? by_bytes : count_max );
+    }
+
+private:
+    [[nodiscard]] static constexpr typename shell_t::size_type shell_byte_count( size_type const element_count )
+        noexcept( noexcept( detail::throw_length_error() ) )
+    {
+        // Reporting follows the same overcommit split as allocation failure
+        // (detail::throw_length_error): where allocation can already fail this
+        // throws `length_error` like the STL containers do; under full
+        // overcommit nothing on this path throws, so it fails hard instead and
+        // `resize` stays noexcept.
+        //
+        // The test itself vanishes whenever the ceiling provably cannot be
+        // reached (the usual `size_type == std::size_t` case), which is why
+        // guarding here costs nothing on the common instantiations - the
+        // original reason it was left out. It also stays in this inlinable
+        // function while only the failure path is outlined+cold, so a
+        // compile-time-constant `element_count` still folds the branch away.
+        if constexpr ( max_size() < std::numeric_limits<size_type>::max() )
+        {
+            if ( element_count > max_size() ) [[ unlikely ]]
+                detail::throw_length_error();
+        }
         return static_cast<typename shell_t::size_type>( byte_count( element_count ) );
     }
 
@@ -263,9 +305,10 @@ public:
     [[nodiscard]] static pointer allocate_external( size_type const element_count )
     {
         if constexpr ( std::is_void_v<Allocator> )
+            // shell_byte_count (not a raw narrowing cast): same size-ceiling
+            // guard as every other allocating path.
             return reinterpret_cast<pointer>(
-                detail::heap_shell_allocator<sz_t>::template allocate<alignment>(
-                    static_cast<typename detail::heap_shell_allocator<sz_t>::size_type>( byte_count( element_count ) ) ) );
+                detail::heap_shell_allocator<sz_t>::template allocate<alignment>( shell_byte_count( element_count ) ) );
         else
             return allocator_type::template allocate<alignment>( element_count );
     }

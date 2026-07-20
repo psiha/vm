@@ -47,6 +47,10 @@ namespace detail
         throw std::bad_alloc{};
 #   endif
     }
+    [[ noreturn, gnu::cold ]] void throw_length_error()
+    {
+        throw std::length_error{ "psi::vm: requested size exceeds the allocator's addressable byte range" };
+    }
 #endif
 } // namespace detail
 

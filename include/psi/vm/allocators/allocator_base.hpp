@@ -66,6 +66,22 @@ namespace detail
         std::unreachable();
     }
 #endif
+
+    // Requested size exceeds what the allocator's size_type can express in
+    // bytes (see heap_storage::max_size()). Same overcommit split as
+    // throw_bad_alloc: where allocation can already fail, report it the
+    // standard way (`length_error`, as the STL containers do); under full
+    // overcommit nothing on the path throws, so keep it noexcept and fail
+    // hard rather than making `resize` conditionally throwing.
+#if PSI_MALLOC_OVERCOMMIT != PSI_OVERCOMMIT_Full
+    [[ noreturn, gnu::cold ]] void throw_length_error();
+#else
+    [[ noreturn, gnu::cold ]] inline void throw_length_error() noexcept
+    {
+        BOOST_ASSERT_MSG( false, "Requested size exceeds the allocator's addressable byte range" );
+        std::unreachable();
+    }
+#endif
 } // namespace detail
 
 // Concept: does the allocator provide try_expand(ptr, size) -> bool?
