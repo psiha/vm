@@ -65,25 +65,20 @@ public:
         return *this;
     }
 
+    // traits::close() itself skips the invalid value, so neither of these (nor
+    // the destructor) needs to pre-check: keeping the test in a single place
+    // avoids the trap of a guard that only fires when the compiler can prove
+    // the value - i.e. practically never for a handle held in an object.
     void reset( native_handle_t const new_handle ) noexcept
     {
         auto const old_handle{ handle_ };
         handle_ = new_handle;
-#   if __has_builtin( __builtin_constant_p ) //...mrmlj...TODO deduplicate
-        if ( __builtin_constant_p( old_handle ) && ( old_handle == invalid_value ) )
-            return;
-#   endif
         traits::close( old_handle );
     }
 
     void close() noexcept
     {
-        auto const handle{ release() };
-#   if __has_builtin( __builtin_constant_p )
-        if ( __builtin_constant_p( handle ) && ( handle == invalid_value ) )
-            return;
-#   endif
-        traits::close( handle );
+        traits::close( release() );
     }
 
     native_handle_t release() noexcept
