@@ -13,6 +13,7 @@
 //------------------------------------------------------------------------------
 #include <psi/vm/containers/vm_vector.hpp>
 
+#include <psi/vm/align.hpp>
 #include <psi/vm/mapped_view/ops.hpp>
 
 #include <boost/assert.hpp>
@@ -72,7 +73,15 @@ void * mem_mapping::expand_capacity( std::size_t const target_capacity )
     // Exact-size expansion only. Geometric growth is the vector's responsibility.
     auto const current_fc_capacity{ storage_size() };
     if ( current_fc_capacity < target_capacity ) [[ unlikely ]]
-        set_size( mapping_, target_capacity );
+        // PROTOTYPE (ftruncate-alignment lever): round the on-disk file length
+        // up to a page so its EOF stays block-aligned. An extending ftruncate
+        // with dirty mmap pages and an unaligned EOF synchronously flushes and
+        // waits for the tail block (xfs_setattr_size -> filemap_write_and_wait
+        // _range); keeping the EOF aligned skips that wait. The logical size is
+        // held separately in the header (stored_size()), and capacity comes
+        // from the mapped view - so the extra file bytes are spare fs_capacity,
+        // not visible size; no format change.
+        set_size( mapping_, align_up( target_capacity, commit_granularity ) );
     return expand_view( target_capacity );
 }
 
