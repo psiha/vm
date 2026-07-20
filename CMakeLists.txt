@@ -70,6 +70,21 @@ add_compile_definitions( BOOST_ALL_NO_LIB )
 if ( ${CMAKE_SYSTEM_NAME} MATCHES "Linux" )
     PSI_add_link_options( Release -flto ) # lld does not seem to be enough
     if ( CMAKE_CXX_COMPILER_ID MATCHES "Clang" )
+        # Clang builds here select libc++ rather than the platform default, so
+        # confirm it is actually installed: otherwise the first header compiled
+        # fails with a bare "'version' file not found", which points at the
+        # precompiled header instead of at the missing runtime.
+        include( CheckCXXSourceCompiles )
+        set( CMAKE_REQUIRED_FLAGS "-stdlib=libc++" )
+        check_cxx_source_compiles( "#include <version>\nint main() { return 0; }" PSI_VM_LIBCXX_USABLE )
+        unset( CMAKE_REQUIRED_FLAGS )
+        if ( NOT PSI_VM_LIBCXX_USABLE )
+            message( FATAL_ERROR
+                "psi::vm selects libc++ for Clang builds, but '-stdlib=libc++' cannot compile "
+                "#include <version>. Install the libc++ runtime matching this Clang "
+                "(e.g. the 'libc++-<N>-dev' and 'libc++abi-<N>-dev' packages for Clang <N>), "
+                "then reconfigure." )
+        endif()
         add_compile_options( -stdlib=libc++ )
         # Needed under WSL for some reason?
         PSI_add_link_options( Debug      -lc++ -lc++abi -lm -lubsan )
