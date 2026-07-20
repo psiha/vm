@@ -112,13 +112,15 @@ map
 [[ gnu::cold, gnu::nothrow, clang::nouwtable ]]
 void unmap( mapped_span const view )
 {
+    // An empty view is the state of a default-constructed or moved-from mapped
+    // object: munmap()ing it merely fails with EINVAL. The WinNT backend has
+    // always skipped empty views - do the same here so that the verification
+    // below need not whitelist that failure (and thereby mask genuine ones).
+    if ( view.empty() )
+        return;
     [[ maybe_unused ]] auto munmap_result{ ::munmap( view.data(), view.size() ) };
 #ifndef __EMSCRIPTEN__
-    BOOST_VERIFY
-    (
-        ( munmap_result == 0 ) ||
-        ( view.empty() && ( !view.data() || errno == EINVAL ) )
-    );
+    BOOST_VERIFY( munmap_result == 0 );
 #endif
 }
 

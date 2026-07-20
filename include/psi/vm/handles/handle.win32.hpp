@@ -47,15 +47,13 @@ struct handle_traits
     [[ gnu::cold, gnu::nothrow, msvc::noalias, msvc::nothrow, clang::nouwtable ]]
     static void close( native_t const native_handle )
     {
-#   if defined( __has_builtin ) && __has_builtin( __builtin_constant_p )
-        if ( __builtin_constant_p( native_handle ) && ( native_handle == nullptr || native_handle == boost::winapi::INVALID_HANDLE_VALUE_ ) )
+        // Runtime rather than __builtin_constant_p check - see the POSIX backend
+        // for the rationale (destroying a default-constructed or moved-from
+        // handle is frequent, and letting it reach CloseHandle() forces the
+        // verification below to whitelist the resulting failure).
+        if ( ( native_handle == nullptr ) || ( native_handle == boost::winapi::INVALID_HANDLE_VALUE_ ) )
             return;
-#   endif
-        BOOST_VERIFY
-        (
-            ( boost::winapi::CloseHandle( native_handle ) != false ) ||
-            ( ( native_handle == nullptr ) || ( native_handle == invalid_value ) )
-        );
+        BOOST_VERIFY( boost::winapi::CloseHandle( native_handle ) != false );
     }
 
     [[ gnu::cold, nodiscard ]]

@@ -64,19 +64,18 @@ struct handle_traits
     [[ gnu::cold, gnu::nothrow, msvc::noalias, msvc::nothrow, clang::nouwtable ]]
     static void close( native_t const native_handle )
     {
-#   if __has_builtin( __builtin_constant_p )
-        if ( __builtin_constant_p( native_handle ) && ( native_handle == invalid_value ) )
+        // The invalid handle has to be rejected at runtime, not merely when the
+        // compiler happens to be able to prove the value (which it practically
+        // never can for a handle loaded from an object member): destroying a
+        // default-constructed or moved-from handle is an ordinary and frequent
+        // event, and without this check each one issues a close( -1 ) that fails
+        // with EBADF. Besides the wasted syscalls that also forced the assertion
+        // below to whitelist a failure, which in turn hid genuine close()
+        // failures on valid handles.
+        if ( native_handle == invalid_value )
             return;
-#   endif
         [[ maybe_unused ]] auto const close_result{ ::close( native_handle ) };
-        BOOST_ASSERT
-        (
-            ( close_result == 0 ) ||
-            (
-                ( native_handle == invalid_value ) &&
-                ( errno         == EBADF         )
-            )
-        );
+        BOOST_ASSERT( close_result == 0 );
     }
 
     // Throws on failure. Cannot use fallible_result<int, last_errno> because
