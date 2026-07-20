@@ -3,6 +3,8 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <filesystem>
+#include <system_error>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -67,6 +69,59 @@ TEST( vm_vector, flush_after_in_place_growth )
         auto result{ vec.flush_blocking()() };
         EXPECT_TRUE( result ) << "whole-container flush failed at growth step " << i;
     }
+}
+
+// A file-backed container keeps its on-disk EOF page aligned, on both the
+// growth and the shrink path, so that an extending resize never has to flush
+// and wait for a dirty tail block (see file_length_for in vm_vector.cpp). The
+// slack this leaves is invisible: the logical size lives in the header, so the
+// contents have to read back exactly - including after a close/reopen cycle,
+// where the file is deliberately longer than the data it holds.
+TEST( vm_vector, file_length_stays_page_aligned_across_growth_and_shrink )
+{
+    auto  const test_vec{ "test_align.vec" };
+    auto  const file_length{ [ & ]{ return static_cast<std::size_t>( std::filesystem::file_size( test_vec ) ); } };
+    std::error_code ec;
+    std::filesystem::remove( test_vec, ec );
+
+    std::uint32_t constexpr grown_count { 40'000 };
+    std::uint32_t constexpr shrunk_count{  1'000 };
+
+    std::size_t grown_length{ 0 };
+    {
+        psi::vm::vm_vector<std::uint32_t, std::uint32_t> vec;
+        vec.map_file( test_vec, flags::named_object_construction_policy::create_new_or_truncate_existing );
+
+        // Drive many separate capacity expansions rather than one big reserve.
+        for ( std::uint32_t i{ 0 }; i < grown_count; ++i )
+            vec.emplace_back( i );
+
+        grown_length = file_length();
+        EXPECT_EQ( grown_length % commit_granularity, 0U ) << "grown file length is not page aligned";
+        for ( std::uint32_t i{ 0 }; i < grown_count; ++i )
+            ASSERT_EQ( vec[ i ], i ) << "contents corrupted by growth at " << i;
+
+        vec.resize( shrunk_count );
+        vec.shrink_to_fit();
+
+        auto const shrunk_length{ file_length() };
+        EXPECT_EQ( shrunk_length % commit_granularity, 0U ) << "shrunk file length is not page aligned";
+        EXPECT_LE( shrunk_length, grown_length ) << "a shrink must never grow the file";
+        for ( std::uint32_t i{ 0 }; i < shrunk_count; ++i )
+            ASSERT_EQ( vec[ i ], i ) << "contents corrupted by shrink at " << i;
+    }
+
+    // The file outlives the mapping longer than its logical content: reopening
+    // must report the stored size, not the (larger, aligned) file length.
+    {
+        psi::vm::vm_vector<std::uint32_t, std::uint32_t> vec;
+        vec.map_file( test_vec, flags::named_object_construction_policy::open_existing );
+        ASSERT_EQ( vec.size(), shrunk_count );
+        for ( std::uint32_t i{ 0 }; i < shrunk_count; ++i )
+            ASSERT_EQ( vec[ i ], i ) << "contents corrupted across reopen at " << i;
+    }
+
+    std::filesystem::remove( test_vec, ec );
 }
 
 //------------------------------------------------------------------------------

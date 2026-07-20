@@ -239,7 +239,11 @@ public:
     [[ nodiscard, gnu::pure ]] bool empty() const noexcept { return !has_attached_storage() || !size(); }
 
     //! <b>Effects</b>: Tries to deallocate the excess of memory created
-    //!   with previous allocations. The size of the vector is unchanged
+    //!   with previous allocations. The size of the vector is unchanged.
+    //!   For file-backed storage the on-disk length is kept rounded up to a
+    //!   page, so up to one page of slack can survive the call (the trade that
+    //!   keeps an extending resize off the dirty-tail-block flush path - see
+    //!   file_length_for in vm_vector.cpp).
     //!
     //! <b>Throws</b>: nothing.
     //!
