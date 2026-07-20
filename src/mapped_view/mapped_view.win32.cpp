@@ -281,8 +281,23 @@ fallible_result<void> flush_blocking( mapped_span const range, file_handle::cons
     if ( !flush_per_view( range, &flush_view_of_file ) ) [[ unlikely ]]
         return error{};
     // https://devblogs.microsoft.com/oldnewthing/20100909-00/?p=12913 Flushing your performance down the drain, that is
-    if ( !::FlushFileBuffers( source_file.value ) ) [[ unlikely ]]
+    // FLUSH_FLAGS_FILE_DATA_SYNC_ONLY is the exact analogue of what the POSIX
+    // side of this function already asks for: the data plus only the metadata
+    // required to retrieve it (i.e. the size of a file that has just been
+    // extended), which is fdatasync()'s contract - msync( MS_SYNC ) on Linux,
+    // fcntl( F_FULLFSYNC ) on macOS. Unlike FLUSH_FLAGS_FILE_DATA_ONLY, and
+    // unlike FLUSH_FLAGS_NO_SYNC, it still issues the device-global hardware
+    // write cache flush, so it is durable on its own: measured at 460.3 us per
+    // call against FlushFileBuffers()'s 460.4 (and FILE_DATA_ONLY's 20.0, which
+    // is what skipping that flush actually looks like).
+    // The FLUSH_FLAGS_* macros must be spelled unqualified - see nt.hpp.
+    ::IO_STATUS_BLOCK iosb;
+    auto const status{ nt::NtFlushBuffersFileEx( source_file.value, FLUSH_FLAGS_FILE_DATA_SYNC_ONLY, nullptr, 0, &iosb ) };
+    if ( status != nt::STATUS_SUCCESS ) [[ unlikely ]]
+    {
+        ::SetLastError( ::RtlNtStatusToDosError( status ) );
         return error{};
+    }
     return err::success;
 }
 
