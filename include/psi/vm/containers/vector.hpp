@@ -595,7 +595,18 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] static constexpr size_type max_size() noexcept { return static_cast<size_type>( std::numeric_limits<size_type>::max() / sizeof( value_type ) ); }
+    //! \note Defers to the storage when it knows better: a byte-counting
+    //! allocator's own size_type can be narrower than what the element count
+    //! suggests, and only the storage sees that (heap_storage::max_size()).
+    //! The fallback below assumes the storage counts in this container's
+    //! size_type, which is what storages without their own max_size() do.
+    [[ nodiscard ]] static constexpr size_type max_size() noexcept
+    {
+        if constexpr ( requires { storage_t::max_size(); } )
+            return storage_t::max_size();
+        else
+            return static_cast<size_type>( std::numeric_limits<size_type>::max() / sizeof( value_type ) );
+    }
 
     // intentional non-standard behaviour: default_init by default
     void resize( size_type const new_size ) { resize( new_size, default_init ); }
