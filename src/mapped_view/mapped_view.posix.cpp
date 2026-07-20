@@ -116,11 +116,16 @@ void unmap( mapped_span const view )
     // object: munmap()ing it merely fails with EINVAL. The WinNT backend has
     // always skipped empty views - do the same here so that the verification
     // below need not whitelist that failure (and thereby mask genuine ones).
+    // The skip has to happen here: ::munmap() is a thin syscall stub which does
+    // not validate its arguments (see handle.posix.hpp's close()), so an empty
+    // view otherwise makes the round trip into the kernel just to come back
+    // EINVAL.
     if ( view.empty() )
         return;
-    [[ maybe_unused ]] auto munmap_result{ ::munmap( view.data(), view.size() ) };
-#ifndef __EMSCRIPTEN__
-    BOOST_VERIFY( munmap_result == 0 );
+#ifdef __EMSCRIPTEN__
+    (void)::munmap( view.data(), view.size() );
+#else
+    BOOST_VERIFY( ::munmap( view.data(), view.size() ) == 0 );
 #endif
 }
 

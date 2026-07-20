@@ -72,10 +72,14 @@ struct handle_traits
         // with EBADF. Besides the wasted syscalls that also forced the assertion
         // below to whitelist a failure, which in turn hid genuine close()
         // failures on valid handles.
+        // Nor can the check be left to libc: unlike free( nullptr ), which has a
+        // userspace no-op contract, ::close() is a thin syscall stub with no
+        // argument validation - fd validity is kernel state and POSIX specifies
+        // the EBADF return, so the invalid value reaches the kernel and back.
+        // The owner of the handle is the only place that can skip the trip.
         if ( native_handle == invalid_value )
             return;
-        [[ maybe_unused ]] auto const close_result{ ::close( native_handle ) };
-        BOOST_ASSERT( close_result == 0 );
+        BOOST_VERIFY( ::close( native_handle ) == 0 );
     }
 
     // Throws on failure. Cannot use fallible_result<int, last_errno> because
