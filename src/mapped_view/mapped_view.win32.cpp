@@ -212,23 +212,39 @@ namespace
     /// such a chain of adjacent views (expand_win32.hpp's
     /// try_placeholder_expand() maps the extra pages over the trailing
     /// placeholder, i.e. as a separate view), and the resulting span - although
-    /// perfectly contiguous to read and write through - then spans several. So
-    /// walk the range view by view and flush each piece.
-    /// VirtualQuery() reports one region per view (regions are never coalesced
+    /// perfectly contiguous to read and write through - then spans several.
+    ///
+    /// A mapping that was never grown in place is a single view, so try the
+    /// whole range first: that costs no boundary queries at all and is the only
+    /// call the common case ever makes. The chained case rejects the whole-range
+    /// call up front - measured for chains of 2 to 8 views, all failing with
+    /// ERROR_INVALID_ADDRESS and never a partial success - so the fallback walk
+    /// below cannot miss a piece (and flushing an already clean piece is a
+    /// no-op regardless).
+    ///
+    /// query_vm() reports one region per view (regions are never coalesced
     /// across distinct views, even where state/protection match), which makes
-    /// it the boundary oracle here.
+    /// it the boundary oracle for that walk.
     [[ nodiscard ]] bool flush_per_view( mapped_span const range, auto const flush_view ) noexcept
     {
+        if ( flush_view( range.data(), range.size() ) ) [[ likely ]]
+            return true;
+        if ( ::GetLastError() != ERROR_INVALID_ADDRESS )
+            return false; // a genuine failure on a single view, not a chain
+
         auto *   p        { range.data() };
         auto     remaining{ range.size() };
         while ( remaining )
         {
-            ::MEMORY_BASIC_INFORMATION info;
-            if ( !::VirtualQuery( p, &info, sizeof( info ) ) ) [[ unlikely ]]
-                return false;
-            auto const offset_into_region{ static_cast<std::size_t>( p - static_cast<std::byte *>( info.BaseAddress ) ) };
+            auto const info{ detail::query_vm( p ) };
+            auto const offset_into_region{ static_cast<std::size_t>( p - static_cast<std::byte const *>( info.BaseAddress ) ) };
             BOOST_ASSERT( info.RegionSize > offset_into_region );
             auto const in_this_view{ std::min<std::size_t>( remaining, info.RegionSize - offset_into_region ) };
+            // query_vm() cannot fail for an address inside a live mapping (it
+            // asserts) but it is not worth risking a non-terminating loop in a
+            // durability primitive should that ever stop holding.
+            if ( !in_this_view ) [[ unlikely ]]
+                return false;
             if ( !flush_view( p, in_this_view ) ) [[ unlikely ]]
                 return false;
             p         += in_this_view;
