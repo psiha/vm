@@ -120,13 +120,14 @@ void unmap( mapped_span const view )
     // not validate its arguments (see handle.posix.hpp's close()), so an empty
     // view otherwise makes the round trip into the kernel just to come back
     // EINVAL.
-    if ( view.empty() )
-        return;
-#ifdef __EMSCRIPTEN__
-    (void)::munmap( view.data(), view.size() );
-#else
-    BOOST_VERIFY( ::munmap( view.data(), view.size() ) == 0 );
-#endif
+    if ( !view.empty() )
+    {
+#   ifdef __EMSCRIPTEN__
+        (void)::munmap( view.data(), view.size() );
+#   else
+        BOOST_VERIFY( ::munmap( view.data(), view.size() ) == 0 );
+#   endif
+    }
 }
 
 void unmap_partial( mapped_span const range ) noexcept { unmap( range ); }
