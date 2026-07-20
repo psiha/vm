@@ -61,11 +61,11 @@ public:
     ) : basic_mapped_view{ map( source_mapping, offset, desired_size ) } {}
     basic_mapped_view( basic_mapped_view && other ) noexcept : span{ other } { static_cast<span &>( other ) = {}; }
     basic_mapped_view( basic_mapped_view const &  ) = delete;
-   ~basic_mapped_view(                            ) noexcept { do_unmap(); }
+   ~basic_mapped_view(                            ) noexcept { maybe_unmap(); }
 
     basic_mapped_view & operator=( basic_mapped_view && other ) noexcept
     {
-        do_unmap();
+        maybe_unmap();
         static_cast<span &>( *this ) = other;
         static_cast<span &>( other ) = {};
         return *this;
@@ -130,6 +130,22 @@ private:
     friend struct std::is_constructible<basic_mapped_view, span const &>;
     basic_mapped_view( span const & mapped_range                            ) noexcept : span{ mapped_range   } {}
     basic_mapped_view( value_type * const p_begin, value_type * const p_end ) noexcept : span{ p_begin, p_end } {}
+
+    // The emptiness test is materialised into a local before being handed to
+    // __builtin_constant_p: applied straight to the call expression it never
+    // fires, whereas a plain value gives llvm.is.constant a single thing to
+    // resolve once inlining has exposed the moved-from store. Where the view is
+    // provably empty the unmap folds away entirely; otherwise nothing is
+    // emitted and the out-of-line do_unmap() runs as before.
+    void maybe_unmap() noexcept
+    {
+#   if __has_builtin( __builtin_constant_p )
+        auto const is_empty{ this->empty() };
+        if ( __builtin_constant_p( is_empty ) && is_empty )
+            return;
+#   endif
+        do_unmap();
+    }
 
     void do_unmap() noexcept;
 }; // class basic_mapped_view
@@ -284,13 +300,13 @@ public:
 
    ~extendable_basic_mapped_view() noexcept
     {
-        do_unmap();
+        maybe_unmap();
         static_cast<span &>( *this ) = {};
     }
 
     extendable_basic_mapped_view & operator=( extendable_basic_mapped_view && other ) noexcept
     {
-        do_unmap();
+        maybe_unmap();
         static_cast<span &>( *this ) = static_cast<span const &>( other );
         static_cast<span &>( other ) = {};
         trailing_placeholder_size_ = std::exchange( other.trailing_placeholder_size_, 0 );
@@ -359,6 +375,22 @@ public: // Factory methods.
     }
 
 private:
+    // The emptiness test is materialised into a local before being handed to
+    // __builtin_constant_p: applied straight to the call expression it never
+    // fires, whereas a plain value gives llvm.is.constant a single thing to
+    // resolve once inlining has exposed the moved-from store. Where the view is
+    // provably empty the unmap folds away entirely; otherwise nothing is
+    // emitted and the out-of-line do_unmap() runs as before.
+    void maybe_unmap() noexcept
+    {
+#   if __has_builtin( __builtin_constant_p )
+        auto const is_empty{ this->empty() };
+        if ( __builtin_constant_p( is_empty ) && is_empty )
+            return;
+#   endif
+        do_unmap();
+    }
+
     void do_unmap() noexcept;
 
 private:

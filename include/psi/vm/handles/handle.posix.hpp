@@ -61,8 +61,8 @@ struct handle_traits
     // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=86286
     // https://discourse.llvm.org/t/rfc-clang-true-noexcept-aka-defaults-are-often-wrong-hardcoded-defaults-are-always-wrong/67629/15?page=2
     // https://logan.tw/llvm/nounwind.html
-    [[ gnu::cold, gnu::nothrow, msvc::noalias, msvc::nothrow, clang::nouwtable ]]
-    static void close( native_t const native_handle )
+    [[ gnu::cold, gnu::noinline, gnu::nothrow, msvc::noalias, msvc::nothrow, clang::nouwtable ]]
+    static void close_impl( native_t const native_handle )
     {
         // The invalid handle has to be filtered out at runtime, not merely when
         // the compiler happens to be able to prove the value (which it
@@ -81,6 +81,24 @@ struct handle_traits
         {
             BOOST_VERIFY( ::close( native_handle ) == 0 );
         }
+    }
+
+    // Inlinable, and deliberately not cold unlike the implementation it guards:
+    // cold is precisely what stops that implementation from being inlined, so
+    // the constant test can only fire from a separate, non-cold wrapper. Where
+    // the value is already provable - destroying a moved-from or never
+    // populated handle, the majority of all release calls - the whole thing
+    // folds away; where it is not, __builtin_constant_p is false and nothing at
+    // all is emitted, leaving the plain call to the outlined implementation
+    // which is where the invalid value is filtered out for real.
+    [[ gnu::nothrow, msvc::noalias, msvc::nothrow, clang::nouwtable ]]
+    static void close( native_t const native_handle )
+    {
+#   if __has_builtin( __builtin_constant_p )
+        if ( __builtin_constant_p( native_handle ) && ( native_handle == invalid_value ) )
+            return;
+#   endif
+        close_impl( native_handle );
     }
 
     // Throws on failure. Cannot use fallible_result<int, last_errno> because
