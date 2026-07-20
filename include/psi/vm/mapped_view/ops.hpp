@@ -40,9 +40,10 @@ inline bool flush_force_failure = false;
 //
 // A range handed to flush_blocking() can, in full generality, cover pages
 // that were never actually backed by storage before this call. Extending a
-// file (ftruncate()/SetFileSize()) is a metadata-only operation on every
-// mainstream filesystem (ext4, XFS, btrfs, NTFS, APFS): it creates a sparse
-// "hole", it does not reserve real blocks for the new range. mmap()-ing that
+// file (ftruncate()/SetFileSize()) does not reserve real blocks for the new
+// range on any mainstream filesystem (ext4, XFS, btrfs, NTFS, APFS): it
+// creates a sparse "hole" (but see the note on extension cost below - not
+// reserving blocks does not make the call unconditionally cheap). mmap()-ing that
 // range, and writing into the mapped memory, don't touch storage either - a
 // write into mapped memory is a plain CPU store that dirties a page-cache
 // page; there is no disk-space check anywhere in that path. Real block
@@ -67,6 +68,35 @@ inline bool flush_force_failure = false;
 // that *earlier* ones landed. This is why callers that care about durability
 // must check (or, per fallible_result below, at least not blindly discard)
 // every single flush_blocking() call, not just periodically sample one.
+//
+// Note on extension cost: not reserving blocks is a statement about
+// allocation, not about latency. Growing a file is *not* reliably a
+// metadata-only operation. On XFS specifically it synchronously writes back
+// and waits for the tail block when two conditions hold together:
+//   1. the file currently has dirty (e.g. mmap-written) pages, and
+//   2. its current end-of-file is not filesystem-block aligned.
+// The size change is logged, so any data between the on-disk EOF and the new
+// EOF - including the zeroing of the partial tail block - has to reach the
+// device first, or a crash could expose unzeroed blocks past the old EOF
+// (the "null files" problem). The path is
+// xfs_setattr_size() -> filemap_write_and_wait_range() ->
+// folio_wait_writeback() -> io_schedule(); i.e. the calling thread sleeps on
+// a real device round trip, which on network-attached storage is expensive.
+//
+// Either condition alone is free - it is only the combination that pays.
+// Measured over 2000 extending truncates, us/call, XFS on network-attached
+// block storage, versus a tmpfs control:
+//   clean file, any alignment .....   0.7
+//   dirty pages, aligned EOF ......   1.1
+//   dirty pages, unaligned EOF .... 644.8
+//   tmpfs (control) ...............   0.2
+// A downstream workload that grows mapped files incrementally found the
+// overwhelming majority of its file-growth time in this one wait. Callers
+// who grow mapped files in a loop therefore want either to keep the file's
+// EOF block-aligned or to grow in fewer, larger steps; note also that the
+// kernel holds i_rwsem exclusively across that wait, so concurrent buffered
+// readers of the same file serialise behind it (mmap readers, which fault
+// without taking i_rwsem, do not).
 //
 // This is why flush_blocking() returns a psi.err fallible_result rather than
 // a bool: a bool can be silently ignored with zero cost, which is exactly
