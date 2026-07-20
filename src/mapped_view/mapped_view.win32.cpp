@@ -24,6 +24,8 @@
 
 #include <boost/assert.hpp>
 
+#include <algorithm>
+
 #ifndef NDEBUG
 #include <cstdio> // for fputs
 #endif
@@ -202,10 +204,49 @@ void discard( mapped_span const range ) noexcept
     BOOST_VERIFY( ::DiscardVirtualMemory( range.data(), range.size() ) );
 }
 
+namespace
+{
+    /// FlushViewOfFile() only accepts a range lying within a *single* mapped
+    /// view: handed a range that crosses into the next one it does nothing and
+    /// fails with ERROR_INVALID_ADDRESS. A mapping grown in place is exactly
+    /// such a chain of adjacent views (expand_win32.hpp's
+    /// try_placeholder_expand() maps the extra pages over the trailing
+    /// placeholder, i.e. as a separate view), and the resulting span - although
+    /// perfectly contiguous to read and write through - then spans several. So
+    /// walk the range view by view and flush each piece.
+    /// VirtualQuery() reports one region per view (regions are never coalesced
+    /// across distinct views, even where state/protection match), which makes
+    /// it the boundary oracle here.
+    [[ nodiscard ]] bool flush_per_view( mapped_span const range, auto const flush_view ) noexcept
+    {
+        auto *   p        { range.data() };
+        auto     remaining{ range.size() };
+        while ( remaining )
+        {
+            ::MEMORY_BASIC_INFORMATION info;
+            if ( !::VirtualQuery( p, &info, sizeof( info ) ) ) [[ unlikely ]]
+                return false;
+            auto const offset_into_region{ static_cast<std::size_t>( p - static_cast<std::byte *>( info.BaseAddress ) ) };
+            BOOST_ASSERT( info.RegionSize > offset_into_region );
+            auto const in_this_view{ std::min<std::size_t>( remaining, info.RegionSize - offset_into_region ) };
+            if ( !flush_view( p, in_this_view ) ) [[ unlikely ]]
+                return false;
+            p         += in_this_view;
+            remaining -= in_this_view;
+        }
+        return true;
+    }
+
+    [[ nodiscard ]] bool flush_view_of_file( std::byte * const address, std::size_t const size ) noexcept
+    {
+        // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwflushvirtualmemory
+        return ::FlushViewOfFile( address, size ) != false;
+    }
+} // anonymous namespace
+
 void flush_async( mapped_span const range ) noexcept
 {
-    // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwflushvirtualmemory
-    if ( !::FlushViewOfFile( range.data(), range.size() ) ) [[ unlikely ]]
+    if ( !flush_per_view( range, &flush_view_of_file ) ) [[ unlikely ]]
     {
 #   ifndef NDEBUG //...mrmlj...catching ghosts
         //std::fputs( err::make_exception( err::last_win32_error{} ).what(), stderr );
@@ -219,8 +260,9 @@ fallible_result<void> flush_blocking( mapped_span const range, file_handle::cons
     if ( flush_observer ) [[ unlikely ]] flush_observer( range, source_file );
     if ( flush_force_failure ) [[ unlikely ]] { ::SetLastError( ERROR_DISK_FULL ); return error{}; }
 #endif
-    // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwflushvirtualmemory
-    if ( !::FlushViewOfFile( range.data(), range.size() ) ) [[ unlikely ]]
+    // Per-view (see flush_per_view() above): a single FlushViewOfFile() call
+    // cannot span a mapping that has been grown in place.
+    if ( !flush_per_view( range, &flush_view_of_file ) ) [[ unlikely ]]
         return error{};
     // https://devblogs.microsoft.com/oldnewthing/20100909-00/?p=12913 Flushing your performance down the drain, that is
     if ( !::FlushFileBuffers( source_file.value ) ) [[ unlikely ]]
