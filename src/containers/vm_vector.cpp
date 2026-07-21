@@ -55,14 +55,40 @@ namespace detail
 #endif
 } // namespace detail
 
-void mem_mapping::close() noexcept
+void mem_mapping::publish_size() noexcept
 {
-    unmap();
-    mapping_.close();
+    if ( !has_attached_storage() )
+        return;
+
+    // Store only on an actual change - publishing an unchanged length would
+    // dirty the header page for nothing.
+    auto & persisted{ persisted_size() };
+    if ( persisted != live_size_ )
+        persisted = live_size_;
 }
 
-void                              mem_mapping::flush_async   ( std::size_t const beginning, std::size_t const size ) const noexcept {        vm::flush_async   ( mapped_span({ view_.subspan( beginning, size ) }) ); }
-err::fallible_result<void, error> mem_mapping::flush_blocking( std::size_t const beginning, std::size_t const size ) const noexcept { return vm::flush_blocking( mapped_span({ view_.subspan( beginning, size ) }), mapping_.underlying_file() ); }
+void mem_mapping::close() noexcept
+{
+    // A clean detach is a commit point: publish the live length so an orderly
+    // shutdown persists exactly what the container spans (this is what keeps
+    // the change invisible to users who never crash). An abnormal termination
+    // by definition does not reach here, which is precisely why the persisted
+    // length then still denotes the last committed extent.
+    publish_size();
+    unmap();
+    mapping_.close();
+    live_size_ = 0;
+}
+
+// A flush that starts at 0 covers sizes_hdr, so it is also the point at which
+// the live length becomes the committed one. Doing it here (rather than on
+// every growth) is the whole point of the split: after an abnormal
+// termination the persisted length denotes the last committed extent, and
+// everything physically beyond it is uncommitted by construction. Data-only
+// flushes (beginning != 0) must NOT publish - a length made durable ahead of
+// the bytes it spans would be exactly the corruption this prevents.
+void                              mem_mapping::flush_async   ( std::size_t const beginning, std::size_t const size )       noexcept { if ( beginning == 0 ) { publish_size(); }        vm::flush_async   ( mapped_span({ view_.subspan( beginning, size ) }) ); }
+err::fallible_result<void, error> mem_mapping::flush_blocking( std::size_t const beginning, std::size_t const size )       noexcept { if ( beginning == 0 ) { publish_size(); } return vm::flush_blocking( mapped_span({ view_.subspan( beginning, size ) }), mapping_.underlying_file() ); }
 [[ gnu::pure ]]
 mem_mapping::size_type
 mem_mapping::client_to_storage_size( size_type const sz ) const noexcept
@@ -168,7 +194,7 @@ void mem_mapping::shrink_mapped_size_to( std::size_t const target_size ) noexcep
 
 void mem_mapping::shrink_to_fit() noexcept
 {
-    shrink_to_slow( stored_size() );
+    shrink_to_slow( live_size() );
 }
 
 void mem_mapping::reserve( size_type const new_capacity )
@@ -179,7 +205,7 @@ void mem_mapping::reserve( size_type const new_capacity )
 
 void * mem_mapping::shrink_to( size_type const target_size ) noexcept
 {
-    auto & sz{ stored_size() };
+    auto & sz{ live_size() };
     if ( sz == target_size ) { // minimize every bit of unnecessary page touching/dirtying
         return data();
     }
@@ -201,7 +227,7 @@ void mem_mapping::resize( size_type const target_size )
         // or skip this like std::vector and rely on an explicit shrink_to_fit() call?
         shrink_to( target_size );
     }
-    BOOST_ASSUME( stored_size() == target_size );
+    BOOST_ASSUME( live_size() == target_size );
 }
 
 [[ gnu::pure, nodiscard ]]
@@ -291,6 +317,8 @@ mem_mapping::map_file( file_handle file, flags::named_object_construction_policy
             BOOST_ASSUME( on_disk_sizes.data_size == 0 );
             on_disk_sizes = hdr;
         }
+        // else: validated below - either way the live length starts at the
+        // persisted (committed) one, which for a fresh file is 0.
         else
         {
             auto match{ on_disk_sizes };
@@ -319,6 +347,11 @@ mem_mapping::map_file( file_handle file, flags::named_object_construction_policy
                 return error{ error::invalid_data };
             }
         }
+        // Seed the live length from the committed one: an attach observes
+        // exactly what the last header-covering flush (or clean detach)
+        // published - which, after an abnormal termination, is the last
+        // committed extent rather than an in-flight cursor.
+        live_size_ = get_sizes().data_size;
     }
     return map_rslt.propagate();
 }
@@ -331,6 +364,7 @@ err::result_or_error<void, error> mem_mapping::map_memory( size_type const data_
         return map_success.error();
     hdr.data_size = data_size;
     get_sizes() = hdr;
+    live_size_  = data_size; // anonymous storage: nothing to commit to, live == committed
     return err::success;
 }
 
@@ -355,6 +389,7 @@ err::result_or_error<void, error> mem_mapping::map_cow_memory( size_type const d
             mapping_.set_ephemeral(); // memfd: fd-backed but not on-disk
             hdr.data_size = data_size;
             get_sizes() = hdr;
+            live_size_  = data_size; // ephemeral storage: live == committed
             return err::success;
         }
         ::close( mfd );

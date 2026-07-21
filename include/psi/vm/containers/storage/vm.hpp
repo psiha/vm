@@ -215,6 +215,17 @@ public:
     mem_mapping( mem_mapping && ) = default;
     mem_mapping & operator=( mem_mapping && ) = default;
 
+    // Write-through of the live length on destruction, so an orderly teardown
+    // leaves the mapping's header describing what the container actually
+    // spans. This is a store into an already-mapped page - deliberately NOT a
+    // flush: forcing a syscall on destruction is the user's prerogative, never
+    // this type's. The body runs while view_/mapping_ are still alive; on a
+    // moved-from object has_attached_storage() is false and publish_size() is
+    // a no-op. (Move operations are user-declared above, so declaring this
+    // does not suppress them.)
+    ~mem_mapping() noexcept { publish_size(); }
+
+
     // COW (copy-on-write) copy construction: creates a new storage sharing
     // physical pages with the source. Writes to the clone trigger private
     // page copies (kernel-managed COW).
@@ -229,7 +240,15 @@ public:
     [[ gnu::pure, nodiscard ]] std::span<std::byte const> header_storage() const noexcept { return const_cast<mem_mapping &>( *this ).header_storage(); }
     [[ gnu::pure, nodiscard ]] std::span<std::byte      > header_storage()       noexcept;
 
-    [[ nodiscard, gnu::pure ]] size_type size       () const noexcept { return get_sizes().data_size; }
+    //! The live length: what the container currently spans, including growth
+    //! not yet committed. Reads a plain member - no mapped-page touch.
+    [[ nodiscard, gnu::pure ]] size_type size       () const noexcept { return live_size_; }
+    //! The length recorded in the persisted header, i.e. the extent as of the
+    //! last header-covering flush (or clean detach). After an abnormal
+    //! termination this is what a reopen reports as size(); everything
+    //! physically beyond it is uncommitted by construction. Equals size()
+    //! outside an in-flight mutation.
+    [[ nodiscard, gnu::pure ]] size_type committed_size() const noexcept { return has_attached_storage() ? get_sizes().data_size : size_type{ 0 }; }
     [[ nodiscard, gnu::pure ]] size_type fs_capacity() const noexcept { return storage_size() - get_sizes().data_offset; }
     [[ nodiscard, gnu::pure ]] size_type vm_capacity() const noexcept { return  mapped_size() - get_sizes().data_offset; }
 
@@ -257,11 +276,26 @@ public:
     [[ nodiscard, gnu::pure ]] size_type storage_size() const noexcept { return get_size( mapping_ ); }
     [[ nodiscard, gnu::pure ]] size_type  mapped_size() const noexcept { return view_.size(); }
 
-    void                              flush_async   () const noexcept {        flush_async   ( 0, mapped_size() ); }
-    err::fallible_result<void, error> flush_blocking() const noexcept { return flush_blocking( 0, mapped_size() ); }
+    void                              flush_async   ()       noexcept {        flush_async   ( 0, mapped_size() ); }
+    err::fallible_result<void, error> flush_blocking()       noexcept { return flush_blocking( 0, mapped_size() ); }
 
-    void                              flush_async   ( size_type beginning, size_type size ) const noexcept;
-    err::fallible_result<void, error> flush_blocking( size_type beginning, size_type size ) const noexcept;
+    //! Publishes the live length into the mapped header, making it the value
+    //! a subsequent reopen will report. NOTE: this is a store into a mapped
+    //! page - it is NOT durability. To make the published length durable,
+    //! follow it with a header-covering flush (flush_blocking()/(0, n)).
+    //! What it buys without a flush is still the essential part: the header
+    //! can only ever hold a value the caller published at a commit point,
+    //! never an in-flight cursor, so whatever the page cache writes back is
+    //! by construction a committed extent.
+    //! Skips the store when nothing changed, to avoid dirtying the page.
+    void publish_size() noexcept;
+
+    // A flush whose range starts at 0 covers the header, so it publishes the
+    // live length first (it would otherwise flush a stale one). Data-only
+    // flushes (beginning != 0) deliberately do not - a length must never
+    // become durable before the bytes it spans.
+    void                              flush_async   ( size_type beginning, size_type size )       noexcept;
+    err::fallible_result<void, error> flush_blocking( size_type beginning, size_type size )       noexcept;
 
     [[ nodiscard, gnu::pure ]] bool file_backed() const noexcept { return mapping_.is_file_based(); }
 
@@ -344,7 +378,7 @@ protected:
             auto const byte_cap{ vm_capacity() };
             if ( byte_target > byte_cap ) [[ unlikely ]]
                 reserve( static_cast<bool>( G ) ? G( byte_target, byte_cap ) : byte_target );
-            stored_size() = byte_target;
+            live_size() = byte_target;
         }
         return data();
     }
@@ -362,13 +396,13 @@ protected:
     void grow_into_available_capacity_by( size_type const sz_delta ) noexcept
     {
         BOOST_ASSERT_MSG( sz_delta <= ( vm_capacity() - size() ), "Out of preallocated space" );
-        stored_size() += sz_delta;
+        live_size() += sz_delta;
     }
 
     void shrink_size_to( size_type const new_size ) noexcept
     {
         BOOST_ASSUME( new_size <= vm_capacity() );
-        stored_size() = new_size;
+        live_size() = new_size;
     }
 
 private:
@@ -377,7 +411,13 @@ private:
 
     static constexpr sizes_hdr unpack( header_info ) noexcept;
 
-    [[ nodiscard, gnu::pure ]] size_type & stored_size() noexcept { return get_sizes().data_size; }
+    //! Mutable access to the LIVE length (the in-flight one). Every internal
+    //! growth/shrink path moves this and only this - publishing to the header
+    //! is the caller's explicit act (publish_size()).
+    [[ nodiscard, gnu::pure ]] size_type & live_size() noexcept { return live_size_; }
+    //! Mutable access to the PERSISTED length in the mapped header. Only
+    //! publish_size() may move it.
+    [[ nodiscard, gnu::pure ]] size_type & persisted_size() noexcept { return get_sizes().data_size; }
 
     void * expand_capacity( size_type target_storage_capacity );
 
@@ -386,6 +426,10 @@ private:
 private:
     extendable_mapped_view view_;
     mapping                mapping_;
+    // The live (in-flight) length. The persisted copy in sizes_hdr::data_size
+    // is deliberately NOT updated by growth/shrinkage - see size() and
+    // committed_size().
+    size_type              live_size_{ 0 };
 }; // mem_mapping
 
 
@@ -485,6 +529,8 @@ public:
     [[ nodiscard, gnu::pure ]] T const * data() const noexcept { return const_cast<vm_storage &>( *this ).data(); }
 
     [[ nodiscard, gnu::pure ]] sz_t size    () const noexcept { return has_attached_storage() ? to_t_sz( base::size()        ) : sz_t{}; }
+    //! Element-count counterpart of mem_mapping::committed_size().
+    [[ nodiscard, gnu::pure ]] sz_t committed_size() const noexcept { return has_attached_storage() ? to_t_sz( base::committed_size() ) : sz_t{}; }
     [[ nodiscard, gnu::pure ]] sz_t capacity() const noexcept { return has_attached_storage() ? static_cast<sz_t>( base::vm_capacity() / sizeof( T ) ) : sz_t{}; }
 
     void reserve( sz_t const new_capacity ) { base::reserve( to_byte_sz( new_capacity ) ); }
