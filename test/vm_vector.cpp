@@ -124,6 +124,66 @@ TEST( vm_vector, file_length_stays_page_aligned_across_growth_and_shrink )
     std::filesystem::remove( test_vec, ec );
 }
 
+
+// The persisted length denotes the last COMMITTED extent, not an in-flight
+// cursor: growth alone must not move it - only a header-covering flush (or an
+// orderly detach) publishes it.
+TEST( vm_vector, committed_size_is_not_moved_by_growth )
+{
+    auto const test_vec{ "committed_size.vec" };
+    std::filesystem::remove( test_vec );
+    psi::vm::vm_vector<double, std::uint16_t> vec;
+    vec.map_file( test_vec, flags::named_object_construction_policy::create_new_or_truncate_existing );
+    EXPECT_EQ( vec.size(), 0 );
+    EXPECT_EQ( vec.committed_size(), 0 );
+
+    vec.append_range({ 3.14, 0.14, 0.04 });
+    // live length moved, committed one did not
+    EXPECT_EQ( vec.size(), 3 );
+    EXPECT_EQ( vec.committed_size(), 0 );
+
+    (void)vec.flush_blocking()();
+    // after a header-covering flush the two agree
+    EXPECT_EQ( vec.size(), 3 );
+    EXPECT_EQ( vec.committed_size(), 3 );
+
+    // ...and further growth again only moves the live one
+    vec.append_range({ 1.0, 2.0 });
+    EXPECT_EQ( vec.size(), 5 );
+    EXPECT_EQ( vec.committed_size(), 3 );
+}
+
+// The point of the change: a length that was never published is not visible to
+// a reopen - the header only ever holds a length some commit point published,
+// never an in-flight cursor. This is a statement about PUBLISHING, not about
+// fsync: the test asserts what the mapping's header describes, and makes no
+// claim that any particular value was forced to the device. A process dying
+// without publishing is simulated faithfully by leaking the container so that
+// no destructor (and therefore no write-through) ever runs.
+TEST( vm_vector, unpublished_growth_is_not_visible_to_a_reopen )
+{
+    auto const test_vec{ "committed_size_crash.vec" };
+    std::filesystem::remove( test_vec );
+    {
+        auto * const leaked{ new psi::vm::vm_vector<double, std::uint16_t>{} }; // deliberately never deleted
+        leaked->map_file( test_vec, flags::named_object_construction_policy::create_new_or_truncate_existing );
+        leaked->append_range({ 3.14, 0.14, 0.04 });
+        (void)leaked->flush_blocking()(); // publishes (and flushes) length 3
+        leaked->append_range({ 1.0, 2.0 });                      // unpublished growth: live 5
+        EXPECT_EQ( leaked->size(), 5 );
+        EXPECT_EQ( leaked->committed_size(), 3 );
+        // no destruction, no close, no further flush: nothing publishes the 5
+    }
+    {
+        psi::vm::vm_vector<double, std::uint16_t> reopened;
+        reopened.map_file( test_vec, flags::named_object_construction_policy::open_existing );
+        EXPECT_EQ( reopened.size(), 3 ); // the published extent, NOT the in-flight 5
+        EXPECT_EQ( reopened.committed_size(), 3 );
+        EXPECT_EQ( reopened[ 0 ], 3.14 );
+        EXPECT_EQ( reopened[ 2 ], 0.04 );
+    }
+}
+
 //------------------------------------------------------------------------------
 } // namespace psi::vm
 //------------------------------------------------------------------------------

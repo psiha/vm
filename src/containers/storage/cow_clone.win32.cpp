@@ -35,6 +35,11 @@ mem_mapping::mem_mapping( mem_mapping const & source )
     if ( !total_mapped )
         return;
 
+    // A COW clone copies the source's CURRENT bytes, so it inherits the
+    // source's LIVE length (not the source's last committed one). Seeded here,
+    // ahead of the strategy branches below, so every success path gets it.
+    live_size_ = source.live_size_;
+
     // Duplicate file handle if source is file-backed (for correct
     // is_file_based() reporting and allocation_type in view mapping)
     file_handle cow_file;
