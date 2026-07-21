@@ -4,7 +4,10 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <system_error>
+#include <vector>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -182,6 +185,54 @@ TEST( vm_vector, unpublished_growth_is_not_visible_to_a_reopen )
         EXPECT_EQ( reopened[ 0 ], 3.14 );
         EXPECT_EQ( reopened[ 2 ], 0.04 );
     }
+}
+
+
+// A failed open must not WRITE to the file it just rejected. Detaching after
+// the header was declared corrupt used to run through close(), which
+// publishes the live length - quietly repairing the very field that made the
+// header invalid, so a second open (or an external consistency checker) saw a
+// plausible file and the corruption vanished.
+TEST( vm_vector, rejected_open_does_not_rewrite_the_corrupt_header )
+{
+    auto const test_vec{ "corrupt_header.vec" };
+    std::filesystem::remove( test_vec );
+    {
+        psi::vm::vm_vector<double, std::uint16_t> vec;
+        vec.map_file( test_vec, flags::named_object_construction_policy::create_new_or_truncate_existing );
+        vec.append_range({ 3.14, 0.14, 0.04 });
+    } // published on destruction
+
+    // Corrupt the persisted length into something the file could not possibly
+    // hold - exactly what the open-time validation rejects. data_size follows
+    // two std::uint32_t fields at the start of sizes_hdr.
+    auto constexpr dataSizeOffset{ 2 * sizeof( std::uint32_t ) };
+    {
+        std::fstream f{ test_vec, std::ios::binary | std::ios::in | std::ios::out };
+        ASSERT_TRUE( f.is_open() );
+        f.seekp( static_cast<std::streamoff>( dataSizeOffset ) );
+        std::uint64_t const bogus{ 0xFFFF'FFFF'0000u };
+        f.write( reinterpret_cast<char const *>( &bogus ), sizeof( bogus ) );
+    }
+
+    auto const readDataSize{ [ & ]() {
+        std::ifstream in{ test_vec, std::ios::binary };
+        in.seekg( static_cast<std::streamoff>( dataSizeOffset ) );
+        std::uint64_t v{};
+        in.read( reinterpret_cast<char *>( &v ), sizeof( v ) );
+        return v;
+    } };
+    auto const before{ readDataSize() };
+    {
+        psi::vm::vm_vector<double, std::uint16_t> vec;
+        // The open is EXPECTED to fail - that is the scenario. What matters is
+        // what it leaves behind.
+        try { vec.map_file( test_vec, flags::named_object_construction_policy::open_existing ); }
+        catch ( ... ) {}
+    }
+    // The rejected header must still be rejected next time - the failed open
+    // must not have written a plausible length over the corrupt one.
+    EXPECT_EQ( readDataSize(), before ) << "a rejected open repaired the corrupt length it rejected";
 }
 
 //------------------------------------------------------------------------------

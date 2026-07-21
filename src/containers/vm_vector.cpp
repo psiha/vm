@@ -342,8 +342,15 @@ mem_mapping::map_file( file_handle file, flags::named_object_construction_policy
                 ( match.data_size          > mapping_size          )
             ) [[ unlikely ]]
             {
-                // Corrupted file: bogus or unexpected on-disk header
-                close();
+                // Corrupted file: bogus or unexpected on-disk header.
+                // Detach WITHOUT publishing: close() would write live_size_
+                // into the very header just declared corrupt, quietly
+                // repairing it and hiding the corruption from the next open
+                // (and from any consistency checker running over the file).
+                // Nothing here has been validated, so there is no length
+                // worth persisting - only resources worth releasing.
+                unmap();
+                mapping_.close();
                 return error{ error::invalid_data };
             }
         }
