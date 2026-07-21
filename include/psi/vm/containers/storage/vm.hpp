@@ -102,7 +102,16 @@ struct header_info
     // guaranteed alignment (event at the possible expense of slack space in
     // header hierarchies) so that alignment fixups can be skipped for such
     // headers.
-    static std::uint8_t constexpr minimal_subheader_alignment{ alignof( int ) };
+    // Natural word alignment: besides skipping the fixup for u64-holding
+    // headers (the common case on 64-bit), this makes every subheader
+    // boundary 8-aligned BY CONSTRUCTION - so different views of the same
+    // header stack through different subheader types (with differing
+    // alignof) compute the same base. With a smaller guarantee, a stack
+    // whose preceding header's padded size was not a multiple of a later
+    // header's alignment placed that header at retrieval-time-aligned
+    // offsets that differed between an alignof<=minimal view and an
+    // alignof>minimal view of the same bytes - a silent split.
+    static std::uint8_t constexpr minimal_subheader_alignment{ alignof( std::uint64_t ) };
     static std::uint8_t constexpr minimal_data_alignment     { 32 };
 
     // note: any potential benefit of __datasizeof (vs sizeof) is nullified with
