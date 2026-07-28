@@ -986,7 +986,11 @@ public:
         }
     }
 
-    template <std::ranges::range Rng>
+    //! <b>Effects</b>: Appends a range. Exact-fit growth by default (like
+    //! insert_range / make_space_for_insert). Pass amortized_growth=true to
+    //! apply the container Growth policy (same as emplace_back) when the
+    //! final size cannot be reserved up front — e.g. a loop of small appends.
+    template <bool amortized_growth = false, std::ranges::range Rng>
     void append_range( Rng && __restrict rng )
     {
         auto const current_size{ this->size() };
@@ -994,7 +998,11 @@ public:
         {
             auto const additional_size{ verified_cast<size_type>( std::size( rng ) ) };
             auto const input_begin    {                           std::begin( rng )   };
-            auto const target_position{ grow_by( additional_size, no_init ) + current_size };
+            value_type * target_position;
+            if constexpr ( amortized_growth )
+                target_position = grow_by_amortized( additional_size, no_init ) + current_size;
+            else
+                target_position = grow_by          ( additional_size, no_init ) + current_size;
             try
             {
                 // No rvalue-vs-lvalue branch on `Rng`: the prior
@@ -1020,6 +1028,7 @@ public:
         }
         else
         {
+            static_assert( !amortized_growth, "amortized_growth requires a sized range" );
             try
             {
                 std::copy( std::begin( rng ), std::end( rng ), std::back_inserter( *this ) );
