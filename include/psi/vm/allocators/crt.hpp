@@ -245,6 +245,15 @@ struct crt_allocator
 
     // --- allocator traits ---
     static constexpr bool try_expand_supports_null  { false }; // _expand(nullptr) is UB
+#if defined( _MSC_VER )
+    // _msize is abnormally slow and reports the requested size, not the usable
+    // block capacity (see crt_alloc_size). heap_storage must not call size() on
+    // the capacity-cache path under MSVC CRT — cache the request instead.
+    // Mimalloc / other allocators with a fast usable-size query set this true.
+    static constexpr bool size_reports_usable_capacity{ false };
+#else
+    static constexpr bool size_reports_usable_capacity{ true };
+#endif
     // _expand works in-place for shrink, but only on non-aligned (regular malloc)
     // allocations. Callers with alignment > guaranteed_alignment must use shrink_to.
 // __has_feature is a Clang builtin; MSVC's (cl.exe) preprocessor errors on a bare

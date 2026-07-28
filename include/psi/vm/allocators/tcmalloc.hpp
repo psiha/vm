@@ -118,6 +118,7 @@ struct tcmalloc_allocator
     static constexpr bool try_expand_supports_null              { false };
     static constexpr bool guaranteed_in_place_shrink            { false }; // tc_realloc may relocate
     static constexpr bool in_place_ops_require_default_alignment{ false }; // n/a (no in-place ops)
+    static constexpr bool size_reports_usable_capacity          { true  };
 
     // tcmalloc does not expose an in-place expansion or shrink API.
     // No try_expand / try_shrink_in_place -- heap_storage uses allocate+move+free path.

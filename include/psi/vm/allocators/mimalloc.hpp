@@ -114,6 +114,7 @@ struct mimalloc_allocator
     static constexpr bool try_expand_supports_null              { false };
     static constexpr bool guaranteed_in_place_shrink            { false };
     static constexpr bool in_place_ops_require_default_alignment{ false };
+    static constexpr bool size_reports_usable_capacity          { true  };
 
     [[ nodiscard ]]
     static bool try_expand( pointer const ptr, size_type const target_size ) noexcept

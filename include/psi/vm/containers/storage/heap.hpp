@@ -49,7 +49,10 @@ namespace psi::vm
 struct heap_options
 {
     std::uint8_t alignment     { 0    }; // 0 -> default
-    bool         cache_capacity{ true }; // if your crt_alloc_size is slow (MSVC)
+    bool         cache_capacity{ true }; // false if you never want a cached capacity field
+    // MSVC CRT's size() (_msize) is slow and does not report usable slack — see
+    // crt_allocator::size_reports_usable_capacity. Mimalloc (default shell when
+    // PSI_VM_HAS_MIMALLOC) caches usable capacity like other platforms.
     // When the value_type is an incomplete/recursive strong-typedef (the vector's
     // support_incomplete_types mode), the class-scope alignment constant must not
     // probe complete<T>/alignof(T): that probe is an ODR hazard that can flip to
@@ -530,19 +533,32 @@ private:
     {
         BOOST_ASSUME( p_array_ || !requested_capacity );
         if constexpr ( options.cache_capacity ) {
-#       if defined( _MSC_VER )
-            if constexpr ( std::is_void_v<Allocator> )
-                BOOST_ASSERT( !requested_capacity || ( shell_capacity( p_array_ ) >= requested_capacity ) );
-            else
-                BOOST_ASSERT( !requested_capacity || ( alloc().size( p_array_ ) >= requested_capacity ) );
-            capacity_ = requested_capacity;
-#       else
-            if constexpr ( std::is_void_v<Allocator> )
-                capacity_ = shell_capacity( p_array_ );
-            else
-                capacity_ = alloc().size( p_array_ );
-            BOOST_ASSUME( capacity_ >= requested_capacity );
-#       endif
+            // Cache the allocator's real usable size when that query is cheap and
+            // reports slack (mimalloc, non-MSVC CRT, …). MSVC's CRT _msize is
+            // both slow and reports the requested size — for that allocator only,
+            // assert usable≥requested then store the request (same as the historic
+            // MSVC branch, but gated on the allocator trait rather than _MSC_VER).
+            // if constexpr (not ?:): the false branch must not instantiate a
+            // missing size_reports_usable_capacity member (mi_heap / scoped / …).
+            constexpr bool cache_usable{ []{
+                if constexpr ( requires { al::size_reports_usable_capacity; } )
+                    return al::size_reports_usable_capacity;
+                else
+                    return true;
+            }() };
+            if constexpr ( cache_usable ) {
+                if constexpr ( std::is_void_v<Allocator> )
+                    capacity_ = shell_capacity( p_array_ );
+                else
+                    capacity_ = alloc().size( p_array_ );
+                BOOST_ASSUME( capacity_ >= requested_capacity );
+            } else {
+                if constexpr ( std::is_void_v<Allocator> )
+                    BOOST_ASSERT( !requested_capacity || ( shell_capacity( p_array_ ) >= requested_capacity ) );
+                else
+                    BOOST_ASSERT( !requested_capacity || ( alloc().size( p_array_ ) >= requested_capacity ) );
+                capacity_ = requested_capacity;
+            }
         }
     }
 
