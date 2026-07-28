@@ -140,6 +140,7 @@ struct dlmalloc_allocator
     static constexpr bool try_expand_supports_null              { false };
     static constexpr bool guaranteed_in_place_shrink            { true  }; // boost_cont_shrink always in-place
     static constexpr bool in_place_ops_require_default_alignment{ false }; // dlmalloc handles any alignment
+    static constexpr bool size_reports_usable_capacity          { true  };
 
     /// Try to expand the allocation in-place. Returns true if it succeeded.
     [[ nodiscard ]]

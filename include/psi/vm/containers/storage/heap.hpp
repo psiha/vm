@@ -538,11 +538,14 @@ private:
             // both slow and reports the requested size — for that allocator only,
             // assert usable≥requested then store the request (same as the historic
             // MSVC branch, but gated on the allocator trait rather than _MSC_VER).
-            constexpr bool cache_usable{
-                requires { al::size_reports_usable_capacity; }
-                    ? al::size_reports_usable_capacity
-                    : true
-            };
+            // if constexpr (not ?:): the false branch must not instantiate a
+            // missing size_reports_usable_capacity member (mi_heap / scoped / …).
+            constexpr bool cache_usable{ []{
+                if constexpr ( requires { al::size_reports_usable_capacity; } )
+                    return al::size_reports_usable_capacity;
+                else
+                    return true;
+            }() };
             if constexpr ( cache_usable ) {
                 if constexpr ( std::is_void_v<Allocator> )
                     capacity_ = shell_capacity( p_array_ );

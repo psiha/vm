@@ -137,6 +137,7 @@ struct mi_heap_allocator
     static constexpr bool try_expand_supports_null              { false };
     static constexpr bool guaranteed_in_place_shrink            { false };
     static constexpr bool in_place_ops_require_default_alignment{ false }; // mi_expand works for any alignment
+    static constexpr bool size_reports_usable_capacity          { true  };
 
     // mi_expand works regardless of which heap the allocation came from.
     [[ nodiscard ]]

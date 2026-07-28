@@ -111,6 +111,7 @@ struct jemalloc_allocator
     static constexpr bool try_expand_supports_null              { false };
     static constexpr bool guaranteed_in_place_shrink            { false }; // je_rallocx may relocate
     static constexpr bool in_place_ops_require_default_alignment{ false }; // jemalloc handles any alignment
+    static constexpr bool size_reports_usable_capacity          { true  };
 
     /// Try to expand in-place via xallocx. Returns true if the allocation
     /// now has at least target_size elements.
