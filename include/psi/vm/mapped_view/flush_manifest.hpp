@@ -115,24 +115,30 @@ public:
 #endif
 
     // Ambient "which manifest, if any, is currently batching this store's commit
-    // flushes" pointer. A plain (not thread_local) pointer: the intended use is
-    // a single-writer commit path that never dispatches flush work onto another
-    // thread. flush() call sites with no direct handle back to the owning store
-    // read this to learn a manifest is active. A static member of the class
-    // rather than a free variable: it IS this class's concept ("which instance
-    // is active").
-    inline static flush_manifest * active{ nullptr };
+    // flushes" pointer. thread_local: a commit path runs entirely on its own
+    // thread and never dispatches flush work onto another one, but SEPARATE
+    // stores may commit CONCURRENTLY on distinct threads (e.g. a host running
+    // one serialized writer per store on a thread pool) - a process-global
+    // pointer would cross-wire their manifests: store A's flush() calls would
+    // register handles into store B's manifest, so A's writes would never be
+    // covered by A's barrier (a silent durability hole) and B's sync_all()
+    // would fsync handles it does not own (or, once A closes, stale ones).
+    // flush() call sites with no direct handle back to the owning store read
+    // this to learn a manifest is active. A static member of the class rather
+    // than a free variable: it IS this class's concept ("which instance is
+    // active").
+    inline static thread_local flush_manifest * active{ nullptr };
 
     // RAII scope guard for `active`. Scoping the set/clear (rather than nulling
     // manually) guarantees `active` is reset on stack unwind before an exception
     // reaches a rollback path - so rollback-time flushes never silently defer
     // into a manifest that nothing will subsequently sync.
     //
-    // Nesting is not supported and does not occur: the intended commit path is
-    // single-writer and never opens a second scope while one is live (no
-    // recursive commit), so `active` is always null on entry - clearing to null
-    // on exit is therefore correct, and the debug assert enforces the
-    // no-nesting invariant this relies on.
+    // Nesting is not supported and does not occur: a commit path never opens a
+    // second scope while one is live on the same thread (no recursive commit),
+    // so `active` is always null on entry - clearing to null on exit is
+    // therefore correct, and the debug assert enforces the no-nesting
+    // invariant this relies on.
     struct scope
     {
         explicit scope( flush_manifest * const m ) noexcept
