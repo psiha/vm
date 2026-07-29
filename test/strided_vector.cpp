@@ -432,6 +432,20 @@ TYPED_TEST( strided_vector_compliance, data_returns_flat_buffer )
     EXPECT_EQ( p[ 3 ], static_cast<typename TypeParam::element_type>( 4 ) );
 }
 
+TYPED_TEST( strided_vector_compliance, flat_view_covers_every_entry )
+{
+    TypeParam v( 2 );
+    v.push_back( as_span( make_entry<TypeParam>( { 1, 2 } ) ) );
+    v.push_back( as_span( make_entry<TypeParam>( { 3, 4 } ) ) );
+    auto const flat{ v.flat_view() };
+    EXPECT_EQ( flat.size(), v.size() * v.stride() );
+    EXPECT_EQ( flat.data(), v.data() );
+    EXPECT_TRUE( std::ranges::equal(
+        flat,
+        std::array<typename TypeParam::element_type, 4>{ 1, 2, 3, 4 }
+    ) );
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // 4. Iterators (random-access with span proxy reference)
 ////////////////////////////////////////////////////////////////////////////////
