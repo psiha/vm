@@ -673,6 +673,14 @@ public:
 
     [[ nodiscard ]] constexpr backing_vector_type const & backing() const noexcept { return data_; }
 
+    // Flat view over every currently held entry (size() * stride() elements),
+    // for bulk consumers (sort/insert/capture) that want the whole buffer
+    // rather than one entry at a time. data_ (backing_vector_type) already
+    // satisfies span's contiguous_range + sized_range range-constructor, so
+    // this is a plain conversion, not a construction.
+    [[ nodiscard, gnu::pure ]] constexpr std::span<T const> flat_view() const noexcept { return data_; }
+    [[ nodiscard, gnu::pure ]] constexpr std::span<T      > flat_view()       noexcept { return data_; }
+
     //--------------------------------------------------------------------------
     // Iterators
     //--------------------------------------------------------------------------
