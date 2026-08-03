@@ -44,7 +44,7 @@ struct handle_traits
 
     inline static native_t const invalid_value{ nullptr }; // Win32 is inconsistent: some parts use null while other parts use INVALID_HANDLE_VALUE
 
-    [[ gnu::cold, gnu::nothrow, msvc::noalias, msvc::nothrow, clang::nouwtable ]]
+    PSI_COLD [[ gnu::nothrow, msvc::noalias, msvc::nothrow, clang::nouwtable ]]
     static void close( native_t const native_handle )
     {
         // Runtime rather than __builtin_constant_p check - see the POSIX backend
@@ -56,7 +56,7 @@ struct handle_traits
         BOOST_VERIFY( boost::winapi::CloseHandle( native_handle ) != false );
     }
 
-    [[ gnu::cold, nodiscard ]]
+    PSI_COLD [[ nodiscard ]]
     static fallible_result<native_t> copy( native_t native_handle ) noexcept; // implemented in nt.cpp
 }; // handle_traits
 

@@ -76,7 +76,7 @@ bptree_base::map_memory( std::uint32_t const initial_capacity_as_number_of_nodes
     return success;
 }
 
-[[ gnu::cold ]]
+PSI_COLD
 void bptree_base::reserve_additional( node_slot::value_type additional_nodes )
 {
     auto const preallocated_count{ hdr().free_node_count_ };
@@ -86,7 +86,7 @@ void bptree_base::reserve_additional( node_slot::value_type additional_nodes )
     update_cached_pointers();
     assign_nodes_to_free_pool( current_size );
 }
-[[ gnu::cold ]]
+PSI_COLD
 void bptree_base::reserve( node_slot::value_type new_capacity_in_number_of_nodes )
 {
     if ( new_capacity_in_number_of_nodes <= nodes_.capacity() )
@@ -96,7 +96,7 @@ void bptree_base::reserve( node_slot::value_type new_capacity_in_number_of_nodes
     update_cached_pointers();
     assign_nodes_to_free_pool( current_size );
 }
-[[ gnu::cold ]]
+PSI_COLD
 void bptree_base::assign_nodes_to_free_pool( node_slot::value_type const starting_node ) noexcept
 {
     for ( auto & n : std::views::reverse( std::span( nodes_.data(), nodes_.size() ).subspan( starting_node ) ) )
@@ -499,7 +499,7 @@ bptree_base::base_iterator bptree_base::make_iter( insert_pos_t const next_pos )
 [[ gnu::pure ]] bptree_base::base_random_access_iterator bptree_base::ra_begin() noexcept { return { *this, begin_pos(), 0      }; }
 [[ gnu::pure ]] bptree_base::base_random_access_iterator bptree_base::ra_end  () noexcept { return { *this,   end_pos(), size() }; }
 
-[[ gnu::cold ]]
+PSI_COLD
 bptree_base::node_header &
 bptree_base::create_root()
 {
@@ -601,7 +601,7 @@ void bptree_base::free_leaf( node_header & leaf ) noexcept
     free( leaf );
 }
 
-[[ gnu::cold ]]
+PSI_COLD
 void bptree_base::reset() noexcept // cheaper/simpler 'clear()' (when retaining the storage mapped/open is not required)
 {
     static_assert( std::is_nothrow_destructible_v<bptree_base> && std::is_nothrow_default_constructible_v<bptree_base> );
@@ -636,7 +636,7 @@ void bptree_base::update_dbg_helpers() noexcept {
 // - Old generation reclaimed when readers drain
 ////////////////////////////////////////////////////////////////////////////////
 
-[[ gnu::cold ]]
+PSI_COLD
 bptree_base::bptree_base( bptree_base const & source )
     :
     p_hdr_{},
@@ -666,7 +666,7 @@ bptree_base::bptree_base( bptree_base const & source )
 // the target has sufficient capacity.
 ////////////////////////////////////////////////////////////////////////////////
 
-[[ gnu::cold ]]
+PSI_COLD
 void bptree_base::commit_to( bptree_base & target ) const noexcept
 {
     if ( !nodes_.has_attached_storage() || !target.nodes_.has_attached_storage() )

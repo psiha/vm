@@ -18,6 +18,8 @@
 #include <psi/vm/detail/nt.hpp>
 #include <psi/vm/detail/win32.hpp>
 
+#include <psi/build/attributes.hpp>
+
 #include <boost/assert.hpp>
 
 #include <cstdint>
@@ -28,7 +30,7 @@ namespace psi::vm
 inline namespace win32
 {
 //------------------------------------------------------------------------------
-[[ gnu::cold, gnu::noinline ]]
+PSI_COLD [[ gnu::noinline ]]
 std::uint64_t get_size( mapping::const_handle const mapping_handle ) noexcept
 {
     using namespace nt;

@@ -42,7 +42,7 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
-[[ gnu::cold ]]
+PSI_COLD
 expand_result expand
 (
     std::byte         *       address,

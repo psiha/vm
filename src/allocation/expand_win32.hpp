@@ -21,6 +21,8 @@
 #include <psi/vm/detail/nt.hpp>
 #include <psi/vm/allocation.hpp>
 
+#include <psi/build/attributes.hpp>
+
 #include <boost/assert.hpp>
 
 #include <cstddef>
@@ -175,7 +177,7 @@ inline bool commit_view_pages( void * const address, std::size_t const size, ULO
 /// Try to expand in-place by splitting a trailing placeholder.
 /// Returns true if the expansion succeeded (address range [addr, addr+current+additional) is now committed).
 /// Returns false if no suitable placeholder exists or the operation failed.
-[[ nodiscard, gnu::cold ]]
+[[ nodiscard ]] PSI_COLD
 inline bool try_placeholder_expand(
     std::byte * const address,
     std::size_t const current_size,
@@ -211,7 +213,7 @@ inline bool try_placeholder_expand(
 /// Returns true on success (the section view now covers [address, address+target_size)).
 /// The tracked placeholder size is decremented by additional_size; remaining
 /// bytes are returned via remaining_placeholder_size.
-[[ nodiscard, gnu::cold ]]
+[[ nodiscard ]] PSI_COLD
 inline bool try_placeholder_section_expand(
     HANDLE        const section_handle,
     std::byte   * const address,
@@ -288,7 +290,7 @@ inline bool try_placeholder_section_expand(
 /// Returns the base address on success (caller must handle COW data transfer),
 /// or nullptr on failure.
 /// On success: [section view aligned_size | placeholder headroom].
-[[ nodiscard, gnu::cold ]]
+[[ nodiscard ]] PSI_COLD
 inline std::byte * overreserve_section_map(
     HANDLE        const section_handle,
     std::size_t   const desired_size,
@@ -363,7 +365,7 @@ inline std::byte * overreserve_section_map(
 /// [aligned_view_size | rest] and the section's [0, aligned_view_size) range is
 /// mapped (and committed) into the head. On failure the whole reservation is
 /// released. Returns true on success.
-[[ nodiscard, gnu::cold ]]
+[[ nodiscard ]] PSI_COLD
 inline bool reserved_section_map(
     HANDLE      const section_handle,
     std::byte * const base,
@@ -433,7 +435,7 @@ inline bool reserved_section_map(
 /// Returns the new base address on success (caller must memcpy used data),
 /// or nullptr on failure.
 /// On success, the region layout is: [committed target_size | placeholder headroom].
-[[ nodiscard, gnu::cold ]]
+[[ nodiscard ]] PSI_COLD
 inline std::byte * overreserve_expand(
     std::size_t     const target_size,
     allocation_type const alloc_type = allocation_type::commit

@@ -16,6 +16,8 @@
 #include <psi/vm/align.hpp>
 #include <psi/vm/detail/posix.hpp>
 
+#include <psi/build/attributes.hpp>
+
 #include <boost/assert.hpp>
 #include <boost/config_ex.hpp>
 
@@ -82,7 +84,7 @@ bool commit( void * const address, std::size_t const size ) noexcept
     ) == 0 );
     return success;
 }
-[[ gnu::cold, gnu::nothrow, clang::nouwtable ]]
+PSI_COLD [[ gnu::nothrow, clang::nouwtable ]]
 void decommit( void * const address, std::size_t const size ) noexcept
 {
     BOOST_ASSUME( is_aligned( address, reserve_granularity ) );
@@ -96,7 +98,7 @@ void decommit( void * const address, std::size_t const size ) noexcept
     );
 #endif
 }
-[[ gnu::cold, gnu::nothrow, clang::nouwtable ]]
+PSI_COLD [[ gnu::nothrow, clang::nouwtable ]]
 void free( void * const address, std::size_t const size ) noexcept
 {
     BOOST_ASSUME( is_aligned( address, reserve_granularity ) );
@@ -104,7 +106,7 @@ void free( void * const address, std::size_t const size ) noexcept
     BOOST_VERIFY( ::munmap( address, size ) == 0 || !address || !size );
 }
 
-[[ gnu::cold, gnu::nothrow, clang::nouwtable ]]
+PSI_COLD [[ gnu::nothrow, clang::nouwtable ]]
 bool allocate_fixed( void * const address, std::size_t const size, allocation_type const alloc_type ) noexcept
 {
     // Cannot use MAP_FIXED as it silently overwrites existing mappings

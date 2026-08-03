@@ -8,6 +8,7 @@
 #include <psi/vm/containers/lookup.hpp>
 #include <psi/vm/containers/heap_vector.hpp>
 
+#include <psi/build/attributes.hpp>
 #include <psi/build/disable_warnings.hpp>
 
 #include <boost/assert.hpp>
@@ -276,7 +277,7 @@ protected:
 
     [[ gnu::pure ]] node_slot::value_type used_number_of_nodes() const noexcept;
 
-    [[ gnu::cold ]] node_header & create_root();
+    PSI_COLD node_header & create_root();
 
     [[ gnu::pure ]] static bool underflowed( auto const & node ) noexcept { return node.num_vals < node.min_values; }
     [[ gnu::pure ]] static bool can_borrow ( auto const & node ) noexcept { return node.num_vals > node.min_values; }

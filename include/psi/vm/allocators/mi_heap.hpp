@@ -71,7 +71,7 @@ struct mi_heap_allocator
     // --- allocator interface (non-static -- uses instance state) ---
 
     template <std::uint8_t alignment = detail::safe_alignof_v<T>>
-    [[ nodiscard ]] [[ using gnu: cold, assume_aligned( alignment ), malloc, returns_nonnull ]]
+    [[ nodiscard ]] PSI_COLD [[ using gnu: assume_aligned( alignment ), malloc, returns_nonnull ]]
     pointer allocate( size_type const count, void const * const /*hint*/ = nullptr )
     {
         BOOST_ASSUME( count < base::max_size() );

@@ -23,6 +23,7 @@
 #include <boost/assert.hpp>
 #include <boost/config_ex.hpp>
 
+#include <psi/build/attributes.hpp>
 #include <psi/build/disable_warnings.hpp>
 
 #ifdef _MSC_VER
@@ -61,7 +62,7 @@ struct handle_traits
     // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=86286
     // https://discourse.llvm.org/t/rfc-clang-true-noexcept-aka-defaults-are-often-wrong-hardcoded-defaults-are-always-wrong/67629/15?page=2
     // https://logan.tw/llvm/nounwind.html
-    [[ gnu::cold, gnu::noinline, gnu::nothrow, msvc::noalias, msvc::nothrow, clang::nouwtable ]]
+    PSI_COLD [[ gnu::noinline, gnu::nothrow, msvc::noalias, msvc::nothrow, clang::nouwtable ]]
     static void close_impl( native_t const native_handle )
     {
         // The invalid handle has to be filtered out at runtime, not merely when
@@ -104,7 +105,7 @@ struct handle_traits
     // Throws on failure. Cannot use fallible_result<int, last_errno> because
     // result_or_error's template constructors are ambiguous when both Result
     // and Error are constructible from int (native_t = int on POSIX).
-    [[ gnu::cold ]]
+    PSI_COLD
     static native_t copy( native_t const native_handle )
     {
         if ( native_handle == invalid_value )

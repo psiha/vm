@@ -20,12 +20,14 @@
 #include <psi/vm/detail/nt.hpp>
 #include <psi/vm/handles/handle.hpp>
 #include <psi/vm/mappable_objects/file/handle.hpp>
+
+#include <psi/build/attributes.hpp>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
-[[ gnu::cold ]]
+PSI_COLD
 mem_mapping::mem_mapping( mem_mapping const & source )
 {
     if ( !source.has_attached_storage() )

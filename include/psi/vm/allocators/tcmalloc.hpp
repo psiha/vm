@@ -58,7 +58,7 @@ struct tcmalloc_allocator
     template <class U> struct rebind { using other = tcmalloc_allocator<U, sz_t>; };
 
     template <std::uint8_t alignment = detail::safe_alignof_v<T>>
-    [[ nodiscard, using gnu: cold, assume_aligned( alignment ), malloc, returns_nonnull ]]
+    [[ nodiscard ]] PSI_COLD [[ using gnu: assume_aligned( alignment ), malloc, returns_nonnull ]]
     static pointer allocate( size_type const count, void const * const /*hint*/ = nullptr )
     {
         BOOST_ASSUME( count < base::max_size() );

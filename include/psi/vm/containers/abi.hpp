@@ -1,5 +1,6 @@
 #pragma once
 
+#include <psi/build/attributes.hpp>
 #include <psi/build/disable_warnings.hpp>
 
 #include <psi/vm/containers/complete.hpp>
@@ -207,7 +208,7 @@ constexpr decltype( auto ) make_trivially_copyable_predicate( Pred && __restrict
 // psi/vm/inplace_merge.hpp).
 
 
-namespace detail { [[ noreturn, gnu::cold ]] void throw_out_of_range( char const * msg ); }
+namespace detail { [[ noreturn ]] PSI_COLD void throw_out_of_range( char const * msg ); }
 
 PSI_WARNING_DISABLE_POP()
 

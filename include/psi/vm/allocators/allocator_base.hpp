@@ -32,6 +32,8 @@
 //------------------------------------------------------------------------------
 #pragma once
 
+#include <psi/build/attributes.hpp>
+
 #include <boost/assert.hpp>
 #include <boost/container/detail/allocation_type.hpp>
 #include <boost/container/detail/version_type.hpp>
@@ -58,9 +60,9 @@ namespace detail
     inline constexpr std::uint8_t safe_alignof_v{ alignof( std::conditional_t<( requires { sizeof( T ); } ), T, std::max_align_t> ) };
 
 #if PSI_MALLOC_OVERCOMMIT != PSI_OVERCOMMIT_Full
-    [[ noreturn, gnu::cold ]] void throw_bad_alloc();
+    [[ noreturn ]] PSI_COLD void throw_bad_alloc();
 #else
-    [[ noreturn, gnu::cold ]] inline void throw_bad_alloc() noexcept
+    [[ noreturn ]] PSI_COLD inline void throw_bad_alloc() noexcept
     {
         BOOST_ASSERT_MSG( false, "Unexpected allocation failure" );
         std::unreachable();
@@ -74,9 +76,9 @@ namespace detail
     // overcommit nothing on the path throws, so keep it noexcept and fail
     // hard rather than making `resize` conditionally throwing.
 #if PSI_MALLOC_OVERCOMMIT != PSI_OVERCOMMIT_Full
-    [[ noreturn, gnu::cold ]] void throw_length_error();
+    [[ noreturn ]] PSI_COLD void throw_length_error();
 #else
-    [[ noreturn, gnu::cold ]] inline void throw_length_error() noexcept
+    [[ noreturn ]] PSI_COLD inline void throw_length_error() noexcept
     {
         BOOST_ASSERT_MSG( false, "Requested size exceeds the allocator's addressable byte range" );
         std::unreachable();

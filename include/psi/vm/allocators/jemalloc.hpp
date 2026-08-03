@@ -53,7 +53,7 @@ struct jemalloc_allocator
     static int consteval je_flags() noexcept { return ( alignment > alignof( std::max_align_t ) ) ? MALLOCX_ALIGN( alignment ) : 0; }
 
     template <std::uint8_t alignment = detail::safe_alignof_v<T>>
-    [[ nodiscard, using gnu: cold, assume_aligned( alignment ), malloc, returns_nonnull ]]
+    [[ nodiscard ]] PSI_COLD [[ using gnu: assume_aligned( alignment ), malloc, returns_nonnull ]]
     static pointer allocate( size_type const count, void const * const /*hint*/ = nullptr )
     {
         BOOST_ASSUME( count < base::max_size() );

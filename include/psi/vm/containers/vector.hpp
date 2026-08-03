@@ -1115,7 +1115,7 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Linear to the number of elements in the container.
-    [[ gnu::cold ]]
+    PSI_COLD
     void clear() noexcept
     {
         std::destroy( begin(), end() );
