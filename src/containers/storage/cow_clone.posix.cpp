@@ -54,7 +54,7 @@ namespace psi::vm
 // until either side writes, at which point the kernel creates private copies.
 ////////////////////////////////////////////////////////////////////////////////
 
-[[ gnu::cold ]]
+PSI_COLD
 mem_mapping::mem_mapping( mem_mapping const & source )
     :
     mem_mapping{}

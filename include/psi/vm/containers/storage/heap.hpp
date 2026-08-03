@@ -33,6 +33,8 @@
 #include <psi/vm/containers/is_trivially_moveable.hpp>
 #include <psi/vm/containers/trivially_destructible_after_move.hpp>
 
+#include <psi/build/attributes.hpp>
+
 #include <boost/assert.hpp>
 
 #include <cstddef>
@@ -327,7 +329,7 @@ public:
     }
 
     // --- storage_* interface for vector<> ---
-    [[ using gnu: cold, assume_aligned( alignment ) ]]
+    PSI_COLD [[ using gnu: assume_aligned( alignment ) ]]
     constexpr value_type * storage_init( size_type const initial_size )
     {
         if ( initial_size )
@@ -363,7 +365,7 @@ public:
 
     // no returns_nonnull: shrink_to( 0 ) frees (mark_freed) and returns
     // data() == nullptr.
-    [[ using gnu: assume_aligned( alignment ), cold ]]
+    [[ using gnu: assume_aligned( alignment ) ]] PSI_COLD
     constexpr value_type * storage_shrink_to( size_type const target_size ) noexcept
     {
         BOOST_ASSUME( target_size <= size_ );
@@ -448,7 +450,7 @@ public:
     }
 
 private:
-    [[ gnu::cold, gnu::noinline, clang::preserve_most ]]
+    PSI_COLD [[ gnu::noinline, clang::preserve_most ]]
     void do_grow( size_type const target_size, size_type const cached_current_capacity )
     {
         auto const new_capacity{ target_size };

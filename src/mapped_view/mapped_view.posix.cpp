@@ -16,6 +16,8 @@
 #include <psi/vm/mapped_view/mapped_view.hpp>
 #include <psi/vm/mapped_view/ops.hpp>
 
+#include <psi/build/attributes.hpp>
+
 #include <boost/assert.hpp>
 
 #include <cerrno>
@@ -109,7 +111,7 @@ map
     return mapped_span{ view_start, view_start ? desired_size : 0 };
 }
 
-[[ gnu::cold, gnu::nothrow, clang::nouwtable ]]
+PSI_COLD [[ gnu::nothrow, clang::nouwtable ]]
 void unmap( mapped_span const view )
 {
     // An empty view is the state of a default-constructed or moved-from mapped

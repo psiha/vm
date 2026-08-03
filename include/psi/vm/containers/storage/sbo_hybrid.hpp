@@ -33,6 +33,8 @@
 #include <psi/vm/containers/trivially_destructible_after_move.hpp>
 #include <psi/vm/containers/noninitialized_array.hpp>
 
+#include <psi/build/attributes.hpp>
+
 #include <boost/assert.hpp>
 
 #include <climits>
@@ -134,7 +136,7 @@ public:
 
     // --- storage_* interface for vector<> ---
 
-    [[ gnu::cold ]]
+    PSI_COLD
 #ifdef _MSC_VER
     __declspec( noalias )
 #endif
@@ -215,7 +217,7 @@ public:
     }
 
 private:
-    [[ gnu::cold, gnu::noinline, clang::preserve_most ]]
+    PSI_COLD [[ gnu::noinline, clang::preserve_most ]]
     void grow_heap( this auto & self, size_type const new_capacity )
     {
         BOOST_ASSUME( new_capacity > self.capacity() );

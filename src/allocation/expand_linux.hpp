@@ -18,6 +18,8 @@
 
 #include <psi/vm/allocation.hpp> // reallocation_type
 
+#include <psi/build/attributes.hpp>
+
 #include <boost/assert.hpp>
 
 #include <cerrno>
@@ -38,7 +40,7 @@ struct mremap_result
 ///
 /// \param realloc_type  moveable → MREMAP_MAYMOVE (may relocate);
 ///                      fixed    → in-place only (fails if not possible)
-[[ nodiscard, gnu::cold ]]
+[[ nodiscard ]] PSI_COLD
 inline mremap_result linux_mremap(
     void            * const address,
     std::size_t       const current_size,

@@ -36,7 +36,7 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
-[[ using gnu: nothrow, sysv_abi, cold ]] BOOST_ATTRIBUTES( BOOST_MINSIZE )
+[[ using gnu: nothrow, sysv_abi ]] PSI_COLD BOOST_ATTRIBUTES( BOOST_MINSIZE )
 mapped_span
 windows_mmap
 (

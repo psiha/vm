@@ -21,6 +21,8 @@
 
 #include "../detail/mach.hpp"
 
+#include <psi/build/attributes.hpp>
+
 #include <cstddef>
 #include <cstdint>
 //------------------------------------------------------------------------------
@@ -40,7 +42,7 @@ struct mach_expand_result
 /// contains the old pages at its beginning.  Preserves COW page state.
 ///
 /// Returns nullptr on failure (caller should fall back to memcpy).
-[[ nodiscard, gnu::cold ]]
+[[ nodiscard ]] PSI_COLD
 inline mach_expand_result macos_expand_relocate(
     void        * const address,
     std::size_t   const current_size,

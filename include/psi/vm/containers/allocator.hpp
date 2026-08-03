@@ -18,6 +18,8 @@
 #include "mappable_objects/file/file.hpp"
 #include "mappable_objects/file/utility.hpp"
 
+#include <psi/build/attributes.hpp>
+
 #include <cstdint>
 #include <climits>
 #include <type_traits>
@@ -26,7 +28,7 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
-namespace detail { [[ noreturn, gnu::cold ]] void throw_bad_alloc() PSI_NOEXCEPT_EXCEPT_BADALLOC; }
+namespace detail { [[ noreturn ]] PSI_COLD void throw_bad_alloc() PSI_NOEXCEPT_EXCEPT_BADALLOC; }
 
 class allocator_backing_mapping
 {

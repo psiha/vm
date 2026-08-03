@@ -16,6 +16,8 @@
 #include <psi/vm/align.hpp>
 #include <psi/vm/mapped_view/ops.hpp>
 
+#include <psi/build/attributes.hpp>
+
 #include <boost/assert.hpp>
 
 #ifdef __linux__
@@ -38,9 +40,9 @@ namespace psi::vm
 
 namespace detail
 {
-    [[ noreturn, gnu::cold ]] void throw_out_of_range( char const * const msg ) { throw std::out_of_range( msg ); }
+    [[ noreturn ]] PSI_COLD void throw_out_of_range( char const * const msg ) { throw std::out_of_range( msg ); }
 #if PSI_MALLOC_OVERCOMMIT != PSI_OVERCOMMIT_Full
-    [[ noreturn, gnu::cold ]] void throw_bad_alloc()
+    [[ noreturn ]] PSI_COLD void throw_bad_alloc()
     {
 #   ifdef _MSC_VER
         std::_Xbad_alloc();
@@ -48,7 +50,7 @@ namespace detail
         throw std::bad_alloc{};
 #   endif
     }
-    [[ noreturn, gnu::cold ]] void throw_length_error()
+    [[ noreturn ]] PSI_COLD void throw_length_error()
     {
         throw std::length_error{ "psi::vm: requested size exceeds the allocator's addressable byte range" };
     }
@@ -265,7 +267,7 @@ mem_mapping::unpack( header_info const hdr_info ) noexcept
 #pragma GCC diagnostic pop
 #endif
 
-[[ gnu::cold ]]
+PSI_COLD
 err::result_or_error<void, error>
 mem_mapping::map_file( file_handle file, flags::named_object_construction_policy const policy, header_info const hdr_info ) noexcept
 {
@@ -362,7 +364,7 @@ mem_mapping::map_file( file_handle file, flags::named_object_construction_policy
     }
     return map_rslt.propagate();
 }
-[[ gnu::cold ]]
+PSI_COLD
 err::result_or_error<void, error> mem_mapping::map_memory( size_type const data_size, header_info const hdr_info ) noexcept
 {
     auto hdr{ unpack( hdr_info ) };
@@ -375,7 +377,7 @@ err::result_or_error<void, error> mem_mapping::map_memory( size_type const data_
     return err::success;
 }
 
-[[ gnu::cold ]]
+PSI_COLD
 err::result_or_error<void, error> mem_mapping::map_cow_memory( size_type const data_size, header_info const hdr_info ) noexcept
 {
 #ifdef __linux__

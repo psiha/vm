@@ -62,7 +62,7 @@ namespace detail
     }
 
     // From GCC docs: realloc-like functions have this property (malloc/restrict) as long as the old pointer is never referred to (including comparing it to the new pointer) after the function returns a non-NULL value.
-    [[ using gnu: cold, assume_aligned( guaranteed_alignment ), malloc ]]
+    PSI_COLD [[ using gnu: assume_aligned( guaranteed_alignment ), malloc ]]
 #ifdef _MSC_VER
     __declspec( restrict, noalias )
 #endif
@@ -74,7 +74,7 @@ namespace detail
         return new_allocation;
     }
 
-    [[ using gnu: cold, assume_aligned( guaranteed_alignment ), malloc, ]]
+    PSI_COLD [[ using gnu: assume_aligned( guaranteed_alignment ), malloc ]]
 #ifdef _MSC_VER
     __declspec( noalias, restrict )
 #endif
@@ -170,7 +170,7 @@ struct crt_allocator
     //!Throws bad_alloc if there is no enough memory
     template <std::uint8_t alignment = detail::safe_alignof_v<T>>
     [[ nodiscard ]]
-    [[ using gnu: cold, assume_aligned( alignment ), malloc, returns_nonnull ]]
+    PSI_COLD [[ using gnu: assume_aligned( alignment ), malloc, returns_nonnull ]]
 #ifdef _MSC_VER
     __declspec( restrict, noalias )
 #endif
@@ -313,7 +313,7 @@ struct crt_allocator
 
 private:
     template <std::uint8_t alignment = detail::safe_alignof_v<T>>
-    [[ gnu::cold, gnu::assume_aligned( alignment ) ]]
+    PSI_COLD [[ gnu::assume_aligned( alignment ) ]]
     [[ nodiscard ]] static pointer do_resize( pointer const existing_allocation_address, size_type const existing_allocation_size, size_type const new_size )
     {
         auto const result{ std::assume_aligned<alignment>( static_cast<pointer>(

@@ -30,6 +30,7 @@
 #include <psi/vm/mappable_objects/file/file.hpp>
 #include <psi/vm/mappable_objects/file/utility.hpp>
 
+#include <psi/build/attributes.hpp>
 #include <psi/build/datasizeof.hpp>
 #include <psi/build/disable_warnings.hpp>
 
@@ -359,7 +360,7 @@ protected:
     sizes_hdr const & get_sizes() const noexcept { return *reinterpret_cast<sizes_hdr const *>( mapped_data() ); }
 
     // template (char type) independent portion of map_file
-    [[ gnu::cold ]]
+    PSI_COLD
     err::result_or_error<void, error>
     map_file( file_handle file, flags::named_object_construction_policy, header_info ) noexcept;
 
