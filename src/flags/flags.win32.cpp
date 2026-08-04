@@ -13,8 +13,7 @@
 //------------------------------------------------------------------------------
 #include <psi/vm/detail/win32.hpp>
 #include <psi/vm/flags/flags.win32.hpp>
-
-#include <psi/build/attributes.hpp>
+#include <psi/vm/allocators/allocator_base.hpp> // detail::throw_bad_alloc
 
 #include <accctrl.h>
 #include <aclapi.h>
@@ -25,7 +24,6 @@
 namespace psi::vm
 {
 //------------------------------------------------------------------------------
-namespace detail { [[ noreturn ]] PSI_COLD void throw_bad_alloc() PSI_NOEXCEPT_EXCEPT_BADALLOC; }
 inline namespace win32
 {
 //------------------------------------------------------------------------------

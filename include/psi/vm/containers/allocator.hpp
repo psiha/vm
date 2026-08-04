@@ -17,8 +17,7 @@
 #include "mapped_view/mapped_view.hpp"
 #include "mappable_objects/file/file.hpp"
 #include "mappable_objects/file/utility.hpp"
-
-#include <psi/build/attributes.hpp>
+#include "../allocators/allocator_base.hpp" // detail::throw_bad_alloc
 
 #include <cstdint>
 #include <climits>
@@ -27,8 +26,6 @@
 namespace psi::vm
 {
 //------------------------------------------------------------------------------
-
-namespace detail { [[ noreturn ]] PSI_COLD void throw_bad_alloc() PSI_NOEXCEPT_EXCEPT_BADALLOC; }
 
 class allocator_backing_mapping
 {
