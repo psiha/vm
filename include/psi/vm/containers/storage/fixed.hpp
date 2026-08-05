@@ -122,7 +122,13 @@ public:
         return *this;
     }
 
-    [[ nodiscard, gnu::pure  ]]        constexpr size_type size    () const noexcept { BOOST_ASSUME( size_ <= static_capacity ); return size_; }
+    // Unchecked on purpose: `gnu::pure` lets the optimizer speculate this call to
+    // where the object is not live yet, and a checked BOOST_ASSUME would then abort
+    // on the garbage it reads there — in assertion-enabled builds only, and only at
+    // whatever inlining decisions happen to expose it. The capacity invariant is
+    // enforced where it is established instead: storage_grow_to() calls the overflow
+    // handler and storage_inc_size() asserts.
+    [[ nodiscard, gnu::pure  ]]        constexpr size_type size    () const noexcept { BOOST_ASSUME_UNCHECKED( size_ <= static_capacity ); return size_; }
     [[ nodiscard, gnu::const ]] static constexpr size_type capacity()       noexcept { return static_capacity; }
     [[ nodiscard, gnu::pure  ]]        constexpr bool      empty   () const noexcept { return !size_; }
 
