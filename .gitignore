@@ -1,6 +1,6 @@
 *.swp
 
 out/*
-build/*
+build*/
 bin/*
 .vs/*
