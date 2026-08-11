@@ -34,7 +34,7 @@ bool constexpr can_be_passed_in_reg
 {
     complete<T> && (
         (
-            std::is_trivial_v<T> &&
+            std::is_trivially_copyable_v<T> &&
             ( sizeof( T ) <= 2 * sizeof( void * ) ) // assuming a sane ABI like SysV (ignoring the MS x64 disaster)
         )
 #if defined( __GNUC__ ) || defined( __clang__ )
