@@ -1040,9 +1040,9 @@ public:
             }
         }
     }
-#ifndef __cpp_lib_span_initializer_list
+    // Unconditional: a braced-init-list cannot deduce the Rng of the template
+    // above, whether or not std::span can be built from an initializer_list.
     void append_range( std::initializer_list<value_type> const rng ) { append_range( std::span{ rng.begin(), rng.end() } ); }
-#endif
 
     //! <b>Effects</b>: Removes the last element from the container.
     //!
