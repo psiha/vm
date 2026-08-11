@@ -872,7 +872,7 @@ public:
     //!
     //! <b>Complexity</b>: Amortized constant time.
     void push_back( value_type && x ) noexcept( noexcept_storage() && std::is_nothrow_move_constructible_v<value_type> )
-    requires( !std::is_trivial_v<value_type> ) // otherwise better to go through the pass-in-reg overload
+    requires( !std::is_trivially_copyable_v<value_type> ) // otherwise better to go through the pass-in-reg overload
     {
         emplace_back( std::move( x ) );
     }

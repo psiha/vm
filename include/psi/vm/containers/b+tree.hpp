@@ -646,7 +646,7 @@ public:
     using value_type = key_type; // TODO map support
 
     // support for non trivial types (for which move and pass-by-ref matters) is WiP, nowhere near complete
-    static_assert( std::is_trivial_v<Key> );
+    static_assert( std::is_trivially_copyable_v<Key> );
 
     bptree_base_wkey(                                 ) noexcept = default;
     bptree_base_wkey( bptree_base_wkey const & source ) : bptree_base{ source } {}
