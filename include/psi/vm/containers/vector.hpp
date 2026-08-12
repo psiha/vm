@@ -874,8 +874,16 @@ public:
     //! aggregate of the ELEMENT type, never a wrapper around it.
     //! The constraint is checked at CALL time, so an incomplete value_type
     //! (which can never be push_back'ed anyway) is not disturbed by it.
-    void push_back( value_type x ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
-    requires( can_be_passed_in_reg<value_type> )
+    //! ...and a TEMPLATE, with `V` defaulted rather than deduced from a
+    //! braced-init-list (which is a non-deduced context, so the default is what
+    //! a braced call gets). A non-template by-value parameter would be part of
+    //! the declaration and so instantiated WITH THE CLASS - and MSVC then
+    //! rejects an over-aligned value_type outright ("formal parameter with
+    //! requested alignment of 256 won't be aligned"), before any requires-clause
+    //! can exclude it. Dependent, it is only instantiated once a call selects it.
+    template <typename V = value_type>
+    void push_back( V x ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
+    requires( can_be_passed_in_reg<value_type> && std::convertible_to<V const &, value_type> )
     {
         emplace_back( std::move( x ) );
     }
