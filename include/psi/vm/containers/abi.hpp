@@ -73,8 +73,14 @@ struct optimal_const_ref { using type = T const &; };
 template <string_viewable T>
 struct optimal_const_ref<T> { using type = std::basic_string_view<typename T::value_type, typename T::traits_type>; };
 
+/// Detects optional-likes, which C++26 (P3168) turned into contiguous ranges of
+/// 0 or 1 elements. Viewing one as a span loses the very thing it carries - its
+/// engaged/disengaged state - and nothing can reconstruct it from that span.
+template <typename T>
+concept optional_like = requires( T const & t ) { t.has_value(); };
+
 template <std::ranges::contiguous_range Rng>
-requires( not std::ranges::borrowed_range<Rng> and not statically_sized_container<Rng> and not string_viewable<Rng> )
+requires( not std::ranges::borrowed_range<Rng> and not statically_sized_container<Rng> and not string_viewable<Rng> and not optional_like<Rng> )
 struct optimal_const_ref<Rng> { using type = std::span<std::ranges::range_value_t<Rng> const>; };
 
 template <typename T>
