@@ -860,8 +860,24 @@ public:
     //!
     //! <b>Complexity</b>: Amortized constant time.
     void push_back( param_const_ref x ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
+    requires( !can_be_passed_in_reg<value_type> )
     {
         emplace_back( x );
+    }
+
+    //! Same thing by value, for the types pass_in_reg would hold by value
+    //! anyway: for those `pass_in_reg<T>::stored_type` IS `T`, so this costs
+    //! nothing (the ABI passes it in registers either way) and it restores
+    //! every spelling a class template cannot be initialized from - above all
+    //!     v.push_back( { .field = 1, .other = 2 } );
+    //! which deduces nothing and, being designated, can only target an
+    //! aggregate of the ELEMENT type, never a wrapper around it.
+    //! The constraint is checked at CALL time, so an incomplete value_type
+    //! (which can never be push_back'ed anyway) is not disturbed by it.
+    void push_back( value_type x ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
+    requires( can_be_passed_in_reg<value_type> )
+    {
+        emplace_back( std::move( x ) );
     }
 
     //! <b>Effects</b>: Constructs a new element in the end of the vector
