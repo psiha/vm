@@ -1282,6 +1282,34 @@ protected: // 'other'
         }
         std::unreachable();
     }
+    // Deduplicating a bulk_copied_input (for a unique tree) leaves its trailing
+    // leaves unused: shrink the last still-used one to its new fill, cut the
+    // chain there and hand the leftovers back to the free pool - the same thing
+    // bulk_insert_prepare does with the tail of the free list it did not need.
+    // Returns the input's new end position.
+    iter_pos shrink_bulk_copied_input( auto & nodes, size_type const old_size, size_type const new_size ) noexcept
+    {
+        BOOST_ASSUME( new_size > 0        );
+        BOOST_ASSUME( new_size < old_size );
+        // NB: `nodes` is sized by node_count_required_for_values(), i.e. for the
+        // whole tree - leaves AND the interior levels above them - while only
+        // its leaf entries were ever filled in. Derive the leaf count; reading
+        // nodes.size() walks into default-initialized pointers.
+        auto const old_leaves{ static_cast<std::uint32_t>( ( old_size + leaf_node::max_values - 1 ) / leaf_node::max_values ) };
+        auto const last_index{ static_cast<std::uint32_t>( ( new_size - 1 ) / leaf_node::max_values ) };
+        auto &     last_leaf { *nodes[ last_index ] };
+        last_leaf.num_vals = static_cast<node_size_type>( new_size - ( size_type{ last_index } * leaf_node::max_values ) );
+        last_leaf.mark_dirty();
+        BOOST_ASSUME( last_leaf.num_vals > 0 );
+        // Back to front, so that each node's right link is already cleared by
+        // the time it is freed (bptree_base::free wants no dangling backlink).
+        for ( auto i{ old_leaves }; i-- > last_index + 1; ) {
+            unlink_right     ( *nodes[ i - 1 ] );
+            bptree_base::free( *nodes[ i     ] );
+        }
+        return { slot_of( last_leaf ), last_leaf.num_vals };
+    }
+
     [[ gnu::noinline ]]
     void bulk_insert_into_empty( node_slot const begin_leaf, iter_pos const end_leaf, size_type const total_size )
     {
@@ -3401,14 +3429,34 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
         return 0;
 
     auto const begin_leaf{ input.begin };
-    auto const end_pos   { input.end   };
-    auto const total_size{ input.size  };
+    auto       end_pos   { input.end   };
+    auto       total_size{ input.size  };
     {
         // use specialized/optimized iterators (that can assume all nodes are
         // full)
         typename base::ra_full_node_iterator const sort_begin{ input.nodes.data(), 0          };
         typename base::ra_full_node_iterator const sort_end  { input.nodes.data(), total_size };
         this->template sort<Erasure>( sort_begin, sort_end );
+        // Collapse keys equivalent to each other WITHIN the input - nothing
+        // downstream does it. The empty-tree shortcut below adopts the input as
+        // the tree verbatim, and the merge/bulk-append paths carry whole
+        // presorted runs across rather than looking every key up; both leave a
+        // unique tree holding equivalent keys and report all of them as
+        // inserted. Doing it here, once, on the just-sorted input, is what
+        // makes every one of those paths correct - and it is the same thing
+        // insert_presorted has always done for its own (contiguous) input.
+        if ( unique ) {
+            auto const deduped_end
+            {
+                std::unique( sort_begin, sort_end, [this]( auto const & left, auto const & right ) noexcept
+                    { return this->eq( left, right ); } )
+            };
+            auto const deduped_size{ static_cast<size_type>( deduped_end - sort_begin ) };
+            if ( deduped_size != total_size ) {
+                end_pos    = base::shrink_bulk_copied_input( input.nodes, total_size, deduped_size );
+                total_size = deduped_size;
+            }
+        }
         input.nodes.clear();
     }
 

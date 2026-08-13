@@ -286,6 +286,70 @@ TEST( bp_tree, nonunique )
     EXPECT_TRUE( bpt.empty() );
 }
 
+// A range insert into a UNIQUE tree used to keep keys that are equivalent to
+// each other WITHIN the input range: nothing deduplicated them. The empty-tree
+// bulk-load shortcut adopts the sorted input as the tree verbatim, and the
+// merge / bulk-append paths carry whole presorted runs across rather than
+// looking every key up - so the tree came out holding equivalent keys, and
+// reported every one of them as inserted.
+namespace
+{
+    std::vector<int> const equivalent_key_input{ 5, 3, 5, 1, 3, 5, 2 }; // 4 distinct keys
+
+    std::vector<int> keys_each_twice( int const distinct )
+    {
+        std::vector<int> doubled;
+        doubled.reserve( static_cast<std::size_t>( distinct ) * 2 );
+        for ( int key{ 0 }; key < distinct; ++key ) { doubled.push_back( key ); doubled.push_back( key ); }
+        return doubled;
+    }
+} // anonymous namespace
+
+TEST( bp_tree, insert_range_with_equivalent_keys_single_leaf )
+{
+    auto const & input{ equivalent_key_input };
+    bptree_set<int> bpt;
+    bpt.map_memory();
+    EXPECT_EQ( bpt.insert( input ), 4u );
+    EXPECT_EQ( bpt.size()         , 4u );
+    EXPECT_EQ( static_cast<std::size_t>( std::ranges::distance( bpt ) ), 4u );
+    EXPECT_TRUE( std::ranges::is_sorted( bpt ) );
+    for ( auto const key : { 1, 2, 3, 5 } ) {
+        EXPECT_NE( bpt.find( key ), bpt.end() );
+    }
+}
+
+TEST( bp_tree, insert_range_with_equivalent_keys_into_non_empty )
+{
+    auto const & input{ equivalent_key_input };
+    bptree_set<int> bpt;
+    bpt.map_memory();
+    EXPECT_EQ( bpt.insert( input ), 4u );
+    EXPECT_EQ( bpt.insert( input ), 0u );
+    EXPECT_EQ( bpt.size()         , 4u );
+}
+
+TEST( bp_tree, insert_range_with_equivalent_keys_many_leaves )
+{
+    auto const distinct{ 4096 };
+    auto const doubled { keys_each_twice( distinct ) };
+    bptree_set<int> bpt;
+    bpt.map_memory( doubled.size() );
+    EXPECT_EQ( bpt.insert( doubled ), static_cast<std::size_t>( distinct ) );
+    EXPECT_EQ( bpt.size()          , static_cast<std::size_t>( distinct ) );
+    EXPECT_EQ( std::ranges::distance( bpt ), distinct );
+    EXPECT_TRUE( std::ranges::is_sorted( bpt ) );
+}
+
+TEST( bp_tree, insert_range_with_equivalent_keys_multiset_keeps_them )
+{
+    auto const & input{ equivalent_key_input };
+    bptree_multiset<int> bpt;
+    bpt.map_memory();
+    EXPECT_EQ( bpt.insert( input ), input.size() );
+    EXPECT_EQ( bpt.size()         , input.size() );
+}
+
 TEST( bp_tree, insert_presorted )
 {
 #ifdef NDEBUG
