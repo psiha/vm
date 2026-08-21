@@ -3638,7 +3638,14 @@ bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const
     // Helper lambda to create linked leaves from a contiguous span of presorted keys.
     // When dedup_source && unique, skips consecutive duplicates while copying.
     // Returns { first_leaf_slot, end_pos, actual_count_copied }.
-    auto const do_dedup{ dedup_source && unique };
+    // ALSO dedups for the insert_presorted_unique entry (dedup_source ==
+    // false): its distinct-input precondition cannot be trusted with the
+    // tree's integrity, because the bulk copy paths below would otherwise
+    // write a caller's duplicate keys verbatim into a unique tree with no
+    // later step to catch them (the skip is reflected in the returned count,
+    // so violation-checking callers do see it). The adjacent-equality
+    // compare is noise next to the copy.
+    auto const do_dedup{ unique };
     auto const copy_to_nodes{ [this, do_dedup]( Key const * __restrict p_input, size_type count ) noexcept
         -> std::tuple<node_slot, iter_pos, size_type>
     {
@@ -3817,19 +3824,17 @@ bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const
         if ( input_offset == total_size )
             break;
 
-        // For non-unique input into a unique tree: skip consecutive dups
+        // For duplicate input keys into a unique tree: skip consecutive dups
         // before calling find_next_insertion_point. This avoids violating
         // find_from's precondition (when offset==num_vals it requires
         // key > back(), but a dup of the last inserted key is == back()).
-        if constexpr ( dedup_source )
+        // Deliberately NOT gated on dedup_source (see do_dedup above).
+        if ( unique )
         {
-            if ( unique )
-            {
-                while ( input_offset < total_size && input_offset > 0 && eq( presorted_input[ input_offset ], presorted_input[ input_offset - 1 ] ) )
-                    ++input_offset;
-                if ( input_offset == total_size )
-                    break;
-            }
+            while ( input_offset < total_size && input_offset > 0 && eq( presorted_input[ input_offset ], presorted_input[ input_offset - 1 ] ) )
+                ++input_offset;
+            if ( input_offset == total_size )
+                break;
         }
 
         // Find next insertion point, leveraging sorted input
