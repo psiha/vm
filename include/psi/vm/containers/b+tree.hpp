@@ -50,14 +50,14 @@ concept InsertableType = ( transparent_comparator && std::is_convertible_v<K, St
 template <typename T>                                  constexpr bool is_statically_sized   { true };
 template <typename T> requires requires{ T{}.size(); } constexpr bool is_statically_sized<T>{ T{}.size() != 0 };
 
+// Byte limit + eligibility live in lookup.hpp (shared, measured constants);
+// node size is a compile-time constant here so the dispatch is compile-time.
 template <typename Comparator, typename Key, std::uint32_t maximum_array_length>
 constexpr bool use_linear_search_for_sorted_array
 {
-    ( is_simple_comparator<Comparator>             ) && 
-    ( std::is_trivially_copyable_v<Key>            ) &&
-    ( sizeof( Key ) < ( 4 * sizeof( void * ) )     ) &&
-    ( maximum_array_length * sizeof( Key ) <= 4096 ) &&
-    ( is_statically_sized<Key>                     )
+    ( linear_search_eligible<Comparator, Key>                           ) &&
+    ( maximum_array_length * sizeof( Key ) <= linear_search_byte_limit  ) &&
+    ( is_statically_sized<Key>                                          )
 }; // use_linear_search_for_sorted_array
 
 
@@ -133,7 +133,10 @@ protected:
 #   endif
     };
 #else // favoring CPU cache & branch prediction (linear scans w/ trivial data and comparators)
-    static constexpr std::uint16_t node_size{ 256 };
+    // 512 measured better than 256 at every tree size on x64 and Apple
+    // Silicon (in-memory random-find sweep, 100k..32M uint32/uint64 keys):
+    // one level less depth at equal-or-better intra-node search cost.
+    static constexpr std::uint16_t node_size{ 512 };
 #endif
 
     using depth_t = std::uint8_t;
@@ -2579,29 +2582,15 @@ private:
         BOOST_ASSUME( num_vals <= leaf_node::max_values );
         Comparator const & __restrict comp( comparator );
         decltype( auto ) value{ prefetch( comp, key ) };
-        if constexpr ( use_linear_search_for_sorted_array<Comparator, Key, leaf_node::max_values> )
+        auto const pos_iter
         {
-            for ( node_size_type k{ 0 }; ; )
-            {
-                if ( !comp( keys[ k ], value ) )
-                {
-                    auto const exact_find{ !comp( value, keys[ k ] ) };
-                    return { k, exact_find };
-                }
-                if ( ++k == num_vals )
-                {
-                    return { k, false };
-                }
-            }
-        }
-        else
-        {
-            auto const pos_iter  { std::lower_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) ) };
-            auto const pos_idx   { static_cast<node_size_type>( std::distance( &keys[ 0 ], pos_iter ) ) };
-            auto const exact_find{ ( pos_idx != num_vals ) && !comp( value, keys[ pos_idx ] ) };
-            return { pos_idx, exact_find };
-        }
-        std::unreachable();
+            use_linear_search_for_sorted_array<Comparator, Key, leaf_node::max_values>
+                ? linear_lower_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
+                :   std::lower_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
+        };
+        auto const pos_idx   { static_cast<node_size_type>( std::distance( &keys[ 0 ], pos_iter ) ) };
+        auto const exact_find{ ( pos_idx != num_vals ) && !comp( value, keys[ pos_idx ] ) };
+        return { pos_idx, exact_find };
     }
     find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return lower_bound( keys, num_vals, value, pass_in_reg{ comp() } ); }
     find_pos lower_bound( auto const & node, auto const & value ) const noexcept { return lower_bound( node.keys, node.num_vals, pass_in_reg{ value } ); }
@@ -2631,24 +2620,13 @@ protected:
         BOOST_ASSUME( num_vals <= leaf_node::max_values );
         Comparator const & __restrict comp( comparator );
         decltype( auto ) value{ prefetch( comp, key ) };
-        if constexpr ( use_linear_search_for_sorted_array<Comparator, Key, leaf_node::max_values> )
+        auto const pos_iter
         {
-            for ( node_size_type k{ 0 }; ; )
-            {
-                if ( comp( value, keys[ k ] ) )
-                    return k;
-
-                if ( ++k == num_vals )
-                    return k;
-            }
-        }
-        else
-        {
-            auto const pos_iter{ std::upper_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) ) };
-            auto const pos_idx { static_cast<node_size_type>( std::distance( &keys[ 0 ], pos_iter ) ) };
-            return pos_idx;
-        }
-        std::unreachable();
+            use_linear_search_for_sorted_array<Comparator, Key, leaf_node::max_values>
+                ? linear_upper_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
+                :   std::upper_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
+        };
+        return static_cast<node_size_type>( std::distance( &keys[ 0 ], pos_iter ) );
     }
     node_size_type upper_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return upper_bound( keys, num_vals, value, pass_in_reg{ comp() } ); }
     node_size_type upper_bound( auto const & node, auto const & value ) const noexcept { return upper_bound( node.keys, node.num_vals, pass_in_reg{ value } ); }
