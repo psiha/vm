@@ -590,7 +590,15 @@ public:
     //! <b>Effects</b>: Returns true if the vector contains no elements.
     //! <b>Throws</b>: Nothing.
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard, gnu::pure ]] bool empty() const noexcept { return BOOST_UNLIKELY( this->size() == 0 ); }
+    //! Defers to the storage when it knows better: a layout whose size() is an
+    //! arm-dependent decode can answer this without decoding.
+    [[ nodiscard, gnu::pure ]] bool empty() const noexcept
+    {
+        if constexpr ( requires ( storage_t const & s ) { { s.storage_empty() } -> std::same_as<bool>; } )
+            return BOOST_UNLIKELY( storage_t::storage_empty() );
+        else
+            return BOOST_UNLIKELY( this->size() == 0 );
+    }
 
     //! <b>Effects</b>: Returns the largest possible size of the vector.
     //!

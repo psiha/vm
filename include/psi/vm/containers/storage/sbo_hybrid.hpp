@@ -774,6 +774,21 @@ public:
         return sz;
     }
 
+    //! Emptiness without decoding the size: the narrow layout's decode is a
+    //! select, while each arm's empty word is recognisable on its own -- an
+    //! empty inline arm is all-zero across its field (the surplus bits are
+    //! elements, so they may not be looked at), and an empty heap arm is the
+    //! bare flag. Neither test can fire on the other arm: a heap word always
+    //! has the flag bit set, and an inline word never equals it.
+    [[ nodiscard, gnu::pure ]] bool storage_empty() const noexcept
+    {
+        auto const raw{ lead_word() };
+        if constexpr ( narrow_inline_size )
+            return ( ( raw & inline_field_mask ) == 0 ) | ( raw == 1 );
+        else
+            return raw < 2; // flag | size, so "no size bits set" is the whole test
+    }
+
     sbo_hybrid() noexcept { set_lead_word( 0 ); } // nothing constructed yet: the whole word can go at once
    ~sbo_hybrid() noexcept { this->storage_free(); }
 

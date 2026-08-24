@@ -1169,6 +1169,37 @@ TEST( SmallVectorFreeCapacity, elementBytesDoNotLeakIntoTheSize )
     expectElementBytesStayOutOfTheSize<std::uint32_t, std::uint64_t,  5>();
 }
 
+template <typename T, typename SzT, std::uint32_t N>
+void expectEmptyTracksBothArms()
+{
+    small_vector<T, N, SzT, packed_opts> v;
+    EXPECT_TRUE( v.empty() );
+
+    v.push_back( T{ 1 } );
+    EXPECT_FALSE( v.empty() );
+    // The element sits in the bytes a size read covers, so those bits stay set
+    // after the clear: emptiness must come from the size field alone.
+    v.clear();
+    EXPECT_TRUE( v.empty() );
+
+    auto const inlineCapacity{ v.capacity() };
+    for ( std::uint32_t i{ 0 }; i <= inlineCapacity; ++i )
+        v.push_back( static_cast<T>( i ) );
+    EXPECT_GT( v.capacity(), inlineCapacity ); // spilled
+    EXPECT_FALSE( v.empty() );
+    // Emptied while still on the heap -- the arm keeps its buffer, so the whole
+    // encoded word is the flag.
+    v.clear();
+    EXPECT_TRUE( v.empty() );
+}
+
+TEST( SmallVectorFreeCapacity, emptyAnswersFromTheLiveArmsOwnField )
+{
+    expectEmptyTracksBothArms<std::uint8_t , std::uint32_t, 15>();
+    expectEmptyTracksBothArms<std::uint8_t , std::uint64_t, 23>();
+    expectEmptyTracksBothArms<std::uint16_t, std::uint64_t, 11>();
+}
+
 TEST( SmallVectorFreeCapacity, doesNotCostHeapRange )
 {
     // The inline capacity and the heap arm's counting range are independent:
