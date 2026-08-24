@@ -79,4 +79,40 @@ using sv_embedded = small_vector<int, 8, std::size_t  , emb_opts>;
         v.push_back( i );
 }
 
+// --- inline size field: narrowed vs left at the heap arm's width ---
+//
+// Same N and same size type on both sides -- only alignof( T ) decides whether
+// the inline arm's size field narrows, so the pair isolates what the narrowing
+// costs the accessors. Diff these two against a build that narrows nothing:
+// `uniform` must come out unchanged, `narrowed` is the price of the extra
+// inline capacity.
+
+inline constexpr sbo_options packed_opts{ .pack_inline_size = true };
+
+using sv_narrowed = small_vector<std::uint8_t , 12, std::uint32_t, packed_opts>; // alignof( T ) < sizeof( sz_t )
+using sv_uniform  = small_vector<std::uint32_t,  3, std::uint32_t, packed_opts>; // alignof( T ) == sizeof( sz_t )
+
+#define PSI_VM_CODEGEN_SBO_ACCESSORS( tag, sv )                                                      \
+    [[ gnu::noinline ]] std::uint32_t size_    ## tag( sv const & v ) { return v.size();     }        \
+    [[ gnu::noinline ]] bool          empty_   ## tag( sv const & v ) { return v.empty();    }        \
+    [[ gnu::noinline ]] std::uint32_t capacity_## tag( sv const & v ) { return v.capacity(); }        \
+    [[ gnu::noinline ]] auto          data_    ## tag( sv const & v ) { return v.data();     }        \
+    [[ gnu::noinline ]] void          push_    ## tag( sv & v, sv::value_type x ) { v.push_back( x ); } \
+    [[ gnu::noinline ]] void push_loop_ ## tag( sv & v, int n )                                       \
+    {                                                                                                \
+        for ( int i{ 0 }; i < n; ++i )                                                                \
+            v.push_back( static_cast<sv::value_type>( i ) );                                          \
+    }                                                                                                \
+    /* size() re-read on every iteration -- the shape the accessor cost shows in */                   \
+    [[ gnu::noinline ]] std::uint32_t sum_ ## tag( sv const & v )                                     \
+    {                                                                                                \
+        std::uint32_t s{ 0 };                                                                         \
+        for ( std::uint32_t i{ 0 }; i < v.size(); ++i )                                               \
+            s += v[ i ];                                                                              \
+        return s;                                                                                     \
+    }
+
+PSI_VM_CODEGEN_SBO_ACCESSORS( narrowed, sv_narrowed )
+PSI_VM_CODEGEN_SBO_ACCESSORS( uniform , sv_uniform  )
+
 } // namespace psi::vm::codegen

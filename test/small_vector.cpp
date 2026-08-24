@@ -1036,15 +1036,17 @@ TEST( SmallVectorNarrowSize, appendingPastTheRepresentableMaximumIsRefused )
 // Inline capacity that the heap-only representation already pays for
 //------------------------------------------------------------------------------
 
-template <typename T, typename SzT, std::uint32_t Expected>
+inline constexpr sbo_options packed_opts{ .pack_inline_size = true };
+
+template <typename T, typename SzT, std::uint32_t Expected, sbo_options Options = sbo_options{}>
 void expectFreeCapacity()
 {
-    static_assert( free_inline_capacity<T, SzT>() == Expected );
-    static_assert( sizeof( free_small_vector<T, SzT> ) == sizeof( heap_vector<T, SzT> ) );
+    static_assert( free_inline_capacity<T, SzT, Options>() == Expected );
+    static_assert( sizeof( free_small_vector<T, SzT, Options> ) == sizeof( heap_vector<T, SzT> ) );
     // Expected is the largest fit, not merely a fit.
-    static_assert( sizeof( small_vector<T, Expected + 1, SzT> ) > sizeof( heap_vector<T, SzT> ) );
+    static_assert( sizeof( small_vector<T, Expected + 1, SzT, Options> ) > sizeof( heap_vector<T, SzT> ) );
 
-    free_small_vector<T, SzT> v;
+    free_small_vector<T, SzT, Options> v;
     EXPECT_EQ( v.capacity(), Expected );
     EXPECT_EQ( sizeof( v ), sizeof( heap_vector<T, SzT> ) );
 }
@@ -1063,6 +1065,108 @@ TEST( SmallVectorFreeCapacity, costsNothingOverTheHeapOnlyFootprint )
     expectFreeCapacity<std::uint64_t, std::uint32_t,  1>();
     expectFreeCapacity<std::uint64_t, std::uint64_t,  2>();
     expectFreeCapacity<double       , std::uint32_t,  1>();
+}
+
+TEST( SmallVectorFreeCapacity, packedInlineSizeBuysCapacityWhereAlignmentLeavesRoom )
+{
+    // The inline arm cannot count past N, so one byte covers every capacity a
+    // pointer-sized budget can hold -- but alignof( T ) pads that byte straight
+    // back out to the size type's width whenever T is at least as wide, which
+    // is why the second half of this table is unmoved.
+    expectFreeCapacity<std::uint8_t , std::uint16_t, 15, packed_opts>();
+    expectFreeCapacity<std::uint8_t , std::uint32_t, 15, packed_opts>();
+    expectFreeCapacity<std::uint8_t , std::uint64_t, 23, packed_opts>();
+    expectFreeCapacity<std::uint16_t, std::uint32_t,  7, packed_opts>();
+    expectFreeCapacity<std::uint16_t, std::uint64_t, 11, packed_opts>();
+    expectFreeCapacity<std::uint32_t, std::uint64_t,  5, packed_opts>();
+
+    expectFreeCapacity<std::uint8_t , std::uint8_t , 15, packed_opts>();
+    expectFreeCapacity<std::uint16_t, std::uint16_t,  7, packed_opts>();
+    expectFreeCapacity<std::uint32_t, std::uint32_t,  3, packed_opts>();
+    expectFreeCapacity<std::uint64_t, std::uint32_t,  1, packed_opts>();
+    expectFreeCapacity<std::uint64_t, std::uint64_t,  2, packed_opts>();
+}
+
+//! Distance from the object to its first inline element -- i.e. what the
+//! inline arm spends on its size field, the whole subject of the narrowing.
+template <typename T, typename SzT, std::size_t ExpectedOffset, sbo_options Options = packed_opts>
+void expectInlineElementsOffset()
+{
+    free_small_vector<T, SzT, Options> v;
+    auto const offset
+    {
+        static_cast<std::size_t>
+        (
+            reinterpret_cast<char const *>( v.data() ) - reinterpret_cast<char const *>( &v )
+        )
+    };
+    EXPECT_EQ( offset, ExpectedOffset );
+}
+
+TEST( SmallVectorFreeCapacity, packedInlineSizeMovesTheElementsAndNothingElseDoes )
+{
+    expectInlineElementsOffset<std::uint8_t , std::uint16_t, 1>();
+    expectInlineElementsOffset<std::uint8_t , std::uint32_t, 1>();
+    expectInlineElementsOffset<std::uint8_t , std::uint64_t, 1>();
+    expectInlineElementsOffset<std::uint16_t, std::uint32_t, 2>();
+    expectInlineElementsOffset<std::uint16_t, std::uint64_t, 2>();
+    expectInlineElementsOffset<std::uint32_t, std::uint64_t, 4>();
+
+    // Packed but pinned by alignment: the elements already start at
+    // sizeof( SzT ), so both arms keep the same size type and every accessor
+    // stays a plain shift.
+    expectInlineElementsOffset<std::uint8_t , std::uint8_t , sizeof( std::uint8_t  )>();
+    expectInlineElementsOffset<std::uint16_t, std::uint16_t, sizeof( std::uint16_t )>();
+    expectInlineElementsOffset<std::uint32_t, std::uint32_t, sizeof( std::uint32_t )>();
+    expectInlineElementsOffset<std::uint64_t, std::uint32_t, sizeof( std::uint64_t )>();
+    expectInlineElementsOffset<std::uint64_t, std::uint64_t, sizeof( std::uint64_t )>();
+
+    // Unpacked: the size field keeps the heap arm's width everywhere.
+    expectInlineElementsOffset<std::uint8_t , std::uint32_t, sizeof( std::uint32_t ), sbo_options{}>();
+    expectInlineElementsOffset<std::uint16_t, std::uint64_t, sizeof( std::uint64_t ), sbo_options{}>();
+    expectInlineElementsOffset<std::uint32_t, std::uint64_t, sizeof( std::uint64_t ), sbo_options{}>();
+}
+
+//! A narrowed inline size field abuts the elements, so a saturated buffer puts
+//! the widest element bit pattern in the bytes a heap-width read picks up.
+template <typename T, typename SzT, std::uint32_t InlineCap>
+void expectElementBytesStayOutOfTheSize()
+{
+    using sv = free_small_vector<T, SzT, packed_opts>;
+    static_assert( free_inline_capacity<T, SzT, packed_opts>() == InlineCap );
+
+    sv v;
+    for ( std::uint32_t i{ 0 }; i < InlineCap; ++i )
+    {
+        v.emplace_back( std::numeric_limits<T>::max() );
+        EXPECT_EQ( v.size(), i + 1 );
+        EXPECT_FALSE( v.empty() );
+    }
+    EXPECT_EQ( v.capacity(), InlineCap );
+
+    v.emplace_back( std::numeric_limits<T>::max() );
+    EXPECT_EQ( v.size(), InlineCap + 1 );
+    EXPECT_GT( v.capacity(), InlineCap );
+
+    // Back to the inline arm over a field the heap arm wrote at its own width.
+    sv small;
+    small.emplace_back( T{ 1 } );
+    v = std::move( small );
+    EXPECT_EQ( v.size    (), 1 );
+    EXPECT_EQ( v.capacity(), InlineCap );
+    EXPECT_EQ( v[ 0 ], T{ 1 } );
+
+    while ( !v.empty() )
+        v.pop_back();
+    EXPECT_EQ( v.size(), 0 );
+}
+
+TEST( SmallVectorFreeCapacity, elementBytesDoNotLeakIntoTheSize )
+{
+    expectElementBytesStayOutOfTheSize<std::uint8_t , std::uint32_t, 15>();
+    expectElementBytesStayOutOfTheSize<std::uint8_t , std::uint64_t, 23>();
+    expectElementBytesStayOutOfTheSize<std::uint16_t, std::uint64_t, 11>();
+    expectElementBytesStayOutOfTheSize<std::uint32_t, std::uint64_t,  5>();
 }
 
 TEST( SmallVectorFreeCapacity, doesNotCostHeapRange )
@@ -1114,6 +1218,9 @@ TEST( SmallVectorFreeCapacity, behavesLikeAnExplicitlySizedSmallVector )
     exerciseSizePath<free_small_vector<std::uint16_t, std::uint16_t>,  7>();
     exerciseSizePath<free_small_vector<std::uint8_t , std::uint8_t >, 15>();
     exerciseSizePath<free_small_vector<std::uint32_t, std::uint32_t>,  3>();
+    exerciseSizePath<free_small_vector<std::uint8_t , std::uint32_t, packed_opts>, 15>();
+    exerciseSizePath<free_small_vector<std::uint16_t, std::uint64_t, packed_opts>, 11>();
+    exerciseSizePath<free_small_vector<std::uint32_t, std::uint64_t, packed_opts>,  5>();
 }
 
 

@@ -68,6 +68,14 @@ struct sbo_options
     std::uint8_t     alignment{ 0 };
     geometric_growth growth   { .num = 5, .den = 4 }; // 1.25x default (conservative for small vectors)
     sbo_layout       layout   { /*first as default, i.e. auto_select*/ };
+
+    //! Give the inline arm a size field only as wide as N needs and spend what
+    //! that frees on the inline buffer (see the embedded layout below for the
+    //! capacities it buys). Off by default: the elements then start inside the
+    //! bytes a size read covers, so every append stalls store-to-load
+    //! forwarding. Worth it for buffers filled once and read repeatedly, not
+    //! for append-heavy ones.
+    bool             pack_inline_size{ false };
 }; // struct sbo_options
 
 
@@ -586,11 +594,29 @@ private:
 }; // class sbo_hybrid (compact_lsb)
 
 
+namespace detail
+{
+    template <std::uintmax_t Max>
+    using narrowest_uint_t = std::conditional_t
+    <
+        ( Max <= 0xFFu ), std::uint8_t, std::conditional_t
+        <
+            ( Max <= 0xFFFFu ), std::uint16_t, std::conditional_t
+            <
+                ( Max <= 0xFFFFFFFFu ), std::uint32_t, std::uint64_t
+            >
+        >
+    >;
+} // namespace detail
+
+
 ////////////////////////////////////////////////////////////////////////////////
 // Layout C: Embedded (sz_ packed inside union, LSB flag)
 //
-// Both union variants start with sz_t at offset 0 (common initial sequence).
-// size() = sz_ >> 1, is_heap() = sz_ & 1. No external size_ field.
+// Both union variants start their size field at offset 0 and carry the heap
+// flag in its bit 0, so the flag is readable without knowing which arm is live.
+// The inline arm cannot count past N, so it takes only the width N needs -- the
+// bytes that buys go to the inline buffer. No external size_ field.
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename T, std::uint32_t N, typename sz_t, sbo_options options>
@@ -606,6 +632,22 @@ class sbo_hybrid<T, N, sz_t, options>
 
     static_assert( static_cast<std::uintmax_t>( N ) <= static_cast<std::uintmax_t>( max_size_val ), "inline capacity beyond what the size type can hold next to the heap flag" );
 
+    // The inline size field is narrowed only where that actually moves the
+    // elements closer to offset 0 -- i.e. where alignof( T ) does not already
+    // pad the field back out to sizeof( sz_t ). Everywhere else the two arms
+    // keep the same size type and every accessor below stays a plain shift.
+    using narrow_sz_t = detail::narrowest_uint_t<std::uintmax_t{ N } * 2>;
+    static std::size_t constexpr elem_align{ alignof( std::conditional_t<complete<T>, T, std::max_align_t> ) };
+    static std::size_t constexpr narrow_elements_offset{ ( sizeof( narrow_sz_t ) + elem_align - 1 ) / elem_align * elem_align };
+    static std::size_t constexpr wide_elements_offset  { ( sizeof( sz_t        ) + elem_align - 1 ) / elem_align * elem_align };
+
+    static bool constexpr narrow_inline_size{ options.pack_inline_size && ( narrow_elements_offset < wide_elements_offset ) };
+
+    using inline_sz_t = std::conditional_t<narrow_inline_size, narrow_sz_t, sz_t>;
+
+    //! Every bit of the inline arm's size field, flag included.
+    static sz_t constexpr inline_field_mask{ static_cast<sz_t>( std::numeric_limits<inline_sz_t>::max() ) };
+
 public:
     // The flag shares the size field, so the container cannot count as high as
     // the size type alone would allow. Without this the generic fallback in
@@ -620,7 +662,7 @@ private:
         // inherited constructors re-default-initialize data members after the
         // base-class body.
         struct inline_t {
-            sz_t                       sz_;       // LSB=0, actual size = sz_ >> 1
+            inline_sz_t                sz_;       // LSB=0, actual size = sz_ >> 1
             noninitialized_array<T, N> elements_;
             constexpr  inline_t() noexcept {}     // no-op: leaves sz_ uninitialized
             constexpr ~inline_t() noexcept {}
@@ -635,30 +677,71 @@ private:
         constexpr ~data_t() noexcept {}
     };
 
+    //! The leading size field, always at the heap arm's width -- reads and
+    //! writes have to agree on one width or every append pays a store-to-load
+    //! forwarding stall.
+    //!
+    //! Where the arms narrow the field they give it different types, so there
+    //! is no common initial sequence to read through and this goes to the
+    //! object representation instead. Inline, the bytes it covers past the
+    //! field are element storage: reads mask them off and writes put them back
+    //! byte for byte, so no element ever changes value.
+    [[ nodiscard, gnu::pure ]] sz_t lead_word() const noexcept
+    {
+        if constexpr ( narrow_inline_size )
+        {
+            sz_t word;
+            std::memcpy( &word, &storage_, sizeof( word ) );
+            return word;
+        }
+        else
+            return storage_.heap_.sz_;
+    }
+    void set_lead_word( sz_t const word ) noexcept
+    {
+        if constexpr ( narrow_inline_size )
+            std::memcpy( &storage_, &word, sizeof( word ) );
+        else
+            storage_.heap_.sz_ = word;
+    }
+
+    //! `word` with the inline arm's field replaced and its surplus bytes kept.
+    [[ nodiscard ]] static sz_t inline_field_into( sz_t const word, sz_t const sz ) noexcept
+    {
+        return static_cast<sz_t>( ( word & static_cast<sz_t>( ~inline_field_mask ) ) | ( sz << 1 ) );
+    }
+
     // --- policy interface ---
-    // Common initial sequence: heap_.sz_ is always valid to read regardless of
-    // active member ([class.union]/7, [class.mem]/25).
-    [[ nodiscard, gnu::pure ]] bool is_heap() const noexcept { return BOOST_UNLIKELY( ( storage_.heap_.sz_ & 1 ) != 0 ); }
+    [[ nodiscard, gnu::pure ]] bool is_heap() const noexcept { return BOOST_UNLIKELY( ( lead_word() & 1 ) != 0 ); }
 
     void set_inline_size( sz_t const sz ) noexcept
     {
         BOOST_ASSUME( sz <= N );
-        storage_.inline_.sz_ = static_cast<sz_t>( sz << 1 ); // LSB = 0 -> inline
+        if constexpr ( narrow_inline_size )
+            set_lead_word( inline_field_into( lead_word(), sz ) ); // LSB = 0 -> inline
+        else
+            storage_.inline_.sz_ = static_cast<inline_sz_t>( sz << 1 );
     }
     void set_heap_state( T * __restrict const p, sz_t const cap, sz_t const sz ) noexcept
     {
         BOOST_ASSUME( sz <= max_size_val );
-        storage_.heap_.sz_   = static_cast<sz_t>( ( sz << 1 ) | 1 ); // LSB = 1 -> heap
+        set_lead_word( static_cast<sz_t>( ( sz << 1 ) | 1 ) ); // LSB = 1 -> heap
         storage_.heap_.cap_  = cap;
         storage_.heap_.data_ = p;
     }
     void set_size_preserving_flag( sz_t const sz ) noexcept
     {
         BOOST_ASSUME( sz <= max_size_val );
-        storage_.heap_.sz_ = static_cast<sz_t>( ( sz << 1 ) | ( storage_.heap_.sz_ & 1 ) );
+        auto const word{ lead_word() };
+        if constexpr ( narrow_inline_size )
+            set_lead_word( ( word & 1 ) ? static_cast<sz_t>( ( sz << 1 ) | 1 ) : inline_field_into( word, sz ) );
+        else
+            set_lead_word( static_cast<sz_t>( ( sz << 1 ) | ( word & 1 ) ) );
     }
-    void do_dec_size() noexcept { BOOST_ASSUME( this->size() >= 1 ); storage_.heap_.sz_ -= 2; }
-    void do_inc_size() noexcept { BOOST_ASSUME( this->size() < this->capacity() ); storage_.heap_.sz_ += 2; }
+    // The encoded size tops out at 2N, which is what the inline field was sized
+    // to hold, so one full-width step never carries out of the live arm's field.
+    void do_dec_size() noexcept { BOOST_ASSUME( this->size() >= 1 );               set_lead_word( static_cast<sz_t>( lead_word() - 2 ) ); }
+    void do_inc_size() noexcept { BOOST_ASSUME( this->size() < this->capacity() ); set_lead_word( static_cast<sz_t>( lead_word() + 2 ) ); }
 
     [[ nodiscard, gnu::pure ]] T       * buffer_data()       noexcept { return storage_.inline_.elements_.data; }
     [[ nodiscard, gnu::pure ]] T const * buffer_data() const noexcept { return storage_.inline_.elements_.data; }
@@ -670,16 +753,28 @@ private:
     [[ nodiscard, gnu::pure ]] sz_t const & heap_cap_ref() const noexcept { return storage_.heap_.cap_; }
 
 public:
-    // Branch-free: common initial sequence guarantees heap_.sz_ is always the
-    // correct sz_t regardless of active union member.
+    // Branch-free: the flag sits at the same bit in both arms, so the shift is
+    // the same in both and only the mask that drops the wider arm's surplus
+    // bits is picked -- from the flag itself, as a select rather than a branch.
     [[ nodiscard, gnu::pure ]] sz_t size() const noexcept
     {
-        auto const sz{ static_cast<sz_t>( storage_.heap_.sz_ >> 1 ) };
+        auto const raw{ lead_word() };
+        auto const sz
+        {
+            [ raw ]
+            {
+                auto const decoded{ static_cast<sz_t>( raw >> 1 ) };
+                if constexpr ( narrow_inline_size )
+                    return ( raw & 1 ) ? decoded : static_cast<sz_t>( decoded & ( inline_field_mask >> 1 ) );
+                else
+                    return decoded;
+            }()
+        };
         BOOST_ASSUME( sz <= max_size_val );
         return sz;
     }
 
-    sbo_hybrid() noexcept { storage_.inline_.sz_ = 0; }
+    sbo_hybrid() noexcept { set_lead_word( 0 ); } // nothing constructed yet: the whole word can go at once
    ~sbo_hybrid() noexcept { this->storage_free(); }
 
     sbo_hybrid( sbo_hybrid const & ) = delete;
@@ -703,7 +798,7 @@ public:
             if constexpr ( !trivially_destructible_after_move_assignment<T> )
                 std::destroy_n( other.buffer_data(), sz );
         }
-        other.storage_.inline_.sz_ = 0; // inline-0: clear LSB flag + size
+        other.set_inline_size( 0 ); // inline-0: clear LSB flag + size
     }
 
     sbo_hybrid & operator=( sbo_hybrid && other ) noexcept( is_trivially_moveable<T> || std::is_nothrow_move_constructible_v<T> )
@@ -725,7 +820,7 @@ public:
             if constexpr ( !trivially_destructible_after_move_assignment<T> )
                 std::destroy_n( other.buffer_data(), sz );
         }
-        other.storage_.inline_.sz_ = 0;
+        other.set_inline_size( 0 );
         return *this;
     }
 
