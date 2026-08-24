@@ -10,6 +10,7 @@
 #include <limits>
 #include <numeric>
 #include <stdexcept>
+#include <utility>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -1020,6 +1021,56 @@ TEST( SmallVectorNarrowSize, appendingPastTheRepresentableMaximumIsRefused )
     EXPECT_EQ( v.size(), sv8::max_size() );
 }
 #endif
+
+//------------------------------------------------------------------------------
+// Inline capacity that the heap-only representation already pays for
+//------------------------------------------------------------------------------
+
+template <typename T, typename SzT, std::uint32_t Expected>
+void expectFreeCapacity()
+{
+    static_assert( free_inline_capacity<T, SzT>() == Expected );
+    static_assert( sizeof( free_small_vector<T, SzT> ) == sizeof( heap_vector<T, SzT> ) );
+    // Expected is the largest fit, not merely a fit.
+    static_assert( sizeof( small_vector<T, Expected + 1, SzT> ) > sizeof( heap_vector<T, SzT> ) );
+
+    free_small_vector<T, SzT> v;
+    EXPECT_EQ( v.capacity(), Expected );
+    EXPECT_EQ( sizeof( v ), sizeof( heap_vector<T, SzT> ) );
+}
+
+TEST( SmallVectorFreeCapacity, costsNothingOverTheHeapOnlyFootprint )
+{
+    expectFreeCapacity<std::uint8_t , std::uint8_t , 15>();
+    expectFreeCapacity<std::uint8_t , std::uint64_t, 16>();
+    expectFreeCapacity<std::uint16_t, std::uint16_t,  7>();
+    expectFreeCapacity<std::uint32_t, std::uint32_t,  3>();
+    expectFreeCapacity<std::uint64_t, std::uint32_t,  1>();
+    expectFreeCapacity<std::uint64_t, std::uint64_t,  2>();
+    expectFreeCapacity<double       , std::uint32_t,  1>();
+}
+
+TEST( SmallVectorFreeCapacity, reportsZeroWhenNothingFits )
+{
+    // An element that alone overruns the whole budget.
+    static_assert( free_inline_capacity<std::pair<std::uint8_t, void *>>() == 0 );
+
+    // A size type wider than the element's alignment resolves to a layout that
+    // keeps the size out of the union, which costs a word at every N.
+    static_assert( free_inline_capacity<std::uint8_t              >() == 0 );
+    static_assert( free_inline_capacity<std::uint16_t             >() == 0 );
+    static_assert( free_inline_capacity<std::uint8_t, std::uint16_t>() == 0 );
+
+    // So does asking for the layout with a separate size field.
+    static_assert( free_inline_capacity<std::uint32_t, std::uint32_t, msb_opts>() == 0 );
+}
+
+TEST( SmallVectorFreeCapacity, behavesLikeAnExplicitlySizedSmallVector )
+{
+    exerciseSizePath<free_small_vector<std::uint16_t, std::uint16_t>,  7>();
+    exerciseSizePath<free_small_vector<std::uint8_t , std::uint8_t >, 15>();
+    exerciseSizePath<free_small_vector<std::uint32_t, std::uint32_t>,  3>();
+}
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm
