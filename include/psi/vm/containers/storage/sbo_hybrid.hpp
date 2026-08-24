@@ -37,10 +37,13 @@
 
 #include <boost/assert.hpp>
 
+#include <algorithm>
 #include <climits>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <type_traits>
 #include <utility>
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -54,7 +57,7 @@ namespace psi::vm
 ////////////////////////////////////////////////////////////////////////////////
 
 enum class sbo_layout : std::uint8_t {
-    auto_select,   // default -- resolved to best layout based on T and sz_t
+    auto_select,   // default -- resolved to the layout with the smallest footprint
     compact,       // union-based, MSB-of-size flag, trivially relocatable
     compact_lsb,   // union-based, size-first with LSB flag, trivially relocatable
     embedded,      // union-based, size inside union (LSB flag), trivially relocatable
@@ -68,13 +71,15 @@ struct sbo_options
 }; // struct sbo_options
 
 
+// `embedded` spends the size field inside the union, where it overlaps the heap
+// arm's own size; the other two spend a separate word on it outside the union,
+// so they are never smaller at any N and are a word larger whenever the inline
+// buffer would otherwise have fit within the heap-only footprint.
 template <typename T, typename sz_t>
 consteval sbo_layout resolve_layout( sbo_layout const l ) noexcept
 {
     if ( l == sbo_layout::auto_select )
-        return ( sizeof( sz_t ) > alignof( T ) )
-            ? sbo_layout::compact_lsb
-            : sbo_layout::embedded;
+        return sbo_layout::embedded;
     return l;
 }
 
@@ -131,15 +136,19 @@ public:
     void reserve( this auto & self, size_type const new_capacity )
     {
         if ( new_capacity > self.capacity() )
+        {
+            auto constexpr ceiling{ size_ceiling<decltype( self )>() };
+            if ( new_capacity > ceiling ) [[ unlikely ]]
+                detail::throw_length_error();
             self.grow_heap( new_capacity );
+        }
     }
 
     // --- storage_* interface for vector<> ---
 
+    // No __declspec( noalias ): clang derives nounwind from it, and the throws
+    // on the spill path below then bypass the caller's handlers entirely.
     PSI_COLD
-#ifdef _MSC_VER
-    __declspec( noalias )
-#endif
     value_type * storage_init( this auto & self, size_type const initial_size )
     {
         if ( initial_size <= N ) [[ likely ]]
@@ -147,6 +156,9 @@ public:
             self.set_inline_size( initial_size );
             return self.buffer_data();
         }
+        auto constexpr ceiling{ size_ceiling<decltype( self )>() };
+        if ( initial_size > ceiling ) [[ unlikely ]]
+            detail::throw_length_error();
         auto const p{ al::template allocate<alignment>( initial_size ) };
         self.set_heap_state( p, initial_size, initial_size );
         return p;
@@ -159,7 +171,15 @@ public:
         BOOST_ASSUME( target_size >= self.size() );
         auto const current_cap{ self.capacity() };
         if ( target_size > current_cap ) [[ unlikely ]]
-            self.grow_heap( static_cast<bool>( G ) ? G( target_size, current_cap ) : target_size );
+        {
+            auto constexpr ceiling{ size_ceiling<decltype( self )>() };
+            if ( target_size > ceiling ) [[ unlikely ]]
+                detail::throw_length_error();
+            // The ceiling is itself a reachable size, so geometric overshoot
+            // past it is clamped rather than refused.
+            auto const wanted{ static_cast<bool>( G ) ? G( target_size, current_cap ) : target_size };
+            self.grow_heap( std::min( wanted, ceiling ) );
+        }
         self.set_size_preserving_flag( target_size );
         return self.data();
     }
@@ -217,10 +237,20 @@ public:
     }
 
 private:
+    // Past this the size field cannot encode the size next to the heap flag,
+    // and the write path only BOOST_ASSUMEs it (a no-op under NDEBUG): the
+    // stored size would truncate while the elements are really there. Refused
+    // on every capacity increase - all cold - which leaves
+    // `capacity() <= max_size()` an invariant and the fast path unchecked.
+    template <typename Self>
+    [[ nodiscard ]] static constexpr size_type size_ceiling() noexcept { return std::remove_cvref_t<Self>::max_size(); }
+
     PSI_COLD [[ gnu::noinline, clang::preserve_most ]]
     void grow_heap( this auto & self, size_type const new_capacity )
     {
+        auto constexpr ceiling{ size_ceiling<decltype( self )>() };
         BOOST_ASSUME( new_capacity > self.capacity() );
+        BOOST_ASSUME( new_capacity <= ceiling );
         if ( self.is_heap() )
         {
             if constexpr ( is_trivially_moveable<T> )
@@ -293,8 +323,10 @@ class sbo_hybrid<T, N, sz_t, options>
     friend mixin;
 
     static sz_t constexpr heap_flag   { sz_t{ 1 } << ( sizeof( sz_t ) * CHAR_BIT - 1 ) };
-    static sz_t constexpr size_mask   { ~heap_flag };
+    static sz_t constexpr size_mask   { static_cast<sz_t>( ~heap_flag ) }; // ~ promotes to int for a narrow sz_t
     static sz_t constexpr max_size_val{ size_mask };
+
+    static_assert( static_cast<std::uintmax_t>( N ) <= static_cast<std::uintmax_t>( max_size_val ), "inline capacity beyond what the size type can hold next to the heap flag" );
 
 public:
     // The flag shares the size field, so the container cannot count as high as
@@ -434,6 +466,8 @@ class sbo_hybrid<T, N, sz_t, options>
 
     static sz_t constexpr max_size_val{ std::numeric_limits<sz_t>::max() >> 1 };
 
+    static_assert( static_cast<std::uintmax_t>( N ) <= static_cast<std::uintmax_t>( max_size_val ), "inline capacity beyond what the size type can hold next to the heap flag" );
+
 public:
     // The flag shares the size field, so the container cannot count as high as
     // the size type alone would allow. Without this the generic fallback in
@@ -569,6 +603,8 @@ class sbo_hybrid<T, N, sz_t, options>
     friend mixin;
 
     static sz_t constexpr max_size_val{ std::numeric_limits<sz_t>::max() >> 1 };
+
+    static_assert( static_cast<std::uintmax_t>( N ) <= static_cast<std::uintmax_t>( max_size_val ), "inline capacity beyond what the size type can hold next to the heap flag" );
 
 public:
     // The flag shares the size field, so the container cannot count as high as

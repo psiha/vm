@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <limits>
 #include <numeric>
+#include <stdexcept>
+#include <utility>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -980,6 +982,140 @@ TEST( SmallVectorNarrowSize, sizeReachesItsRepresentableMaximum )
     v.clear();
     EXPECT_TRUE( v.empty() );
 }
+
+TEST( SmallVectorNarrowSize, everyLayoutInstantiatesWithANarrowSizeType )
+{
+    exerciseSizePath<small_vector<std::uint8_t, 4, std::uint8_t, msb_opts>, 4>();
+    exerciseSizePath<small_vector<std::uint8_t, 4, std::uint8_t, lsb_opts>, 4>();
+    exerciseSizePath<small_vector<std::uint8_t, 4, std::uint8_t, emb_opts>, 4>();
+
+    using msb8 = small_vector<std::uint8_t, 4, std::uint8_t, msb_opts>;
+    EXPECT_EQ( msb8::max_size(), std::uint8_t{ std::numeric_limits<std::uint8_t>::max() >> 1 } );
+}
+
+TEST( SmallVectorNarrowSize, geometricGrowthReachesTheRepresentableMaximum )
+{
+    // Geometric growth overshoots the ceiling on the last few steps; the
+    // overshoot is clamped, so appending all the way up to max_size() is legal.
+    using sv8 = sized_small_vector<std::uint8_t, 15, std::uint8_t>;
+    sv8 v;
+    for ( std::uint32_t i{ 0 }; i < sv8::max_size(); ++i )
+        v.push_back( static_cast<std::uint8_t>( i ) );
+    EXPECT_EQ( v.size    (), sv8::max_size() );
+    EXPECT_GE( v.capacity(), sv8::max_size() );
+    EXPECT_EQ( v[ 0 ], 0 );
+    EXPECT_EQ( v.back(), static_cast<std::uint8_t>( sv8::max_size() - 1 ) );
+}
+
+#if PSI_MALLOC_OVERCOMMIT != PSI_OVERCOMMIT_Full
+TEST( SmallVectorNarrowSize, sizingPastTheRepresentableMaximumIsRefused )
+{
+    // Where the library is allowed to report allocation limits at all, a size
+    // the layout cannot encode is reported rather than silently truncated.
+    using sv8 = sized_small_vector<std::uint8_t, 15, std::uint8_t>;
+    auto constexpr past_it{ static_cast<std::uint8_t>( sv8::max_size() + 1 ) };
+
+    sv8 v;
+    EXPECT_THROW( v.resize ( past_it ), std::length_error );
+    EXPECT_THROW( v.reserve( past_it ), std::length_error );
+    EXPECT_THROW( (void)sv8( past_it ), std::length_error );
+    EXPECT_EQ( v.size(), 0 );
+}
+
+TEST( SmallVectorNarrowSize, appendingPastTheRepresentableMaximumIsRefused )
+{
+    using sv8 = sized_small_vector<std::uint8_t, 15, std::uint8_t>;
+    sv8 v;
+    v.resize( sv8::max_size() );
+    EXPECT_THROW( v.push_back( 1 ), std::length_error );
+    EXPECT_EQ( v.size(), sv8::max_size() );
+}
+#endif
+
+//------------------------------------------------------------------------------
+// Inline capacity that the heap-only representation already pays for
+//------------------------------------------------------------------------------
+
+template <typename T, typename SzT, std::uint32_t Expected>
+void expectFreeCapacity()
+{
+    static_assert( free_inline_capacity<T, SzT>() == Expected );
+    static_assert( sizeof( free_small_vector<T, SzT> ) == sizeof( heap_vector<T, SzT> ) );
+    // Expected is the largest fit, not merely a fit.
+    static_assert( sizeof( small_vector<T, Expected + 1, SzT> ) > sizeof( heap_vector<T, SzT> ) );
+
+    free_small_vector<T, SzT> v;
+    EXPECT_EQ( v.capacity(), Expected );
+    EXPECT_EQ( sizeof( v ), sizeof( heap_vector<T, SzT> ) );
+}
+
+TEST( SmallVectorFreeCapacity, costsNothingOverTheHeapOnlyFootprint )
+{
+    expectFreeCapacity<std::uint8_t , std::uint8_t , 15>();
+    expectFreeCapacity<std::uint8_t , std::uint16_t, 14>();
+    expectFreeCapacity<std::uint8_t , std::uint32_t, 12>();
+    expectFreeCapacity<std::uint8_t , std::uint64_t, 16>();
+    expectFreeCapacity<std::uint16_t, std::uint16_t,  7>();
+    expectFreeCapacity<std::uint16_t, std::uint32_t,  6>();
+    expectFreeCapacity<std::uint16_t, std::uint64_t,  8>();
+    expectFreeCapacity<std::uint32_t, std::uint32_t,  3>();
+    expectFreeCapacity<std::uint32_t, std::uint64_t,  4>();
+    expectFreeCapacity<std::uint64_t, std::uint32_t,  1>();
+    expectFreeCapacity<std::uint64_t, std::uint64_t,  2>();
+    expectFreeCapacity<double       , std::uint32_t,  1>();
+}
+
+TEST( SmallVectorFreeCapacity, doesNotCostHeapRange )
+{
+    // The inline capacity and the heap arm's counting range are independent:
+    // the free capacity below comes with the size type's full range, not with
+    // the range a narrower size type would leave.
+    using wide = free_small_vector<std::uint16_t, std::uint32_t>;
+    using narrow = free_small_vector<std::uint16_t, std::uint16_t>;
+    static_assert( sizeof( wide ) == sizeof( narrow ) );
+    static_assert( wide::max_size() == ( std::numeric_limits<std::uint32_t>::max() >> 1 ) );
+    static_assert( narrow::max_size() == ( std::numeric_limits<std::uint16_t>::max() >> 1 ) );
+    EXPECT_GT( wide::max_size(), narrow::max_size() );
+}
+
+template <typename T, typename SzT, std::uint32_t N>
+void expectAutoSelectIsSmallest()
+{
+    using selected = small_vector<T, N, SzT>;
+    static_assert( sizeof( selected ) <= sizeof( small_vector<T, N, SzT, msb_opts> ) );
+    static_assert( sizeof( selected ) <= sizeof( small_vector<T, N, SzT, lsb_opts> ) );
+    static_assert( sizeof( selected ) == sizeof( small_vector<T, N, SzT, emb_opts> ) );
+}
+
+TEST( SmallVectorFreeCapacity, autoSelectTakesTheSmallestLayout )
+{
+    expectAutoSelectIsSmallest<std::uint8_t , std::uint8_t , 15>();
+    expectAutoSelectIsSmallest<std::uint8_t , std::uint32_t, 12>();
+    expectAutoSelectIsSmallest<std::uint16_t, std::uint32_t,  6>();
+    expectAutoSelectIsSmallest<std::uint32_t, std::uint32_t,  3>();
+    expectAutoSelectIsSmallest<std::uint64_t, std::uint32_t,  1>();
+    expectAutoSelectIsSmallest<std::uint64_t, std::uint64_t,  2>();
+}
+
+TEST( SmallVectorFreeCapacity, reportsZeroWhenNothingFits )
+{
+    // An element that alone overruns the whole budget.
+    static_assert( free_inline_capacity<std::pair<std::uint8_t, void *>>() == 0 );
+
+    // Asking for a layout that keeps the size outside the union: it costs a
+    // word at every N, which is the whole slack for a heap-only footprint of
+    // pointer + size + capacity.
+    static_assert( free_inline_capacity<std::uint32_t, std::uint32_t, msb_opts>() == 0 );
+    static_assert( free_inline_capacity<std::uint32_t, std::uint32_t, lsb_opts>() == 0 );
+}
+
+TEST( SmallVectorFreeCapacity, behavesLikeAnExplicitlySizedSmallVector )
+{
+    exerciseSizePath<free_small_vector<std::uint16_t, std::uint16_t>,  7>();
+    exerciseSizePath<free_small_vector<std::uint8_t , std::uint8_t >, 15>();
+    exerciseSizePath<free_small_vector<std::uint32_t, std::uint32_t>,  3>();
+}
+
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm

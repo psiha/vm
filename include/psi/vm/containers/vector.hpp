@@ -313,8 +313,10 @@ private:
 #   endif
     }
 
-    // constructor helpers - for initializing the vector during construction
-    constexpr void initialized_impl( size_type const initial_size, no_init_t ) noexcept
+    // Constructor helpers. Potentially throwing: storage_init() allocates, and
+    // rejects sizes the storage cannot represent. The constructors' own
+    // noexcept-specifiers are what state the contract to callers.
+    constexpr void initialized_impl( size_type const initial_size, no_init_t )
     {
         storage_t::storage_init( initial_size );
         BOOST_ASSUME( this->size() == initial_size );
@@ -336,12 +338,12 @@ private:
     static constexpr value_type * gcc_dse_workaround( value_type * p ) noexcept { return p; }
 #endif
 
-    constexpr void initialized_impl( size_type const initial_size, default_init_t ) noexcept
+    constexpr void initialized_impl( size_type const initial_size, default_init_t )
     {
         initialized_impl( initial_size, no_init );
         std::uninitialized_default_construct_n( gcc_dse_workaround( this->data() ), this->size() );
     }
-    constexpr void initialized_impl( size_type const initial_size, value_init_t ) noexcept
+    constexpr void initialized_impl( size_type const initial_size, value_init_t )
     {
         initialized_impl( initial_size, no_init );
         if constexpr ( std::is_trivially_constructible_v<value_type> && storage_t::storage_zero_initialized )
