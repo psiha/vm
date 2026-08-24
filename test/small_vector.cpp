@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <limits>
 #include <numeric>
+#include <stdexcept>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -980,6 +981,45 @@ TEST( SmallVectorNarrowSize, sizeReachesItsRepresentableMaximum )
     v.clear();
     EXPECT_TRUE( v.empty() );
 }
+
+TEST( SmallVectorNarrowSize, geometricGrowthReachesTheRepresentableMaximum )
+{
+    // Geometric growth overshoots the ceiling on the last few steps; the
+    // overshoot is clamped, so appending all the way up to max_size() is legal.
+    using sv8 = sized_small_vector<std::uint8_t, 15, std::uint8_t>;
+    sv8 v;
+    for ( std::uint32_t i{ 0 }; i < sv8::max_size(); ++i )
+        v.push_back( static_cast<std::uint8_t>( i ) );
+    EXPECT_EQ( v.size    (), sv8::max_size() );
+    EXPECT_GE( v.capacity(), sv8::max_size() );
+    EXPECT_EQ( v[ 0 ], 0 );
+    EXPECT_EQ( v.back(), static_cast<std::uint8_t>( sv8::max_size() - 1 ) );
+}
+
+#if PSI_MALLOC_OVERCOMMIT != PSI_OVERCOMMIT_Full
+TEST( SmallVectorNarrowSize, sizingPastTheRepresentableMaximumIsRefused )
+{
+    // Where the library is allowed to report allocation limits at all, a size
+    // the layout cannot encode is reported rather than silently truncated.
+    using sv8 = sized_small_vector<std::uint8_t, 15, std::uint8_t>;
+    auto constexpr past_it{ static_cast<std::uint8_t>( sv8::max_size() + 1 ) };
+
+    sv8 v;
+    EXPECT_THROW( v.resize ( past_it ), std::length_error );
+    EXPECT_THROW( v.reserve( past_it ), std::length_error );
+    EXPECT_THROW( (void)sv8( past_it ), std::length_error );
+    EXPECT_EQ( v.size(), 0 );
+}
+
+TEST( SmallVectorNarrowSize, appendingPastTheRepresentableMaximumIsRefused )
+{
+    using sv8 = sized_small_vector<std::uint8_t, 15, std::uint8_t>;
+    sv8 v;
+    v.resize( sv8::max_size() );
+    EXPECT_THROW( v.push_back( 1 ), std::length_error );
+    EXPECT_EQ( v.size(), sv8::max_size() );
+}
+#endif
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm
