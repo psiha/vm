@@ -296,6 +296,15 @@ class sbo_hybrid<T, N, sz_t, options>
     static sz_t constexpr size_mask   { ~heap_flag };
     static sz_t constexpr max_size_val{ size_mask };
 
+public:
+    // The flag shares the size field, so the container cannot count as high as
+    // the size type alone would allow. Without this the generic fallback in
+    // `vector` reports the size type's full range and growth runs past what the
+    // layout can represent.
+    [[ nodiscard ]] static constexpr sz_t max_size() noexcept { return max_size_val; }
+
+private:
+
     union data_t {
         constexpr  data_t() noexcept : buffer_{} {}
         constexpr ~data_t() noexcept {}
@@ -425,6 +434,15 @@ class sbo_hybrid<T, N, sz_t, options>
 
     static sz_t constexpr max_size_val{ std::numeric_limits<sz_t>::max() >> 1 };
 
+public:
+    // The flag shares the size field, so the container cannot count as high as
+    // the size type alone would allow. Without this the generic fallback in
+    // `vector` reports the size type's full range and growth runs past what the
+    // layout can represent.
+    [[ nodiscard ]] static constexpr sz_t max_size() noexcept { return max_size_val; }
+
+private:
+
     union data_t {
         constexpr  data_t() noexcept : buffer_{} {}
         constexpr ~data_t() noexcept {}
@@ -442,19 +460,19 @@ class sbo_hybrid<T, N, sz_t, options>
     void set_inline_size( sz_t const sz ) noexcept
     {
         BOOST_ASSUME( sz <= N );
-        size_ = sz << 1; // LSB = 0 -> inline
+        size_ = static_cast<sz_t>( sz << 1 ); // LSB = 0 -> inline
     }
     void set_heap_state( T * __restrict const p, sz_t const cap, sz_t const sz ) noexcept
     {
         BOOST_ASSUME( sz <= max_size_val );
         storage_.heap_.data_     = p;
         storage_.heap_.capacity_ = cap;
-        size_                    = ( sz << 1 ) | 1; // LSB = 1 -> heap
+        size_                    = static_cast<sz_t>( ( sz << 1 ) | 1 ); // LSB = 1 -> heap
     }
     void set_size_preserving_flag( sz_t const sz ) noexcept
     {
         BOOST_ASSUME( sz <= max_size_val );
-        size_ = ( sz << 1 ) | ( size_ & 1 );
+        size_ = static_cast<sz_t>( ( sz << 1 ) | ( size_ & 1 ) );
     }
     void do_dec_size() noexcept { BOOST_ASSUME( this->size() >= 1 ); size_ -= 2; }
     void do_inc_size() noexcept { BOOST_ASSUME( this->size() < this->capacity() ); size_ += 2; }
@@ -471,7 +489,7 @@ class sbo_hybrid<T, N, sz_t, options>
 public:
     [[ nodiscard, gnu::pure ]] sz_t size() const noexcept
     {
-        auto const sz{ size_ >> 1 };
+        auto const sz{ static_cast<sz_t>( size_ >> 1 ) };
         BOOST_ASSUME( sz <= max_size_val );
         return sz;
     }
@@ -552,6 +570,15 @@ class sbo_hybrid<T, N, sz_t, options>
 
     static sz_t constexpr max_size_val{ std::numeric_limits<sz_t>::max() >> 1 };
 
+public:
+    // The flag shares the size field, so the container cannot count as high as
+    // the size type alone would allow. Without this the generic fallback in
+    // `vector` reports the size type's full range and growth runs past what the
+    // layout can represent.
+    [[ nodiscard ]] static constexpr sz_t max_size() noexcept { return max_size_val; }
+
+private:
+
     union data_t {
         // Named struct with no-op ctor -- avoids overwriting heap state when
         // inherited constructors re-default-initialize data members after the
@@ -580,19 +607,19 @@ class sbo_hybrid<T, N, sz_t, options>
     void set_inline_size( sz_t const sz ) noexcept
     {
         BOOST_ASSUME( sz <= N );
-        storage_.inline_.sz_ = sz << 1; // LSB = 0 -> inline
+        storage_.inline_.sz_ = static_cast<sz_t>( sz << 1 ); // LSB = 0 -> inline
     }
     void set_heap_state( T * __restrict const p, sz_t const cap, sz_t const sz ) noexcept
     {
         BOOST_ASSUME( sz <= max_size_val );
-        storage_.heap_.sz_   = ( sz << 1 ) | 1; // LSB = 1 -> heap
+        storage_.heap_.sz_   = static_cast<sz_t>( ( sz << 1 ) | 1 ); // LSB = 1 -> heap
         storage_.heap_.cap_  = cap;
         storage_.heap_.data_ = p;
     }
     void set_size_preserving_flag( sz_t const sz ) noexcept
     {
         BOOST_ASSUME( sz <= max_size_val );
-        storage_.heap_.sz_ = ( sz << 1 ) | ( storage_.heap_.sz_ & 1 );
+        storage_.heap_.sz_ = static_cast<sz_t>( ( sz << 1 ) | ( storage_.heap_.sz_ & 1 ) );
     }
     void do_dec_size() noexcept { BOOST_ASSUME( this->size() >= 1 ); storage_.heap_.sz_ -= 2; }
     void do_inc_size() noexcept { BOOST_ASSUME( this->size() < this->capacity() ); storage_.heap_.sz_ += 2; }
@@ -611,7 +638,7 @@ public:
     // correct sz_t regardless of active union member.
     [[ nodiscard, gnu::pure ]] sz_t size() const noexcept
     {
-        auto const sz{ storage_.heap_.sz_ >> 1 };
+        auto const sz{ static_cast<sz_t>( storage_.heap_.sz_ >> 1 ) };
         BOOST_ASSUME( sz <= max_size_val );
         return sz;
     }

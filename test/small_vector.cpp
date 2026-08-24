@@ -1,10 +1,13 @@
 // Small-vector-specific tests: inline storage, transitions, type erasure, etc.
 #include <psi/vm/containers/small_vector.hpp>
 
+#include <psi/vm/containers/heap_vector.hpp>
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <numeric>
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -897,6 +900,85 @@ TEST( small_vector_nontrivial, clear )
         EXPECT_EQ( v[ 0 ].value, 42 );
     }
     EXPECT_EQ( nontrivial_live_count.load(), baseline );
+}
+
+//------------------------------------------------------------------------------
+// Narrow size types
+//------------------------------------------------------------------------------
+// A size type no wider than the element alignment lets the size share the
+// union with the inline buffer, which is what keeps the whole container down to
+// the size of its heap-only representation.
+
+template <typename T, std::uint32_t N, typename SzT>
+using sized_small_vector = small_vector<T, N, SzT>;
+
+TEST( SmallVectorNarrowSize, layoutMatchesTheHeapOnlyRepresentation )
+{
+    EXPECT_EQ( sizeof( sized_small_vector<std::uint16_t,  7, std::uint16_t> ),
+               sizeof( heap_vector<std::uint16_t, std::uint16_t> ) );
+    EXPECT_EQ( sizeof( sized_small_vector<std::uint8_t , 15, std::uint8_t > ),
+               sizeof( heap_vector<std::uint8_t, std::uint8_t> ) );
+
+    // One element past the fit grows it; that is the boundary the capacity
+    // choice at a call site has to respect.
+    EXPECT_GT( sizeof( sized_small_vector<std::uint16_t, 8, std::uint16_t> ),
+               sizeof( sized_small_vector<std::uint16_t, 7, std::uint16_t> ) );
+}
+
+template <typename SV, std::uint32_t InlineCap>
+void exerciseSizePath()
+{
+    SV v;
+    EXPECT_TRUE( v.empty() );
+
+    for ( std::uint32_t i{ 0 }; i < InlineCap; ++i ) {
+        v.emplace_back( static_cast<typename SV::value_type>( i ) );
+        EXPECT_EQ( v.size(), i + 1 );
+    }
+    for ( std::uint32_t i{ 0 }; i < InlineCap; ++i ) {
+        EXPECT_EQ( v[ i ], static_cast<typename SV::value_type>( i ) );
+    }
+
+    // Spill to the heap and back: the size and the heap flag share one field,
+    // so every transition has to preserve both.
+    auto const spilled{ InlineCap + 5 };
+    for ( std::uint32_t i{ InlineCap }; i < spilled; ++i ) {
+        v.emplace_back( static_cast<typename SV::value_type>( i ) );
+    }
+    EXPECT_EQ( v.size(), spilled );
+    for ( std::uint32_t i{ 0 }; i < spilled; ++i ) {
+        EXPECT_EQ( v[ i ], static_cast<typename SV::value_type>( i ) );
+    }
+
+    while ( !v.empty() ) {
+        v.pop_back();
+    }
+    EXPECT_TRUE( v.empty() );
+    EXPECT_EQ( v.size(), 0 );
+}
+
+TEST( SmallVectorNarrowSize, sizeSurvivesEveryTransition )
+{
+    exerciseSizePath<sized_small_vector<std::uint16_t,  7, std::uint16_t>,  7>();
+    exerciseSizePath<sized_small_vector<std::uint16_t,  4, std::uint16_t>,  4>();
+    exerciseSizePath<sized_small_vector<std::uint8_t , 15, std::uint8_t >, 15>();
+    exerciseSizePath<sized_small_vector<std::uint32_t,  3, std::uint32_t>,  3>();
+}
+
+TEST( SmallVectorNarrowSize, sizeReachesItsRepresentableMaximum )
+{
+    // The high bit of the size field carries the heap flag, so the largest
+    // representable size is half the size type's range.
+    using sv8 = sized_small_vector<std::uint8_t, 15, std::uint8_t>;
+    EXPECT_EQ( sv8::max_size(), std::uint8_t{ std::numeric_limits<std::uint8_t>::max() >> 1 } );
+
+    sv8 v;
+    v.resize( sv8::max_size() );
+    EXPECT_EQ( v.size(), sv8::max_size() );
+    v.back() = 42;
+    EXPECT_EQ( v.back(), 42 );
+    v.clear();
+    EXPECT_TRUE( v.empty() );
 }
 
 //------------------------------------------------------------------------------
