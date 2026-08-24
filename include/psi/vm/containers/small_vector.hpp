@@ -66,7 +66,7 @@ namespace detail
         (
             Capacity != 0,
             "no inline capacity fits within the heap-only footprint for this element and size type: "
-            "narrow sz_t (or the layout), or name an explicit N to accept the larger object"
+            "narrow sz_t, leave the layout on auto_select, or name an explicit N to accept the larger object"
         );
         // The substitute keeps this alias well formed, so the assertion above
         // is the whole diagnostic rather than the head of a cascade.
@@ -77,10 +77,9 @@ namespace detail
 //! Largest N for which small_vector<T,N,sz_t,options> still fits inside
 //! sizeof( heap_vector<T,sz_t> ) -- i.e. the inline capacity that the
 //! heap-only representation already pays for. 0 when even one element does
-//! not fit, which happens whenever the resolved layout keeps the size outside
-//! the union (a size type wider than alignof( T ), or an explicit
-//! sbo_layout::compact) and whenever a single element alone overruns the
-//! budget.
+//! not fit: an element that alone overruns the budget, or an explicitly
+//! requested layout that keeps the size outside the union (which costs a word
+//! at every N, and is the whole slack of a pointer + size + capacity object).
 template <typename T, typename sz_t = std::uint32_t, sbo_options options = {}>
 [[ nodiscard ]] consteval std::uint32_t free_inline_capacity() noexcept
 {

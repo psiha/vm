@@ -57,7 +57,7 @@ namespace psi::vm
 ////////////////////////////////////////////////////////////////////////////////
 
 enum class sbo_layout : std::uint8_t {
-    auto_select,   // default -- resolved to best layout based on T and sz_t
+    auto_select,   // default -- resolved to the layout with the smallest footprint
     compact,       // union-based, MSB-of-size flag, trivially relocatable
     compact_lsb,   // union-based, size-first with LSB flag, trivially relocatable
     embedded,      // union-based, size inside union (LSB flag), trivially relocatable
@@ -71,13 +71,15 @@ struct sbo_options
 }; // struct sbo_options
 
 
+// `embedded` spends the size field inside the union, where it overlaps the heap
+// arm's own size; the other two spend a separate word on it outside the union,
+// so they are never smaller at any N and are a word larger whenever the inline
+// buffer would otherwise have fit within the heap-only footprint.
 template <typename T, typename sz_t>
 consteval sbo_layout resolve_layout( sbo_layout const l ) noexcept
 {
     if ( l == sbo_layout::auto_select )
-        return ( sizeof( sz_t ) > alignof( T ) )
-            ? sbo_layout::compact_lsb
-            : sbo_layout::embedded;
+        return sbo_layout::embedded;
     return l;
 }
 
@@ -321,7 +323,7 @@ class sbo_hybrid<T, N, sz_t, options>
     friend mixin;
 
     static sz_t constexpr heap_flag   { sz_t{ 1 } << ( sizeof( sz_t ) * CHAR_BIT - 1 ) };
-    static sz_t constexpr size_mask   { ~heap_flag };
+    static sz_t constexpr size_mask   { static_cast<sz_t>( ~heap_flag ) }; // ~ promotes to int for a narrow sz_t
     static sz_t constexpr max_size_val{ size_mask };
 
     static_assert( static_cast<std::uintmax_t>( N ) <= static_cast<std::uintmax_t>( max_size_val ), "inline capacity beyond what the size type can hold next to the heap flag" );
