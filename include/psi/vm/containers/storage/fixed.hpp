@@ -130,6 +130,11 @@ public:
     // handler and storage_inc_size() asserts.
     [[ nodiscard, gnu::pure  ]]        constexpr size_type size    () const noexcept { BOOST_ASSUME_UNCHECKED( size_ <= static_capacity ); return size_; }
     [[ nodiscard, gnu::const ]] static constexpr size_type capacity()       noexcept { return static_capacity; }
+    // The storage counts elements, not bytes: without this the vector's
+    // generic fallback (numeric_limits<size_type>::max() / sizeof(value_type))
+    // under-reports the limit for every multi-byte value_type once size_type is
+    // narrowed to the capacity (e.g. 255 / sizeof(uint16_t) = 127).
+    [[ nodiscard, gnu::const ]] static constexpr size_type max_size()       noexcept { return static_capacity; }
     [[ nodiscard, gnu::pure  ]]        constexpr bool      empty   () const noexcept { return !size_; }
 
     [[ nodiscard, gnu::const ]] constexpr value_type       * data()       noexcept { return array_.data; }
