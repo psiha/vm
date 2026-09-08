@@ -51,6 +51,7 @@
 #pragma once
 
 #include <psi/vm/containers/fc_vector.hpp>
+#include <psi/vm/containers/strided_view.hpp>
 #include <psi/vm/containers/growth_policy.hpp>
 #include <psi/vm/containers/heap_vector.hpp>
 #include <psi/vm/containers/small_vector.hpp>
@@ -664,6 +665,26 @@ public:
     [[ nodiscard ]] constexpr const_reference front() const noexcept { BOOST_ASSERT( !empty() ); return (*this)[ 0 ]; }
     [[ nodiscard ]] constexpr reference       back ()       noexcept { BOOST_ASSERT( !empty() ); return (*this)[ size() - 1 ]; }
     [[ nodiscard ]] constexpr const_reference back () const noexcept { BOOST_ASSERT( !empty() ); return (*this)[ size() - 1 ]; }
+
+    //--------------------------------------------------------------------------
+    // Transverse (per-field) access
+    //
+    // The other axis: one field position of every entry, as a flat
+    // random-access range of `T` (see strided_view). `operator[]` walks an
+    // entry, `field()` walks the array.
+    //--------------------------------------------------------------------------
+private:
+    // strided_view counts entries in 32 bits (it is a two-word view); a larger
+    // container has no transverse view.
+    [[ nodiscard ]] constexpr typename strided_view<T>::size_type field_size() const noexcept
+    {
+        BOOST_ASSERT( size() <= std::numeric_limits<typename strided_view<T>::size_type>::max() );
+        return static_cast<typename strided_view<T>::size_type>( size() );
+    }
+
+public:
+    [[ nodiscard ]] constexpr strided_view<T const> field( stride_type const lane ) const noexcept { BOOST_ASSERT( lane < stride() ); return { data_.data() + lane, stride_ * sizeof( T ), field_size() }; }
+    [[ nodiscard ]] constexpr strided_view<T      > field( stride_type const lane )       noexcept { BOOST_ASSERT( lane < stride() ); return { data_.data() + lane, stride_ * sizeof( T ), field_size() }; }
 
     //--------------------------------------------------------------------------
     // Raw data access
