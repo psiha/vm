@@ -259,6 +259,11 @@ protected: // pass-in-reg public function overloads/impls
 
 private:
     // lower_bound find >limited to/within a node<
+    // The capacity is the searched node's own, not the leaf's: it bounds
+    // num_vals and it selects the intra-node search. Inner and leaf nodes hold
+    // a different number of entries the moment a leaf carries anything besides
+    // the key (a map), and for a set the two still differ by the child slots.
+    template <node_size_type maximum_values>
     [[ using gnu: pure, hot, noinline, sysv_abi, leaf ]]
     static find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const key, pass_in_reg<Comparator> const comparator ) noexcept
     {
@@ -267,13 +272,13 @@ private:
         // https://algorithmica.org/en/eytzinger
         // FAST: Fast Architecture Sensitive Tree Search on Modern CPUs and GPUs http://kaldewey.com/pubs/FAST__SIGMOD10.pdf
         // ...
-        BOOST_ASSUME( num_vals >  0                     );
-        BOOST_ASSUME( num_vals <= leaf_node::max_values );
+        BOOST_ASSUME( num_vals >  0              );
+        BOOST_ASSUME( num_vals <= maximum_values );
         Comparator const & __restrict comp( comparator );
         decltype( auto ) value{ prefetch( comp, key ) };
         auto const pos_iter
         {
-            use_linear_search_for_sorted_array<Comparator, Key, leaf_node::max_values>
+            use_linear_search_for_sorted_array<Comparator, Key, maximum_values>
                 ? linear_lower_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
                 :   std::lower_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
         };
@@ -281,13 +286,14 @@ private:
         auto const exact_find{ ( pos_idx != num_vals ) && !comp( value, keys[ pos_idx ] ) };
         return { pos_idx, exact_find };
     }
-    find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return lower_bound( keys, num_vals, value, pass_in_reg{ comp() } ); }
-    find_pos lower_bound( auto const & node, auto const & value ) const noexcept { return lower_bound( node.keys, node.num_vals, pass_in_reg{ value } ); }
+    template <node_size_type maximum_values>
+    find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return lower_bound<maximum_values>( keys, num_vals, value, pass_in_reg{ comp() } ); }
+    find_pos lower_bound( auto const & node, auto const & value ) const noexcept { return lower_bound<node_capacity<decltype( node )>>( node.keys, node.num_vals, pass_in_reg{ value } ); }
     [[ using gnu: pure, hot, sysv_abi ]]
     find_pos lower_bound( auto const & node, node_size_type const offset, Reg auto const value ) const noexcept
     {
         BOOST_ASSUME( offset < node.num_vals );
-        auto result{ lower_bound( &node.keys[ offset ], node.num_vals - offset, value ) };
+        auto result{ lower_bound<node_capacity<decltype( node )>>( &node.keys[ offset ], node.num_vals - offset, value ) };
         result.pos += offset;
         return result;
     }
@@ -302,28 +308,30 @@ protected:
     size_type erase_sorted_exact  ( std::span<Key const> keys_to_remove                         , bool unique ) noexcept { return erase_sorted_impl<true >( keys_to_remove, unique ); }
 
     // upper_bound find >limited to/within a node<
+    template <node_size_type maximum_values>
     [[ using gnu: pure, hot, noinline, sysv_abi, leaf ]]
     static node_size_type upper_bound( Key const keys[], node_size_type const num_vals, Reg auto const key, pass_in_reg<Comparator> const comparator ) noexcept
     {
-        BOOST_ASSUME( num_vals >  0                     );
-        BOOST_ASSUME( num_vals <= leaf_node::max_values );
+        BOOST_ASSUME( num_vals >  0              );
+        BOOST_ASSUME( num_vals <= maximum_values );
         Comparator const & __restrict comp( comparator );
         decltype( auto ) value{ prefetch( comp, key ) };
         auto const pos_iter
         {
-            use_linear_search_for_sorted_array<Comparator, Key, leaf_node::max_values>
+            use_linear_search_for_sorted_array<Comparator, Key, maximum_values>
                 ? linear_upper_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
                 :   std::upper_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
         };
         return static_cast<node_size_type>( std::distance( &keys[ 0 ], pos_iter ) );
     }
-    node_size_type upper_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return upper_bound( keys, num_vals, value, pass_in_reg{ comp() } ); }
-    node_size_type upper_bound( auto const & node, auto const & value ) const noexcept { return upper_bound( node.keys, node.num_vals, pass_in_reg{ value } ); }
+    template <node_size_type maximum_values>
+    node_size_type upper_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return upper_bound<maximum_values>( keys, num_vals, value, pass_in_reg{ comp() } ); }
+    node_size_type upper_bound( auto const & node, auto const & value ) const noexcept { return upper_bound<node_capacity<decltype( node )>>( node.keys, node.num_vals, pass_in_reg{ value } ); }
     [[ using gnu: pure, hot, sysv_abi ]]
     node_size_type upper_bound( auto const & node, node_size_type const offset, Reg auto const value ) const noexcept
     {
         BOOST_ASSUME( offset < node.num_vals );
-        return upper_bound( &node.keys[ offset ], node.num_vals - offset, value ) + offset;
+        return upper_bound<node_capacity<decltype( node )>>( &node.keys[ offset ], node.num_vals - offset, value ) + offset;
     }
 
     // upper_bound find >from a starting point, across nodes within the level/depth of the starting node<

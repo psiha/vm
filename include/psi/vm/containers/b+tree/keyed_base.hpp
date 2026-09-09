@@ -159,6 +159,8 @@ protected: // node types
         // intermediate state where the two children would get merged) and isn't
         // worth supporting (bordering on a plain BST).
         static_assert( min_children >= 3 );
+        // see the leaf_node twin: the 2-into-1 merge has to fit
+        static_assert( 2 * min_children <= parent_node::max_children + 1 );
     }; // struct inner_node
 
     struct root_node : parent_node
@@ -175,6 +177,19 @@ protected: // node types
         static node_size_type constexpr storage_space{ static_cast<node_size_type>( node_size - align_up( sizeof( node_header ), alignof( Key ) ) ) };
         static node_size_type constexpr max_values   { storage_space / sizeof( Key ) };
         static node_size_type constexpr min_values   { ihalf_ceil<max_values> };
+
+        // The tree's central inequality, and the reason a minimum fill of half
+        // the capacity is not an arbitrary choice: it is exactly what makes
+        // "either a sibling can lend a value, or the two of them merge into
+        // one node" true, which is what the entire underflow half of the tree
+        // (handle_underflow, merge_right_into_left, append_and_free and the
+        // bulk-fill partitions written as `min_values * 2`) rests on.  Raising
+        // the minimum past it does not merely make those sites suboptimal - it
+        // makes the 2-into-1 merge overflow the node, silently, before it
+        // asserts.  A higher fill target therefore has to bring its own merge
+        // shape (3-into-2) and re-state this bound; it can never be a constant
+        // bump.
+        static_assert( 2 * min_values <= max_values + 1 );
 
         Key keys[ max_values ];
     }; // struct leaf_node

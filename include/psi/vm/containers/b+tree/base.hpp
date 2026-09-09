@@ -326,6 +326,15 @@ protected:
     static constexpr auto children( auto       & node ) noexcept { verify( node ); if constexpr ( requires{ node.children; } ) return std::span{ node.children, static_cast<size_type>( node.num_vals + 1U ) }; else return std::array<node_slot, 0>{}; }
     static constexpr auto children( auto const & node ) noexcept { verify( node ); if constexpr ( requires{ node.children; } ) return std::span{ node.children, static_cast<size_type>( node.num_vals + 1U ) }; else return std::array<node_slot, 0>{}; }
 
+    // How many entries the node type actually being worked on holds. Leaf and
+    // inner capacities are not interchangeable: they already differ for a set
+    // (the inner node spends space on child slots), and a map inverts which of
+    // the two is larger.  It lives here, on the non-dependent base, so that
+    // unqualified lookup finds it from the class templates below - it needs
+    // nothing from the key type.
+    template <typename N>
+    static node_size_type constexpr node_capacity{ std::remove_cvref_t<N>::max_values };
+
     [[ gnu::pure ]] static constexpr node_size_type num_vals  ( auto const & node ) noexcept { return node.num_vals; }
     [[ gnu::pure ]] static constexpr node_size_type num_chldrn( auto const & node ) noexcept { if constexpr ( requires{ node.children; } ) { BOOST_ASSUME( node.num_vals ); return node.num_vals + 1U; } else return 0; }
 
