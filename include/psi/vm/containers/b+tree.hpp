@@ -129,10 +129,10 @@ public:
         (
             (
                 ( ( leaf_key_offset + 1 ) < leaf.num_vals ) &&
-                lt( key, leaf.keys[ leaf_key_offset + 1 ] )
+                lt( key, key_at( leaf, leaf_key_offset + 1 ) )
             ) ||
             ( !leaf.right ) ||
-            lt( key, this->right( leaf ).keys[ 0 ] )
+            lt( key, key_at( this->right( leaf ), 0 ) )
         ) [[ likely ]]
         {
             return this->erase_single( location );
