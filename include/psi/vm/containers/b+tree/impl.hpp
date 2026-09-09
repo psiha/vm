@@ -967,7 +967,7 @@ bp_tree_impl<Key, Comparator>::merge
             nxt_tgt_offset = lower_bound( tgt, nxt_tgt_offset, key_const_arg{ src.keys[ nxt_src_offset ] } ).pos;
         }
 #   else
-        auto [target_slot, nxt_tgt_offset]{ base::split_to_insert( target, target_offset, pass_rv_in_reg{ /*mrmlj*/Key{ src_keys[ 0 ] } }, {} ) };
+        auto [target_slot, nxt_tgt_offset]{ base::overflow_to_insert( target, target_offset, pass_rv_in_reg{ /*mrmlj*/Key{ src_keys[ 0 ] } }, {} ) };
         auto & tgt{ leaf( target_slot ) };
 #   endif
         verify_min_max( tgt );
