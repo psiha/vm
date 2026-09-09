@@ -764,6 +764,32 @@ TYPED_TEST( vector_compliance, shrink_to_fit )
     EXPECT_EQ( v[ 2 ], 3 );
 }
 
+TYPED_TEST( vector_compliance, shrink_to_fit_on_a_never_allocated_vector )
+{
+    // A default-constructed vector holds no block, so shrink_to_fit() has nothing
+    // to give back — and must not reach the allocator with a null pointer.
+    TypeParam v;
+    v.shrink_to_fit();
+    EXPECT_TRUE( v.empty() );
+    EXPECT_GE  ( v.capacity(), v.size() );
+    // still usable afterwards
+    v.push_back( 7 );
+    EXPECT_EQ( v.size(), 1 );
+    EXPECT_EQ( v[ 0 ], 7 );
+}
+
+TYPED_TEST( vector_compliance, shrink_to_fit_after_clear_releases_and_stays_usable )
+{
+    TypeParam v{ 1, 2, 3 };
+    v.reserve( 100 );
+    v.clear();
+    v.shrink_to_fit();
+    EXPECT_TRUE( v.empty() );
+    v.push_back( 42 );
+    EXPECT_EQ( v.size(), 1 );
+    EXPECT_EQ( v[ 0 ], 42 );
+}
+
 TYPED_TEST( vector_compliance, resize_grow )
 {
     TypeParam v{ 1, 2, 3 };

@@ -369,6 +369,17 @@ public:
     constexpr value_type * storage_shrink_to( size_type const target_size ) noexcept
     {
         BOOST_ASSUME( target_size <= size_ );
+        // Nothing was ever allocated (the storage_init( 0 ) / mark_freed state): there
+        // is no block to shrink or free, and the allocators' in-place shrink does not
+        // accept a null pointer (MSVC's _expand invokes the invalid-parameter handler
+        // on one, i.e. it does not merely fail). shrink_to_fit() on a default-
+        // constructed container reaches exactly this state.
+        if ( !p_array_ ) [[ unlikely ]]
+        {
+            BOOST_ASSUME( !size_       );
+            BOOST_ASSUME( !target_size );
+            return data();
+        }
         // Gate in-place shrink on alignment: CRT's _expand only works on regular malloc allocations.
         constexpr bool effective_guaranteed_in_place_shrink{
             al::guaranteed_in_place_shrink &&
