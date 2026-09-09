@@ -186,6 +186,82 @@ TEST( bp_tree, benchamrk )
     EXPECT_LE( bpt_find, flat_set_find );
 #endif
 } // bp_tree.benchamrk
+
+namespace
+{
+    // What a real index comparator looks like: the tree stores row indices and
+    // ordering means dereferencing a column.  Every comparison is a scattered
+    // load rather than a read of a key the scan already has in the cache line
+    // it is walking, which is the whole economics of the intra-node search - so
+    // a node-size or linear-vs-binary answer obtained with std::less on the
+    // keys themselves does not transfer to it.
+    struct indirect_less
+    {
+        std::uint32_t const * values;
+        [[ gnu::pure ]] bool operator()( std::uint32_t const left, std::uint32_t const right ) const noexcept
+        {
+            return values[ left ] < values[ right ];
+        }
+    };
+} // anonymous namespace
+
+// The linear path is gated on is_simple_comparator, which is a statement about
+// whether == may replace the double-negation equivalence test - not about cost.
+// Indirect comparators do satisfy it, and consumers specialise it exactly like
+// this, so the linear scan is reachable with an indirect comparison and this is
+// the configuration that says what that costs.
+template <> inline constexpr bool is_simple_comparator<indirect_less>{ true };
+
+TEST( bp_tree, benchmark_indirect_comparator )
+{
+    auto const   test_size{ 7654321 };
+    std::mt19937 rng{ PSI_VM_BENCH_SEED };
+
+    // values[ row ] is what orders row.  The rows are inserted in a random
+    // order and their values are a random permutation too, so neither the keys
+    // nor the memory they are read from arrive in order.
+    std::vector<std::uint32_t> values( test_size );
+    std::iota( values.begin(), values.end(), 0u );
+    std::ranges::shuffle( values, rng );
+    auto rows{ std::ranges::to<std::vector>( std::views::iota( 0u, std::uint32_t( test_size ) ) ) };
+    std::ranges::shuffle( rows, rng );
+
+    using bpt_t = psi::vm::bp_tree<std::uint32_t, true, indirect_less>;
+    auto constexpr leaf_values { bpt_t::max_values_per_leaf () };
+    auto constexpr inner_values{ bpt_t::max_values_per_inner() };
+    std::println
+    (
+        "indirect comparator - geometry: {}-byte nodes, {} values/leaf, {} values/inner\n"
+        "intra-node search: linear_search_byte_limit={}, leaf={}, inner={}",
+        bpt_t::node_byte_size(), leaf_values, inner_values,
+        linear_search_byte_limit,
+        use_linear_search_for_sorted_array<indirect_less, std::uint32_t, leaf_values  > ? "LINEAR" : "binary",
+        use_linear_search_for_sorted_array<indirect_less, std::uint32_t, inner_values > ? "LINEAR" : "binary"
+    );
+
+    bpt_t bpt{ indirect_less{ values.data() } }; bpt.map_memory();
+
+    auto const insert{ time_insertion_one_by_one( bpt, rows ) };
+    // find( row ) locates the entry equivalent to row under the comparator, so
+    // the checksum is the sum of the rows' VALUES, not of the rows.
+    auto const expected{ std::accumulate( values.begin(), values.end(), std::uint64_t{ 0 } ) };
+    duration best{ duration::max() };
+    for ( auto pass{ 0 }; pass < lookup_passes; ++pass )
+    {
+        std::uint64_t sum{ 0 };
+        auto const start{ timer::now() };
+        for ( auto const row : rows ) { sum += values[ *bpt.find( row ) ]; }
+        auto const elapsed{ duration{ timer::now() - start } / rows.size() };
+        EXPECT_EQ( sum, expected );
+        best = std::min( best, elapsed );
+    }
+    auto const bytes{ std::size_t( bpt.nodes_reserved() ) * bpt_t::node_byte_size() };
+    std::println
+    (
+        "	 random one-by-one insert / random lookup [ns/key]:	{} / {}	{:.2f} bytes/key",
+        insert, best, double( bytes ) / test_size
+    );
+} // bp_tree.benchmark_indirect_comparator
 #endif // release build
 
 static auto const test_file{ "test.bpt" };
