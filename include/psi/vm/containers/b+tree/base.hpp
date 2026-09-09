@@ -20,6 +20,7 @@
 #include <boost/stl_interfaces/iterator_interface.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <array>
 #include <bit>
 #include <climits>
@@ -29,6 +30,13 @@
 #include <span>
 #include <type_traits>
 #include <utility>
+// Node header layout policy - see node_header's note.  0 (default): the front
+// gap is its own member, costing one entry per node, every field a plain load.
+// 1: the counted fields share one 32-bit word, costing no capacity, at the
+// price of a bit extract on num_vals and a gap capped at 255 entries.
+#ifndef PSI_VM_BT_PACKED_NODE_HEADER
+#   define PSI_VM_BT_PACKED_NODE_HEADER 0
+#endif
 
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -196,34 +204,67 @@ protected:
         node_slot parent  {};
         node_slot left    {};
         node_slot right   {};
-        size_type num_vals{};
+        // --- the counted fields, in one of two layouts (see the note below) ---
+#if PSI_VM_BT_PACKED_NODE_HEADER
+        static constexpr auto max_entries_ { std::uint32_t{ node_size - minimum_header_size } };
+        // children always cost a slot each, so this bound does not depend on Key
+        static constexpr auto max_children_{ max_entries_ / ( 1 + sizeof( node_slot ) ) + 1 };
+        static constexpr auto num_vals_bits_ { std::uint32_t( std::bit_width( max_entries_  ) ) };
+        static constexpr auto chld_idx_bits_ { std::uint32_t( std::bit_width( max_children_ ) ) };
+        static constexpr auto start_bits_    { std::uint32_t{ 8 } };
+        static_assert( num_vals_bits_ + chld_idx_bits_ + start_bits_ + 1 <= 32,
+                       "the packed node header does not fit at this node size" );
 
-        // Compute whether a plain bool for 'dirty' fits in the struct's tail
-        // alignment padding without increasing sizeof(node_header). This holds
-        // when the raw layout leaves ≥1 byte of slack before the next alignment
-        // boundary — e.g. 256B nodes: size_type=uint8_t, 3*4+2*1=14B raw →
-        // 16B padded (4B align) → 2B slack → bool fits. 4096B nodes: uint16_t,
-        // 3*4+2*2=16B raw → 16B padded → 0B slack → bitfield required.
-        static constexpr auto raw_bf_size_ { 3 * sizeof( node_slot ) + 2 * sizeof( size_type ) };
-        static constexpr auto padded_size_ { ( raw_bf_size_ + alignof( node_slot ) - 1 ) / alignof( node_slot ) * alignof( node_slot ) };
-        static constexpr bool dirty_is_bool{ padded_size_ - raw_bf_size_ >= sizeof( bool ) };
+        std::uint32_t num_vals         : num_vals_bits_ { 0 };
+        std::uint32_t start            : start_bits_    { 0 };
+        std::uint32_t parent_child_idx : chld_idx_bits_ { 0 };
+        std::uint32_t dirty            : 1              { 0 };
 
-        // Conditional tail: full-width parent_child_idx + bool dirty when there
-        // is alignment padding to spare (simpler codegen — no bit extract/insert);
-        // otherwise pack both into one size_type via bitfields to preserve node
-        // key/value capacity.
-        struct bitfield_tail { size_type parent_child_idx : sizeof( size_type ) * CHAR_BIT - 1; size_type dirty : 1; };
-        struct bool_tail     { size_type parent_child_idx;                                      bool      dirty;     };
-        using tail_t = std::conditional_t<dirty_is_bool, bool_tail, bitfield_tail>;
-        tail_t tail{};
+        static constexpr std::uint32_t max_front_gap{ ( std::uint32_t{ 1 } << start_bits_ ) - 1 };
+#else
+        size_type num_vals        {};
+        size_type start           {};
+        size_type parent_child_idx{};
+        bool      dirty           {};
 
-      /* TODO
-        size_type start; // make keys and children arrays function as devectors: allow empty space at the beginning to avoid moves for smaller borrowings
-      */
+        static constexpr std::uint32_t max_front_gap{ node_size };  // never binds
+#endif
+
+        // Where this node's live entries begin - the devector front gap.  It
+        // lets entries be taken from or given to the FRONT of a node without
+        // moving the rest: relieve_into_sibling and handle_underflow's borrow
+        // branches each hand over a few entries and today pay a whole-node
+        // move to do it, which is the wrong way round - the move is largest
+        // exactly when the number of entries handed over is smallest.
+        //
+        // Two layouts, because this is a genuine trade and not a free win:
+        //
+        //   plain  - 'start' is its own member.  sizeof(node_header) grows by
+        //            the ALIGNMENT of node_slot, not by the width of the field
+        //            (the header is already a multiple of it), so it costs
+        //            exactly one entry per node - 1 of 1020 at 4096-byte nodes
+        //            with 4-byte keys.  Every field stays a plain load.
+        //
+        //   packed - num_vals, start, parent_child_idx and dirty share one
+        //            32-bit word, so the header does not grow at all and no
+        //            capacity is lost.  The cost is that num_vals, read on
+        //            every node visit, becomes a bit extract, and the gap is
+        //            capped at 255 entries (beyond that the node is recentred
+        //            instead, which is only the move this was avoiding).
+        //
+        // The packed budget, in bits, from node_size alone - the header cannot
+        // see Key, so these are the conservative bounds:
+        //   num_vals         ceil_log2( node_size - minimum_header_size )
+        //   parent_child_idx ceil_log2( storage / ( 1 + sizeof( node_slot ) ) )
+        //                    - children always cost a slot each, so this bound
+        //                      does NOT depend on the key width
+        //   start            capped at 8
+        //   dirty            1
+        // 4096-byte nodes: 12 + 10 + 8 + 1 = 31.  512-byte: 9 + 7 + 8 + 1 = 25.
 
         [[ gnu::pure ]] bool is_root() const noexcept { return !parent; }
 
-        void mark_dirty() noexcept { tail.dirty = true; }
+        void mark_dirty() noexcept { dirty = true; }
 
 #   ifndef __clang__ // https://github.com/llvm/llvm-project/issues/36032
         // merely to prevent slicing (in return-node-by-ref cases)
@@ -332,10 +373,10 @@ protected:
         BOOST_ASSUME( node.num_vals >= node.min_values );
     }
 
-    static constexpr auto keys    ( auto       & node ) noexcept { verify( node );                                             return std::span{ node.keys    , static_cast<size_type>( node.num_vals      ) }; }
-    static constexpr auto keys    ( auto const & node ) noexcept { verify( node );                                             return std::span{ node.keys    , static_cast<size_type>( node.num_vals      ) }; }
-    static constexpr auto children( auto       & node ) noexcept { verify( node ); if constexpr ( requires{ node.children; } ) return std::span{ node.children, static_cast<size_type>( node.num_vals + 1U ) }; else return std::array<node_slot, 0>{}; }
-    static constexpr auto children( auto const & node ) noexcept { verify( node ); if constexpr ( requires{ node.children; } ) return std::span{ node.children, static_cast<size_type>( node.num_vals + 1U ) }; else return std::array<node_slot, 0>{}; }
+    static constexpr auto keys    ( auto       & node ) noexcept { verify( node );                                             return std::span{ &node.keys    [ node.start ], static_cast<size_type>( node.num_vals      ) }; }
+    static constexpr auto keys    ( auto const & node ) noexcept { verify( node );                                             return std::span{ &node.keys    [ node.start ], static_cast<size_type>( node.num_vals      ) }; }
+    static constexpr auto children( auto       & node ) noexcept { verify( node ); if constexpr ( requires{ node.children; } ) return std::span{ &node.children[ node.start ], static_cast<size_type>( node.num_vals + 1U ) }; else return std::array<node_slot, 0>{}; }
+    static constexpr auto children( auto const & node ) noexcept { verify( node ); if constexpr ( requires{ node.children; } ) return std::span{ &node.children[ node.start ], static_cast<size_type>( node.num_vals + 1U ) }; else return std::array<node_slot, 0>{}; }
 
     // How many entries the node type actually being worked on holds. Leaf and
     // inner capacities are not interchangeable: they already differ for a set
@@ -355,8 +396,8 @@ public:
     // a nested class its enclosing class's access rights, but MSVC does not
     // grant that through a dependent base.  Nothing outside can call it anyway -
     // the node types it takes are themselves not nameable from out here.
-    static constexpr decltype( auto ) key_at( auto       & node, auto const i ) noexcept { return ( node.keys[ i ] ); }
-    static constexpr decltype( auto ) key_at( auto const & node, auto const i ) noexcept { return ( node.keys[ i ] ); }
+    static constexpr decltype( auto ) key_at( auto       & node, auto const i ) noexcept { return ( node.keys[ node.start + i ] ); }
+    static constexpr decltype( auto ) key_at( auto const & node, auto const i ) noexcept { return ( node.keys[ node.start + i ] ); }
 protected:
 
     [[ gnu::pure ]] static constexpr node_size_type num_vals  ( auto const & node ) noexcept { return node.num_vals; }
@@ -372,12 +413,12 @@ protected:
     template <auto array>
     static auto rshift( auto & node, node_size_type const start_offset, node_size_type const end_offset ) noexcept
     {
-        auto const max{ std::size( node.*array ) };
+        auto const max{ std::size( node.*array ) - node.start };
         BOOST_ASSUME(   end_offset <= max        );
         BOOST_ASSUME( start_offset  < max        );
         BOOST_ASSUME( start_offset  < end_offset );
-        auto const begin{ &(node.*array)[ start_offset ] };
-        auto const end  { &(node.*array)[   end_offset ] };
+        auto const begin{ &(node.*array)[ node.start + start_offset ] };
+        auto const end  { &(node.*array)[ node.start +   end_offset ] };
         auto const new_begin{ std::shift_right( begin, end, 1 ) };
         BOOST_ASSUME( new_begin == begin + 1 );
         return std::span{ new_begin, end };
@@ -387,12 +428,12 @@ protected:
     template <auto array>
     static auto lshift( auto & node, node_size_type const start_offset, node_size_type const end_offset ) noexcept
     {
-        auto const max{ std::size( node.*array ) };
+        auto const max{ std::size( node.*array ) - node.start };
         BOOST_ASSUME(   end_offset <= max        );
         BOOST_ASSUME( start_offset  < max        );
         BOOST_ASSUME( start_offset  < end_offset );
-        auto const begin{ &(node.*array)[ start_offset ] };
-        auto const end  { &(node.*array)[   end_offset ] };
+        auto const begin{ &(node.*array)[ node.start + start_offset ] };
+        auto const end  { &(node.*array)[ node.start +   end_offset ] };
         auto const new_end{ std::shift_left( begin, end, 1 ) };
         BOOST_ASSUME( new_end == end - 1 );
         return std::span{ begin, new_end };
@@ -422,13 +463,13 @@ protected:
     static void shift_entries_left( N & node, auto const first, auto const last, auto const distance ) noexcept
     {
         std::shift_left( &key_at( node, first ), &key_at( node, last ), distance );
-        if constexpr ( has_mapped_values<N> ) std::shift_left( &node.values[ first ], &node.values[ last ], distance );
+        if constexpr ( has_mapped_values<N> ) std::shift_left( &node.values[ node.start + first ], &node.values[ node.start + last ], distance );
     }
     template <typename N>
     static void shift_entries_right( N & node, auto const first, auto const last, auto const distance ) noexcept
     {
         std::shift_right( &key_at( node, first ), &key_at( node, last ), distance );
-        if constexpr ( has_mapped_values<N> ) std::shift_right( &node.values[ first ], &node.values[ last ], distance );
+        if constexpr ( has_mapped_values<N> ) std::shift_right( &node.values[ node.start + first ], &node.values[ node.start + last ], distance );
     }
 
     template <typename N>
@@ -437,7 +478,7 @@ protected:
         for ( auto ch_slot : shifted_children )
         {
             auto & child{ node( ch_slot ) };
-            child.tail.parent_child_idx++;
+            child.parent_child_idx++;
             child.mark_dirty();
         }
     }
@@ -447,7 +488,7 @@ protected:
         for ( auto ch_slot : shifted_children )
         {
             auto & child{ node( ch_slot ) };
-            child.tail.parent_child_idx--;
+            child.parent_child_idx--;
             child.mark_dirty();
         }
     }
