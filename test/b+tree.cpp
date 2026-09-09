@@ -29,10 +29,25 @@ namespace psi::vm
 
 #ifdef NDEBUG // bench only release builds
 
+// A/B arms are separately built binaries and have to see the same shuffle, so
+// the seed is fixed rather than drawn from random_device.  Override to vary it
+// deliberately.
+#ifndef PSI_VM_BENCH_SEED
+#   define PSI_VM_BENCH_SEED 0x5eed1234u
+#endif
+
 namespace
 {
-    using timer    = std::chrono::high_resolution_clock;
-    using duration = std::chrono::nanoseconds;
+    using timer = std::chrono::high_resolution_clock;
+    // Fractional nanoseconds: the per-key figure is a total divided by millions,
+    // and truncating it to whole nanoseconds throws away the resolution the
+    // comparison is made at.
+    using duration = std::chrono::duration<double, std::nano>;
+
+    // A single pass is not separable from scheduling noise at the ~15% deltas
+    // this benchmark exists to resolve, so a lookup pass is repeated and the
+    // best one reported.
+    auto constexpr lookup_passes{ 3 };
 
 #if HAVE_ABSL
     // absl::btree_set exposes bytes_used() only on the internal btree, so the
@@ -55,33 +70,60 @@ namespace
     {
         auto const start{ timer::now() };
         container.insert( data.begin(), data.end() );
-        return std::chrono::duration_cast<duration>( timer::now() - start ) / data.size();
+        return duration{ timer::now() - start } / data.size();
     }
     duration time_insertion_one_by_one( auto & container, auto const & data )
     {
         auto const start{ timer::now() };
         for ( auto const x : data ) { container.insert( x ); }
-        return std::chrono::duration_cast<duration>( timer::now() - start ) / data.size();
+        return duration{ timer::now() - start } / data.size();
     }
-    duration time_lookup( auto const & container, auto const & data ) noexcept
+    // The lookup loop accumulates rather than asserting: an EXPECT_EQ per key is
+    // gtest machinery inside the timed region, millions of times over, and it
+    // swamps the difference between two search implementations.  The checksum is
+    // checked once the clock has stopped, and it is also what keeps the searches
+    // from being elided.
+    duration time_lookup( auto const & container, auto const & data, std::uint64_t const expected_checksum ) noexcept
     {
-        auto const start{ timer::now() };
-        for ( auto const x : data ) {
-            EXPECT_EQ( *container.find( x ), x );
+        auto best{ duration::max() };
+        for ( auto pass{ 0 }; pass < lookup_passes; ++pass )
+        {
+            std::uint64_t checksum{ 0 };
+            auto const start{ timer::now() };
+            for ( auto const x : data ) { checksum += static_cast<std::uint64_t>( *container.find( x ) ); }
+            auto const elapsed{ duration{ timer::now() - start } / data.size() };
+            EXPECT_EQ( checksum, expected_checksum );
+            best = std::min( best, elapsed );
         }
-        return std::chrono::duration_cast<duration>( timer::now() - start ) / data.size();
+        return best;
     }
 } // anonymous namespace
 
 TEST( bp_tree, benchamrk )
 {
     auto const   test_size{ 7654321 };
-    auto const   seed{ std::random_device{}() };
-    std::mt19937 rng{ seed };
+    std::mt19937 rng{ PSI_VM_BENCH_SEED };
 
     std::ranges::iota_view constexpr sorted_numbers{ 0, test_size };
     auto numbers{ std::ranges::to<std::vector>( sorted_numbers ) };
     std::ranges::shuffle( numbers, rng );
+    auto const checksum{ std::accumulate( numbers.begin(), numbers.end(), std::uint64_t{ 0 } ) };
+
+    // The geometry and the intra-node search the numbers below were produced
+    // with - node size and byte limit are build-time knobs, so a run that does
+    // not state which arm it is has not measured anything comparable.
+    using bpt_t = psi::vm::bptree_set<int>;
+    auto constexpr leaf_values { bpt_t::max_values_per_leaf () };
+    auto constexpr inner_values{ bpt_t::max_values_per_inner() };
+    std::println
+    (
+        "geometry: {}-byte nodes, {} values/leaf, {} values/inner\n"
+        "intra-node search: linear_search_byte_limit={}, leaf={}, inner={}",
+        bpt_t::node_byte_size(), leaf_values, inner_values,
+        linear_search_byte_limit,
+        use_linear_search_for_sorted_array<std::less<>, int, leaf_values  > ? "LINEAR" : "binary",
+        use_linear_search_for_sorted_array<std::less<>, int, inner_values > ? "LINEAR" : "binary"
+    );
 
     psi::vm         ::bptree_set<int> bpt; bpt.map_memory();
     boost::container::flat_set  <int> flat_set;
@@ -106,10 +148,10 @@ TEST( bp_tree, benchamrk )
 #endif
 
     // random lookup
-    auto const flat_set_find{ time_lookup( flat_set, numbers ) };
-    auto const      bpt_find{ time_lookup( bpt     , numbers ) };
+    auto const flat_set_find{ time_lookup( flat_set, numbers, checksum ) };
+    auto const      bpt_find{ time_lookup( bpt     , numbers, checksum ) };
 #if HAVE_ABSL
-    auto const     abpt_find{ time_lookup( abpt    , numbers ) };
+    auto const     abpt_find{ time_lookup( abpt    , numbers, checksum ) };
 #endif
 
     std::println( "insert / lookup:" );
@@ -121,10 +163,10 @@ TEST( bp_tree, benchamrk )
 
     // random one-by-one insertion, and what each container ends up occupying
     auto const  bpt_rnd_insert{ time_insertion_one_by_one( bpt_rnd , numbers ) };
-    auto const  bpt_rnd_find  { time_lookup              ( bpt_rnd , numbers ) };
+    auto const  bpt_rnd_find  { time_lookup              ( bpt_rnd , numbers, checksum ) };
 #if HAVE_ABSL
     auto const abpt_rnd_insert{ time_insertion_one_by_one( abpt_rnd, numbers ) };
-    auto const abpt_rnd_find  { time_lookup              ( abpt_rnd, numbers ) };
+    auto const abpt_rnd_find  { time_lookup              ( abpt_rnd, numbers, checksum ) };
 #endif
     auto const     bpt_bytes{ std::size_t(     bpt.nodes_reserved() ) * decltype( bpt )::node_byte_size() };
     auto const bpt_rnd_bytes{ std::size_t( bpt_rnd.nodes_reserved() ) * decltype( bpt )::node_byte_size() };
