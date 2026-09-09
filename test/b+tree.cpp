@@ -1362,6 +1362,25 @@ TEST( bp_tree, erase_sorted_exact_mixed_present_absent )
     indirect_values.clear();
 }
 
+// Documents the hinted-insert contract at the boundaries the sorted-index
+// maintenance pattern ( insert( lower_bound( k ), k ) ) naturally produces:
+// an empty tree and a key greater than every key already present.
+TEST( bp_tree, hinted_insert_boundaries )
+{
+    bptree_set<std::uint32_t> tree;
+    ASSERT_TRUE( tree.map_memory()().succeeded() );
+
+    tree.insert( 10U );
+    tree.insert( 20U );
+
+    auto const past_the_end_hint{ tree.lower_bound( 30U ) };
+    EXPECT_EQ( past_the_end_hint, tree.end() );
+
+    tree.insert( past_the_end_hint, 30U );
+    EXPECT_EQ( tree.size(), 3U );
+    EXPECT_NE( tree.find( 30U ), tree.end() );
+}
+
 TEST( bp_tree, lower_bound_from )
 {
     // Test lower_bound_from edge cases:
