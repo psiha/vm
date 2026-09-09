@@ -465,7 +465,7 @@ protected:
             for ( auto level{ 0 }; level < depth - 1; ++level )
             {
                 auto const pos{ upper_bound( *p_node, key ) };
-                p_node = &this->template node<parent_node>( p_node->children[ std::min( pos, p_node->num_vals ) ] );
+                p_node = &this->template node<parent_node>( p_node->children[ std::min( pos, static_cast<node_size_type>( p_node->num_vals ) ) ] );
             }
             auto & leaf{ base::template as<leaf_node>( *p_node ) };
             auto const leaf_pos{ upper_bound( leaf, key ) };
@@ -516,7 +516,7 @@ private:
     {
         // Key in tree but not in starting leaf - go up the tree:
         auto const * prnt{ &parent( starting_leaf ) };
-        auto         parent_offset{ starting_leaf.tail.parent_child_idx };
+        auto         parent_offset{ starting_leaf.parent_child_idx };
         // Children are right shifted (WRT the keys array which has one less
         // element) - those which have a key on the same/corresponding index
         // should have a strictily less-than starting key value than the parent
@@ -538,10 +538,10 @@ private:
                 // lower_bound call below would get fed empty input which
                 // it does not support)
                 BOOST_ASSUME( depth > 2 || ( parent_offset < prnt->num_vals ) );
-                parent_offset = std::min( parent_offset, node_size_type( prnt->num_vals - 1 ) );
+                parent_offset = std::min( static_cast<node_size_type>( parent_offset ), static_cast<node_size_type>( prnt->num_vals - 1 ) );
                 break;
             }
-            parent_offset = prnt->tail.parent_child_idx;
+            parent_offset = prnt->parent_child_idx;
             prnt          = &parent( *prnt );
             --level;
         }
@@ -1007,10 +1007,9 @@ bp_tree_impl<Key, Comparator>::merge
         }
     }
 
-    auto & tgt_size{ target.num_vals };
     node_size_type inserted_size;
     node_size_type next_tgt_offset;
-    if ( target_offset == tgt_size ) // a simple append
+    if ( target_offset == target.num_vals ) // a simple append
     {
         if ( dedup_source && unique )
         {
@@ -1023,23 +1022,23 @@ bp_tree_impl<Key, Comparator>::merge
             std::copy_n( src_keys, copy_size, &tgt_keys[ target_offset ] );
             inserted_size = copy_size;
         }
-        tgt_size        += inserted_size;
-        next_tgt_offset  = tgt_size;
+        target.num_vals        += inserted_size;
+        next_tgt_offset  = target.num_vals;
     }
     else
     {
-        BOOST_ASSUME( tgt_size + copy_size <= leaf_node::max_values );
+        BOOST_ASSUME( target.num_vals + copy_size <= leaf_node::max_values );
         // make room for merge: move existing values (beyond the insertion/merge
         // point) to the end of the buffer
-        std::move_backward( &tgt_keys[ target_offset ], &tgt_keys[ tgt_size ], &tgt_keys[ tgt_size + copy_size ] );
+        std::move_backward( &tgt_keys[ target_offset ], &tgt_keys[ target.num_vals ], &tgt_keys[ target.num_vals + copy_size ] );
         auto const new_tgt_size{ target_offset + merge_interleaved_values
         (
             &src_keys[ 0                         ], copy_size,
-            &tgt_keys[ target_offset + copy_size ], tgt_size - target_offset,
+            &tgt_keys[ target_offset + copy_size ], target.num_vals - target_offset,
             &tgt_keys[ target_offset             ], unique, dedup_source
         ) };
-        inserted_size   = static_cast<node_size_type>( new_tgt_size - tgt_size );
-        tgt_size        = static_cast<node_size_type>( new_tgt_size            );
+        inserted_size   = static_cast<node_size_type>( new_tgt_size - target.num_vals );
+        target.num_vals        = static_cast<node_size_type>( new_tgt_size            );
         next_tgt_offset = target_offset + inserted_size;
     }
     target.mark_dirty();
@@ -1703,7 +1702,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
                     this->link( this->leaf( prev_src_copy_node ), src_leaf_copy );
                 }
                 BOOST_ASSUME( !src_leaf_copy.parent );
-                BOOST_ASSUME( !src_leaf_copy.tail.parent_child_idx );
+                BOOST_ASSUME( !src_leaf_copy.parent_child_idx );
                     
                 if ( !src_leaf->right )
                     break;
