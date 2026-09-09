@@ -335,8 +335,8 @@ protected: // split_to_insert and its helpers
         BOOST_ASSUME(     node.num_vals == max );
         BOOST_ASSUME( new_node.num_vals == 0   );
 
-          move_entries( node, mid - 1   , max, new_node, 0 );
-        rshift_entries( node, insert_pos, mid              );
+          move_entries( node, mid - 1   , node.num_vals, new_node, 0 );
+        rshift_entries( node, insert_pos, mid                       );
 
         node    .num_vals = mid;
         new_node.num_vals = max - mid + 1;
@@ -1123,7 +1123,14 @@ protected: // 'other'
         {
             verify_min_max( *p_left_sibling );
             node.num_vals++;
-            rshift_entries( node );
+            if constexpr ( requires { node.children; } ) {
+                rshift_entries( node );
+            } else {
+                // this is the borrow the front gap exists for: taking one entry
+                // in at the front is just where the entries now begin
+                if ( node.start ) --node.start;
+                else              rshift_entries( node );
+            }
             node_size_type const left_separator_key_idx( parent_child_idx - 1 );
             auto & left_separator_key{ keys( parent )[ left_separator_key_idx ] };
             auto const node_keys{ keys( node ) };
