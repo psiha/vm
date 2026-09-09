@@ -1,7 +1,7 @@
 #pragma once
 ////////////////////////////////////////////////////////////////////////////////
 ///
-/// \file b+tree.hpp
+/// ile b+tree.hpp
 ///
 /// The public b+tree interface. The implementation it rests on is split by
 /// what each layer needs to know - see the b+tree/ directory.
@@ -171,7 +171,7 @@ public:
             }
             else
             {
-                std::shift_left( &node.keys[ node_offset ], &node.keys[ node.num_vals ], erased_count );
+                bptree_base::shift_entries_left( node, node_offset, node.num_vals, erased_count );
                 node.num_vals -= erased_count;
                 node.mark_dirty();
                 if ( node_offset == 0 ) {
