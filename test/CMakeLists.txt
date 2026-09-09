@@ -24,6 +24,35 @@ else()
     target_compile_options( gtest PRIVATE -fno-fast-math )
 endif()
 
+# The b+tree benchmark can compare against absl::btree_set - the closest
+# shipping container to this one (it also redistributes into a sibling before
+# splitting).  Off by default: it pulls in and builds abseil.
+option( PSI_VM_BENCH_ABSL "b+tree benchmark: build the absl::btree_set comparison arm" OFF )
+if ( PSI_VM_BENCH_ABSL )
+    # psi.build's MSVC toolchain defines __GNUC__ globally (clang-cl does
+    # support the GNU-style extensions) - abseil reads that as "GNU platform"
+    # and tries to build its libsupc++ demangler, which wants cxxabi.h.  Drop
+    # it for abseil's subtree only; a subdirectory inherits the directory
+    # property as it stands at the add_subdirectory() call.
+    get_directory_property( psi_vm_saved_defs COMPILE_DEFINITIONS )
+    set( psi_vm_absl_defs ${psi_vm_saved_defs} )
+    list( REMOVE_ITEM psi_vm_absl_defs __GNUC__ )
+    set_directory_properties( PROPERTIES COMPILE_DEFINITIONS "${psi_vm_absl_defs}" )
+
+    CPMAddPackage(
+        NAME               abseil-cpp
+        GITHUB_REPOSITORY  abseil/abseil-cpp
+        GIT_TAG            20250127.0
+        OPTIONS
+            "ABSL_PROPAGATE_CXX_STD ON"
+            "ABSL_ENABLE_INSTALL OFF"
+            "ABSL_BUILD_TESTING OFF"
+            "BUILD_TESTING OFF"
+    )
+
+    set_directory_properties( PROPERTIES COMPILE_DEFINITIONS "${psi_vm_saved_defs}" )
+endif()
+
 set( vm_test_sources
     "${CMAKE_CURRENT_SOURCE_DIR}/b+tree.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/b+tree_space.cpp"
@@ -42,6 +71,14 @@ set( vm_test_sources
 
 add_executable( vm_unit_tests EXCLUDE_FROM_ALL ${vm_test_sources} )
 target_link_libraries( vm_unit_tests PRIVATE GTest::gtest_main psi::vm )
+if ( PSI_VM_BENCH_ABSL )
+    target_link_libraries     ( vm_unit_tests PRIVATE absl::btree )
+    target_compile_definitions( vm_unit_tests PRIVATE HAVE_ABSL=1 )
+    # abseil is not built with this project's warning set
+    if ( CLANG_CL OR CMAKE_CXX_COMPILER_ID MATCHES "Clang" )
+        target_compile_options( vm_unit_tests PRIVATE -Wno-error )
+    endif()
+endif()
 if ( MSVC AND NOT CLANG_CL )
     target_compile_options( vm_unit_tests PRIVATE /bigobj )
 endif()

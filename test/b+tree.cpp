@@ -5,7 +5,9 @@
 #include <boost/assert.hpp>
 #include <boost/container/flat_set.hpp>
 
-#define HAVE_ABSL 0
+#ifndef HAVE_ABSL // -DPSI_VM_BENCH_ABSL=ON wires this up (see test/CMakeLists.txt)
+#   define HAVE_ABSL 0
+#endif
 #if HAVE_ABSL
 #include <absl/container/btree_set.h>
 #endif
@@ -32,10 +34,33 @@ namespace
     using timer    = std::chrono::high_resolution_clock;
     using duration = std::chrono::nanoseconds;
 
+#if HAVE_ABSL
+    // absl::btree_set exposes bytes_used() only on the internal btree, so the
+    // footprint is measured where it actually happens
+    template <typename T>
+    struct counting_allocator
+    {
+        using value_type = T;
+        std::size_t * total;
+        explicit counting_allocator( std::size_t & t ) noexcept : total{ &t } {}
+        template <typename U> counting_allocator( counting_allocator<U> const & other ) noexcept : total{ other.total } {}
+        [[ nodiscard ]] T * allocate( std::size_t const n ) { *total += n * sizeof( T ); return static_cast<T *>( ::operator new( n * sizeof( T ) ) ); }
+        void deallocate( T * const p, std::size_t const n ) noexcept { *total -= n * sizeof( T ); ::operator delete( p ); }
+        bool operator==( counting_allocator const & other ) const noexcept { return total == other.total; }
+    };
+    using counted_btree_set = absl::btree_set<int, std::less<int>, counting_allocator<int>>;
+#endif
+
     duration time_insertion( auto & container, auto const & data )
     {
         auto const start{ timer::now() };
         container.insert( data.begin(), data.end() );
+        return std::chrono::duration_cast<duration>( timer::now() - start ) / data.size();
+    }
+    duration time_insertion_one_by_one( auto & container, auto const & data )
+    {
+        auto const start{ timer::now() };
+        for ( auto const x : data ) { container.insert( x ); }
         return std::chrono::duration_cast<duration>( timer::now() - start ) / data.size();
     }
     duration time_lookup( auto const & container, auto const & data ) noexcept
@@ -61,7 +86,16 @@ TEST( bp_tree, benchamrk )
     psi::vm         ::bptree_set<int> bpt; bpt.map_memory();
     boost::container::flat_set  <int> flat_set;
 #if HAVE_ABSL
-    absl            ::btree_set <int> abpt;
+    std::size_t absl_bulk_bytes{ 0 };
+    counted_btree_set abpt{ std::less<int>{}, counting_allocator<int>{ absl_bulk_bytes } };
+#endif
+    // A second pair, filled one key at a time in random order.  The bulk lane
+    // below is every container's best case and it is not the state a
+    // long-lived index is in.
+    psi::vm::bptree_set<int> bpt_rnd; bpt_rnd.map_memory();
+#if HAVE_ABSL
+    std::size_t absl_rnd_bytes{ 0 };
+    counted_btree_set abpt_rnd{ std::less<int>{}, counting_allocator<int>{ absl_rnd_bytes } };
 #endif
 
     // bulk-insertion-into-empty
@@ -83,6 +117,27 @@ TEST( bp_tree, benchamrk )
     std::println( "\t psi::vm::bpt:\t{} / {}", bpt_insert, bpt_find );
 #if HAVE_ABSL
     std::println( "\t absl::bpt:\t{} / {}", abpt_insert, abpt_find );
+#endif
+
+    // random one-by-one insertion, and what each container ends up occupying
+    auto const  bpt_rnd_insert{ time_insertion_one_by_one( bpt_rnd , numbers ) };
+    auto const  bpt_rnd_find  { time_lookup              ( bpt_rnd , numbers ) };
+#if HAVE_ABSL
+    auto const abpt_rnd_insert{ time_insertion_one_by_one( abpt_rnd, numbers ) };
+    auto const abpt_rnd_find  { time_lookup              ( abpt_rnd, numbers ) };
+#endif
+    auto const     bpt_bytes{ std::size_t(     bpt.nodes_reserved() ) * decltype( bpt )::node_byte_size() };
+    auto const bpt_rnd_bytes{ std::size_t( bpt_rnd.nodes_reserved() ) * decltype( bpt )::node_byte_size() };
+
+    std::println( "random one-by-one insert / random lookup [ns/key], and footprint:" );
+    std::println( "	 psi::vm::bpt:	{} / {}	{:.2f} bytes/key", bpt_rnd_insert, bpt_rnd_find, double( bpt_rnd_bytes ) / test_size );
+#if HAVE_ABSL
+    std::println( "	 absl::bpt:	{} / {}	{:.2f} bytes/key", abpt_rnd_insert, abpt_rnd_find, double( absl_rnd_bytes ) / test_size );
+#endif
+    std::println( "sorted-bulk footprint:" );
+    std::println( "	 psi::vm::bpt:	{:.2f} bytes/key", double( bpt_bytes ) / test_size );
+#if HAVE_ABSL
+    std::println( "	 absl::bpt:	{:.2f} bytes/key", double( absl_bulk_bytes ) / test_size );
 #endif
 
 #if 0 // CI servers are unreliable for comparative perf tests
