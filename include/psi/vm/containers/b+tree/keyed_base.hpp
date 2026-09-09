@@ -201,7 +201,7 @@ protected: // split_to_insert and its helpers
     root_node & new_root( node_slot const left_child, node_slot const right_child, key_rv_arg separator_key )
     {
         auto & new_root_node{ as<root_node>( bptree_base::new_root( left_child, right_child ) ) };
-        new_root_node.keys    [ 0 ] = std::move( separator_key );
+        key_at( new_root_node, 0 ) = std::move( separator_key );
         new_root_node.children[ 0 ] =  left_child;
         new_root_node.children[ 1 ] = right_child;
         return new_root_node;
@@ -335,8 +335,8 @@ protected: // split_to_insert and its helpers
         BOOST_ASSUME(     node.num_vals == max );
         BOOST_ASSUME( new_node.num_vals == 0   );
 
-          move_entries( node, mid - 1   , max, new_node, 0 );
-        rshift_entries( node, insert_pos, mid              );
+          move_entries( node, mid - 1   , node.num_vals, new_node, 0 );
+        rshift_entries( node, insert_pos, mid                       );
 
         node    .num_vals = mid;
         new_node.num_vals = max - mid + 1;
@@ -446,7 +446,11 @@ protected: // split_to_insert and its helpers
             auto const to_move       { static_cast<node_size_type>( left_room / 2 ) };
             auto const left_prior_num{ left_sibling.num_vals };
             move_entries( node, 0, to_move, left_sibling, left_prior_num );
-            shift_entries_left( node, 0, max, to_move );
+            // the node was full, so it had no gap; the entries it keeps simply
+            // begin further in - no move at all
+            BOOST_ASSUME( node.start == 0 );
+            if ( to_move <= leaf_node::max_front_gap ) node.start = static_cast<node_size_type>( to_move );
+            else                                       shift_entries_left( node, 0, max, to_move );
             left_sibling.num_vals = static_cast<node_size_type>( left_prior_num + to_move );
             node        .num_vals = static_cast<node_size_type>( max            - to_move );
             left_sibling.mark_dirty();
@@ -464,7 +468,18 @@ protected: // split_to_insert and its helpers
             auto & right_sibling{ *p_right };
             auto const to_move   { static_cast<node_size_type>( right_room / 2 ) };
             auto const kept      { static_cast<node_size_type>( max - to_move ) };
-            shift_entries_right( right_sibling, 0, right_sibling.num_vals + to_move, to_move );
+            // Opening 'to_move' slots at the sibling's front: its existing gap
+            // supplies some of them, so only the DEFICIT has to be shifted -
+            // shifting by the full amount from a base that is already offset
+            // runs past the end of the array (the room check bounds
+            // num_vals + to_move, not start + num_vals + to_move).
+            if ( right_sibling.start >= to_move ) {
+                right_sibling.start -= to_move;
+            } else {
+                auto const deficit{ static_cast<node_size_type>( to_move - right_sibling.start ) };
+                shift_entries_right( right_sibling, 0, right_sibling.num_vals + deficit, deficit );
+                right_sibling.start = 0;
+            }
             move_entries( node, kept, max, right_sibling, 0 );
             right_sibling.num_vals = static_cast<node_size_type>( right_sibling.num_vals + to_move );
             node         .num_vals = kept;
@@ -534,7 +549,19 @@ protected: // 'other'
             return overflow_to_insert( target_node, target_node_pos, std::move( v ), right_child );
         } else {
             ++target_node.num_vals;
-            rshift_entries( target_node, target_node_pos );
+            if constexpr ( requires { target_node.children; } ) {
+                rshift_entries( target_node, target_node_pos );
+            } else {
+                // a leaf opens the slot from whichever side is cheaper, and
+                // MUST use the front when its entries already reach the end of
+                // their array
+                bool const room_behind{ target_node.start + target_node.num_vals <= N::max_values };
+                BOOST_ASSUME( room_behind || target_node.start );
+                if ( target_node.start && ( !room_behind || ( target_node_pos * 2u < target_node.num_vals ) ) )
+                    open_slot_from_front( target_node, target_node_pos );
+                else
+                    rshift_entries( target_node, target_node_pos );
+            }
             key_at( target_node, target_node_pos ) = std::move( v );
             target_node.mark_dirty();
             if constexpr ( requires { target_node.children; } ) {
@@ -745,7 +772,7 @@ protected: // 'other'
             if constexpr ( can_preallocate ) {
                 auto const size_to_copy{ static_cast<node_size_type>( std::min<size_type>( leaf.max_values, input_size - count ) ) };
                 BOOST_ASSUME( size_to_copy > 0 );
-                std::copy_n ( p_keys, size_to_copy, leaf.keys );
+                std::copy_n ( p_keys, size_to_copy, &key_at( leaf, 0 ) );
                 std::advance( p_keys, size_to_copy );
                 leaf.num_vals  = size_to_copy;
                 // The leaf is being pulled directly off the free list (not via
@@ -1106,7 +1133,14 @@ protected: // 'other'
         {
             verify_min_max( *p_left_sibling );
             node.num_vals++;
-            rshift_entries( node );
+            if constexpr ( requires { node.children; } ) {
+                rshift_entries( node );
+            } else {
+                // this is the borrow the front gap exists for: taking one entry
+                // in at the front is just where the entries now begin
+                if ( node.start ) --node.start;
+                else              rshift_entries( node );
+            }
             node_size_type const left_separator_key_idx( parent_child_idx - 1 );
             auto & left_separator_key{ keys( parent )[ left_separator_key_idx ] };
             auto const node_keys{ keys( node ) };
@@ -1603,7 +1637,7 @@ public:
     {
         BOOST_ASSUME( p_leaf_ );
         BOOST_ASSUME( p_leaf_->num_vals <= leaf_node::max_values );
-        return { p_leaf_->keys, p_leaf_->num_vals };
+        return { &bptree_base::key_at( *p_leaf_, 0 ), p_leaf_->num_vals };
     }
 
     leaf_iterator & operator++() noexcept
