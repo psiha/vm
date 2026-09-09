@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include "vm_vector.hpp"
+#include <psi/vm/containers/vm_vector.hpp>
 
 #include <psi/vm/align.hpp>
 #include <psi/vm/allocation.hpp>
