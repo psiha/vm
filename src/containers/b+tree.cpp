@@ -108,6 +108,9 @@ bptree_base::node_slot::value_type bptree_base::used_number_of_nodes() const noe
     return nodes_.size() - hdr().free_node_count_;
 }
 
+std::uint32_t bptree_base::nodes_used    () const noexcept { return used_number_of_nodes(); }
+std::uint32_t bptree_base::nodes_reserved() const noexcept { return static_cast<std::uint32_t>( nodes_.size() ); }
+
 void bptree_base::rshift_sibling_parent_pos( node_header & node ) noexcept
 {
     auto p_node{ &node };

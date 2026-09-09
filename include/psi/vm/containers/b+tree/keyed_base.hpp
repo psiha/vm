@@ -392,6 +392,114 @@ protected: // split_to_insert and its helpers
             : insert_pos_t{ split_slot, next_insert_pos };
     }
 
+    // Dual of handle_underflow's borrow branches, in the other direction: an
+    // overflowing node hands values over to a sibling that still has room
+    // instead of splitting, and the separator between the two follows the
+    // values exactly as it does when the flow is the other way.  This is what
+    // buys a fill above the ~ln2 a plain split-on-full settles at, without
+    // moving the minimum-fill floor (which cannot be raised while merges stay
+    // 2-into-1 - see the bound asserted at leaf_node::min_values).
+    //
+    // Leaves only, deliberately.  A node's children carry a back-index into
+    // their parent (node_header::tail.parent_child_idx), so relocating an
+    // inner node's children re-indexes - and dirties - every one of them,
+    // costing more than the split it would save; leaves are the overwhelming
+    // majority of nodes at any realistic fanout, so that is where the fill is.
+    //
+    // Returns where the pending insertion ended up, or nothing when no sibling
+    // could take the load - in which case the caller splits as before.
+    [[ nodiscard ]] std::optional<iter_pos>
+    relieve_into_sibling( leaf_node & node, node_size_type const insert_pos ) noexcept
+    {
+        auto constexpr max{ leaf_node::max_values };
+        BOOST_ASSUME( node.num_vals == max );
+        BOOST_ASSUME( insert_pos    <= max );
+        if ( node.is_root() ) [[ unlikely ]] // no siblings to relieve into
+            return {};
+
+        auto const   this_slot       { slot_of( node ) };
+        auto       & parent          { this->parent( node ) };
+        auto const   parent_child_idx{ node.tail.parent_child_idx };
+        BOOST_ASSUME( parent.children[ parent_child_idx ] == this_slot );
+
+        // the left/right links are level links which can point across parents,
+        // so sibling existence is resolved from the parent's child count - the
+        // same idiom handle_underflow uses - and only then dereferenced
+        auto const has_left { parent_child_idx > 0 };
+        auto const has_right{ parent_child_idx < ( num_chldrn( parent ) - 1 ) };
+        auto const p_left   { has_left  ? &left ( node ) : nullptr };
+        auto const p_right  { has_right ? &right( node ) : nullptr };
+        auto const left_room ( p_left  ? max - p_left ->num_vals : 0 );
+        auto const right_room( p_right ? max - p_right->num_vals : 0 );
+        // Half of a single free slot is nothing, and handing over that one slot
+        // would leave the sibling full - so it has to be worth a move.
+        if ( std::max( left_room, right_room ) < 2 )
+            return {};
+
+        // Hand over half of the room found, rounded down, not all of it: the
+        // sibling is a node in its own right, emptying its slack here only
+        // moves the next split one node over, and a sibling left full would
+        // have to be split by the very insertion this is trying to relieve.
+        if ( left_room >= right_room )
+        {
+            auto & left_sibling{ *p_left };
+            auto const to_move       { static_cast<node_size_type>( left_room / 2 ) };
+            auto const left_prior_num{ left_sibling.num_vals };
+            move_entries( node, 0, to_move, left_sibling, left_prior_num );
+            shift_entries_left( node, 0, max, to_move );
+            left_sibling.num_vals = static_cast<node_size_type>( left_prior_num + to_move );
+            node        .num_vals = static_cast<node_size_type>( max            - to_move );
+            left_sibling.mark_dirty();
+            node        .mark_dirty();
+            // this node's first key moved, so its separator has to follow
+            update_separator( node, node.keys[ 0 ] );
+            verify_min_max( left_sibling );
+            verify_min_max( node         );
+            return ( insert_pos < to_move )
+                ? iter_pos{ slot_of( left_sibling ), static_cast<node_size_type>( left_prior_num + insert_pos ) }
+                : iter_pos{ this_slot              , static_cast<node_size_type>( insert_pos     - to_move    ) };
+        }
+        else
+        {
+            auto & right_sibling{ *p_right };
+            auto const to_move   { static_cast<node_size_type>( right_room / 2 ) };
+            auto const kept      { static_cast<node_size_type>( max - to_move ) };
+            shift_entries_right( right_sibling, 0, right_sibling.num_vals + to_move, to_move );
+            move_entries( node, kept, max, right_sibling, 0 );
+            right_sibling.num_vals = static_cast<node_size_type>( right_sibling.num_vals + to_move );
+            node         .num_vals = kept;
+            right_sibling.mark_dirty();
+            node         .mark_dirty();
+            // the sibling's first key moved, so its separator has to follow
+            update_separator( right_sibling, right_sibling.keys[ 0 ] );
+            verify_min_max( right_sibling );
+            verify_min_max( node          );
+            return ( insert_pos > kept )
+                ? iter_pos{ slot_of( right_sibling ), static_cast<node_size_type>( insert_pos - kept ) }
+                : iter_pos{ this_slot               , insert_pos                                        };
+        }
+    }
+
+    // The overflow decision itself: relieve into a sibling when the policy asks
+    // for it and one has room, split otherwise.
+    template <typename N>
+    insert_pos_t overflow_to_insert( N & node, node_size_type const insert_pos, key_rv_arg value, node_slot const key_right_child )
+    {
+        if constexpr ( redistribute_on_overflow && std::is_same_v<N, leaf_node> )
+        {
+            if ( auto const relieved{ relieve_into_sibling( node, insert_pos ) } )
+            {
+                auto & target{ leaf( relieved->node ) };
+                // an assert, not an assume: full() runs verify(), and an
+                // assumption carrying a side effect is discarded (with a
+                // diagnostic) rather than believed
+                BOOST_ASSERT( !full( target ) );
+                return insert( target, relieved->value_offset, std::move( value ), key_right_child );
+            }
+        }
+        return split_to_insert( node, insert_pos, std::move( value ), key_right_child );
+    }
+
 
 protected: // 'other'
     // key_locations (containing find_pos) should also be returnable through registers
@@ -423,7 +531,7 @@ protected: // 'other'
     {
         verify( target_node );
         if ( full( target_node ) ) [[ unlikely ]] {
-            return split_to_insert( target_node, target_node_pos, std::move( v ), right_child );
+            return overflow_to_insert( target_node, target_node_pos, std::move( v ), right_child );
         } else {
             ++target_node.num_vals;
             rshift_entries( target_node, target_node_pos );
