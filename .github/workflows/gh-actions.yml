@@ -3,8 +3,10 @@ name: Build & Test
 on:
   push:
     branches: [ "master" ]
+  # Any base branch, not just master: a stacked pull request targets the
+  # branch below it in the stack, and filtering on master meant every PR
+  # in a stack except the bottom one was merged without ever being built.
   pull_request:
-    branches: [ "master" ]
 
 jobs:
   build:
