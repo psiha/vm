@@ -17,6 +17,8 @@ PSI_WARNING_DISABLE_PUSH()
 PSI_WARNING_MSVC_DISABLE( 4127 ) // conditional expression is constant
 PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
 
+
+
 ////////////////////////////////////////////////////////////////////////////////
 // \class bp_tree_impl
 ////////////////////////////////////////////////////////////////////////////////
@@ -54,8 +56,8 @@ protected:
     using bptree_base::keys;
     using bptree_base::node;
     using bptree_base::num_chldrn;
-    using bptree_base::lshift_keys;
-    using bptree_base::rshift_keys;
+    using bptree_base::lshift_entries;
+    using bptree_base::rshift_entries;
     using bptree_base::lshift_chldrn;
     using bptree_base::rshift_chldrn;
     using bptree_base::slot_of;
@@ -971,8 +973,8 @@ bp_tree_impl<Key, Comparator>::merge
         // keys strictly greater than right_delimiter (equal keys go into the current leaf).
         node_size_type const cut_pos
         { unique
-            ? lower_bound( src_keys, copy_size, key_const_arg{ right_delimiter } ).pos
-            : upper_bound( src_keys, copy_size, key_const_arg{ right_delimiter } )
+            ? lower_bound<leaf_node::max_values>( src_keys, copy_size, key_const_arg{ right_delimiter } ).pos
+            : upper_bound<leaf_node::max_values>( src_keys, copy_size, key_const_arg{ right_delimiter } )
         };
         if ( cut_pos != copy_size )
         {
@@ -1180,7 +1182,7 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
             // before proceeding with the bulk_append we have to:
             // - prepare the current src_leaf (so that it does not have a hole
             //   at the beginning)
-            std::shift_left( &src_leaf->keys[ 0 ], &src_leaf->keys[ src_leaf->num_vals ], source_slot_offset );
+            shift_entries_left( *src_leaf, 0, src_leaf->num_vals, source_slot_offset );
             src_leaf->num_vals -= source_slot_offset;
             // - link/append it to existing leaves
             base::link( *tgt_leaf, *src_leaf );
@@ -1225,8 +1227,8 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
                 BOOST_ASSUME( tgt_leaf->is_root() );
                 node_size_type const missing_keys( tgt_leaf->min_values - tgt_leaf->num_vals );
                 BOOST_ASSUME( tgt_leaf->num_vals + src_leaf->num_vals >= leaf_node::min_values * 2 );
-                this->move_keys( *src_leaf, 0, missing_keys, *tgt_leaf, tgt_leaf->num_vals );
-                std::shift_left( &src_leaf->keys[ 0 ], &src_leaf->keys[ src_leaf->num_vals ], missing_keys );
+                this->move_entries( *src_leaf, 0, missing_keys, *tgt_leaf, tgt_leaf->num_vals );
+                shift_entries_left( *src_leaf, 0, src_leaf->num_vals, missing_keys );
                 tgt_leaf->num_vals += missing_keys;
                 src_leaf->num_vals -= missing_keys;
                 tgt_leaf->mark_dirty();
@@ -1534,7 +1536,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
 
     // (this is a refurbished move-merge implementation that only had its
     // explicitly other-destructive calls removed - good enough while only
-    // trivial types are supported - TODO calls like move_keys will need to be
+    // trivial types are supported - TODO calls like move_entries will need to be
     // changed also to support non trivial types)
 
     if ( other.empty() )
@@ -1618,7 +1620,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
                 node_size_type const remaining_src_node_data( src_leaf->num_vals - source_slot_offset );
                 node_size_type const copy_size{ std::min( remaining_tgt_node_space, remaining_src_node_data ) };
                 BOOST_ASSUME( copy_size );
-                this->move_keys( *src_leaf, source_slot_offset, source_slot_offset + copy_size, *tgt_leaf, tgt_leaf->num_vals );
+                this->move_entries( *src_leaf, source_slot_offset, source_slot_offset + copy_size, *tgt_leaf, tgt_leaf->num_vals );
                 tgt_leaf->num_vals += copy_size;
                 tgt_leaf->mark_dirty();
                 if ( copy_size == remaining_src_node_data )
@@ -1656,7 +1658,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
                 if ( !src_copy_begin ) [[ unlikely ]]
                 {
                     src_copy_begin = slot_of( src_leaf_copy );
-                    this->move_keys( *src_leaf, source_slot_offset, src_leaf->num_vals, src_leaf_copy, 0 );
+                    this->move_entries( *src_leaf, source_slot_offset, src_leaf->num_vals, src_leaf_copy, 0 );
                     src_leaf_copy.num_vals = src_leaf->num_vals - source_slot_offset;
 #               if 0 // actually there should be no need for this src update (see the note at the end of the function for a TODO on proper src/other cleanup)
                     src_leaf->num_vals     = source_slot_offset;
@@ -1669,7 +1671,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
                 }
                 else
                 {
-                    this->move_keys( *src_leaf, 0, src_leaf->num_vals, src_leaf_copy, 0 );
+                    this->move_entries( *src_leaf, 0, src_leaf->num_vals, src_leaf_copy, 0 );
                     src_leaf_copy.num_vals = src_leaf->num_vals;
 #               if 0 // see above
                     src_leaf->num_vals     = 0;

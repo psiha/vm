@@ -233,17 +233,17 @@ protected: // split_to_insert and its helpers
         {
             key_to_propagate = std::move( value );
 
-            move_keys  ( node, mid    , node.num_vals    , new_node, 0 );
+            move_entries  ( node, mid    , node.num_vals    , new_node, 0 );
             move_chldrn( node, mid + 1, node.num_vals + 1, new_node, 1 );
         }
         else
         {
             key_to_propagate = std::move( node.keys[ mid ] );
 
-            move_keys  ( node, mid + 1, insert_pos    , new_node, 0 );
+            move_entries  ( node, mid + 1, insert_pos    , new_node, 0 );
             move_chldrn( node, mid + 1, insert_pos + 1, new_node, 0 );
 
-            move_keys  ( node, insert_pos    , node.num_vals    , new_node, new_insert_pos     );
+            move_entries  ( node, insert_pos    , node.num_vals    , new_node, new_insert_pos     );
             move_chldrn( node, insert_pos + 1, node.num_vals + 1, new_node, new_insert_pos + 1 );
 
             keys( new_node )[ new_insert_pos - 1 ] = std::move( value );
@@ -276,8 +276,8 @@ protected: // split_to_insert and its helpers
         BOOST_ASSUME(     node.num_vals == max );
         BOOST_ASSUME( new_node.num_vals == 0   );
 
-        move_keys( node, mid       , insert_pos, new_node, 0                  );
-        move_keys( node, insert_pos, max       , new_node, new_insert_pos + 1 );
+        move_entries( node, mid       , insert_pos, new_node, 0                  );
+        move_entries( node, insert_pos, max       , new_node, new_insert_pos + 1 );
 
         node    .num_vals = mid          ;
         new_node.num_vals = max - mid + 1;
@@ -305,10 +305,10 @@ protected: // split_to_insert and its helpers
 
         value_type key_to_propagate{ std::move( node.keys[ mid - 1 ] ) };
 
-        move_keys  ( node, mid, num_vals  ( node ), new_node, 0 );
+        move_entries  ( node, mid, num_vals  ( node ), new_node, 0 );
         move_chldrn( node, mid, num_chldrn( node ), new_node, 0 );
 
-        rshift_keys  ( node, insert_pos    , mid     );
+        rshift_entries  ( node, insert_pos    , mid     );
         rshift_chldrn( node, insert_pos + 1, mid + 1 );
 
         node    .num_vals = mid;
@@ -335,8 +335,8 @@ protected: // split_to_insert and its helpers
         BOOST_ASSUME(     node.num_vals == max );
         BOOST_ASSUME( new_node.num_vals == 0   );
 
-          move_keys( node, mid - 1   , max, new_node, 0 );
-        rshift_keys( node, insert_pos, mid              );
+          move_entries( node, mid - 1   , max, new_node, 0 );
+        rshift_entries( node, insert_pos, mid              );
 
         node    .num_vals = mid;
         new_node.num_vals = max - mid + 1;
@@ -426,7 +426,7 @@ protected: // 'other'
             return split_to_insert( target_node, target_node_pos, std::move( v ), right_child );
         } else {
             ++target_node.num_vals;
-            rshift_keys( target_node, target_node_pos );
+            rshift_entries( target_node, target_node_pos );
             target_node.keys[ target_node_pos ] = std::move( v );
             target_node.mark_dirty();
             if constexpr ( requires { target_node.children; } ) {
@@ -447,7 +447,7 @@ protected: // 'other'
     [[ gnu::sysv_abi, gnu::noinline ]]
     iter_pos erase( leaf_node & leaf, node_size_type const leaf_key_offset ) noexcept
     {
-        lshift_keys( leaf, leaf_key_offset );
+        lshift_entries( leaf, leaf_key_offset );
         --leaf.num_vals;
         leaf.mark_dirty();
 
@@ -554,7 +554,7 @@ protected: // 'other'
         // for the leftmost child we also/simply delete the lead key (and the
         // logic just works out)
         auto const key_idx{ static_cast<node_size_type>( std::max( 0, child_idx - 1 ) ) };
-        lshift_keys  ( parent,   key_idx );
+        lshift_entries  ( parent,   key_idx );
         lshift_chldrn( parent, child_idx );
         parent.num_vals--;
         parent.mark_dirty();
@@ -798,8 +798,8 @@ protected: // 'other'
         auto & preceding{ left( leaf ) };
         if ( preceding.num_vals + leaf.num_vals >= leaf_node::min_values * 2 ) [[ likely ]]
         {
-            std::shift_right( &leaf.keys[ 0 ], &leaf.keys[ leaf.num_vals + missing_keys ], missing_keys );
-            this->move_keys( preceding, preceding.num_vals - missing_keys, preceding.num_vals, leaf, 0 );
+            shift_entries_right( leaf, 0, leaf.num_vals + missing_keys, missing_keys );
+            this->move_entries( preceding, preceding.num_vals - missing_keys, preceding.num_vals, leaf, 0 );
             leaf     .num_vals += missing_keys;
             preceding.num_vals -= missing_keys;
             leaf     .mark_dirty();
@@ -998,7 +998,7 @@ protected: // 'other'
         {
             verify_min_max( *p_left_sibling );
             node.num_vals++;
-            rshift_keys( node );
+            rshift_entries( node );
             node_size_type const left_separator_key_idx( parent_child_idx - 1 );
             auto & left_separator_key{ keys( parent )[ left_separator_key_idx ] };
             auto const node_keys{ keys( node ) };
@@ -1048,7 +1048,7 @@ protected: // 'other'
                 auto & leftmost_right_key{ keys( *p_right_sibling ).front() };
                 BOOST_ASSUME( right_separator_key == leftmost_right_key ); // yes we expect exact or bitwise equality for key-copies in inner nodes
                 node_keys.back() = std::move( leftmost_right_key );
-                lshift_keys( *p_right_sibling );
+                lshift_entries( *p_right_sibling );
                 // adjust the separator key in the parent
                 right_separator_key = leftmost_right_key;
             } else {
@@ -1060,7 +1060,7 @@ protected: // 'other'
                 node_keys.back()    = std::move( right_separator_key );
                 right_separator_key = std::move( keys( *p_right_sibling ).front() );
                 insrt_child( node, num_chldrn( node ) - 1, children( *p_right_sibling ).front(), this_slot );
-                lshift_keys  ( *p_right_sibling );
+                lshift_entries  ( *p_right_sibling );
                 lshift_chldrn( *p_right_sibling );
             }
 
@@ -1109,7 +1109,7 @@ protected: // 'other'
 
     template <typename N>
     [[ gnu::sysv_abi ]] static
-    void move_keys
+    void move_entries
     (
         N const & source, node_size_type src_begin, node_size_type src_end,
         N       & target, node_size_type tgt_begin
@@ -1588,7 +1588,7 @@ bptree_base_wkey<Key>::erase( const_iterator const first, const_iterator const l
         auto const single_node_bulk_erase{ pos.node == end_pos.node };
         auto const node_end_offset{ single_node_bulk_erase ? end_pos.value_offset : node.num_vals };
         auto const erased_count{ static_cast<node_size_type>( node_end_offset - pos.value_offset ) };
-        std::shift_left( &node.keys[ pos.value_offset ], &node.keys[ node.num_vals ], erased_count );
+        shift_entries_left( node, pos.value_offset, node.num_vals, erased_count );
         node.num_vals -= erased_count;
         node.mark_dirty();
         if ( single_node_bulk_erase ) {
@@ -1609,7 +1609,7 @@ bptree_base_wkey<Key>::erase( const_iterator const first, const_iterator const l
             if ( end_pos.value_offset < node.num_vals ) // partial, certainly last, node
             {
                 auto const erased_count{ end_pos.value_offset };
-                std::shift_left( &node.keys[ 0 ], &node.keys[ node.num_vals ], erased_count );
+                shift_entries_left( node, 0, node.num_vals, erased_count );
                 node.num_vals -= erased_count;
                 node.mark_dirty();
                 // erasure not to the end but from the beginning of the node -
@@ -1708,7 +1708,7 @@ auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator 
 
 template <typename Key>
 template <typename N> [[ gnu::sysv_abi ]]
-void bptree_base_wkey<Key>::move_keys
+void bptree_base_wkey<Key>::move_entries
 (
     N const & source, node_size_type const src_begin, node_size_type const src_end,
     N       & target, node_size_type const tgt_begin
@@ -1719,6 +1719,8 @@ void bptree_base_wkey<Key>::move_keys
     BOOST_ASSUME( ( src_end - src_begin ) <= N::max_values );
     BOOST_ASSUME( tgt_begin < N::max_values );
     std::uninitialized_move( &source.keys[ src_begin ], &source.keys[ src_end ], &target.keys[ tgt_begin ] );
+    if constexpr ( has_mapped_values<N> )
+        std::uninitialized_move( &source.values[ src_begin ], &source.values[ src_end ], &target.values[ tgt_begin ] );
 }
 template <typename Key> [[ gnu::noinline, gnu::sysv_abi ]]
 void bptree_base_wkey<Key>::move_chldrn
@@ -1745,8 +1747,6 @@ void bptree_base_wkey<Key>::move_chldrn
         child.mark_dirty();
     }
 }
-
-
 
 PSI_WARNING_DISABLE_POP()
 

@@ -376,8 +376,36 @@ protected:
     template <auto array> static auto lshift( auto & node, node_size_type const offset ) noexcept { return lshift<array>( node, offset, size<array>( node ) ); }
     template <auto array> static auto lshift( auto & node                              ) noexcept { return lshift<array>( node, 0                           ); }
 
-    template <typename N> static void rshift_keys( N & node, auto... args ) noexcept { rshift<&N::keys>( node, args... ); }
-    template <typename N> static void lshift_keys( N & node, auto... args ) noexcept { lshift<&N::keys>( node, args... ); }
+    // A node's entry is not necessarily just its key: a map's leaf carries a
+    // parallel array of mapped values, and the two are one entry - always moved
+    // and shifted together, by the same indices.  A node's child slots are
+    // deliberately NOT part of this: moving those has to re-index and dirty
+    // every child touched, which is move_chldrn's job.
+    template <typename N> static bool constexpr has_mapped_values{ requires( N & n ) { n.values; } };
+
+    template <typename N> static void rshift_entries( N & node, auto... args ) noexcept
+    {
+        rshift<&N::keys>( node, args... );
+        if constexpr ( has_mapped_values<N> ) rshift<&N::values>( node, args... );
+    }
+    template <typename N> static void lshift_entries( N & node, auto... args ) noexcept
+    {
+        lshift<&N::keys>( node, args... );
+        if constexpr ( has_mapped_values<N> ) lshift<&N::values>( node, args... );
+    }
+    // shift a half-open entry range by 'distance' slots, the whole entry moving
+    template <typename N>
+    static void shift_entries_left( N & node, auto const first, auto const last, auto const distance ) noexcept
+    {
+        std::shift_left( &node.keys[ first ], &node.keys[ last ], distance );
+        if constexpr ( has_mapped_values<N> ) std::shift_left( &node.values[ first ], &node.values[ last ], distance );
+    }
+    template <typename N>
+    static void shift_entries_right( N & node, auto const first, auto const last, auto const distance ) noexcept
+    {
+        std::shift_right( &node.keys[ first ], &node.keys[ last ], distance );
+        if constexpr ( has_mapped_values<N> ) std::shift_right( &node.values[ first ], &node.values[ last ], distance );
+    }
 
     template <typename N>
     void rshift_chldrn( N & parent, auto... args ) noexcept {
