@@ -468,8 +468,18 @@ protected: // split_to_insert and its helpers
             auto & right_sibling{ *p_right };
             auto const to_move   { static_cast<node_size_type>( right_room / 2 ) };
             auto const kept      { static_cast<node_size_type>( max - to_move ) };
-            if ( right_sibling.start >= to_move ) right_sibling.start -= to_move; // room already at its front
-            else                                  shift_entries_right( right_sibling, 0, right_sibling.num_vals + to_move, to_move );
+            // Opening 'to_move' slots at the sibling's front: its existing gap
+            // supplies some of them, so only the DEFICIT has to be shifted -
+            // shifting by the full amount from a base that is already offset
+            // runs past the end of the array (the room check bounds
+            // num_vals + to_move, not start + num_vals + to_move).
+            if ( right_sibling.start >= to_move ) {
+                right_sibling.start -= to_move;
+            } else {
+                auto const deficit{ static_cast<node_size_type>( to_move - right_sibling.start ) };
+                shift_entries_right( right_sibling, 0, right_sibling.num_vals + deficit, deficit );
+                right_sibling.start = 0;
+            }
             move_entries( node, kept, max, right_sibling, 0 );
             right_sibling.num_vals = static_cast<node_size_type>( right_sibling.num_vals + to_move );
             node         .num_vals = kept;

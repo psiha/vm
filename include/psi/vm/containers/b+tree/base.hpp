@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstdio>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -375,6 +376,14 @@ protected:
 
     static void verify( auto const & node ) noexcept
     {
+        // TEMPORARY PROBE - does any path let a node's entries run past
+        // the end of its array once a front gap exists?
+        if ( std::size_t( node.start ) + node.num_vals > node.max_values ) {
+            static int reported{ 0 };
+            if ( reported++ < 10 )
+                std::fprintf( stderr, "[GAP] start=%u num_vals=%u max=%u\n",
+                              unsigned( node.start ), unsigned( node.num_vals ), unsigned( node.max_values ) );
+        }
         BOOST_ASSUME( node.num_vals <= node.max_values );
         // also used for underflowing nodes and (most problematically) for root nodes 'interpreted' as inner nodes...TODO...
         //BOOST_ASSUME( node.num_vals >= node.min_values );
