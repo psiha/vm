@@ -137,7 +137,14 @@ public:
 
 protected:
     // TODO make this properly configurable (a template parameter)
-#if PSI_VM_BT_PAGE_SIZED_NODES // favoring TLB and disk access related issues
+    // -DPSI_VM_BT_NODE_SIZE=n overrides both branches below.  The two shipping
+    // geometries are an order of magnitude apart in how many values a node
+    // holds, and that count - not the byte size - is what the intra-node search
+    // dispatch and the occupancy numbers turn on, so the sizes in between have
+    // to be reachable for a sweep to say where the crossovers actually are.
+#if defined( PSI_VM_BT_NODE_SIZE )
+    static constexpr std::uint16_t node_size{ PSI_VM_BT_NODE_SIZE };
+#elif PSI_VM_BT_PAGE_SIZED_NODES // favoring TLB and disk access related issues
     static constexpr std::uint16_t node_size
     {
 #   if ( defined( __APPLE__ ) && defined( __aarch64__ ) ) // Quickfix: CPU and especially RSS memory spike regressions with full Apple Silicon 16kB node sizes, TODO investigate properly
