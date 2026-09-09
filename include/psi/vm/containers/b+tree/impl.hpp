@@ -290,7 +290,7 @@ private:
     }
     template <node_size_type maximum_values>
     find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return lower_bound<maximum_values>( keys, num_vals, value, pass_in_reg{ comp() } ); }
-    find_pos lower_bound( auto const & node, auto const & value ) const noexcept { return lower_bound<node_capacity<decltype( node )>>( node.keys, node.num_vals, pass_in_reg{ value } ); }
+    find_pos lower_bound( auto const & node, auto const & value ) const noexcept { return lower_bound<node_capacity<decltype( node )>>( &key_at( node, 0 ), node.num_vals, pass_in_reg{ value } ); }
     [[ using gnu: pure, hot, sysv_abi ]]
     find_pos lower_bound( auto const & node, node_size_type const offset, Reg auto const value ) const noexcept
     {
@@ -328,7 +328,7 @@ protected:
     }
     template <node_size_type maximum_values>
     node_size_type upper_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return upper_bound<maximum_values>( keys, num_vals, value, pass_in_reg{ comp() } ); }
-    node_size_type upper_bound( auto const & node, auto const & value ) const noexcept { return upper_bound<node_capacity<decltype( node )>>( node.keys, node.num_vals, pass_in_reg{ value } ); }
+    node_size_type upper_bound( auto const & node, auto const & value ) const noexcept { return upper_bound<node_capacity<decltype( node )>>( &key_at( node, 0 ), node.num_vals, pass_in_reg{ value } ); }
     [[ using gnu: pure, hot, sysv_abi ]]
     node_size_type upper_bound( auto const & node, node_size_type const offset, Reg auto const value ) const noexcept
     {
@@ -901,7 +901,7 @@ bp_tree_impl<Key, Comparator>::merge
     BOOST_ASSUME( input_length > 0 );
     verify( target );
     node_size_type const available_space( target.max_values - target.num_vals ); // recheck: do we need a different value for roots here?
-    auto & tgt_keys{ target.keys };
+    auto * const tgt_keys{ &key_at( target, 0 ) };
     BOOST_ASSERT
     (
         ( lower_bound( target, src_keys[ 0 ] ).pos == target_offset ) ||
@@ -1360,7 +1360,7 @@ bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const
                     static_cast<size_type>( input_end - p_input ),
                     leaf_node::max_values
                 ));
-                std::copy_n( p_input, fill, new_leaf.keys );
+                std::copy_n( p_input, fill, &key_at( new_leaf, 0 ) );
                 p_input += fill;
             }
 
@@ -1561,7 +1561,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
             auto & new_leaf{ this->template new_node<leaf_node>() };
             auto const leaf_slot{ slot_of( new_leaf ) };
 
-            std::copy_n( src.keys, src.num_vals, new_leaf.keys );
+            std::copy_n( &key_at( src, 0 ), src.num_vals, &key_at( new_leaf, 0 ) );
             new_leaf.num_vals = src.num_vals;
 
             if ( !first_leaf_slot ) [[ unlikely ]] {

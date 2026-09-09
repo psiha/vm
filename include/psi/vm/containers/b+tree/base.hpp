@@ -464,6 +464,26 @@ protected:
         if constexpr ( has_mapped_values<N> ) lshift<&N::values>( node, args... );
     }
     // shift a half-open entry range by 'distance' slots, the whole entry moving
+    // Make room at logical position 'pos' by moving the entries BELOW it one
+    // slot down into the front gap, instead of the entries above it one slot
+    // up.  The free slot lands at the same logical position either way; this
+    // direction moves 'pos' entries rather than 'num_vals - pos', and it is
+    // the only direction available once a node's entries reach the end of
+    // their array - which is exactly the state that giving entries to a left
+    // sibling leaves behind.  Leaves only: an inner node's children would have
+    // to move with the keys and be re-indexed.
+    template <typename N>
+    static void open_slot_from_front( N & node, node_size_type const pos ) noexcept
+    {
+        static_assert( !requires( N & n ) { n.children; }, "front-opening does not maintain child back-indices" );
+        BOOST_ASSUME( node.start > 0 );
+        auto const base{ node.start };
+        std::move( &node.keys  [ base ], &node.keys  [ base + pos ], &node.keys  [ base - 1 ] );
+        if constexpr ( has_mapped_values<N> )
+        std::move( &node.values[ base ], &node.values[ base + pos ], &node.values[ base - 1 ] );
+        --node.start;
+    }
+
     template <typename N>
     static void shift_entries_left( N & node, auto const first, auto const last, auto const distance ) noexcept
     {
