@@ -184,9 +184,13 @@ protected: // pass-in-reg public function overloads/impls
             // pass the end of a node (like an end iterator, indicating an
             // append/push_back position) but iterators do not support this
             // (have to be initialized with a valid position for the increment
-            // operator to work).
+            // operator to work) - so such a position is expressed as the first
+            // value of the following leaf, or, past the last leaf, as end()
+            // (which is the last leaf at its num_vals offset, not a null node).
             if ( location.leaf_offset.pos == location.leaf.num_vals ) [[ unlikely ]] {
                 BOOST_ASSUME( !location.leaf_offset.exact_find );
+                if ( BOOST_UNLIKELY( !location.leaf.right ) )
+                    return end();
                 return base::make_iter( location.leaf.right, node_size_type{ 0 } );
             }
             return base::make_iter( location );
@@ -217,21 +221,27 @@ protected: // pass-in-reg public function overloads/impls
 
     const_iterator insert_impl( const_iterator const pos_hint, Reg auto const v, [[ maybe_unused ]] bool const unique )
     {
-        // yes, for starters, generic 'hint as just a hint' is not supported
+        // yes, for starters, generic 'hint as just a hint' is not supported:
+        // the hint has to be the exact resulting position, i.e. lower_bound(v).
+        // end() is a valid hint - it is the append position (the last leaf at
+        // its num_vals offset) and is what lower_bound() yields for a value
+        // greater than every value in the tree.
         BOOST_ASSUME( !empty() );
-        BOOST_ASSERT_MSG( lt( v, *pos_hint ), "Invalid insertion hint" );
-        BOOST_ASSERT_MSG( !unique || gt( v, *std::prev( pos_hint ) ), "Invalid insertion hint" );
+        BOOST_ASSERT_MSG( ( pos_hint == end()   ) || lt( v, *pos_hint            ), "Invalid insertion hint" );
+        BOOST_ASSERT_MSG( ( pos_hint == begin() ) || gt( v, *std::prev( pos_hint ) ) || !unique, "Invalid insertion hint" );
 
         auto const [hint_slot, hint_slot_offset]{ pos_hint.base().pos() };
         auto & hint_leaf{ leaf( hint_slot ) };
         if ( hint_slot_offset == 0 ) [[ unlikely ]] {
             base::update_separator( hint_leaf, v );
         }
-        [[ maybe_unused ]]
         auto const insert_pos_next{ base::insert( hint_leaf, hint_slot_offset, Key{ v }, {} ) };
-        BOOST_ASSERT( pos_hint == base::make_iter( insert_pos_next ) );
         ++this->hdr().size_;
-        return pos_hint.base();
+        // the value landed at the hinted position, which now denotes the
+        // inserted value rather than the one it was taken from - except for an
+        // append, where the hint was end() and the inserted value sits at the
+        // offset the hint carried.
+        return base::make_iter( insert_pos_next );
     }
 
     [[ using gnu: pure, sysv_abi ]]

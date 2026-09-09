@@ -4,3 +4,6 @@ out/*
 build/*
 bin/*
 .vs/*
+test.bpt
+test*.bpt
+*.vec
