@@ -346,6 +346,19 @@ protected:
     template <typename N>
     static node_size_type constexpr node_capacity{ std::remove_cvref_t<N>::max_values };
 
+    // Every index into a node's entries goes through here. Today it is just
+    // keys[ i ]; it exists so that where a node's first live entry sits is
+    // stated in exactly one place rather than in seventy call sites.
+public:
+    // Public only because the key-typed iterators need it and they are nested
+    // classes of bptree_base_wkey, not of this class: [class.access.nest] gives
+    // a nested class its enclosing class's access rights, but MSVC does not
+    // grant that through a dependent base.  Nothing outside can call it anyway -
+    // the node types it takes are themselves not nameable from out here.
+    static constexpr decltype( auto ) key_at( auto       & node, auto const i ) noexcept { return ( node.keys[ i ] ); }
+    static constexpr decltype( auto ) key_at( auto const & node, auto const i ) noexcept { return ( node.keys[ i ] ); }
+protected:
+
     [[ gnu::pure ]] static constexpr node_size_type num_vals  ( auto const & node ) noexcept { return node.num_vals; }
     [[ gnu::pure ]] static constexpr node_size_type num_chldrn( auto const & node ) noexcept { if constexpr ( requires{ node.children; } ) { BOOST_ASSUME( node.num_vals ); return node.num_vals + 1U; } else return 0; }
 
@@ -408,13 +421,13 @@ protected:
     template <typename N>
     static void shift_entries_left( N & node, auto const first, auto const last, auto const distance ) noexcept
     {
-        std::shift_left( &node.keys[ first ], &node.keys[ last ], distance );
+        std::shift_left( &key_at( node, first ), &key_at( node, last ), distance );
         if constexpr ( has_mapped_values<N> ) std::shift_left( &node.values[ first ], &node.values[ last ], distance );
     }
     template <typename N>
     static void shift_entries_right( N & node, auto const first, auto const last, auto const distance ) noexcept
     {
-        std::shift_right( &node.keys[ first ], &node.keys[ last ], distance );
+        std::shift_right( &key_at( node, first ), &key_at( node, last ), distance );
         if constexpr ( has_mapped_values<N> ) std::shift_right( &node.values[ first ], &node.values[ last ], distance );
     }
 
