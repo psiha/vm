@@ -171,7 +171,7 @@ public:
             }
             else
             {
-                std::shift_left( &node.keys[ node_offset ], &node.keys[ node.num_vals ], erased_count );
+                bptree_base::shift_entries_left( node, node_offset, node.num_vals, erased_count );
                 node.num_vals -= erased_count;
                 node.mark_dirty();
                 if ( node_offset == 0 ) {
