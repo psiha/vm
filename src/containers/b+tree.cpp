@@ -117,8 +117,8 @@ void bptree_base::rshift_sibling_parent_pos( node_header & node ) noexcept
     while ( p_node->right )
     {
         auto & right{ this->node( p_node->right ) };
-        BOOST_ASSUME( right.tail.parent_child_idx == p_node->tail.parent_child_idx );
-        ++right.tail.parent_child_idx;
+        BOOST_ASSUME( right.parent_child_idx == p_node->parent_child_idx );
+        ++right.parent_child_idx;
         right.mark_dirty();
         p_node = &right;
     }
@@ -261,7 +261,7 @@ bptree_base::new_spillover_node_for( node_header & existing_node )
      left_node.mark_dirty();
     update_right_sibling_link( right_node, right_node_slot );
     right_node.parent           = left_node.parent;
-    right_node.tail.parent_child_idx = left_node.tail.parent_child_idx + 1;
+    right_node.parent_child_idx = left_node.parent_child_idx + 1;
     //right-sibling parent_child_idx rshifting is performed by insert_into_*
     //rshift_sibling_parent_pos( right_node );
 
@@ -282,8 +282,8 @@ bptree_base::new_root( node_slot const left_child, node_slot const right_child )
     right.parent      = hdr.root_;
     left .mark_dirty();
     right.mark_dirty();
-    BOOST_ASSUME( left .tail.parent_child_idx == 0 );
-    BOOST_ASSUME( right.tail.parent_child_idx == 1 );
+    BOOST_ASSUME( left .parent_child_idx == 0 );
+    BOOST_ASSUME( right.parent_child_idx == 1 );
     ++hdr.depth_;
     return new_root;
 }
@@ -493,7 +493,7 @@ bptree_base::base_iterator bptree_base::make_iter( insert_pos_t const next_pos )
 [[ gnu::pure ]] bptree_base::iter_pos bptree_base::begin_pos() const noexcept { return { this->first_leaf(), 0 }; }
 [[ gnu::pure ]] bptree_base::iter_pos bptree_base::  end_pos() const noexcept {
     auto const last_leaf{ hdr().last_leaf_ };
-    return { last_leaf, last_leaf ? node( last_leaf ).num_vals : node_size_type{} };
+    return { last_leaf, last_leaf ? static_cast<node_size_type>( node( last_leaf ).num_vals ) : node_size_type{} };
 }
 
 [[ gnu::pure ]] bptree_base::base_iterator bptree_base::begin() noexcept { return make_iter( begin_pos() ); }
@@ -709,7 +709,7 @@ void bptree_base::commit_to( bptree_base & target ) const noexcept
     {
         auto const & src_node{ src_nodes[ i ] };
 
-        if ( !src_node.tail.dirty )
+        if ( !src_node.dirty )
         {
 #           ifndef NDEBUG
             // Cross-check: a clean node must be byte-identical to the target.
@@ -717,7 +717,7 @@ void bptree_base::commit_to( bptree_base & target ) const noexcept
             if ( std::memcmp( &src_node, &tgt_node, stride ) != 0 )
             {
                 std::fprintf( stderr, "commit_to: node[%u] clean but differs! src_dirty=%d tgt_dirty=%d stride=%zu num_nodes=%u tgt_num_nodes=%u\n",
-                    i, src_node.tail.dirty, tgt_node.tail.dirty, stride, num_nodes, tgt_num_nodes );
+                    i, src_node.dirty, tgt_node.dirty, stride, num_nodes, tgt_num_nodes );
                 // Find first differing byte
                 auto const * s{ reinterpret_cast<std::byte const *>( &src_node ) };
                 auto const * t{ reinterpret_cast<std::byte const *>( &tgt_node ) };
@@ -735,7 +735,7 @@ void bptree_base::commit_to( bptree_base & target ) const noexcept
 
         auto & tgt_node{ tgt_nodes[ i ] };
         std::memcpy( &tgt_node, &src_node, stride );
-        tgt_node.tail.dirty = false; // clear in target (target is the master branch)
+        tgt_node.dirty = false; // clear in target (target is the master branch)
     }
 
     // Sync the target's cached header pointer (the header contents may have
