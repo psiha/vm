@@ -7,15 +7,9 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 
-#pragma once
-
 #include <psi/vm/containers/vm_vector.hpp>
-
-#include <psi/vm/align.hpp>
 #include <psi/vm/allocation.hpp>
-#include <psi/vm/containers/komparator.hpp>
 #include <psi/vm/containers/lookup.hpp>
-#include <psi/vm/containers/heap_vector.hpp>
 
 #include <psi/build/attributes.hpp>
 #include <psi/build/disable_warnings.hpp>
@@ -23,24 +17,19 @@
 #include <boost/assert.hpp>
 #include <boost/config_ex.hpp>
 #include <boost/integer.hpp>
-// pdqsort included transitively via komparator.hpp
 #include <boost/stl_interfaces/iterator_interface.hpp>
-#if 0 // reexamining...
-#include <boost/stl_interfaces/sequence_container_interface.hpp>
-#endif
 
 #include <algorithm>
 #include <array>
-#include <cmath>
+#include <bit>
+#include <climits>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <iterator>
-#include <std_fix/const_iterator.hpp>
-#include <ranges>
 #include <span>
 #include <type_traits>
 #include <utility>
+
 //------------------------------------------------------------------------------
 namespace psi::vm
 {

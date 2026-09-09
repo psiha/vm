@@ -8,6 +8,26 @@
 
 #include "keyed_base.hpp"
 
+#include <psi/vm/containers/komparator.hpp>
+#include <psi/vm/containers/lookup.hpp>
+
+#include <psi/build/disable_warnings.hpp>
+
+#include <boost/assert.hpp>
+#include <boost/config_ex.hpp>
+#include <boost/stl_interfaces/sequence_container_interface.hpp>
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <iterator>
+#include <ranges>
+#include <span>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+
 //------------------------------------------------------------------------------
 namespace psi::vm
 {

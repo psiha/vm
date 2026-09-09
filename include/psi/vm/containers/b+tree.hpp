@@ -12,6 +12,20 @@
 
 #include "b+tree/impl.hpp"
 
+#include <psi/vm/containers/komparator.hpp>
+#include <psi/vm/containers/lookup.hpp>
+
+#include <psi/build/disable_warnings.hpp>
+
+#include <boost/assert.hpp>
+
+#include <algorithm>
+#include <functional>
+#include <iterator>
+#include <ranges>
+#include <span>
+#include <utility>
+
 //------------------------------------------------------------------------------
 namespace psi::vm
 {

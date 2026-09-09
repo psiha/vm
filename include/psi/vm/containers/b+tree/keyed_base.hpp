@@ -9,6 +9,28 @@
 
 #include "base.hpp"
 
+#include <psi/vm/align.hpp>
+#include <psi/vm/containers/heap_vector.hpp>
+
+#include <psi/build/disable_warnings.hpp>
+
+#include <boost/assert.hpp>
+#include <boost/config_ex.hpp>
+#include <boost/stl_interfaces/iterator_interface.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <iterator>
+#include <optional>
+#include <ranges>
+#include <span>
+#include <std_fix/const_iterator.hpp>
+#include <type_traits>
+#include <utility>
+
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
