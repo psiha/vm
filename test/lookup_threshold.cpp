@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <numeric>
 #include <print>
 #include <random>
@@ -69,6 +70,16 @@ namespace
     // the per-probe figures are comparable across lengths.
     constexpr std::uint32_t probes{ 200'000 };
     constexpr int           passes{ 3 };
+
+    // A narrow key cannot represent every length: the generator below strides by
+    // 3, so uint8_t tops out at 84 values and would otherwise WRAP - producing an
+    // unsorted range and a meaningless, silently-wrong measurement.
+    template <typename Key>
+    [[ nodiscard ]] constexpr bool length_representable( std::uint32_t const n ) noexcept
+    {
+        if constexpr ( std::is_floating_point_v<Key> ) { return true; }
+        else { return ( static_cast<std::uint64_t>( n ) * 3 + 1 ) <= static_cast<std::uint64_t>( std::numeric_limits<Key>::max() ); }
+    }
 
     template <typename Key>
     [[ nodiscard ]] std::vector<Key> sorted_range( std::uint32_t const n )
@@ -216,6 +227,7 @@ namespace
         std::uint32_t crossover_bytes { 0 };
         for ( auto const n : lengths )
         {
+            if ( !length_representable<Key>( n ) ) { continue; }
             auto const range{ sorted_range<Key>( n ) };
             std::vector<Key> keys( probes );
             std::uniform_int_distribution<std::uint32_t> pick{ 0, n * 3 };
@@ -254,6 +266,7 @@ TEST( lookup, threshold_sweep )
         linear_search_max_values<std::uint32_t>
     );
     std::println( "\n########## RESIDENT (array already in cache) ##########" );
+    sweep<std::uint8_t >( "uint8_t " ); // caps out at 84 values - see length_representable
     sweep<std::uint16_t>( "uint16_t" );
     sweep<std::uint32_t>( "uint32_t" );
     sweep<std::uint64_t>( "uint64_t" );
