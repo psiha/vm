@@ -303,9 +303,20 @@ private:
         decltype( auto ) value{ prefetch( comp, key ) };
         auto const pos_iter
         {
+#       if PSI_VM_BT_RUNTIME_DISPATCH
+            // Dispatch on the length the node ACTUALLY has, not on the length it
+            // could have.  A node is rarely full - a half-full one scans half as
+            // far - and the compile-time form cannot see that, so it picks the
+            // strategy for a fill the node may never reach.  The BOOST_ASSUME
+            // above states num_vals <= maximum_values, which lets the compiler
+            // fold this check away entirely whenever the whole node fits under
+            // the threshold: the small-node case pays nothing for the choice.
+            psi::vm::lower_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
+#       else
             use_linear_search_for_sorted_array<Comparator, Key, maximum_values>
                 ? linear_lower_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
                 :   std::lower_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
+#       endif
         };
         auto const pos_idx   { static_cast<node_size_type>( std::distance( &keys[ 0 ], pos_iter ) ) };
         auto const exact_find{ ( pos_idx != num_vals ) && !comp( value, keys[ pos_idx ] ) };
@@ -343,9 +354,13 @@ protected:
         decltype( auto ) value{ prefetch( comp, key ) };
         auto const pos_iter
         {
+#       if PSI_VM_BT_RUNTIME_DISPATCH // see the lower_bound twin
+            psi::vm::upper_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
+#       else
             use_linear_search_for_sorted_array<Comparator, Key, maximum_values>
                 ? linear_upper_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
                 :   std::upper_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
+#       endif
         };
         return static_cast<node_size_type>( std::distance( &keys[ 0 ], pos_iter ) );
     }

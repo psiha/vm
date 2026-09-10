@@ -57,6 +57,13 @@ concept InsertableType = ( transparent_comparator && std::is_convertible_v<K, St
 template <typename T>                                  constexpr bool is_statically_sized   { true };
 template <typename T> requires requires{ T{}.size(); } constexpr bool is_statically_sized<T>{ T{}.size() != 0 };
 
+// Dispatch the intra-node search on the node's ACTUAL fill (lookup.hpp's
+// runtime form) rather than on its capacity.  Off by default: it is a change to
+// the hot path of every consumer and wants its own measurement.
+#ifndef PSI_VM_BT_RUNTIME_DISPATCH
+#   define PSI_VM_BT_RUNTIME_DISPATCH 0
+#endif
+
 // Byte limit + eligibility live in lookup.hpp (shared, measured constants);
 // node size is a compile-time constant here so the dispatch is compile-time.
 template <typename Comparator, typename Key, std::uint32_t maximum_array_length>
