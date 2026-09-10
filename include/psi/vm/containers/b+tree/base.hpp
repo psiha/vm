@@ -64,14 +64,15 @@ template <typename T> requires requires{ T{}.size(); } constexpr bool is_statica
 #   define PSI_VM_BT_RUNTIME_DISPATCH 0
 #endif
 
-// Byte limit + eligibility live in lookup.hpp (shared, measured constants);
-// node size is a compile-time constant here so the dispatch is compile-time.
+// The value limit + eligibility live in lookup.hpp (shared, measured); the node
+// capacity is a compile-time constant here so the dispatch is compile-time.
 template <typename Comparator, typename Key, std::uint32_t maximum_array_length>
 constexpr bool use_linear_search_for_sorted_array
 {
-    ( linear_search_eligible<Comparator, Key>                           ) &&
-    ( maximum_array_length * sizeof( Key ) <= linear_search_byte_limit  ) &&
-    ( is_statically_sized<Key>                                          )
+    ( linear_search_eligible<Comparator, Key>                ) &&
+    ( linear_search_max_values != 0                          ) &&
+    ( maximum_array_length <= linear_search_max_values       ) &&
+    ( is_statically_sized<Key>                               )
 }; // use_linear_search_for_sorted_array
 
 

@@ -5,7 +5,7 @@
 /// Does the shipped linear-vs-binary threshold actually hold, on this platform,
 /// for this key type?
 ///
-/// lookup.hpp dispatches on a single constant, `linear_search_byte_limit`, and
+/// lookup.hpp dispatches on a single constant, `linear_search_max_values`, and
 /// the comment above it records a crossover measured "between 1 and 4 KiB of
 /// scanned data -- the same BYTE size for 32-bit and 64-bit keys, so the limit
 /// is expressed in bytes, not element count", with the linear path disabled
@@ -228,7 +228,7 @@ namespace
             auto const linear_wins{ lin <= bin };
             if ( !linear_wins && !crossover_values ) { crossover_values = n; crossover_bytes = static_cast<std::uint32_t>( bytes ); }
             // What the shipped constant would pick for a range of this size.
-            auto const shipped_linear{ ( linear_search_byte_limit != 0 ) && ( bytes <= linear_search_byte_limit ) && linear_search_eligible<std::less<>, Key> };
+            auto const shipped_linear{ ( linear_search_max_values != 0 ) && ( n <= linear_search_max_values ) && linear_search_eligible<std::less<>, Key> };
             std::println
             (
                 "  {:6} | {:6} | {:9.2f} | {:9.2f} | {:6} | {:5.1f}% | {}{}",
@@ -250,8 +250,8 @@ TEST( lookup, threshold_sweep )
 {
     std::println
     (
-        "linear_search_byte_limit = {}  (0 means the linear path is compiled out)",
-        linear_search_byte_limit
+        "linear_search_max_values = {}  (0 means the linear path is compiled out)",
+        linear_search_max_values
     );
     std::println( "\n########## RESIDENT (array already in cache) ##########" );
     sweep<std::uint16_t>( "uint16_t" );

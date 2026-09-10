@@ -82,28 +82,50 @@ using key_const_arg_t = std::conditional_t<
 
 
 //==============================================================================
-// Sorted-range search primitives: linear vs binary, byte-size dispatched.
+// Sorted-range search primitives: linear vs binary, dispatched on the number of
+// VALUES in the range.
 //
-// For trivially-comparable keys a linear early-exit scan beats std::lower_bound
-// on x64 for small ranges: measured (b+tree node search + isolated sorted-array
-// probes, clang, -O3) the crossover sits between 1 and 4 KiB of scanned data --
-// the same BYTE size for 32-bit and 64-bit keys, so the limit is expressed in
-// bytes, not element count. On AArch64 (Apple Silicon measured) clang emits a
-// branchless (csel) binary search whose latency is essentially flat in range
-// size and which wins at EVERY size -- so the linear path is disabled there.
+// Why values and not bytes.  The limit used to be denominated in bytes, on the
+// grounds that the crossover had been found at the same byte size for 32- and
+// 64-bit keys.  Re-measured with both widths in a real tree (test/b+tree.cpp,
+// bp_tree.benchmark_key_width), it is not: the crossover sits between ~250 and
+// ~510 VALUES for 4-byte keys AND for 8-byte keys, which is 1004-2028 bytes in
+// one case and 2024-4072 in the other.  Denominated in bytes, one constant
+// therefore means two different policies for two widths of the same type.
+//
+// Why AArch64 is zero.  clang emits a genuinely branchless binary search there -
+// `fcmp; csel; csel; cbnz`, no data-dependent branch - so there is no
+// misprediction to amortise and binary wins at every length and every key type
+// measured (48-289% ahead on float).  On x86-64 it emits a BRANCHY loop for both
+// integers and floating point (`cmp;jae` / `ucomiss;jbe`, no cmov under
+// libstdc++), and that misprediction is the only reason a linear scan competes
+// there at all.
+//
+// ⚠ Floating-point keys behave differently from integers on x86-64, and this one
+// constant does not express that: measured in isolation, integers cross at 8
+// values while float and double cross at 96 (Xeon 8581C) / 192 (Zen 5) / 256
+// (Arrow Lake).  The value below is set from the in-tree integer measurement,
+// which is the case psi::vm's own containers actually run.
+//
+// ⚠ The isolated and in-tree numbers disagree by an order of magnitude because
+// they are different cache regimes - a resident array favours binary (its probes
+// never miss), a freshly pointer-chased node favours a streaming scan.  Do not
+// re-tune this from a standalone benchmark alone; test/lookup_threshold.cpp
+// prints both regimes and flags every length where this policy disagrees with
+// the measurement.
 //==============================================================================
 
-// Range byte-size up to which the dispatched functions below use a linear scan.
-// Overridable so the dispatch itself can be A/B'd without editing this header
-// (-DPSI_VM_LINEAR_SEARCH_BYTE_LIMIT=0 disables the linear path everywhere).
-inline constexpr std::size_t linear_search_byte_limit
+// Number of values up to which the dispatched functions below use a linear scan
+// (0 disables the linear path entirely).  Overridable so the dispatch can be
+// A/B'd without editing this header.
+inline constexpr std::size_t linear_search_max_values
 {
-#if defined( PSI_VM_LINEAR_SEARCH_BYTE_LIMIT )
-    PSI_VM_LINEAR_SEARCH_BYTE_LIMIT
+#if defined( PSI_VM_LINEAR_SEARCH_MAX_VALUES )
+    PSI_VM_LINEAR_SEARCH_MAX_VALUES
 #elif defined( __aarch64__ ) || defined( _M_ARM64 )
     0
 #else
-    2048
+    256
 #endif
 };
 
@@ -142,15 +164,15 @@ std::optional<It> linear_find( It const first, It const last, auto const & key, 
 }
 
 // Runtime-dispatched versions: linear for trivial data & comparators when the
-// range is small enough (see linear_search_byte_limit), std:: otherwise.
+// range is short enough (see linear_search_max_values), std:: otherwise.
 template <typename It, typename Comp = std::less<>>
 [[ nodiscard, gnu::pure ]] constexpr
 It lower_bound( It const first, It const last, auto const & key, Comp const & comp = {} ) noexcept
 {
     using Key = std::remove_cvref_t<decltype( *first )>;
-    if constexpr ( linear_search_eligible<Comp, Key> && ( linear_search_byte_limit != 0 ) )
+    if constexpr ( linear_search_eligible<Comp, Key> && ( linear_search_max_values != 0 ) )
     {
-        if ( static_cast<std::size_t>( last - first ) * sizeof( Key ) <= linear_search_byte_limit ) [[ likely ]]
+        if ( static_cast<std::size_t>( last - first ) <= linear_search_max_values ) [[ likely ]]
             return linear_lower_bound( first, last, key, comp );
     }
     return std::lower_bound( first, last, key, comp );
@@ -160,9 +182,9 @@ template <typename It, typename Comp = std::less<>>
 It upper_bound( It const first, It const last, auto const & key, Comp const & comp = {} ) noexcept
 {
     using Key = std::remove_cvref_t<decltype( *first )>;
-    if constexpr ( linear_search_eligible<Comp, Key> && ( linear_search_byte_limit != 0 ) )
+    if constexpr ( linear_search_eligible<Comp, Key> && ( linear_search_max_values != 0 ) )
     {
-        if ( static_cast<std::size_t>( last - first ) * sizeof( Key ) <= linear_search_byte_limit ) [[ likely ]]
+        if ( static_cast<std::size_t>( last - first ) <= linear_search_max_values ) [[ likely ]]
             return linear_upper_bound( first, last, key, comp );
     }
     return std::upper_bound( first, last, key, comp );
