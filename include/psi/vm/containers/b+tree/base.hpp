@@ -57,14 +57,22 @@ concept InsertableType = ( transparent_comparator && std::is_convertible_v<K, St
 template <typename T>                                  constexpr bool is_statically_sized   { true };
 template <typename T> requires requires{ T{}.size(); } constexpr bool is_statically_sized<T>{ T{}.size() != 0 };
 
-// Byte limit + eligibility live in lookup.hpp (shared, measured constants);
-// node size is a compile-time constant here so the dispatch is compile-time.
+// Dispatch the intra-node search on the node's ACTUAL fill (lookup.hpp's
+// runtime form) rather than on its capacity.  Off by default: it is a change to
+// the hot path of every consumer and wants its own measurement.
+#ifndef PSI_VM_BT_RUNTIME_DISPATCH
+#   define PSI_VM_BT_RUNTIME_DISPATCH 0
+#endif
+
+// The value limit + eligibility live in lookup.hpp (shared, measured); the node
+// capacity is a compile-time constant here so the dispatch is compile-time.
 template <typename Comparator, typename Key, std::uint32_t maximum_array_length>
 constexpr bool use_linear_search_for_sorted_array
 {
-    ( linear_search_eligible<Comparator, Key>                           ) &&
-    ( maximum_array_length * sizeof( Key ) <= linear_search_byte_limit  ) &&
-    ( is_statically_sized<Key>                                          )
+    ( linear_search_eligible<Comparator, Key>                ) &&
+    ( linear_search_max_values<Key> != 0                     ) &&
+    ( maximum_array_length <= linear_search_max_values<Key>  ) &&
+    ( is_statically_sized<Key>                               )
 }; // use_linear_search_for_sorted_array
 
 
@@ -137,7 +145,14 @@ public:
 
 protected:
     // TODO make this properly configurable (a template parameter)
-#if PSI_VM_BT_PAGE_SIZED_NODES // favoring TLB and disk access related issues
+    // -DPSI_VM_BT_NODE_SIZE=n overrides both branches below.  The two shipping
+    // geometries are an order of magnitude apart in how many values a node
+    // holds, and that count - not the byte size - is what the intra-node search
+    // dispatch and the occupancy numbers turn on, so the sizes in between have
+    // to be reachable for a sweep to say where the crossovers actually are.
+#if defined( PSI_VM_BT_NODE_SIZE )
+    static constexpr std::uint16_t node_size{ PSI_VM_BT_NODE_SIZE };
+#elif PSI_VM_BT_PAGE_SIZED_NODES // favoring TLB and disk access related issues
     static constexpr std::uint16_t node_size
     {
 #   if ( defined( __APPLE__ ) && defined( __aarch64__ ) ) // Quickfix: CPU and especially RSS memory spike regressions with full Apple Silicon 16kB node sizes, TODO investigate properly

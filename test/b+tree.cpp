@@ -29,10 +29,25 @@ namespace psi::vm
 
 #ifdef NDEBUG // bench only release builds
 
+// A/B arms are separately built binaries and have to see the same shuffle, so
+// the seed is fixed rather than drawn from random_device.  Override to vary it
+// deliberately.
+#ifndef PSI_VM_BENCH_SEED
+#   define PSI_VM_BENCH_SEED 0x5eed1234u
+#endif
+
 namespace
 {
-    using timer    = std::chrono::high_resolution_clock;
-    using duration = std::chrono::nanoseconds;
+    using timer = std::chrono::high_resolution_clock;
+    // Fractional nanoseconds: the per-key figure is a total divided by millions,
+    // and truncating it to whole nanoseconds throws away the resolution the
+    // comparison is made at.
+    using duration = std::chrono::duration<double, std::nano>;
+
+    // A single pass is not separable from scheduling noise at the ~15% deltas
+    // this benchmark exists to resolve, so a lookup pass is repeated and the
+    // best one reported.
+    auto constexpr lookup_passes{ 3 };
 
 #if HAVE_ABSL
     // absl::btree_set exposes bytes_used() only on the internal btree, so the
@@ -55,33 +70,60 @@ namespace
     {
         auto const start{ timer::now() };
         container.insert( data.begin(), data.end() );
-        return std::chrono::duration_cast<duration>( timer::now() - start ) / data.size();
+        return duration{ timer::now() - start } / data.size();
     }
     duration time_insertion_one_by_one( auto & container, auto const & data )
     {
         auto const start{ timer::now() };
         for ( auto const x : data ) { container.insert( x ); }
-        return std::chrono::duration_cast<duration>( timer::now() - start ) / data.size();
+        return duration{ timer::now() - start } / data.size();
     }
-    duration time_lookup( auto const & container, auto const & data ) noexcept
+    // The lookup loop accumulates rather than asserting: an EXPECT_EQ per key is
+    // gtest machinery inside the timed region, millions of times over, and it
+    // swamps the difference between two search implementations.  The checksum is
+    // checked once the clock has stopped, and it is also what keeps the searches
+    // from being elided.
+    duration time_lookup( auto const & container, auto const & data, std::uint64_t const expected_checksum ) noexcept
     {
-        auto const start{ timer::now() };
-        for ( auto const x : data ) {
-            EXPECT_EQ( *container.find( x ), x );
+        auto best{ duration::max() };
+        for ( auto pass{ 0 }; pass < lookup_passes; ++pass )
+        {
+            std::uint64_t checksum{ 0 };
+            auto const start{ timer::now() };
+            for ( auto const x : data ) { checksum += static_cast<std::uint64_t>( *container.find( x ) ); }
+            auto const elapsed{ duration{ timer::now() - start } / data.size() };
+            EXPECT_EQ( checksum, expected_checksum );
+            best = std::min( best, elapsed );
         }
-        return std::chrono::duration_cast<duration>( timer::now() - start ) / data.size();
+        return best;
     }
 } // anonymous namespace
 
 TEST( bp_tree, benchamrk )
 {
     auto const   test_size{ 7654321 };
-    auto const   seed{ std::random_device{}() };
-    std::mt19937 rng{ seed };
+    std::mt19937 rng{ PSI_VM_BENCH_SEED };
 
     std::ranges::iota_view constexpr sorted_numbers{ 0, test_size };
     auto numbers{ std::ranges::to<std::vector>( sorted_numbers ) };
     std::ranges::shuffle( numbers, rng );
+    auto const checksum{ std::accumulate( numbers.begin(), numbers.end(), std::uint64_t{ 0 } ) };
+
+    // The geometry and the intra-node search the numbers below were produced
+    // with - node size and byte limit are build-time knobs, so a run that does
+    // not state which arm it is has not measured anything comparable.
+    using bpt_t = psi::vm::bptree_set<int>;
+    auto constexpr leaf_values { bpt_t::max_values_per_leaf () };
+    auto constexpr inner_values{ bpt_t::max_values_per_inner() };
+    std::println
+    (
+        "geometry: {}-byte nodes, {} values/leaf, {} values/inner\n"
+        "intra-node search: linear_search_max_values={}, leaf={}, inner={}",
+        bpt_t::node_byte_size(), leaf_values, inner_values,
+        linear_search_max_values<int>,
+        use_linear_search_for_sorted_array<std::less<>, int, leaf_values  > ? "LINEAR" : "binary",
+        use_linear_search_for_sorted_array<std::less<>, int, inner_values > ? "LINEAR" : "binary"
+    );
 
     psi::vm         ::bptree_set<int> bpt; bpt.map_memory();
     boost::container::flat_set  <int> flat_set;
@@ -106,10 +148,10 @@ TEST( bp_tree, benchamrk )
 #endif
 
     // random lookup
-    auto const flat_set_find{ time_lookup( flat_set, numbers ) };
-    auto const      bpt_find{ time_lookup( bpt     , numbers ) };
+    auto const flat_set_find{ time_lookup( flat_set, numbers, checksum ) };
+    auto const      bpt_find{ time_lookup( bpt     , numbers, checksum ) };
 #if HAVE_ABSL
-    auto const     abpt_find{ time_lookup( abpt    , numbers ) };
+    auto const     abpt_find{ time_lookup( abpt    , numbers, checksum ) };
 #endif
 
     std::println( "insert / lookup:" );
@@ -121,10 +163,10 @@ TEST( bp_tree, benchamrk )
 
     // random one-by-one insertion, and what each container ends up occupying
     auto const  bpt_rnd_insert{ time_insertion_one_by_one( bpt_rnd , numbers ) };
-    auto const  bpt_rnd_find  { time_lookup              ( bpt_rnd , numbers ) };
+    auto const  bpt_rnd_find  { time_lookup              ( bpt_rnd , numbers, checksum ) };
 #if HAVE_ABSL
     auto const abpt_rnd_insert{ time_insertion_one_by_one( abpt_rnd, numbers ) };
-    auto const abpt_rnd_find  { time_lookup              ( abpt_rnd, numbers ) };
+    auto const abpt_rnd_find  { time_lookup              ( abpt_rnd, numbers, checksum ) };
 #endif
     auto const     bpt_bytes{ std::size_t(     bpt.nodes_reserved() ) * decltype( bpt )::node_byte_size() };
     auto const bpt_rnd_bytes{ std::size_t( bpt_rnd.nodes_reserved() ) * decltype( bpt )::node_byte_size() };
@@ -144,6 +186,195 @@ TEST( bp_tree, benchamrk )
     EXPECT_LE( bpt_find, flat_set_find );
 #endif
 } // bp_tree.benchamrk
+
+namespace
+{
+    // What a real index comparator looks like: the tree stores row indices and
+    // ordering means dereferencing a column.  Every comparison is a scattered
+    // load rather than a read of a key the scan already has in the cache line
+    // it is walking, which is the whole economics of the intra-node search - so
+    // a node-size or linear-vs-binary answer obtained with std::less on the
+    // keys themselves does not transfer to it.
+    struct indirect_less
+    {
+        std::uint32_t const * values;
+        [[ gnu::pure ]] bool operator()( std::uint32_t const left, std::uint32_t const right ) const noexcept
+        {
+            return values[ left ] < values[ right ];
+        }
+    };
+} // anonymous namespace
+
+// The linear path is gated on is_simple_comparator, which is a statement about
+// whether == may replace the double-negation equivalence test - not about cost.
+// Indirect comparators do satisfy it, and consumers specialise it exactly like
+// this, so the linear scan is reachable with an indirect comparison and this is
+// the configuration that says what that costs.
+template <> inline constexpr bool is_simple_comparator<indirect_less>{ true };
+
+TEST( bp_tree, benchmark_indirect_comparator )
+{
+    auto const   test_size{ 7654321 };
+    std::mt19937 rng{ PSI_VM_BENCH_SEED };
+
+    // values[ row ] is what orders row.  The rows are inserted in a random
+    // order and their values are a random permutation too, so neither the keys
+    // nor the memory they are read from arrive in order.
+    std::vector<std::uint32_t> values( test_size );
+    std::iota( values.begin(), values.end(), 0u );
+    std::ranges::shuffle( values, rng );
+    auto rows{ std::ranges::to<std::vector>( std::views::iota( 0u, std::uint32_t( test_size ) ) ) };
+    std::ranges::shuffle( rows, rng );
+
+    using bpt_t = psi::vm::bp_tree<std::uint32_t, true, indirect_less>;
+    auto constexpr leaf_values { bpt_t::max_values_per_leaf () };
+    auto constexpr inner_values{ bpt_t::max_values_per_inner() };
+    std::println
+    (
+        "indirect comparator - geometry: {}-byte nodes, {} values/leaf, {} values/inner\n"
+        "intra-node search: linear_search_max_values={}, leaf={}, inner={}",
+        bpt_t::node_byte_size(), leaf_values, inner_values,
+        linear_search_max_values<int>,
+        use_linear_search_for_sorted_array<indirect_less, std::uint32_t, leaf_values  > ? "LINEAR" : "binary",
+        use_linear_search_for_sorted_array<indirect_less, std::uint32_t, inner_values > ? "LINEAR" : "binary"
+    );
+
+    bpt_t bpt{ indirect_less{ values.data() } }; bpt.map_memory();
+
+    auto const insert{ time_insertion_one_by_one( bpt, rows ) };
+    // find( row ) locates the entry equivalent to row under the comparator, so
+    // the checksum is the sum of the rows' VALUES, not of the rows.
+    auto const expected{ std::accumulate( values.begin(), values.end(), std::uint64_t{ 0 } ) };
+    duration best{ duration::max() };
+    for ( auto pass{ 0 }; pass < lookup_passes; ++pass )
+    {
+        std::uint64_t sum{ 0 };
+        auto const start{ timer::now() };
+        for ( auto const row : rows ) { sum += values[ *bpt.find( row ) ]; }
+        auto const elapsed{ duration{ timer::now() - start } / rows.size() };
+        EXPECT_EQ( sum, expected );
+        best = std::min( best, elapsed );
+    }
+    auto const bytes{ std::size_t( bpt.nodes_reserved() ) * bpt_t::node_byte_size() };
+    std::println
+    (
+        "	 random one-by-one insert / random lookup [ns/key]:	{} / {}	{:.2f} bytes/key",
+        insert, best, double( bytes ) / test_size
+    );
+} // bp_tree.benchmark_indirect_comparator
+
+namespace
+{
+    // Whether the intra-node search threshold belongs in BYTES or in VALUES
+    // cannot be answered with one key width: at a fixed node size the two move
+    // together, so every crossover found with 4-byte keys fits both stories.
+    // Doubling the key width holds the node's byte size fixed and halves the
+    // value count, which separates them - and the two answers are expected to
+    // differ by comparator: a scan over keys the node already holds costs bytes
+    // touched, while an indirect comparison costs one scattered load per value.
+    template <typename Key>
+    void time_key_width( char const * const label, std::uint32_t const test_size, std::mt19937 & rng )
+    {
+        using tree_t = psi::vm::bptree_set<Key>;
+        auto keys{ std::ranges::to<std::vector>( std::views::iota( Key{ 0 }, Key( test_size ) ) ) };
+        std::ranges::shuffle( keys, rng );
+        auto const expected{ std::accumulate( keys.begin(), keys.end(), std::uint64_t{ 0 } ) };
+
+        tree_t bpt; bpt.map_memory();
+        auto const bulk  { time_insertion( bpt, std::views::iota( Key{ 0 }, Key( test_size ) ) ) };
+        auto const lookup{ time_lookup   ( bpt, keys, expected ) };
+
+        auto constexpr leaf_values { tree_t::max_values_per_leaf () };
+        auto constexpr inner_values{ tree_t::max_values_per_inner() };
+        std::println
+        (
+            "{}: {}-byte keys, {} values/leaf ({} B), {} values/inner ({} B); leaf={} inner={}\n"
+            "	 bulk insert / random lookup [ns/key]:	{} / {}",
+            label, sizeof( Key ),
+            leaf_values , leaf_values  * sizeof( Key ),
+            inner_values, inner_values * sizeof( Key ),
+            use_linear_search_for_sorted_array<std::less<>, Key, leaf_values  > ? "LINEAR" : "binary",
+            use_linear_search_for_sorted_array<std::less<>, Key, inner_values > ? "LINEAR" : "binary",
+            bulk, lookup
+        );
+    }
+} // anonymous namespace
+
+TEST( bp_tree, benchmark_key_width )
+{
+    auto const   test_size{ 7654321 };
+    std::mt19937 rng{ PSI_VM_BENCH_SEED };
+    time_key_width<std::uint32_t>( "narrow", test_size, rng );
+    time_key_width<std::uint64_t>( "wide  ", test_size, rng );
+    // A third width, because two points cannot distinguish "the crossover is a
+    // number of values" from "it is a number of bytes that happens to line up".
+    // A unique tree can hold at most 65536 uint16 keys, so this one is small and
+    // shallow by necessity - it is here for the geometry, not for the absolute
+    // timings, which are not comparable with the two above.
+    time_key_width<std::uint16_t>( "16-bit", 60000, rng );
+} // bp_tree.benchmark_key_width
+
+#if HAVE_ABSL
+namespace
+{
+    // absl::btree decides the same question we do, and its rule is:
+    //   "If the key is arithmetic and the comparator is std::less or
+    //    std::greater, choose linear.  Otherwise, choose binary."
+    //   TODO(ezb): Might make sense to add condition(s) based on node-size.
+    // - i.e. linear for EVERY arithmetic key, with no size condition at all,
+    // and they flag the missing size condition themselves.  It is worth knowing
+    // whether that is the right call at their node size, and they provide the
+    // means to ask: a comparator may opt in or out through a member typedef, so
+    // the same container can be built both ways and compared against itself.
+    template <typename Key, bool linear>
+    struct absl_pref : std::less<Key>
+    {
+        using absl_btree_prefer_linear_node_search = std::bool_constant<linear>;
+    };
+} // anonymous namespace
+
+TEST( bp_tree, benchmark_absl_linear_switch )
+{
+    auto const   test_size{ 7654321 };
+    std::mt19937 rng{ PSI_VM_BENCH_SEED };
+
+    auto const run{ [&]<typename Key>( char const * const label )
+    {
+        // Not views::iota: it requires a weakly-incrementable type, and the
+        // floating-point arms are the whole point of this test.
+        std::vector<Key> keys( test_size );
+        for ( auto i{ 0 }; i < test_size; ++i ) { keys[ static_cast<std::size_t>( i ) ] = static_cast<Key>( i ); }
+        std::ranges::shuffle( keys, rng );
+        // Not std::accumulate with a uint64 init: over a vector<float> the
+        // addition promotes the ACCUMULATOR to float, so the reference sum is
+        // computed in float precision and diverges from the uint64 one the
+        // lookup builds as soon as the running total passes 2^24.
+        std::uint64_t expected{ 0 };
+        for ( auto const k : keys ) { expected += static_cast<std::uint64_t>( k ); }
+
+        absl::btree_set<Key, absl_pref<Key, true  >> lin;
+        absl::btree_set<Key, absl_pref<Key, false >> bin;
+        lin.insert( keys.begin(), keys.end() );
+        bin.insert( keys.begin(), keys.end() );
+
+        auto const lin_find{ time_lookup( lin, keys, expected ) };
+        auto const bin_find{ time_lookup( bin, keys, expected ) };
+        std::println
+        (
+            "	 {}: absl linear {} / absl binary {}	=> absl's default ({}) is {}",
+            label, lin_find, bin_find,
+            "linear",                                  // arithmetic key + std::less
+            ( lin_find <= bin_find ) ? "RIGHT" : "WRONG"
+        );
+    } };
+
+    std::println( "absl::btree_set node search, its own switch A/B'd against itself:" );
+    run.template operator()<std::uint32_t>( "uint32" );
+    run.template operator()<std::uint64_t>( "uint64" );
+    run.template operator()<float        >( "float " );
+    run.template operator()<double       >( "double" );
+} // bp_tree.benchmark_absl_linear_switch
+#endif // HAVE_ABSL
 #endif // release build
 
 static auto const test_file{ "test.bpt" };
