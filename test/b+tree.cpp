@@ -307,6 +307,68 @@ TEST( bp_tree, benchmark_key_width )
     time_key_width<std::uint32_t>( "narrow", test_size, rng );
     time_key_width<std::uint64_t>( "wide  ", test_size, rng );
 } // bp_tree.benchmark_key_width
+
+#if HAVE_ABSL
+namespace
+{
+    // absl::btree decides the same question we do, and its rule is:
+    //   "If the key is arithmetic and the comparator is std::less or
+    //    std::greater, choose linear.  Otherwise, choose binary."
+    //   TODO(ezb): Might make sense to add condition(s) based on node-size.
+    // - i.e. linear for EVERY arithmetic key, with no size condition at all,
+    // and they flag the missing size condition themselves.  It is worth knowing
+    // whether that is the right call at their node size, and they provide the
+    // means to ask: a comparator may opt in or out through a member typedef, so
+    // the same container can be built both ways and compared against itself.
+    template <typename Key, bool linear>
+    struct absl_pref : std::less<Key>
+    {
+        using absl_btree_prefer_linear_node_search = std::bool_constant<linear>;
+    };
+} // anonymous namespace
+
+TEST( bp_tree, benchmark_absl_linear_switch )
+{
+    auto const   test_size{ 7654321 };
+    std::mt19937 rng{ PSI_VM_BENCH_SEED };
+
+    auto const run{ [&]<typename Key>( char const * const label )
+    {
+        // Not views::iota: it requires a weakly-incrementable type, and the
+        // floating-point arms are the whole point of this test.
+        std::vector<Key> keys( test_size );
+        for ( auto i{ 0 }; i < test_size; ++i ) { keys[ static_cast<std::size_t>( i ) ] = static_cast<Key>( i ); }
+        std::ranges::shuffle( keys, rng );
+        // Not std::accumulate with a uint64 init: over a vector<float> the
+        // addition promotes the ACCUMULATOR to float, so the reference sum is
+        // computed in float precision and diverges from the uint64 one the
+        // lookup builds as soon as the running total passes 2^24.
+        std::uint64_t expected{ 0 };
+        for ( auto const k : keys ) { expected += static_cast<std::uint64_t>( k ); }
+
+        absl::btree_set<Key, absl_pref<Key, true  >> lin;
+        absl::btree_set<Key, absl_pref<Key, false >> bin;
+        lin.insert( keys.begin(), keys.end() );
+        bin.insert( keys.begin(), keys.end() );
+
+        auto const lin_find{ time_lookup( lin, keys, expected ) };
+        auto const bin_find{ time_lookup( bin, keys, expected ) };
+        std::println
+        (
+            "	 {}: absl linear {} / absl binary {}	=> absl's default ({}) is {}",
+            label, lin_find, bin_find,
+            "linear",                                  // arithmetic key + std::less
+            ( lin_find <= bin_find ) ? "RIGHT" : "WRONG"
+        );
+    } };
+
+    std::println( "absl::btree_set node search, its own switch A/B'd against itself:" );
+    run.template operator()<std::uint32_t>( "uint32" );
+    run.template operator()<std::uint64_t>( "uint64" );
+    run.template operator()<float        >( "float " );
+    run.template operator()<double       >( "double" );
+} // bp_tree.benchmark_absl_linear_switch
+#endif // HAVE_ABSL
 #endif // release build
 
 static auto const test_file{ "test.bpt" };
