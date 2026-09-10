@@ -20,6 +20,12 @@
 #include <boost/stl_interfaces/sequence_container_interface.hpp>
 #endif
 
+#ifdef PSI_VM_BT_PROBE // MEASUREMENT ONLY
+#   include <atomic>
+#   include <cstdio>
+#   include <cstdlib>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -2573,9 +2579,34 @@ protected: // pass-in-reg public function overloads/impls
 
 private:
     // lower_bound find >limited to/within a node<
+    // MEASUREMENT ONLY: the probe has side effects and calls out, so it cannot
+    // keep `pure` (the compiler is entitled to elide repeated calls to a pure
+    // function - a counter under it would silently under-count) or `leaf`.
+#ifdef PSI_VM_BT_PROBE
+    [[ using gnu:       hot, noinline, sysv_abi       ]]
+#else
     [[ using gnu: pure, hot, noinline, sysv_abi, leaf ]]
+#endif
     static find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const key, pass_in_reg<Comparator> const comparator ) noexcept
     {
+#ifdef PSI_VM_BT_PROBE
+        // Is the intra-node search actually on the hot path of the workload
+        // being measured?  A geometry A/B that comes out flat means nothing
+        // until this says the subsystem ran at all.
+        {
+            static std::atomic<std::uint64_t> calls { 0 };
+            static std::atomic<std::uint64_t> scanned{ 0 };
+            [[ maybe_unused ]] static bool const registered
+            {
+                []{ std::atexit( []{ std::fprintf( stderr, "[BTPROBE] lower_bound calls=%llu values_spanned=%llu\n",
+                        static_cast<unsigned long long>( calls  .load( std::memory_order_relaxed ) ),
+                        static_cast<unsigned long long>( scanned.load( std::memory_order_relaxed ) ) ); } );
+                    return true; }()
+            };
+            calls  .fetch_add( 1       , std::memory_order_relaxed );
+            scanned.fetch_add( num_vals, std::memory_order_relaxed );
+        }
+#endif
         // TODO branchless binary search, Alexandrescu's TLC,
         // https://orlp.net/blog/bitwise-binary-search
         // https://algorithmica.org/en/eytzinger
