@@ -552,6 +552,11 @@ public:
     T * storage_grow_to  ( sz_t const target_size )          { return static_cast<T *>( base::template grow_to<G>( to_byte_sz( target_size ) ) ); }
     T * storage_shrink_to( sz_t const target_size ) noexcept { return static_cast<T *>( base::         shrink_to ( to_byte_sz( target_size ) ) ); }
 
+    // Opt in to vector<>'s shrink_to_fit(): spare capacity here is file
+    // length, so it has to be handed back explicitly - storage_shrink_to( size() )
+    // is by construction a no-op.
+    void storage_shrink_to_fit() noexcept { base::shrink_to_fit(); }
+
     void storage_shrink_size_to( sz_t const new_size ) noexcept { base::shrink_size_to( to_byte_sz( new_size ) ); }
     void storage_dec_size() noexcept { storage_shrink_size_to( size() - 1 ); }
     void storage_inc_size() noexcept { base::grow_into_available_capacity_by( sizeof( T ) ); }

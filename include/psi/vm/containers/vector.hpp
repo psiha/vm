@@ -232,6 +232,7 @@ concept psi_vm_vector = requires { typename std::remove_cvref_t<T>::psi_vm_vecto
 ///     void storage_free() noexcept
 ///   Optional methods:
 ///     bool storage_try_expand_capacity(size_type) noexcept
+///     void storage_shrink_to_fit() noexcept
 ///     void swap(Storage &) noexcept
 ///
 ////////////////////////////////////////////////////////////////////////////////
@@ -637,7 +638,22 @@ public:
         else                           shrink_to( new_size                                   );
     }
 
-    void shrink_to_fit( ) noexcept { this->storage_shrink_to( this->size() ); }
+    //! <b>Effects</b>: Releases capacity beyond size() back to the storage.
+    //!
+    //! Storages whose spare capacity is a resource in its own right - a
+    //! file-backed mapping, whose capacity is file length - opt in with an
+    //! explicit storage_shrink_to_fit(): for those a plain shrink-to-the-
+    //! current-size is by construction a no-op (the size is already the
+    //! target), so the whole high-water allocation would silently be retained.
+    //! The generic fallback stays shrink-to-size, which is what a storage that
+    //! reaches its capacity through reallocation needs.
+    void shrink_to_fit( ) noexcept
+    {
+        if constexpr ( requires { this->storage_shrink_to_fit(); } )
+            this->storage_shrink_to_fit();
+        else
+            this->storage_shrink_to( this->size() );
+    }
 
     //////////////////////////////////////////////
     //
