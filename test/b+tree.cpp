@@ -262,6 +262,51 @@ TEST( bp_tree, benchmark_indirect_comparator )
         insert, best, double( bytes ) / test_size
     );
 } // bp_tree.benchmark_indirect_comparator
+
+namespace
+{
+    // Whether the intra-node search threshold belongs in BYTES or in VALUES
+    // cannot be answered with one key width: at a fixed node size the two move
+    // together, so every crossover found with 4-byte keys fits both stories.
+    // Doubling the key width holds the node's byte size fixed and halves the
+    // value count, which separates them - and the two answers are expected to
+    // differ by comparator: a scan over keys the node already holds costs bytes
+    // touched, while an indirect comparison costs one scattered load per value.
+    template <typename Key>
+    void time_key_width( char const * const label, std::uint32_t const test_size, std::mt19937 & rng )
+    {
+        using tree_t = psi::vm::bptree_set<Key>;
+        auto keys{ std::ranges::to<std::vector>( std::views::iota( Key{ 0 }, Key( test_size ) ) ) };
+        std::ranges::shuffle( keys, rng );
+        auto const expected{ std::accumulate( keys.begin(), keys.end(), std::uint64_t{ 0 } ) };
+
+        tree_t bpt; bpt.map_memory();
+        auto const bulk  { time_insertion( bpt, std::views::iota( Key{ 0 }, Key( test_size ) ) ) };
+        auto const lookup{ time_lookup   ( bpt, keys, expected ) };
+
+        auto constexpr leaf_values { tree_t::max_values_per_leaf () };
+        auto constexpr inner_values{ tree_t::max_values_per_inner() };
+        std::println
+        (
+            "{}: {}-byte keys, {} values/leaf ({} B), {} values/inner ({} B); leaf={} inner={}\n"
+            "	 bulk insert / random lookup [ns/key]:	{} / {}",
+            label, sizeof( Key ),
+            leaf_values , leaf_values  * sizeof( Key ),
+            inner_values, inner_values * sizeof( Key ),
+            use_linear_search_for_sorted_array<std::less<>, Key, leaf_values  > ? "LINEAR" : "binary",
+            use_linear_search_for_sorted_array<std::less<>, Key, inner_values > ? "LINEAR" : "binary",
+            bulk, lookup
+        );
+    }
+} // anonymous namespace
+
+TEST( bp_tree, benchmark_key_width )
+{
+    auto const   test_size{ 7654321 };
+    std::mt19937 rng{ PSI_VM_BENCH_SEED };
+    time_key_width<std::uint32_t>( "narrow", test_size, rng );
+    time_key_width<std::uint64_t>( "wide  ", test_size, rng );
+} // bp_tree.benchmark_key_width
 #endif // release build
 
 static auto const test_file{ "test.bpt" };
