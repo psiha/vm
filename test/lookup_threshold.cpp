@@ -228,7 +228,7 @@ namespace
             auto const linear_wins{ lin <= bin };
             if ( !linear_wins && !crossover_values ) { crossover_values = n; crossover_bytes = static_cast<std::uint32_t>( bytes ); }
             // What the shipped constant would pick for a range of this size.
-            auto const shipped_linear{ ( linear_search_max_values != 0 ) && ( n <= linear_search_max_values ) && linear_search_eligible<std::less<>, Key> };
+            auto const shipped_linear{ ( linear_search_max_values<Key> != 0 ) && ( n <= linear_search_max_values<Key> ) && linear_search_eligible<std::less<>, Key> };
             std::println
             (
                 "  {:6} | {:6} | {:9.2f} | {:9.2f} | {:6} | {:5.1f}% | {}{}",
@@ -250,8 +250,8 @@ TEST( lookup, threshold_sweep )
 {
     std::println
     (
-        "linear_search_max_values = {}  (0 means the linear path is compiled out)",
-        linear_search_max_values
+        "linear_search_max_values<uint32> = {}  (0 means the linear path is compiled out)",
+        linear_search_max_values<std::uint32_t>
     );
     std::println( "\n########## RESIDENT (array already in cache) ##########" );
     sweep<std::uint16_t>( "uint16_t" );

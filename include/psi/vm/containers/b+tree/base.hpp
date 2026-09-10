@@ -70,8 +70,8 @@ template <typename Comparator, typename Key, std::uint32_t maximum_array_length>
 constexpr bool use_linear_search_for_sorted_array
 {
     ( linear_search_eligible<Comparator, Key>                ) &&
-    ( linear_search_max_values != 0                          ) &&
-    ( maximum_array_length <= linear_search_max_values       ) &&
+    ( linear_search_max_values<Key> != 0                     ) &&
+    ( maximum_array_length <= linear_search_max_values<Key>  ) &&
     ( is_statically_sized<Key>                               )
 }; // use_linear_search_for_sorted_array
 

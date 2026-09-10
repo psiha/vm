@@ -120,7 +120,7 @@ TEST( bp_tree, benchamrk )
         "geometry: {}-byte nodes, {} values/leaf, {} values/inner\n"
         "intra-node search: linear_search_max_values={}, leaf={}, inner={}",
         bpt_t::node_byte_size(), leaf_values, inner_values,
-        linear_search_max_values,
+        linear_search_max_values<int>,
         use_linear_search_for_sorted_array<std::less<>, int, leaf_values  > ? "LINEAR" : "binary",
         use_linear_search_for_sorted_array<std::less<>, int, inner_values > ? "LINEAR" : "binary"
     );
@@ -234,7 +234,7 @@ TEST( bp_tree, benchmark_indirect_comparator )
         "indirect comparator - geometry: {}-byte nodes, {} values/leaf, {} values/inner\n"
         "intra-node search: linear_search_max_values={}, leaf={}, inner={}",
         bpt_t::node_byte_size(), leaf_values, inner_values,
-        linear_search_max_values,
+        linear_search_max_values<int>,
         use_linear_search_for_sorted_array<indirect_less, std::uint32_t, leaf_values  > ? "LINEAR" : "binary",
         use_linear_search_for_sorted_array<indirect_less, std::uint32_t, inner_values > ? "LINEAR" : "binary"
     );

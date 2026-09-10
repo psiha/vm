@@ -94,30 +94,43 @@ using key_const_arg_t = std::conditional_t<
 // therefore means two different policies for two widths of the same type.
 //
 // Why AArch64 is zero.  clang emits a genuinely branchless binary search there -
-// `fcmp; csel; csel; cbnz`, no data-dependent branch - so there is no
-// misprediction to amortise and binary wins at every length and every key type
-// measured (48-289% ahead on float).  On x86-64 it emits a BRANCHY loop for both
-// integers and floating point (`cmp;jae` / `ucomiss;jbe`, no cmov under
-// libstdc++), and that misprediction is the only reason a linear scan competes
-// there at all.
+// `fcmp; csel; csel; cbnz`, no data-dependent branch - and binary wins at every
+// length and every key type measured, floating point included (48-289% ahead).
 //
-// ⚠ Floating-point keys behave differently from integers on x86-64, and this one
-// constant does not express that: measured in isolation, integers cross at 8
-// values while float and double cross at 96 (Xeon 8581C) / 192 (Zen 5) / 256
-// (Arrow Lake).  The value below is set from the in-tree integer measurement,
-// which is the case psi::vm's own containers actually run.
+// ⚠ It is NOT simply "branchless wins, branchy loses".  clang-cl emits a
+// branchless integer binary search on Windows too (`cmovae` under the MSVC STL,
+// where libstdc++ on the same ISA emits `cmp;jae`), and a linear scan still won
+// in-tree there up to ~250-510 values.  So what keeps the scan competitive
+// inside a b+tree is not branch misprediction: it is that a node has just been
+// pointer-chased to and is cold, where a scan streams it under the prefetcher
+// while binary search issues dependent misses.  The same code measured on a
+// RESIDENT array reverses the verdict (binary wins from 8 values), which is why
+// these numbers may only be re-tuned from an in-tree measurement.
 //
-// ⚠ The isolated and in-tree numbers disagree by an order of magnitude because
-// they are different cache regimes - a resident array favours binary (its probes
-// never miss), a freshly pointer-chased node favours a streaming scan.  Do not
-// re-tune this from a standalone benchmark alone; test/lookup_threshold.cpp
-// prints both regimes and flags every length where this policy disagrees with
-// the measurement.
+// The limit therefore depends on the ISA *and* on the key type, because those
+// are the two axes the measurements actually separate:
+//
+//   ISA        integral keys                 floating-point keys
+//   AArch64    binary always                 binary always
+//   x86-64     linear to 256 values          linear to 128 values
+//
+// Integers: in-tree crossover ~250-510 values, at BOTH 4- and 8-byte widths
+// (bp_tree.benchmark_key_width); 256 sits at the safe end of that band.
+// Floating point: no in-tree data - psi::vm's own trees are not float-keyed -
+// so this is the isolated measurement, where float and double cross together at
+// 96 (Xeon 8581C) / 192 (Zen 5) / 256 (Arrow Lake).  128 is below all three, and
+// at 128 a scan is still ahead on every x86 box measured (26.6% on Zen 5, a wash
+// on the Xeon).  Being the conservative end of an isolated measurement, it is
+// the number to revisit first if a float-keyed tree ever appears.
+//
+// test/lookup_threshold.cpp prints both regimes per type and flags every length
+// where this policy disagrees with what it measures.
 //==============================================================================
 
 // Number of values up to which the dispatched functions below use a linear scan
 // (0 disables the linear path entirely).  Overridable so the dispatch can be
 // A/B'd without editing this header.
+template <typename Key>
 inline constexpr std::size_t linear_search_max_values
 {
 #if defined( PSI_VM_LINEAR_SEARCH_MAX_VALUES )
@@ -125,7 +138,7 @@ inline constexpr std::size_t linear_search_max_values
 #elif defined( __aarch64__ ) || defined( _M_ARM64 )
     0
 #else
-    256
+    std::is_floating_point_v<Key> ? 128 : 256
 #endif
 };
 
@@ -170,9 +183,9 @@ template <typename It, typename Comp = std::less<>>
 It lower_bound( It const first, It const last, auto const & key, Comp const & comp = {} ) noexcept
 {
     using Key = std::remove_cvref_t<decltype( *first )>;
-    if constexpr ( linear_search_eligible<Comp, Key> && ( linear_search_max_values != 0 ) )
+    if constexpr ( linear_search_eligible<Comp, Key> && ( linear_search_max_values<Key> != 0 ) )
     {
-        if ( static_cast<std::size_t>( last - first ) <= linear_search_max_values ) [[ likely ]]
+        if ( static_cast<std::size_t>( last - first ) <= linear_search_max_values<Key> ) [[ likely ]]
             return linear_lower_bound( first, last, key, comp );
     }
     return std::lower_bound( first, last, key, comp );
@@ -182,9 +195,9 @@ template <typename It, typename Comp = std::less<>>
 It upper_bound( It const first, It const last, auto const & key, Comp const & comp = {} ) noexcept
 {
     using Key = std::remove_cvref_t<decltype( *first )>;
-    if constexpr ( linear_search_eligible<Comp, Key> && ( linear_search_max_values != 0 ) )
+    if constexpr ( linear_search_eligible<Comp, Key> && ( linear_search_max_values<Key> != 0 ) )
     {
-        if ( static_cast<std::size_t>( last - first ) <= linear_search_max_values ) [[ likely ]]
+        if ( static_cast<std::size_t>( last - first ) <= linear_search_max_values<Key> ) [[ likely ]]
             return linear_upper_bound( first, last, key, comp );
     }
     return std::upper_bound( first, last, key, comp );
