@@ -141,6 +141,9 @@ public:
     // grows geometrically for bulk operations and is never handed back.
     [[ gnu::pure, nodiscard ]] std::uint32_t nodes_used    () const noexcept;
     [[ gnu::pure, nodiscard ]] std::uint32_t nodes_reserved() const noexcept;
+    // ...and the ones a commit_to() would copy, which is what a COW clone of
+    // this tree costs to commit.  A tree nobody has mutated owes nothing.
+    [[ gnu::pure, nodiscard ]] std::uint32_t nodes_dirty   () const noexcept;
     [[ nodiscard ]] static constexpr std::uint32_t node_byte_size() noexcept { return node_size; }
 
 protected:
