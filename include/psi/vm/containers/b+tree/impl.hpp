@@ -207,7 +207,7 @@ protected: // pass-in-reg public function overloads/impls
         {
             auto & new_root{ static_cast<leaf_node &>( base::create_root() ) };
             BOOST_ASSUME( new_root.num_vals == 1 );
-            key_at( new_root, 0 ) = v;
+            base::key_at( new_root, 0 ) = v;
             return { begin(), true };
         }
 
@@ -290,12 +290,12 @@ private:
     }
     template <node_size_type maximum_values>
     find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return lower_bound<maximum_values>( keys, num_vals, value, pass_in_reg{ comp() } ); }
-    find_pos lower_bound( auto const & node, auto const & value ) const noexcept { return lower_bound<node_capacity<decltype( node )>>( &key_at( node, 0 ), node.num_vals, pass_in_reg{ value } ); }
+    find_pos lower_bound( auto const & node, auto const & value ) const noexcept { return lower_bound<bptree_base::node_capacity<decltype( node )>>( &base::key_at( node, 0 ), node.num_vals, pass_in_reg{ value } ); }
     [[ using gnu: pure, hot, sysv_abi ]]
     find_pos lower_bound( auto const & node, node_size_type const offset, Reg auto const value ) const noexcept
     {
         BOOST_ASSUME( offset < node.num_vals );
-        auto result{ lower_bound<node_capacity<decltype( node )>>( &key_at( node, offset ), node.num_vals - offset, value ) };
+        auto result{ lower_bound<bptree_base::node_capacity<decltype( node )>>( &base::key_at( node, offset ), node.num_vals - offset, value ) };
         result.pos += offset;
         return result;
     }
@@ -328,12 +328,12 @@ protected:
     }
     template <node_size_type maximum_values>
     node_size_type upper_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return upper_bound<maximum_values>( keys, num_vals, value, pass_in_reg{ comp() } ); }
-    node_size_type upper_bound( auto const & node, auto const & value ) const noexcept { return upper_bound<node_capacity<decltype( node )>>( &key_at( node, 0 ), node.num_vals, pass_in_reg{ value } ); }
+    node_size_type upper_bound( auto const & node, auto const & value ) const noexcept { return upper_bound<bptree_base::node_capacity<decltype( node )>>( &base::key_at( node, 0 ), node.num_vals, pass_in_reg{ value } ); }
     [[ using gnu: pure, hot, sysv_abi ]]
     node_size_type upper_bound( auto const & node, node_size_type const offset, Reg auto const value ) const noexcept
     {
         BOOST_ASSUME( offset < node.num_vals );
-        return upper_bound<node_capacity<decltype( node )>>( &key_at( node, offset ), node.num_vals - offset, value ) + offset;
+        return upper_bound<bptree_base::node_capacity<decltype( node )>>( &base::key_at( node, offset ), node.num_vals - offset, value ) + offset;
     }
 
     // upper_bound find >from a starting point, across nodes within the level/depth of the starting node<
@@ -498,7 +498,7 @@ private:
         // element) - those which have a key on the same/corresponding index
         // should have a strictily less-than starting key value than the parent
         // (separator key).
-        BOOST_ASSUME( ( parent_offset == prnt->num_vals ) || lt( key_at( starting_leaf, 0 ), key_at( *prnt, parent_offset ) ) );
+        BOOST_ASSUME( ( parent_offset == prnt->num_vals ) || lt( base::key_at( starting_leaf, 0 ), base::key_at( *prnt, parent_offset ) ) );
         auto const depth{ this->hdr().depth_ }; BOOST_ASSUME( depth >= 1 );
         auto       level{ depth - 1 };
         while ( lt( keys( *prnt ).back(), key ) )
@@ -697,12 +697,12 @@ bp_tree_impl<Key, Comparator>::replace_keys_inplace( std::span<Key const> const 
     while ( key_idx < old_keys.size() )
     {
         // Verify and replace the key at current position
-        BOOST_ASSERT( key_at( *p_leaf, offset ) == old_keys[ key_idx ] );
+        BOOST_ASSERT( base::key_at( *p_leaf, offset ) == old_keys[ key_idx ] );
         BOOST_ASSERT_MSG(
             eq( old_keys[ key_idx ], new_keys[ key_idx ] ),
             "Replacement key must compare equivalent to old key (same ordering position)"
         );
-        key_at( *p_leaf, offset ) = new_keys[ key_idx ];
+        base::key_at( *p_leaf, offset ) = new_keys[ key_idx ];
         if ( offset == 0 ) [[ unlikely ]] {
             this->update_separator( *p_leaf, new_keys[ key_idx ] );
         }
@@ -776,9 +776,9 @@ bp_tree_impl<Key, Comparator>::erase_sorted_impl( std::span<Key const> const key
     auto const is_match{ [&]( leaf_node const & lf, node_size_type pos, size_t kidx )
     {
         if constexpr ( require_exact_equality )
-            return eq( key_at( lf, pos ), keys_to_remove[ kidx ] ) && key_at( lf, pos ) == keys_to_remove[ kidx ];
+            return eq( base::key_at( lf, pos ), keys_to_remove[ kidx ] ) && base::key_at( lf, pos ) == keys_to_remove[ kidx ];
         else
-            return eq( key_at( lf, pos ), keys_to_remove[ kidx ] );
+            return eq( base::key_at( lf, pos ), keys_to_remove[ kidx ] );
     } };
 
     // Helper: scan keys_to_remove[key_idx..] using find_from until a match is found.
@@ -788,7 +788,7 @@ bp_tree_impl<Key, Comparator>::erase_sorted_impl( std::span<Key const> const key
         while ( key_idx < keys_to_remove.size() )
         {
             auto [next_leaf, found_pos]{ find_from( *lf, off, keys_to_remove[ key_idx ] ) };
-            if ( found_pos.exact_find && ( !require_exact_equality || key_at( *next_leaf, found_pos.pos ) == keys_to_remove[ key_idx ] ) )
+            if ( found_pos.exact_find && ( !require_exact_equality || base::key_at( *next_leaf, found_pos.pos ) == keys_to_remove[ key_idx ] ) )
             {
                 lf  = next_leaf;
                 off = found_pos.pos;
@@ -806,7 +806,7 @@ bp_tree_impl<Key, Comparator>::erase_sorted_impl( std::span<Key const> const key
     auto const first_location{ find_nodes_for( keys_to_remove[ 0 ], unique ) };
     auto * p_leaf{ &first_location.leaf };
     auto   offset{ first_location.leaf_offset.pos };
-    if ( !first_location.leaf_offset.exact_find || ( require_exact_equality && key_at( *p_leaf, offset ) != keys_to_remove[ 0 ] ) )
+    if ( !first_location.leaf_offset.exact_find || ( require_exact_equality && base::key_at( *p_leaf, offset ) != keys_to_remove[ 0 ] ) )
     {
         // First key not found — try remaining keys using find_from from this position
         ++key_idx;
@@ -819,7 +819,7 @@ bp_tree_impl<Key, Comparator>::erase_sorted_impl( std::span<Key const> const key
         // Verify and handle match at current position
         if constexpr ( require_exact_equality )
         {
-            if ( key_at( *p_leaf, offset ) != keys_to_remove[ key_idx ] )
+            if ( base::key_at( *p_leaf, offset ) != keys_to_remove[ key_idx ] )
             {
                 ++key_idx;
                 if ( !find_next_match( p_leaf, offset ) )
@@ -827,12 +827,12 @@ bp_tree_impl<Key, Comparator>::erase_sorted_impl( std::span<Key const> const key
                 continue;
             }
         }
-        BOOST_ASSERT( eq( key_at( *p_leaf, offset ), keys_to_remove[ key_idx ] ) );
+        BOOST_ASSERT( eq( base::key_at( *p_leaf, offset ), keys_to_remove[ key_idx ] ) );
 
         // Update separator key if erasing at position 0
         if ( offset == 0 && p_leaf->num_vals > 1 ) [[ unlikely ]]
         {
-            this->update_separator( *p_leaf, key_at( *p_leaf, 1 ) );
+            this->update_separator( *p_leaf, base::key_at( *p_leaf, 1 ) );
         }
 
         // Erase the key
@@ -856,7 +856,7 @@ bp_tree_impl<Key, Comparator>::erase_sorted_impl( std::span<Key const> const key
 
         // Use find_from to locate the next key
         auto [next_leaf, found_pos]{ find_from( *p_leaf, offset, keys_to_remove[ key_idx ] ) };
-        if ( !found_pos.exact_find || ( require_exact_equality && key_at( *next_leaf, found_pos.pos ) != keys_to_remove[ key_idx ] ) ) [[ unlikely ]]
+        if ( !found_pos.exact_find || ( require_exact_equality && base::key_at( *next_leaf, found_pos.pos ) != keys_to_remove[ key_idx ] ) ) [[ unlikely ]]
         {
             if ( !find_next_match( p_leaf, offset ) )
                 break;
@@ -885,7 +885,7 @@ bp_tree_impl<Key, Comparator>::merge
     verify( source );
     BOOST_ASSUME( source_offset < source.num_vals );
     node_size_type const input_length( source.num_vals - source_offset );
-    auto           const src_keys{ &key_at( source, source_offset ) };
+    auto           const src_keys{ &base::key_at( source, source_offset ) };
     return merge( src_keys, input_length, target, target_offset, unique );
 }
 
@@ -901,7 +901,7 @@ bp_tree_impl<Key, Comparator>::merge
     BOOST_ASSUME( input_length > 0 );
     verify( target );
     node_size_type const available_space( target.max_values - target.num_vals ); // recheck: do we need a different value for roots here?
-    auto * const tgt_keys{ &key_at( target, 0 ) };
+    auto * const tgt_keys{ &base::key_at( target, 0 ) };
     BOOST_ASSERT
     (
         ( lower_bound( target, src_keys[ 0 ] ).pos == target_offset ) ||
@@ -917,7 +917,7 @@ bp_tree_impl<Key, Comparator>::merge
         if (
             !unique && // skip duplicates only for unique instances
             ( target_offset != target.num_vals ) &&
-            eq( key_at( target, target_offset ), src_keys[ 0 ] )
+            eq( base::key_at( target, target_offset ), src_keys[ 0 ] )
         ) [[ unlikely ]]
         {
             return std::make_tuple<node_size_type, node_size_type>( 0, 1, &target, target_offset );
@@ -934,7 +934,7 @@ bp_tree_impl<Key, Comparator>::merge
         // next_tgt_offset returned by split_to_insert points to the
         // position in the target node that immediately follows the
         // position for the inserted src_keys[ 0 ] - IOW it need not be
-        // the position for key_at( src, next_src_offset )
+        // the position for base::key_at( src, next_src_offset )
         if
         (
             ( nxt_tgt_offset != tgt.num_vals ) && // necessary check because find assumes non-empty input
@@ -942,7 +942,7 @@ bp_tree_impl<Key, Comparator>::merge
             false                                 // not really worth it: the caller still has to call find on/for returns from all the other branches
         )
         {
-            nxt_tgt_offset = lower_bound( tgt, nxt_tgt_offset, key_const_arg{ key_at( src, nxt_src_offset ) } ).pos;
+            nxt_tgt_offset = lower_bound( tgt, nxt_tgt_offset, key_const_arg{ base::key_at( src, nxt_src_offset ) } ).pos;
         }
 #   else
         auto [target_slot, nxt_tgt_offset]{ base::overflow_to_insert( target, target_offset, pass_rv_in_reg{ /*mrmlj*/Key{ src_keys[ 0 ] } }, {} ) };
@@ -967,7 +967,7 @@ bp_tree_impl<Key, Comparator>::merge
     // size accordingly to maintain the sorted property).
     if ( target.right )
     {
-        auto const & right_delimiter{ key_at( right( target ), 0 ) };
+        auto const & right_delimiter{ base::key_at( right( target ), 0 ) };
         // For unique trees: stop before any key >= right_delimiter (no duplicates allowed).
         // For non-unique trees: equal keys may span leaf boundaries, so stop only before
         // keys strictly greater than right_delimiter (equal keys go into the current leaf).
@@ -1181,7 +1181,7 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
             // before proceeding with the bulk_append we have to:
             // - prepare the current src_leaf (so that it does not have a hole
             //   at the beginning)
-            shift_entries_left( *src_leaf, 0, src_leaf->num_vals, source_slot_offset );
+            base::shift_entries_left( *src_leaf, 0, src_leaf->num_vals, source_slot_offset );
             src_leaf->num_vals -= source_slot_offset;
             // - link/append it to existing leaves
             base::link( *tgt_leaf, *src_leaf );
@@ -1227,7 +1227,7 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
                 node_size_type const missing_keys( tgt_leaf->min_values - tgt_leaf->num_vals );
                 BOOST_ASSUME( tgt_leaf->num_vals + src_leaf->num_vals >= leaf_node::min_values * 2 );
                 this->move_entries( *src_leaf, 0, missing_keys, *tgt_leaf, tgt_leaf->num_vals );
-                shift_entries_left( *src_leaf, 0, src_leaf->num_vals, missing_keys );
+                base::shift_entries_left( *src_leaf, 0, src_leaf->num_vals, missing_keys );
                 tgt_leaf->num_vals += missing_keys;
                 src_leaf->num_vals -= missing_keys;
                 tgt_leaf->mark_dirty();
@@ -1290,7 +1290,7 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
         // fact that we are using presorted data) rather than starting every
         // time from scratch (using find_insertion_point)
         std::tie( tgt_leaf, tgt_leaf_next_pos ) =
-            find_next_insertion_point( *tgt_leaf, tgt_leaf_next_pos.pos, key_const_arg{ key_at( *src_leaf, source_slot_offset ) }, unique );
+            find_next_insertion_point( *tgt_leaf, tgt_leaf_next_pos.pos, key_const_arg{ base::key_at( *src_leaf, source_slot_offset ) }, unique );
     }
 
     BOOST_ASSUME( inserted <= total_size );
@@ -1330,7 +1330,7 @@ bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const
                 if ( actual_copied > 0 )
                 {
                     auto const & prev_leaf{ this->leaf( prev_leaf_slot ) };
-                    auto const & last_key{ key_at( prev_leaf, prev_leaf.num_vals - 1 ) };
+                    auto const & last_key{ base::key_at( prev_leaf, prev_leaf.num_vals - 1 ) };
                     while ( p_input != input_end && this->eq( *p_input, last_key ) )
                         ++p_input;
                     if ( p_input == input_end )
@@ -1346,12 +1346,12 @@ bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const
             {
                 while ( p_input != input_end && fill < leaf_node::max_values )
                 {
-                    if ( fill > 0 && this->eq( *p_input, key_at( new_leaf, fill - 1 ) ) )
+                    if ( fill > 0 && this->eq( *p_input, base::key_at( new_leaf, fill - 1 ) ) )
                     {
                         ++p_input;
                         continue;
                     }
-                    key_at( new_leaf, fill++ ) = *p_input++;
+                    base::key_at( new_leaf, fill++ ) = *p_input++;
                 }
             }
             else
@@ -1360,7 +1360,7 @@ bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const
                     static_cast<size_type>( input_end - p_input ),
                     leaf_node::max_values
                 ));
-                std::copy_n( p_input, fill, &key_at( new_leaf, 0 ) );
+                std::copy_n( p_input, fill, &base::key_at( new_leaf, 0 ) );
                 p_input += fill;
             }
 
@@ -1419,10 +1419,10 @@ bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const
                     while ( input_offset < total_size && fill < missing )
                     {
                         bool const is_dup =
-                            ( fill > 0 ) ? eq( presorted_input[ input_offset ], key_at( *tgt_leaf, tgt_leaf->num_vals + fill - 1 ) )
-                                         : ( tgt_leaf->num_vals > 0 && eq( presorted_input[ input_offset ], key_at( *tgt_leaf, tgt_leaf->num_vals - 1 ) ) );
+                            ( fill > 0 ) ? eq( presorted_input[ input_offset ], base::key_at( *tgt_leaf, tgt_leaf->num_vals + fill - 1 ) )
+                                         : ( tgt_leaf->num_vals > 0 && eq( presorted_input[ input_offset ], base::key_at( *tgt_leaf, tgt_leaf->num_vals - 1 ) ) );
                         if ( !is_dup )
-                            key_at( *tgt_leaf, tgt_leaf->num_vals + fill++ ) = presorted_input[ input_offset ];
+                            base::key_at( *tgt_leaf, tgt_leaf->num_vals + fill++ ) = presorted_input[ input_offset ];
                         ++input_offset;
                     }
                     tgt_leaf->num_vals += fill;
@@ -1433,7 +1433,7 @@ bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const
                 else
                 {
                     auto const fill_size{ static_cast<node_size_type>( std::min<size_type>( remaining_count, missing ) ) };
-                    std::copy_n( &presorted_input[ input_offset ], fill_size, &key_at( *tgt_leaf, tgt_leaf->num_vals ) );
+                    std::copy_n( &presorted_input[ input_offset ], fill_size, &base::key_at( *tgt_leaf, tgt_leaf->num_vals ) );
                     tgt_leaf->num_vals += fill_size;
                     tgt_leaf->mark_dirty();
                     input_offset       += fill_size;
@@ -1449,7 +1449,7 @@ bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const
             // new leaves — copy_to_nodes has no context about tgt_leaf.
             if ( do_dedup )
             {
-                auto const & last_key{ key_at( *tgt_leaf, tgt_leaf->num_vals - 1 ) };
+                auto const & last_key{ base::key_at( *tgt_leaf, tgt_leaf->num_vals - 1 ) };
                 while ( input_offset < total_size && eq( presorted_input[ input_offset ], last_key ) )
                     ++input_offset;
                 remaining_count = total_size - input_offset;
@@ -1561,7 +1561,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
             auto & new_leaf{ this->template new_node<leaf_node>() };
             auto const leaf_slot{ slot_of( new_leaf ) };
 
-            std::copy_n( &key_at( src, 0 ), src.num_vals, &key_at( new_leaf, 0 ) );
+            std::copy_n( &base::key_at( src, 0 ), src.num_vals, &base::key_at( new_leaf, 0 ) );
             new_leaf.num_vals = src.num_vals;
 
             if ( !first_leaf_slot ) [[ unlikely ]] {
@@ -1721,7 +1721,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
         BOOST_ASSUME( src_leaf->num_vals );
 
         std::tie( tgt_leaf, tgt_leaf_next_pos ) =
-            find_next_insertion_point( *tgt_leaf, tgt_next_offset, key_const_arg{ key_at( *src_leaf, source_slot_offset ) }, unique );
+            find_next_insertion_point( *tgt_leaf, tgt_next_offset, key_const_arg{ base::key_at( *src_leaf, source_slot_offset ) }, unique );
     }
 
     BOOST_ASSUME( inserted <= total_size );

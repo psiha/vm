@@ -129,10 +129,10 @@ public:
         (
             (
                 ( ( leaf_key_offset + 1 ) < leaf.num_vals ) &&
-                lt( key, key_at( leaf, leaf_key_offset + 1 ) )
+                lt( key, impl_base::key_at( leaf, leaf_key_offset + 1 ) )
             ) ||
             ( !leaf.right ) ||
-            lt( key, key_at( this->right( leaf ), 0 ) )
+            lt( key, impl_base::key_at( this->right( leaf ), 0 ) )
         ) [[ likely ]]
         {
             return this->erase_single( location );
@@ -157,7 +157,7 @@ public:
             }
             else
             {
-                shift_entries_left( node, node_offset, node.num_vals, erased_count );
+                impl_base::shift_entries_left( node, node_offset, node.num_vals, erased_count );
                 node.num_vals -= erased_count;
                 node.mark_dirty();
                 if ( node_offset == 0 ) {
