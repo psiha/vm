@@ -184,6 +184,76 @@ std::optional<It> linear_find( It const first, It const last, auto const & key, 
     return pos;
 }
 
+// Branchless binary search.
+//
+// The same halving std::lower_bound does, written so that both arms of each
+// step are a data move rather than a jump: a mispredicted branch costs the
+// pipeline, and a binary search over data the predictor cannot learn
+// mispredicts about half its steps by construction.  Whether that is worth
+// anything depends entirely on what the compiler already does with the
+// ordinary form, which differs per key type - see PSI_VM_BRANCHLESS_BINARY_SEARCH.
+//
+// Note it does strictly MORE work than the branchy version in exchange: the
+// branchy one exits as soon as the subrange is empty, while this one always
+// walks the full ceil(log2(n)) steps.  It also always touches first[half],
+// where the branchy form can skip that load on the last step.
+template <typename It, typename Comp = std::less<>>
+[[ nodiscard, gnu::pure ]] constexpr
+It branchless_lower_bound( It first, It const last, auto const & key, Comp const & comp = {} ) noexcept
+{
+    auto length{ last - first };
+    while ( length > 0 )
+    {
+        auto const half{ length / 2 };
+        auto const go_right{ comp( first[ half ], key ) };
+        first  = go_right ? first + half + 1     : first;
+        length = go_right ? length - half - 1    : half;
+    }
+    return first;
+}
+template <typename It, typename Comp = std::less<>>
+[[ nodiscard, gnu::pure ]] constexpr
+It branchless_upper_bound( It first, It const last, auto const & key, Comp const & comp = {} ) noexcept
+{
+    auto length{ last - first };
+    while ( length > 0 )
+    {
+        auto const half{ length / 2 };
+        auto const go_right{ !comp( key, first[ half ] ) };
+        first  = go_right ? first + half + 1     : first;
+        length = go_right ? length - half - 1    : half;
+    }
+    return first;
+}
+
+// Which binary search the dispatched functions below fall back to.  Off by
+// default: measure before turning it on, because the ordinary form is already
+// branchless for some key types on some toolchains, and where it is, this only
+// adds the extra steps described above.
+#ifndef PSI_VM_BRANCHLESS_BINARY_SEARCH
+#   define PSI_VM_BRANCHLESS_BINARY_SEARCH 0
+#endif
+template <typename It, typename Comp>
+[[ nodiscard, gnu::pure ]] constexpr
+It binary_lower_bound( It const first, It const last, auto const & key, Comp const & comp ) noexcept
+{
+#if PSI_VM_BRANCHLESS_BINARY_SEARCH
+    return branchless_lower_bound( first, last, key, comp );
+#else
+    return std::lower_bound( first, last, key, comp );
+#endif
+}
+template <typename It, typename Comp>
+[[ nodiscard, gnu::pure ]] constexpr
+It binary_upper_bound( It const first, It const last, auto const & key, Comp const & comp ) noexcept
+{
+#if PSI_VM_BRANCHLESS_BINARY_SEARCH
+    return branchless_upper_bound( first, last, key, comp );
+#else
+    return std::upper_bound( first, last, key, comp );
+#endif
+}
+
 // Runtime-dispatched versions: linear for trivial data & comparators when the
 // range is short enough (see linear_search_max_values), std:: otherwise.
 template <typename It, typename Comp = std::less<>>
@@ -196,7 +266,7 @@ It lower_bound( It const first, It const last, auto const & key, Comp const & co
         if ( static_cast<std::size_t>( last - first ) <= linear_search_max_values<Key> ) [[ likely ]]
             return linear_lower_bound( first, last, key, comp );
     }
-    return std::lower_bound( first, last, key, comp );
+    return binary_lower_bound( first, last, key, comp );
 }
 template <typename It, typename Comp = std::less<>>
 [[ nodiscard, gnu::pure ]] constexpr
@@ -208,7 +278,7 @@ It upper_bound( It const first, It const last, auto const & key, Comp const & co
         if ( static_cast<std::size_t>( last - first ) <= linear_search_max_values<Key> ) [[ likely ]]
             return linear_upper_bound( first, last, key, comp );
     }
-    return std::upper_bound( first, last, key, comp );
+    return binary_upper_bound( first, last, key, comp );
 }
 template <typename It, typename Comp = std::less<>>
 [[ nodiscard, gnu::pure ]] constexpr
