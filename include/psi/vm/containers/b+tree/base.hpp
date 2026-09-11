@@ -120,6 +120,16 @@ public:
 
     bool has_attached_storage() const noexcept { return nodes_.has_attached_storage(); }
 
+    // Footprint, in nodes: the ones the tree is actually using (all levels),
+    // and the ones the pool holds - which is what is resident, since the pool
+    // grows geometrically for bulk operations and is never handed back.
+    [[ gnu::pure, nodiscard ]] std::uint32_t nodes_used    () const noexcept;
+    [[ gnu::pure, nodiscard ]] std::uint32_t nodes_reserved() const noexcept;
+    // ...and the ones a commit_to() would copy, which is what a COW clone of
+    // this tree costs to commit.  A tree nobody has mutated owes nothing.
+    [[ gnu::pure, nodiscard ]] std::uint32_t nodes_dirty   () const noexcept;
+    [[ nodiscard ]] static constexpr std::uint32_t node_byte_size() noexcept { return node_size; }
+
 protected:
     // TODO make this properly configurable (a template parameter)
 #if PSI_VM_BT_PAGE_SIZED_NODES // favoring TLB and disk access related issues
