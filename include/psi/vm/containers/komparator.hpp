@@ -4,6 +4,7 @@
 ///
 /// Contents:
 ///   - is_simple_comparator<T>   -- trait: can == replace double-negation test?
+///   - is_direct_comparator<T>   -- trait: does a comparison read only the keys?
 ///   - comp_eq(comp, a, b)       -- optimised equality from strict-weak comparator
 ///   - Komparator<Comparator>    -- EBO wrapper with lt/gt/eq/le/ge + sort
 ///
@@ -55,6 +56,40 @@ template <> inline constexpr bool is_simple_comparator<std::ranges::greater>{ tr
 // The erasure adapters (sort.hpp) forward the wrapped comparator's simplicity.
 template <typename C> inline constexpr bool is_simple_comparator<erasure_opt_in <C>>{ is_simple_comparator<C> };
 template <typename C> inline constexpr bool is_simple_comparator<erasure_opt_out<C>>{ is_simple_comparator<C> };
+
+
+/// Does one comparison read nothing but the keys it is handed?
+///
+/// is_simple_comparator answers a SEMANTIC question - may == stand in for the
+/// double-negation equivalence test - and a search-strategy choice needs a COST
+/// one.  They are different properties, and a comparator that treats the key as
+/// a handle and fetches what orders it from somewhere else satisfies the first
+/// while failing the second: it is exactly as "simple", and every call of it is
+/// a scattered load rather than a read of the cache line the caller is already
+/// walking.  That is the whole economics of a linear scan, so the scan has to
+/// ask this question and not the other one.
+///
+/// Cost is not deducible from a type, so it is stated rather than derived, and
+/// directness is a CLAIM rather than an assumption: a comparator that says
+/// nothing gets std::lower_bound.  The opposite default would need a projecting
+/// comparator to opt out, leaving the party that knows least - one that says
+/// nothing at all - inheriting the strategy that suits it least.  That default is a judgement, not a measurement - an
+/// indirect comparison costs the scan and the bisection differently, and which
+/// one wins depends on the operation (measured: binary ahead on lookup, the
+/// scan ahead on insert, ~14% each way) - so a consumer that has measured its
+/// own shape should say so here rather than inherit this.
+///
+/// std::less/greater name the key type's own ordering, so they read the keys and
+/// nothing else however that ordering is spelled.
+template <typename T> constexpr bool is_direct_comparator{ false };
+template <typename T> constexpr bool is_direct_comparator<std::less   <T>>{ true };
+template <typename T> constexpr bool is_direct_comparator<std::greater<T>>{ true };
+template <> inline constexpr bool is_direct_comparator<std::less   <void>>{ true };
+template <> inline constexpr bool is_direct_comparator<std::greater<void>>{ true };
+template <> inline constexpr bool is_direct_comparator<std::ranges::less   >{ true };
+template <> inline constexpr bool is_direct_comparator<std::ranges::greater>{ true };
+template <typename C> inline constexpr bool is_direct_comparator<erasure_opt_in <C>>{ is_direct_comparator<C> };
+template <typename C> inline constexpr bool is_direct_comparator<erasure_opt_out<C>>{ is_direct_comparator<C> };
 
 
 //==============================================================================
