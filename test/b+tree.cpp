@@ -205,12 +205,19 @@ namespace
     };
 } // anonymous namespace
 
-// The linear path is gated on is_simple_comparator, which is a statement about
-// whether == may replace the double-negation equivalence test - not about cost.
-// Indirect comparators do satisfy it, and consumers specialise it exactly like
-// this, so the linear scan is reachable with an indirect comparison and this is
-// the configuration that says what that costs.
+// Semantically simple - the ordering is a plain < on the fetched values, so ==
+// stands in for the double negation - and consumers specialise it exactly like
+// this.  It is not DIRECT, which is the separate question the linear path also
+// asks (komparator.hpp), so this comparator takes the binary search: the number
+// below is what says that is the right answer.
 template <> inline constexpr bool is_simple_comparator<indirect_less>{ true };
+// Set to 1 to claim directness this comparator does not have, which is the only
+// way back to the linear arm and the reason it is a knob rather than a value:
+// the arm exists to be measured, not to be shipped.
+#ifndef PSI_VM_BENCH_INDIRECT_LINEAR
+#   define PSI_VM_BENCH_INDIRECT_LINEAR 0
+#endif
+template <> inline constexpr bool is_direct_comparator<indirect_less>{ PSI_VM_BENCH_INDIRECT_LINEAR };
 
 TEST( bp_tree, benchmark_indirect_comparator )
 {

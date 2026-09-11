@@ -142,12 +142,20 @@ inline constexpr std::size_t linear_search_max_values
 #endif
 };
 
-// Can Key + Comparator use the linear path at all (equivalence of comparator
-// equality and ==, trivial copies, small elements)?
+// Can Key + Comparator use the linear path at all?  Four conditions, and the
+// first two are separate questions about the comparator that a single trait
+// used to answer together (komparator.hpp): the scan needs comparator equality
+// to BE ==, and it needs a comparison to read only the keys it is walking.  An
+// indirect comparator satisfies the first and not the second, and it does not
+// keep the same crossover: measured against the b+tree benchmark's indirect
+// comparator at 512-byte nodes, the two strategies trade places by ~14% in
+// opposite directions - binary ahead on lookup, the scan ahead on insert - so
+// the choice is not the one the length threshold alone was calibrated for.
 template <typename Comparator, typename Key>
 constexpr bool linear_search_eligible
 {
     is_simple_comparator<Comparator>          &&
+    is_direct_comparator<Comparator>          &&
     std::is_trivially_copyable_v<Key>         &&
     ( sizeof( Key ) < ( 4 * sizeof( void * ) ) )
 }; // linear_search_eligible
