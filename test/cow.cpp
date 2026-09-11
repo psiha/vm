@@ -1030,6 +1030,47 @@ TEST( cow, bptree_cow_expand )
     EXPECT_TRUE ( std::ranges::is_sorted( src, src.comp() ) );
 }
 
+// free() marks every node it writes dirty, and map_memory() threads the whole
+// reserved pool through it - so without care a tree nobody has touched owes its
+// entire pool to the first commit_to() of its first COW clone.  Measured before
+// the fix: 169 of the 170 nodes that commit copied held no values at all.
+TEST( bptree_cow, a_fresh_tree_owes_a_commit_nothing )
+{
+    bptree_set<int> src;
+    // Reserve far more than the tree will hold, so the free pool dominates and
+    // a per-pool-node cost would be unmissable.
+    src.map_memory( 20000 );
+    EXPECT_GT( src.nodes_reserved(), 100u ) << "the pool has to be large for this to measure anything";
+    EXPECT_EQ( src.nodes_dirty(), 0u ) << "a just-created tree has nothing to commit";
+
+    std::vector<int> values( 100 );
+    std::iota( values.begin(), values.end(), 0 );
+    src.insert( values );
+    // The fill dirties what it fills and a little free-list bookkeeping, and
+    // nothing like the whole pool.  Not "dirty <= used": taking a node off the
+    // free list also rewrites its successor's back-link (new_node ->
+    // unlink_right), so one allocation legitimately dirties two nodes.
+    auto constexpr free_list_bookkeeping{ 2u };
+    EXPECT_LE( src.nodes_dirty(), src.nodes_used() + free_list_bookkeeping );
+    EXPECT_LT( src.nodes_dirty(), src.nodes_reserved() / 2 );
+
+    // And a clone's commit stays proportional to what the clone changed, on the
+    // first commit as much as on the second - commit_to clears the bit in its
+    // target, so a pool that started dirty would have made only the first one
+    // expensive and hidden the cost from a single-commit test.
+    for ( auto const key : { 1000, 1001 } )
+    {
+        bptree_set<int> clone{ src };
+        auto const before{ clone.nodes_dirty() };
+        clone.insert( key );
+        // One key touches its leaf, the path above it, and the free-list
+        // bookkeeping for anything it had to allocate - a handful, not a pool.
+        EXPECT_LT( clone.nodes_dirty() - before, clone.nodes_reserved() / 2 );
+        clone.commit_to( src );
+        EXPECT_TRUE( has( src, key ) );
+    }
+}
+
 //------------------------------------------------------------------------------
 } // namespace psi::vm
 //------------------------------------------------------------------------------

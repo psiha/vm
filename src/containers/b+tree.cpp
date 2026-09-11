@@ -1,6 +1,7 @@
 #include <psi/vm/containers/b+tree.hpp>
 
 #include <cstring> // memcmp, memcpy
+#include <span>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -71,6 +72,17 @@ bptree_base::map_memory( std::uint32_t const initial_capacity_as_number_of_nodes
         hdr() = {};
         if ( initial_capacity_as_number_of_nodes ) {
             assign_nodes_to_free_pool( 0 );
+            // assign_nodes_to_free_pool() threads the pool through free(),
+            // which marks every node it writes dirty.  Here that bit means
+            // nothing: the tree has just been created, so there is no target a
+            // COW clone of it could owe those nodes to, and the storage already
+            // holds what they say.  Leaving them set makes the FIRST commit_to
+            // of the first clone copy the whole reserved pool - measured at 169
+            // of 170 nodes copied for a pool that held 100 values - after which
+            // it self-corrects, because commit_to clears the bit in its target.
+            // So clear it once here instead of paying for it once there.
+            for ( auto & n : nodes_ )
+                n.dirty = false;
         }
     }
     return success;
@@ -110,6 +122,15 @@ bptree_base::node_slot::value_type bptree_base::used_number_of_nodes() const noe
 
 std::uint32_t bptree_base::nodes_used    () const noexcept { return used_number_of_nodes(); }
 std::uint32_t bptree_base::nodes_reserved() const noexcept { return static_cast<std::uint32_t>( nodes_.size() ); }
+std::uint32_t bptree_base::nodes_dirty   () const noexcept
+{
+    if ( !nodes_.has_attached_storage() ) [[ unlikely ]]
+        return 0;
+    std::uint32_t count{ 0 };
+    for ( auto const & n : nodes_ )
+        count += n.dirty;
+    return count;
+}
 
 void bptree_base::rshift_sibling_parent_pos( node_header & node ) noexcept
 {
