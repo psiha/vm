@@ -274,6 +274,63 @@ TEST( lookup, threshold_sweep )
     sweep<double       >( "double"   );
 } // lookup.threshold_sweep
 
+    // std::lower_bound vs branchless_lower_bound, IN ONE PROCESS.
+    //
+    // The pair is measured back to back in the same binary on the same data, so
+    // there are no A/B arms and no cross-process noise floor to defend - the
+    // only thing that differs between the two numbers is which search ran.
+    //
+    // What this is for: clang already compiles the ordinary binary search
+    // branchlessly for some key types (a cmov on the index) and branchily for
+    // others (floating point, where the compare goes through the FP flags), so
+    // "branchless" is only a change where the compiler was not already doing
+    // it.  A type where both numbers match is a type where this buys nothing.
+    template <typename Key>
+    void compare_binary_forms( char const * const type_name )
+    {
+        std::mt19937 rng{ PSI_VM_BENCH_SEED };
+        std::println( "\n{}:", type_name );
+        std::println( "{:>8} | {:>10} | {:>12} | {:>8}", "values", "std [ns]", "branchless", "delta" );
+        for ( auto const n : { 8u, 16u, 32u, 64u, 128u, 256u, 512u, 1024u } )
+        {
+            if ( !length_representable<Key>( n ) ) { continue; }
+            auto const v{ sorted_range<Key>( n ) };
+            std::vector<Key> keys( probes );
+            std::uniform_int_distribution<std::uint32_t> pick{ 0, n * 3 };
+            for ( auto & k : keys ) { k = static_cast<Key>( pick( rng ) ); }
+
+            auto time_one{ [ & ]( auto const & search )
+            {
+                auto best{ ns::max() };
+                for ( auto pass{ 0 }; pass < passes; ++pass )
+                {
+                    std::size_t acc{ 0 };
+                    auto const start{ timer::now() };
+                    for ( auto const k : keys )
+                        { acc += static_cast<std::size_t>( search( v.begin(), v.end(), k ) - v.begin() ); }
+                    best = std::min( best, ns{ timer::now() - start } / keys.size() );
+                    sink = acc; // the accumulator must escape or the loop is dead code
+                }
+                return best;
+            } };
+
+            auto const std_ns{ time_one( []( auto f, auto l, auto k ){ return         std::lower_bound( f, l, k, std::less<>{} ); } ) };
+            auto const bl_ns { time_one( []( auto f, auto l, auto k ){ return psi::vm::branchless_lower_bound( f, l, k, std::less<>{} ); } ) };
+            auto const delta { ( bl_ns.count() - std_ns.count() ) / std_ns.count() * 100 };
+            std::println( "{:>8} | {:>10.2f} | {:>12.2f} | {:>7.1f}%", n, std_ns.count(), bl_ns.count(), delta );
+        }
+    }
+
+TEST( lookup, branchless_vs_std_binary )
+{
+    std::println( "\n########## std::lower_bound vs branchless, same process ##########" );
+    compare_binary_forms<std::uint16_t>( "uint16_t" );
+    compare_binary_forms<std::uint32_t>( "uint32_t" );
+    compare_binary_forms<std::uint64_t>( "uint64_t" );
+    compare_binary_forms<float        >( "float"    );
+    compare_binary_forms<double       >( "double"   );
+} // lookup.branchless_vs_std_binary
+
 TEST( lookup, threshold_sweep_cold )
 {
     std::println( "\n########## COLD (a fresh range per search, as a b+tree node is) ##########" );
@@ -283,6 +340,49 @@ TEST( lookup, threshold_sweep_cold )
 } // lookup.threshold_sweep_cold
 
 #endif // release build
+
+////////////////////////////////////////////////////////////////////////////////
+// branchless_{lower,upper}_bound have to agree with std:: EXACTLY, including
+// where duplicates put the boundary and where the key falls outside the range -
+// a binary search that is merely nearly right is worse than a slow one, and the
+// off-by-one in the "go right" step is exactly the mistake to make.
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename Key>
+void check_branchless_agrees_with_std()
+{
+    std::mt19937 rng{ 20260911 };
+    // Duplicates are the interesting case: lower_bound must find the FIRST of a
+    // run and upper_bound the one past the LAST, so keep the value range far
+    // narrower than the length.
+    for ( auto const length : { 0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 33, 63, 64, 65, 127, 255, 256, 511, 1000 } )
+    {
+        std::vector<Key> v( static_cast<std::size_t>( length ) );
+        std::uniform_int_distribution<int> dist{ 0, std::max( 1, length / 4 ) };
+        for ( auto & x : v ) { x = static_cast<Key>( dist( rng ) ); }
+        std::ranges::sort( v );
+
+        // Probe every value that can occur, plus both sides of the range.
+        for ( int probe{ -2 }; probe <= std::max( 1, length / 4 ) + 2; ++probe )
+        {
+            auto const key{ static_cast<Key>( probe ) };
+            EXPECT_EQ
+            (
+                branchless_lower_bound( v.begin(), v.end(), key, std::less<>{} ) - v.begin(),
+                        std::lower_bound( v.begin(), v.end(), key )             - v.begin()
+            ) << "lower_bound disagreed at length " << length << ", key " << probe;
+            EXPECT_EQ
+            (
+                branchless_upper_bound( v.begin(), v.end(), key, std::less<>{} ) - v.begin(),
+                        std::upper_bound( v.begin(), v.end(), key )             - v.begin()
+            ) << "upper_bound disagreed at length " << length << ", key " << probe;
+        }
+    }
+}
+
+TEST( lookup, branchless_agrees_with_std_uint32 ) { check_branchless_agrees_with_std<std::uint32_t>(); }
+TEST( lookup, branchless_agrees_with_std_uint64 ) { check_branchless_agrees_with_std<std::uint64_t>(); }
+TEST( lookup, branchless_agrees_with_std_float  ) { check_branchless_agrees_with_std<float       >(); }
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm
