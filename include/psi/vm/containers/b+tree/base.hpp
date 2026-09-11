@@ -493,6 +493,37 @@ protected:
         --node.start;
     }
 
+    // Move a node's entries back to the front of their array, closing the gap.
+    //
+    // 'full' means num_vals == max_values, but a node carrying a front gap has
+    // only max_values - start slots BEHIND its entries - so a path that sizes
+    // its write from num_vals alone and appends at key_at( node, num_vals )
+    // runs off the end by exactly 'start'.  Such a path closes the gap first
+    // rather than learning about it: the gap is an optimisation for
+    // insert-shaped work and is worth nothing to a path filling to capacity.
+    //
+    // Safe for inner nodes, and cheap, because it preserves every LOGICAL
+    // index - entry i sits at start + i before and at i after - so a child's
+    // parent_child_idx still names the same child.  (Contrast
+    // open_slot_from_front, which is leaves-only for the opposite reason.)
+    template <typename N>
+    static void recentre( N & node ) noexcept
+    {
+        if ( !node.start ) [[ likely ]]
+            return;
+        auto const base{ node.start };
+        std::move( &node.keys[ base ], &node.keys[ base + node.num_vals ], &node.keys[ 0 ] );
+        if constexpr ( has_mapped_values<N> )
+            std::move( &node.values[ base ], &node.values[ base + node.num_vals ], &node.values[ 0 ] );
+        if constexpr ( requires{ node.children; } )
+        {
+            if ( node.num_vals ) // an inner node holds num_vals + 1 children
+                std::move( &node.children[ base ], &node.children[ base + node.num_vals + 1 ], &node.children[ 0 ] );
+        }
+        node.start = 0;
+        node.mark_dirty();
+    }
+
     template <typename N>
     static void shift_entries_left( N & node, auto const first, auto const last, auto const distance ) noexcept
     {

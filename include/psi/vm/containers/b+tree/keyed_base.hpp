@@ -429,8 +429,14 @@ protected: // split_to_insert and its helpers
         auto const has_right{ parent_child_idx < ( num_chldrn( parent ) - 1 ) };
         auto const p_left   { has_left  ? &left ( node ) : nullptr };
         auto const p_right  { has_right ? &right( node ) : nullptr };
-        auto const left_room ( p_left  ? max - p_left ->num_vals : 0 );
-        auto const right_room( p_right ? max - p_right->num_vals : 0 );
+        // Room is the slots a sibling can actually receive into, and the two
+        // sides do not count it the same way.  The LEFT sibling receives at its
+        // TAIL - move_entries writes at start + num_vals - so a front gap does
+        // not help it and has to come off the total.  The RIGHT sibling receives
+        // at its FRONT, where its gap is precisely what supplies the slots (the
+        // branch below spends it first and shifts only the deficit).
+        auto const left_room ( p_left  ? max - p_left ->start - p_left ->num_vals : 0 );
+        auto const right_room( p_right ? max                  - p_right->num_vals : 0 );
         // Half of a single free slot is nothing, and handing over that one slot
         // would leave the sibling full - so it has to be worth a move.
         if ( std::max( left_room, right_room ) < 2 )
@@ -1279,6 +1285,11 @@ protected: // 'other'
 
     void append_and_free( leaf_node & __restrict target, leaf_node & __restrict source ) noexcept
     {
+        // The append lands at key_at( target, num_vals ), i.e. physical
+        // start + num_vals, while the bound below covers num_vals alone - so a
+        // target carrying a front gap is written past the end of its array by
+        // exactly 'start'.  Witnessed: start=29, num_vals=123, max_values=123.
+        recentre( target );
         BOOST_ASSUME( target.num_vals + source.num_vals <= target.max_values );
 
         std::ranges::move( keys( source ), &key_at( target, target.num_vals ) );

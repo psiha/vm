@@ -900,6 +900,12 @@ bp_tree_impl<Key, Comparator>::merge
 {
     BOOST_ASSUME( input_length > 0 );
     verify( target );
+    // Both the room below and the move_backward that opens the merge point are
+    // denominated in num_vals while tgt_keys is &keys[ start ] - so a target
+    // carrying a front gap has less room than available_space claims and the
+    // move's destination, keys[ start + num_vals + copy_size ], runs past the
+    // end.  Close the gap before either is computed.
+    base::recentre( target );
     node_size_type const available_space( target.max_values - target.num_vals ); // recheck: do we need a different value for roots here?
     auto * const tgt_keys{ &base::key_at( target, 0 ) };
     BOOST_ASSERT
