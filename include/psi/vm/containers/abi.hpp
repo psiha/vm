@@ -83,13 +83,43 @@ template <std::ranges::contiguous_range Rng>
 requires( not std::ranges::borrowed_range<Rng> and not statically_sized_container<Rng> and not string_viewable<Rng> and not optional_like<Rng> )
 struct optimal_const_ref<Rng> { using type = std::span<std::ranges::range_value_t<Rng> const>; };
 
+////////////////////////////////////////////////////////////////////////////////
+/// The form a T takes when it travels in a register. Defaults to T itself; a
+/// type whose storage form is not its register form - a packed integer, say,
+/// which is a byte array in memory but a plain word in a register - specializes
+/// this to name that word. pass_in_reg then carries the register form and
+/// converts at the boundary, once in each direction: T must convert to its
+/// register form and be constructible from it.
+///
+/// A trivial wrapper around such a T inherits its register form: the wrapper
+/// names its `value_type`, can `rebind` itself to another value type, has the
+/// size of its value and converts to and from the wrapper of the register form.
+/// Such a wrapper travels as the wrapper of the register form. A wrapper whose
+/// narrowing conversion is deliberately explicit does not qualify - it keeps
+/// travelling as itself.
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename T> struct reg_form { using type = T; };
+template <typename T> using reg_form_t = typename reg_form<T>::type;
+
+template <typename W>
+concept reg_form_wrapper =
+    requires { typename W::value_type; typename W::template rebind<reg_form_t<typename W::value_type>>; } &&
+    !std::same_as<reg_form_t<typename W::value_type>, typename W::value_type> &&
+    std::is_trivially_copyable_v<W> && ( sizeof( W ) == sizeof( typename W::value_type ) ) &&
+    std::is_convertible_v<W, typename W::template rebind<reg_form_t<typename W::value_type>>> &&
+    std::is_convertible_v<typename W::template rebind<reg_form_t<typename W::value_type>>, W>;
+
+template <reg_form_wrapper W>
+struct reg_form<W> { using type = typename W::template rebind<reg_form_t<typename W::value_type>>; };
+
 template <typename T>
 struct [[ clang::trivial_abi ]] pass_in_reg
 {
-    static auto constexpr pass_by_val{ can_be_passed_in_reg<T> };
+    static auto constexpr pass_by_val{ can_be_passed_in_reg<reg_form_t<T>> };
 
     using  value_type = T;
-    using stored_type = std::conditional_t<pass_by_val, T, typename optimal_const_ref<T>::type>;
+    using stored_type = std::conditional_t<pass_by_val, reg_form_t<T>, typename optimal_const_ref<T>::type>;
     // Primary: brace-init (handles aggregates, same-type, multi-arg — rejects narrowing)
     BOOST_FORCEINLINE
     constexpr pass_in_reg( auto const &... args ) noexcept requires requires { stored_type{ args... }; } : value{ args... } {}
@@ -110,6 +140,10 @@ struct [[ clang::trivial_abi ]] pass_in_reg
 
     [[ gnu::pure ]] BOOST_FORCEINLINE
     constexpr operator stored_type const &() const noexcept { return value; }
+    // Back from the register form (a different type only for a reg_form
+    // specialization): the boundary's second conversion.
+    [[ gnu::pure ]] BOOST_FORCEINLINE
+    constexpr operator value_type() const noexcept requires( !std::same_as<stored_type, value_type> && std::is_constructible_v<value_type, stored_type> ) { return static_cast<value_type>( value ); }
 }; // pass_in_reg
 template <typename T>
 pass_in_reg( T ) -> pass_in_reg<T>;
