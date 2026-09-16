@@ -155,7 +155,7 @@ template <typename Comparator, typename Key>
 constexpr bool linear_search_eligible
 {
     is_simple_comparator<Comparator>          &&
-    is_direct_comparator<Comparator>          &&
+    is_direct_comparator<Comparator, Key>     &&
     std::is_trivially_copyable_v<Key>         &&
     ( sizeof( Key ) < ( 4 * sizeof( void * ) ) )
 }; // linear_search_eligible

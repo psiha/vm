@@ -217,7 +217,7 @@ template <> inline constexpr bool is_simple_comparator<indirect_less>{ true };
 #ifndef PSI_VM_BENCH_INDIRECT_LINEAR
 #   define PSI_VM_BENCH_INDIRECT_LINEAR 0
 #endif
-template <> inline constexpr bool is_direct_comparator<indirect_less>{ PSI_VM_BENCH_INDIRECT_LINEAR };
+template <typename Key> inline constexpr bool is_direct_comparator<indirect_less, Key>{ PSI_VM_BENCH_INDIRECT_LINEAR };
 
 TEST( bp_tree, benchmark_indirect_comparator )
 {
