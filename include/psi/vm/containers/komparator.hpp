@@ -81,15 +81,15 @@ template <typename C> inline constexpr bool is_simple_comparator<erasure_opt_out
 ///
 /// std::less/greater name the key type's own ordering, so they read the keys and
 /// nothing else however that ordering is spelled.
-template <typename T> constexpr bool is_direct_comparator{ false };
-template <typename T> constexpr bool is_direct_comparator<std::less   <T>>{ true };
-template <typename T> constexpr bool is_direct_comparator<std::greater<T>>{ true };
-template <> inline constexpr bool is_direct_comparator<std::less   <void>>{ true };
-template <> inline constexpr bool is_direct_comparator<std::greater<void>>{ true };
-template <> inline constexpr bool is_direct_comparator<std::ranges::less   >{ true };
-template <> inline constexpr bool is_direct_comparator<std::ranges::greater>{ true };
-template <typename C> inline constexpr bool is_direct_comparator<erasure_opt_in <C>>{ is_direct_comparator<C> };
-template <typename C> inline constexpr bool is_direct_comparator<erasure_opt_out<C>>{ is_direct_comparator<C> };
+template <typename Comparator, typename Key = void> constexpr bool is_direct_comparator{ false };
+template <typename T, typename Key> constexpr bool is_direct_comparator<std::less   <T>, Key>{ true };
+template <typename T, typename Key> constexpr bool is_direct_comparator<std::greater<T>, Key>{ true };
+template <typename Key> inline constexpr bool is_direct_comparator<std::less   <void>, Key>{ std::is_fundamental_v<Key> || std::is_same_v<Key, void> };
+template <typename Key> inline constexpr bool is_direct_comparator<std::greater<void>, Key>{ std::is_fundamental_v<Key> || std::is_same_v<Key, void> };
+template <typename Key> inline constexpr bool is_direct_comparator<std::ranges::less   , Key>{ std::is_fundamental_v<Key> || std::is_same_v<Key, void> };
+template <typename Key> inline constexpr bool is_direct_comparator<std::ranges::greater, Key>{ std::is_fundamental_v<Key> || std::is_same_v<Key, void> };
+template <typename C, typename Key> inline constexpr bool is_direct_comparator<erasure_opt_in <C>, Key>{ is_direct_comparator<C, Key> };
+template <typename C, typename Key> inline constexpr bool is_direct_comparator<erasure_opt_out<C>, Key>{ is_direct_comparator<C, Key> };
 
 
 //==============================================================================
