@@ -376,26 +376,22 @@ protected:
 
     static void verify( auto const & node ) noexcept
     {
-        // TEMPORARY PROBE - does any path let a node's entries run past
-        // the end of its array once a front gap exists?
-        if ( std::size_t( node.start ) + node.num_vals > node.max_values ) {
-            static int reported{ 0 };
-            if ( reported++ < 10 )
-                std::fprintf( stderr, "[GAP] start=%u num_vals=%u max=%u\n",
-                              unsigned( node.start ), unsigned( node.num_vals ), unsigned( node.max_values ) );
-        }
+        BOOST_ASSERT( std::size_t( node.start ) + node.num_vals <= node.max_values );
+        BOOST_ASSUME( std::size_t( node.start ) + node.num_vals <= node.max_values );
         BOOST_ASSUME( node.num_vals <= node.max_values );
         // also used for underflowing nodes and (most problematically) for root nodes 'interpreted' as inner nodes...TODO...
         //BOOST_ASSUME( node.num_vals >= node.min_values );
     }
     static void verify_min_max( auto const & node ) noexcept
     { // temporary wrkrnd version for the comment above in version()
+        BOOST_ASSERT( std::size_t( node.start ) + node.num_vals <= node.max_values );
+        BOOST_ASSUME( std::size_t( node.start ) + node.num_vals <= node.max_values );
         BOOST_ASSUME( node.num_vals <= node.max_values );
         BOOST_ASSUME( node.num_vals >= node.min_values );
     }
 
-    static constexpr auto keys    ( auto       & node ) noexcept { verify( node );                                             return std::span{ &node.keys    [ node.start ], static_cast<size_type>( node.num_vals      ) }; }
-    static constexpr auto keys    ( auto const & node ) noexcept { verify( node );                                             return std::span{ &node.keys    [ node.start ], static_cast<size_type>( node.num_vals      ) }; }
+    static constexpr auto keys    ( auto       & node ) noexcept { verify( node ); return std::span{ &node.keys[ node.start ], static_cast<size_type>( node.num_vals ) }; }
+    static constexpr auto keys    ( auto const & node ) noexcept { verify( node ); return std::span{ &node.keys[ node.start ], static_cast<size_type>( node.num_vals ) }; }
     static constexpr auto children( auto       & node ) noexcept { verify( node ); if constexpr ( requires{ node.children; } ) return std::span{ &node.children[ node.start ], static_cast<size_type>( node.num_vals + 1U ) }; else return std::array<node_slot, 0>{}; }
     static constexpr auto children( auto const & node ) noexcept { verify( node ); if constexpr ( requires{ node.children; } ) return std::span{ &node.children[ node.start ], static_cast<size_type>( node.num_vals + 1U ) }; else return std::array<node_slot, 0>{}; }
 
@@ -408,11 +404,13 @@ protected:
     template <typename N>
     static node_size_type constexpr node_capacity{ std::remove_cvref_t<N>::max_values };
 
+public:
     // Every index into a node's entries goes through here. Today it is just
     // keys[ i ]; it exists so that where a node's first live entry sits is
     // stated in exactly one place rather than in seventy call sites.
     static constexpr decltype( auto ) key_at( auto       & node, auto const i ) noexcept { return ( node.keys[ node.start + i ] ); }
     static constexpr decltype( auto ) key_at( auto const & node, auto const i ) noexcept { return ( node.keys[ node.start + i ] ); }
+protected:
 
     [[ gnu::pure ]] static constexpr node_size_type num_vals  ( auto const & node ) noexcept { return node.num_vals; }
     [[ gnu::pure ]] static constexpr node_size_type num_chldrn( auto const & node ) noexcept { if constexpr ( requires{ node.children; } ) { BOOST_ASSUME( node.num_vals ); return node.num_vals + 1U; } else return 0; }

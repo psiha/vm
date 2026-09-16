@@ -1416,6 +1416,9 @@ bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const
             // All remaining input goes after all existing data - use bulk append
             auto remaining_count{ total_size - input_offset };
 
+            // Ensure the rightmost leaf is recentred so it has max_values - num_vals tail room
+            base::recentre( *tgt_leaf );
+
             // First, fill up the current target leaf if there's space
             if ( auto const missing{ static_cast<node_size_type>( tgt_leaf->max_values - tgt_leaf->num_vals ) } )
             {
@@ -1619,6 +1622,9 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
         // simple bulk_append at the end of the rightmost leaf
         if ( ( tgt_leaf_next_pos.pos == tgt_leaf->num_vals ) && !tgt_leaf->right )
         {
+            // Ensure the rightmost leaf is recentred so it has max_values - num_vals tail room
+            this->recentre( *tgt_leaf );
+
             // first fill up tgt_leaf (and handle when that's all that's left of
             // the input)
             if ( auto const remaining_tgt_node_space{ node_size_type( tgt_leaf->max_values - tgt_leaf->num_vals ) } )
