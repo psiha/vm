@@ -39,6 +39,7 @@
 #include <boost/config_ex.hpp>
 
 #include <algorithm>
+#include <compare>
 #include <concepts>
 #include <climits>
 #include <cstdint>
@@ -1445,9 +1446,17 @@ public:
 //! <b>Effects</b>: Returns the result of std::lexicographical_compare_three_way
 //!
 //! <b>Complexity</b>: Linear to the number of elements in the container.
-template <std::ranges::range L, std::ranges::range R> requires( psi_vm_vector<L> || psi_vm_vector<R> )
+//! Both take any pair of ranges with one vector among them, so the element
+//! requirement has to be spelled out: without it these are viable for ranges
+//! whose elements do not compare at all (a string_view against a
+//! vector<SomeStruct>, say), and the mismatch surfaces as an error inside
+//! std::equal instead of a failed overload resolution - so a caller cannot
+//! detect it with `requires{ a == b; }` either.
+template <std::ranges::range L, std::ranges::range R>
+requires( ( psi_vm_vector<L> || psi_vm_vector<R> ) && std::three_way_comparable_with<std::ranges::range_reference_t<L>, std::ranges::range_reference_t<R>> )
 [[ nodiscard ]] constexpr auto operator<=>( L const & left, R const & right ) noexcept { return std::lexicographical_compare_three_way( left.begin(), left.end(), right.begin(), right.end() ); }
-template <std::ranges::range L, std::ranges::range R> requires( psi_vm_vector<L> || psi_vm_vector<R> )
+template <std::ranges::range L, std::ranges::range R>
+requires( ( psi_vm_vector<L> || psi_vm_vector<R> ) && std::equality_comparable_with<std::ranges::range_reference_t<L>, std::ranges::range_reference_t<R>> )
 [[ nodiscard ]] constexpr bool operator== ( L const & left, R const & right ) noexcept { return std::equal                            ( left.begin(), left.end(), right.begin(), right.end() ); }
 
 PSI_WARNING_DISABLE_POP()
