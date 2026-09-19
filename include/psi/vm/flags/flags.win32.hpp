@@ -101,9 +101,24 @@ struct access_privileges
 
     constexpr static bool unrestricted( flags_t const privileges ) { return ( ( privileges & all ) == all ) || ( ( privileges & ( readwrite | execute ) ) == ( readwrite | execute ) ); }
 
+    /// \note Where the two halves of a value_type live: the section half is the
+    /// low byte (the SECTION_MAP_* rights), the file half everything above it
+    /// (the GENERIC_* rights and the standard rights). A value describes a
+    /// single object, so each API is given only the half that names rights it
+    /// understands - the low byte spells FILE_READ_DATA, FILE_WRITE_DATA and
+    /// FILE_APPEND_DATA to the file APIs, so passing the whole word to one of
+    /// those asks for write access that no reader wants and that a read-only
+    /// volume (a FUSE-style mount, write-protected media) refuses outright.
+    /// The POSIX flags keep the file, mapping and system rights in disjoint
+    /// shifted fields and extract them the same way (see object::protection).
+    static flags_t constexpr section_privileges{ 0xFF };
+
     struct object
     {
         flags_t /*const*/ privileges;
+
+        flags_t file_access   () const noexcept { return privileges & ~section_privileges; }
+        flags_t section_access() const noexcept { return privileges &  section_privileges; }
     }; // struct object
 
     // https://msdn.microsoft.com/en-us/library/windows/desktop/ms683463(v=vs.85).aspx handle inheritance
