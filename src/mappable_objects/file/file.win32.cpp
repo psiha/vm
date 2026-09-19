@@ -49,7 +49,7 @@ namespace detail
             (
                 call_create
                 (
-                    file_name, flags.ap.object_access.privileges, default_unix_shared_semantics, const_cast<LPSECURITY_ATTRIBUTES>( p_security_attributes ), static_cast<DWORD>( flags.creation_disposition ), flags.flags_and_attributes, nullptr
+                    file_name, flags.ap.object_access.file_access(), default_unix_shared_semantics, const_cast<LPSECURITY_ATTRIBUTES>( p_security_attributes ), static_cast<DWORD>( flags.creation_disposition ), flags.flags_and_attributes, nullptr
                 )
             );
             BOOST_ASSERT( ( handle == INVALID_HANDLE_VALUE ) || ( ::GetLastError() == NO_ERROR ) || ( ::GetLastError() == ERROR_ALREADY_EXISTS ) );
@@ -230,8 +230,7 @@ mapping create_mapping
     std  ::size_t                              const size
 ) noexcept
 {
-    auto section_object_access{ object_access };
-    section_object_access.privileges &= 0xFF; // mask bits unrelated to sections/mappings
+    flags::access_privileges::object const section_object_access{ object_access.section_access() };
     auto const page_protection{ flags::detail::object_access_to_page_access( section_object_access, share_mode ) };
     auto const mapping_handle
     (
