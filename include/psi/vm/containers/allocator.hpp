@@ -13,10 +13,10 @@
 //------------------------------------------------------------------------------
 #pragma once
 
-#include "mapping/mapping.hpp"
-#include "mapped_view/mapped_view.hpp"
-#include "mappable_objects/file/file.hpp"
-#include "mappable_objects/file/utility.hpp"
+#include "../mapping/mapping.hpp"
+#include "../mapped_view/mapped_view.hpp"
+#include "../mappable_objects/file/file.hpp"
+#include "../mappable_objects/file/utility.hpp"
 #include "../allocators/allocator_base.hpp" // detail::throw_bad_alloc
 
 #include <cstdint>
@@ -275,7 +275,7 @@ public:
         }
 
         if ( !( command & bc::nothrow_allocation ) )
-            boost::container::throw_bad_alloc();
+            detail::throw_bad_alloc();
 
         return nullptr;
     }

@@ -18,7 +18,9 @@
 #define guarded_operation_hpp__B181EBDC_EA6B_451A_90D0_B6E1BE57DCA8
 #pragma once
 //------------------------------------------------------------------------------
-#include <psi/vm/mapped_view/mapped_view.hpp"
+#include <psi/vm/mapped_view/mapped_view.hpp>
+
+#include <type_traits>
 
 #ifdef _WIN32
 #include <psi/vm/detail/win32.hpp>
@@ -112,13 +114,13 @@ namespace details
 } // namespace details
 #endif // !_WIN32
 
-template <typename Element, class Operation, class ErrorHandler>
-typename std::result_of<Operation( basic_mapped_span<Element> )>::type
+template <typename View, class Operation, class ErrorHandler>
+std::invoke_result_t<Operation, View>
 guarded_operation
 (
-    basic_mapped_span<Element> const view,
-    Operation                   const operation,
-    ErrorHandler                const error_handler
+    View         const view,
+    Operation    const operation,
+    ErrorHandler const error_handler
 )
 {
 #ifdef _WIN32
