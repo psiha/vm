@@ -122,6 +122,7 @@ option( PSI_VM_JEMALLOC  "Enable jemalloc allocator wrapper"              OFF )
 option( PSI_VM_TCMALLOC  "Enable tcmalloc (Google) allocator wrapper"     OFF )
 
 include( vm.cmake )
+include( module.cmake )
 
 target_link_libraries( psi_vm PUBLIC
   Boost::container

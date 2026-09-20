@@ -65,3 +65,14 @@ target_link_libraries( small_vector_codegen PRIVATE psi::vm )
 if ( NOT MSVC OR CLANG_CL )
     target_precompile_headers( small_vector_codegen REUSE_FROM psi_vm )
 endif()
+
+# Module correctness smoke test (module.cmake, PSI_VM_MODULE) — only built when the option is on,
+# so it adds nothing to the default (off) CI matrix.
+if ( PSI_VM_MODULE AND TARGET psi_vm_module )
+    add_executable( vm_module_smoke_test EXCLUDE_FROM_ALL "${CMAKE_CURRENT_SOURCE_DIR}/module_smoke_test.cpp" )
+    # psi_vm_module supplies the declarations (import psi.vm;); psi::vm supplies the real
+    # out-of-line definitions those declarations point at (allocation.cpp, the throw_* helpers, ...).
+    target_link_libraries( vm_module_smoke_test PRIVATE psi_vm_module psi::vm )
+    set_target_properties( vm_module_smoke_test PROPERTIES CXX_SCAN_FOR_MODULES ON DISABLE_PRECOMPILE_HEADERS ON )
+    add_test( "vm_module_smoke_test" vm_module_smoke_test )
+endif()
