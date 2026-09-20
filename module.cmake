@@ -20,6 +20,10 @@
 # this shape on clang-cl in production use. MSVC proper and GCC are left alone entirely - the
 # option silently has no effect there (a warning, not a hard error, since CI's default matrix
 # leaves this off and a user turning it on there deserves a clear reason nothing happened).
+#
+# Below this flat `psi.vm` also come several per-subsystem modules (psi.vm.containers,
+# psi.vm.shared_memory, ...) for a consumer that wants only part of the library - see the comment
+# ahead of psi_vm_add_submodule() for that shape.
 
 option( PSI_VM_MODULE "Build psi.vm as a C++20 named module (opt-in; requires clang-cl or clang)" OFF )
 
@@ -48,27 +52,6 @@ if ( PSI_VM_MODULE )
         # A consumer wanting one of these still includes it directly after importing psi.vm,
         # same as today.
         list( FILTER psi_vm_module_headers EXCLUDE REGEX "allocators/(jemalloc|tcmalloc|mimalloc|mi_heap|mi_scoped_heap)\\.hpp$" )
-        # containers/allocator.hpp's #include "mapping/mapping.hpp" only resolves with an include
-        # path this repo's own build never sets up (verified: it fails to compile standalone with
-        # nothing beyond the usual include/ root, module or not) - a pre-existing defect unrelated
-        # to module support, tracked separately rather than fixed here.
-        list( FILTER psi_vm_module_headers EXCLUDE REGEX "containers/allocator\\.hpp$" )
-        # guarded_operation.hpp is included by nothing else in the tree and fails to compile in
-        # isolation regardless of modules (a pre-existing mismatched `<...hpp"` include delimiter) -
-        # same category as the previous exclusion, tracked separately.
-        list( FILTER psi_vm_module_headers EXCLUDE REGEX "mapped_view/guarded_operation\\.hpp$" )
-        # implementations.hpp is included by nothing else in the tree; its tag-type `struct win32{}`
-        # (etc.) collides with the real `inline namespace win32` the platform implementation files
-        # declare in the same psi::vm scope - the two are never included together in any real,
-        # working TU today, only in this purview's unconditional flatten.
-        list( FILTER psi_vm_module_headers EXCLUDE REGEX "(^|/)implementations\\.hpp$" )
-        # mappable_objects/shared_memory has zero test coverage (grepped: no test/*.cpp references
-        # it at all) and its headers fail to compile together (an ambiguous `detail` reference, then
-        # a cascade of missing symbols once that's worked around) even after every platform/orphan
-        # exclusion above - a genuinely untested, less mature corner, not something to debug as a
-        # side effect of adding module support. Left out of v1; the rest of psi::vm (containers,
-        # mapped_view, mappable_objects/file, handles, flags, error) is unaffected.
-        list( FILTER psi_vm_module_headers EXCLUDE REGEX "mappable_objects/shared_memory" )
         # Platform-flavoured headers exist on every platform's checkout but only build on their own
         # (vm.cmake applies the identical exclusion to its own .cpp sources via excluded_impl) - the
         # purview, generated once per configure, needs the same split.
@@ -157,5 +140,153 @@ export extern \"C++\"
             $<$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>:/clang:-std=gnu++2c /clang:-Wno-include-angled-in-module-purview /clang:-Wno-reserved-module-identifier>
             $<$<NOT:$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>>:-Wno-include-angled-in-module-purview -Wno-reserved-module-identifier>
         )
+
+        # Per-subsystem modules (opt-in, alongside the flat `psi.vm` above, unaffected by this).
+        #
+        # psi::vm has several genuinely independent parts - e.g. containers do not need to know
+        # about shared memory at all - so a consumer gets one module per subsystem instead of only
+        # the all-of-it `psi.vm`, and can `import` just the ones it actually uses. Each submodule's
+        # purview is a plain #include list of that subsystem's OWN header files; whatever those
+        # transitively #include from another subsystem (e.g. shared_memory pulling in mapping) is
+        # picked up by the preprocessor exactly as it already is for the flat module above - there
+        # is no explicit `import` between these submodules, and none is needed: everything here is
+        # attached via `export extern "C++"`, i.e. global-module linkage, so two submodules that each
+        # independently #include the same upstream header (say mapping.hpp) simply both declare the
+        # same global-module entity, the same way two ordinary translation units already can today -
+        # verified empirically (spike_a.cppm/spike_b.cppm/spike_smoke.cpp, since removed) before
+        # relying on it here, since it is the one part of this design existing tooling doesn't yet
+        # have a name for. The cost is that a subsystem needing e.g. `mapping` recompiles it into its
+        # own BMI rather than importing one shared copy - paid once, in this library's own build, in
+        # exchange for consumers never paying for parts they don't use.
+        #
+        # Two directories need an explicit header list rather than a glob: containers and
+        # mappable_objects each contain two genuinely different modules (containers: does/doesn't
+        # touch vm-backed storage; mappable_objects: file vs shared_memory), and a glob-minus-
+        # exclusion split is exactly the shape that silently mis-files a newly added header into the
+        # wrong module (the concrete failure this design is built to avoid - see AGENTS.md's
+        # "no ifology" note). Every other subsystem is a plain, unsplit directory glob.
+        function( psi_vm_platform_filter list_var )
+            if ( WIN32 )
+                list( FILTER ${list_var} EXCLUDE REGEX "(posix|android)" )
+            else()
+                list( FILTER ${list_var} EXCLUDE REGEX "(win32|(^|[./])nt\\.hpp$)" )
+                if ( NOT CMAKE_SYSTEM_NAME MATCHES "Android" )
+                    list( FILTER ${list_var} EXCLUDE REGEX "android" )
+                endif()
+            endif()
+            set( ${list_var} "${${list_var}}" PARENT_SCOPE )
+        endfunction()
+
+        function( psi_vm_add_submodule suffix )
+            set( headers ${ARGN} )
+            string( REPLACE "." "_" target_suffix "${suffix}" )
+            set( target_name "psi_vm_module_${target_suffix}" )
+            set( module_name "psi.vm.${suffix}" )
+
+            set( purview_file "${CMAKE_CURRENT_BINARY_DIR}/${target_suffix}_module_purview.hpp" )
+            set( content "// Generated by module.cmake - ${module_name}'s own headers, cumulative.\n" )
+            foreach( h ${headers} )
+                string( APPEND content "#include <${h}>\n" )
+            endforeach()
+            file( WRITE "${purview_file}" "${content}" )
+
+            set( unit_file "${CMAKE_CURRENT_BINARY_DIR}/${target_suffix}_module.cppm" )
+            file( WRITE "${unit_file}" "\
+module;
+#if defined( __x86_64__ ) || defined( _M_X64 )
+#include <immintrin.h>
+#endif
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#undef ERROR
+#endif
+#include <algorithm>
+#include <array>
+#include <std_fix/bit>
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <functional>
+#include <iterator>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <ranges>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <tuple>
+#include <utility>
+#include <version>
+#include <boost/assert.hpp>
+#include <boost/config_ex.hpp>
+export module ${module_name};
+export extern \"C++\"
+{
+#include \"${purview_file}\"
+}
+" )
+
+            add_library( ${target_name} STATIC )
+            target_compile_features( ${target_name} PUBLIC cxx_std_23 )
+            target_sources( ${target_name} PUBLIC FILE_SET CXX_MODULES BASE_DIRS "${CMAKE_CURRENT_BINARY_DIR}" FILES "${unit_file}" )
+            target_include_directories( ${target_name} PUBLIC
+                "${CMAKE_CURRENT_LIST_DIR}/include"
+                "${build_SOURCE_DIR}/include"
+                "${config_ex_SOURCE_DIR}/include"
+                "${err_SOURCE_DIR}/include"
+                "${std_fix_SOURCE_DIR}/include"
+            )
+            target_link_libraries( ${target_name} PUBLIC
+                Boost::container Boost::core Boost::assert Boost::integer
+                Boost::move Boost::preprocessor Boost::stl_interfaces Boost::winapi Boost::utility
+            )
+            target_compile_options( ${target_name} PRIVATE
+                $<$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>:/clang:-std=gnu++2c /clang:-Wno-include-angled-in-module-purview /clang:-Wno-reserved-module-identifier>
+                $<$<NOT:$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>>:-Wno-include-angled-in-module-purview -Wno-reserved-module-identifier>
+            )
+        endfunction()
+
+        function( psi_vm_add_submodule_glob suffix dir )
+            file( GLOB_RECURSE headers RELATIVE "${CMAKE_CURRENT_LIST_DIR}/include" "${CMAKE_CURRENT_LIST_DIR}/include/psi/vm/${dir}/*.hpp" )
+            if ( NOT headers )
+                message( FATAL_ERROR "psi_vm_add_submodule_glob( ${suffix} ${dir} ): no headers found under include/psi/vm/${dir} - wrong path?" )
+            endif()
+            psi_vm_platform_filter( headers )
+            psi_vm_add_submodule( "${suffix}" ${headers} )
+        endfunction()
+
+        psi_vm_add_submodule_glob( error              error                       )
+        psi_vm_add_submodule_glob( flags              flags                       )
+        psi_vm_add_submodule_glob( handles            handles                     )
+        psi_vm_add_submodule_glob( mapping            mapping                     )
+        psi_vm_add_submodule_glob( mapped_view        mapped_view                 )
+        psi_vm_add_submodule_glob( file               mappable_objects/file       )
+        psi_vm_add_submodule_glob( shared_memory      mappable_objects/shared_memory )
+
+        set( _psi_vm_containers_vm_backed
+            psi/vm/containers/allocator.hpp
+            psi/vm/containers/storage/vm.hpp
+            psi/vm/containers/vm_vector.hpp
+        )
+        file( GLOB_RECURSE _psi_vm_containers_all RELATIVE "${CMAKE_CURRENT_LIST_DIR}/include" "${CMAKE_CURRENT_LIST_DIR}/include/psi/vm/containers/*.hpp" )
+        if ( NOT _psi_vm_containers_all )
+            message( FATAL_ERROR "psi.vm.containers split: no headers found under include/psi/vm/containers - wrong path?" )
+        endif()
+        set( _psi_vm_containers_base ${_psi_vm_containers_all} )
+        list( REMOVE_ITEM _psi_vm_containers_base ${_psi_vm_containers_vm_backed} )
+        psi_vm_add_submodule( containers          ${_psi_vm_containers_base}       )
+        psi_vm_add_submodule( containers.vm_backed ${_psi_vm_containers_vm_backed} )
+
+        file( GLOB _psi_vm_allocators_headers RELATIVE "${CMAKE_CURRENT_LIST_DIR}/include" "${CMAKE_CURRENT_LIST_DIR}/include/psi/vm/allocators/*.hpp" )
+        if ( NOT _psi_vm_allocators_headers )
+            message( FATAL_ERROR "psi.vm.allocators: no headers found under include/psi/vm/allocators - wrong path?" )
+        endif()
+        list( FILTER _psi_vm_allocators_headers EXCLUDE REGEX "allocators/(jemalloc|tcmalloc|mimalloc|mi_heap|mi_scoped_heap)\\.hpp$" )
+        psi_vm_add_submodule( allocators ${_psi_vm_allocators_headers} )
     endif()
 endif()

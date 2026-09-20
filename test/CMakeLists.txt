@@ -30,6 +30,7 @@ set( vm_test_sources
     "${CMAKE_CURRENT_SOURCE_DIR}/strided_view.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/flat_map.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/flat_set.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/guarded_operation.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/handle_release.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/reserving_mapped_view.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/small_vector.cpp"
@@ -75,4 +76,22 @@ if ( PSI_VM_MODULE AND TARGET psi_vm_module )
     target_link_libraries( vm_module_smoke_test PRIVATE psi_vm_module psi::vm )
     set_target_properties( vm_module_smoke_test PROPERTIES CXX_SCAN_FOR_MODULES ON DISABLE_PRECOMPILE_HEADERS ON )
     add_test( "vm_module_smoke_test" vm_module_smoke_test )
+endif()
+
+# Per-subsystem module correctness smoke test: a consumer combining several of the submodules
+# module.cmake generates (containers, mapping, mapped_view, file, shared_memory, containers.vm_backed)
+# links without conflict even though none of them `import` one another.
+if ( PSI_VM_MODULE AND TARGET psi_vm_module_containers )
+    add_executable( vm_submodule_smoke_test EXCLUDE_FROM_ALL "${CMAKE_CURRENT_SOURCE_DIR}/submodule_smoke_test.cpp" )
+    target_link_libraries( vm_submodule_smoke_test PRIVATE
+        psi_vm_module_containers
+        psi_vm_module_mapping
+        psi_vm_module_mapped_view
+        psi_vm_module_file
+        psi_vm_module_shared_memory
+        psi_vm_module_containers_vm_backed
+        psi::vm
+    )
+    set_target_properties( vm_submodule_smoke_test PROPERTIES CXX_SCAN_FOR_MODULES ON DISABLE_PRECOMPILE_HEADERS ON )
+    add_test( "vm_submodule_smoke_test" vm_submodule_smoke_test )
 endif()
