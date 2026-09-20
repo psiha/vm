@@ -18,6 +18,7 @@
 #define policies_hpp__55090262_271B_4030_9BA1_3FE23F2C9F1E
 #pragma once
 //------------------------------------------------------------------------------
+#include <psi/vm/detail/impl_selection.hpp> // PSI_VM_IMPL()
 //------------------------------------------------------------------------------
 namespace psi
 {
@@ -54,7 +55,7 @@ inline namespace PSI_VM_IMPL() { namespace detail
 } }
 
 template <lifetime_policy lifetime, resizing_policy resizability>
-using named_memory = typename detail::named_memory_impl<lifetime, resizability>::type;
+using named_memory = typename PSI_VM_IMPL()::detail::named_memory_impl<lifetime, resizability>::type;
 
 //------------------------------------------------------------------------------
 } // namespace vm
