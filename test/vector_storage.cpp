@@ -808,6 +808,31 @@ TEST( vector_storage, length_past_the_byte_counters_range_is_reported )
     EXPECT_EQ( vec.size(), 4u );
 }
 
+// A request of exactly max_size() is servable, and the capacity it leaves
+// behind covers it. At the ceiling the allocator's usable size (request plus
+// slack) can exceed what the narrow counter expresses, so it reads back
+// wrapped; the storage must not cache that as its capacity. (Only a shell that
+// reports usable slack is read back at all - the MSVC CRT one is not, and there
+// this holds trivially.)
+TEST( vector_storage, a_request_at_the_byte_counters_ceiling_keeps_its_capacity )
+{
+    // A 16-bit counter puts the ceiling within cheap reach (64 KiB of
+    // elements) while keeping it a reportable one.
+    using storage = heap_storage<std::uint32_t, std::uint16_t>;
+    constexpr auto ceiling{ storage::max_size() };
+    static_assert( ceiling < std::numeric_limits<std::uint16_t>::max() );
+
+    vector<storage> vec;
+    vec.resize( ceiling );
+    EXPECT_EQ( vec.size(), ceiling );
+
+    // Read through a volatile: capacity() itself assumes that it covers
+    // size(), so an optimiser is otherwise free to fold a comparison of the two
+    // away, and pass a capacity that does not cover it.
+    std::uint16_t volatile const capacity{ vec.capacity() };
+    EXPECT_EQ( static_cast<std::uint16_t>( capacity ), ceiling );
+}
+
 // The width axis: a 64-bit byte counter cannot be reached by any plausible
 // size computation, so crossing it stays an assertion and the storage does not
 // acquire a throwing resize for nothing.
