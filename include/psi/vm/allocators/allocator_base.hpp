@@ -70,20 +70,41 @@ namespace detail
 #endif
 
     // Requested size exceeds what the allocator's size_type can express in
-    // bytes (see heap_storage::max_size()). Same overcommit split as
-    // throw_bad_alloc: where allocation can already fail, report it the
-    // standard way (`length_error`, as the STL containers do); under full
-    // overcommit nothing on the path throws, so keep it noexcept and fail
-    // hard rather than making `resize` conditionally throwing.
-#if PSI_MALLOC_OVERCOMMIT != PSI_OVERCOMMIT_Full
+    // bytes (see heap_storage::max_size()).
+    //
+    // NOT gated on the overcommit policy, unlike throw_bad_alloc above, and
+    // the distinction is the whole point: this is a precondition violation on
+    // the REQUEST - the caller asked for a size the type cannot address -
+    // while the policy speaks to whether ALLOCATION can fail, which is a
+    // different question about a different step. Deriving one from the other
+    // made the report vanish in precisely the builds that needed it: with
+    // assertions compiled out the noexcept arm fell through to its caller,
+    // which went on to truncate the byte count, allocate short, and write the
+    // full requested length into it.
     [[ noreturn ]] PSI_COLD void throw_length_error();
-#else
-    [[ noreturn ]] PSI_COLD inline void throw_length_error() noexcept
+
+    // The same condition where no plausible size computation can reach it - a
+    // 64-bit byte counter - and which is therefore a programming error to
+    // assert on rather than a condition to report. Kept noexcept so a storage
+    // that cannot overflow does not acquire a throwing resize for nothing.
+    [[ noreturn ]] PSI_COLD inline void assert_length_error() noexcept
     {
         BOOST_ASSERT_MSG( false, "Requested size exceeds the allocator's addressable byte range" );
         std::unreachable();
     }
-#endif
+
+    // Which of the two a storage gets is the storage's own decision - see
+    // heap_storage::length_error_is_reportable - and it must be visible in the
+    // noexcept specification of whatever calls this, so it is a template
+    // parameter rather than a runtime flag.
+    template <bool reportable>
+    [[ noreturn ]] PSI_COLD void length_error() noexcept( !reportable )
+    {
+        if constexpr ( reportable )
+            throw_length_error();
+        else
+            assert_length_error();
+    }
 } // namespace detail
 
 // Concept: does the allocator provide try_expand(ptr, size) -> bool?

@@ -180,16 +180,27 @@ public:
         return static_cast<size_type>( ( by_bytes < count_max ) ? by_bytes : count_max );
     }
 
+public:
+    //! Whether crossing max_size() is a condition this storage reports, as
+    //! opposed to a programming error it asserts on.
+    //!
+    //! This storage allocates, so the only open question is whether an
+    //! ordinary element count can reach the ceiling at all. The ceiling is set
+    //! by the shell's BYTE counter, so that is the width which decides: below
+    //! 64 bits a plain count of ordinary elements reaches it (a 4-byte element
+    //! over a 32-bit byte counter runs out of addressable bytes four times
+    //! sooner than of representable counts), while at 64 bits no size
+    //! computation plausibly gets there. Reported as `length_error`, the way
+    //! the standard containers report the same thing.
+    //!
+    //! Deliberately independent of the overcommit policy: that governs whether
+    //! ALLOCATION can fail, and this is a precondition on the REQUEST.
+    static bool constexpr length_error_is_reportable{ sizeof( typename shell_t::size_type ) < sizeof( std::uint64_t ) };
+
 private:
     [[nodiscard]] static constexpr typename shell_t::size_type shell_byte_count( size_type const element_count )
-        noexcept( noexcept( detail::throw_length_error() ) )
+        noexcept( !length_error_is_reportable )
     {
-        // Reporting follows the same overcommit split as allocation failure
-        // (detail::throw_length_error): where allocation can already fail this
-        // throws `length_error` like the STL containers do; under full
-        // overcommit nothing on this path throws, so it fails hard instead and
-        // `resize` stays noexcept.
-        //
         // The test itself vanishes whenever the ceiling provably cannot be
         // reached (the usual `size_type == std::size_t` case), which is why
         // guarding here costs nothing on the common instantiations - the
@@ -199,7 +210,7 @@ private:
         if constexpr ( max_size() < std::numeric_limits<size_type>::max() )
         {
             if ( element_count > max_size() ) [[ unlikely ]]
-                detail::throw_length_error();
+                detail::length_error<length_error_is_reportable>();
         }
         return static_cast<typename shell_t::size_type>( byte_count( element_count ) );
     }

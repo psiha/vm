@@ -25,6 +25,9 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
+#include <stdexcept>
+
 #include <algorithm>
 #include <cstdint>
 #include <numeric>
@@ -775,6 +778,61 @@ TEST( vector_storage, growth_policy_disabled )
     EXPECT_LE( vec.capacity(), vec.size() + 1u );
     EXPECT_EQ( vec[ 0 ], 1 );
     EXPECT_EQ( vec[ 2 ], 3 );
+}
+
+
+// A length the storage's byte counter cannot express is REPORTED, not
+// truncated, and it is reported whatever the overcommit policy: the request is
+// a precondition violation, while the policy governs whether allocation can
+// fail, which is a different question about a different step.
+TEST( vector_storage, length_past_the_byte_counters_range_is_reported )
+{
+    // A narrow byte counter under a wider element: the ceiling is the
+    // counter's byte range divided by the element size, so it sits well below
+    // what the element counter itself holds, and a length between the two is
+    // expressible but unservable.
+    using storage = heap_storage<std::uint32_t, std::uint32_t>;
+    using vec_t   = vector<storage>;
+
+    constexpr auto ceiling{ storage::max_size() };
+    static_assert( ceiling < std::numeric_limits<std::uint32_t>::max() );
+
+    static_assert( storage::length_error_is_reportable );
+
+    vec_t vec;
+    vec.resize( 4 ); // the ordinary case is unaffected
+    EXPECT_EQ( vec.size(), 4u );
+
+    // Refused before anything is allocated, so driving it costs nothing.
+    EXPECT_THROW( vec.resize( ceiling + 1 ), std::length_error );
+    EXPECT_EQ( vec.size(), 4u );
+}
+
+// The width axis: a 64-bit byte counter cannot be reached by any plausible
+// size computation, so crossing it stays an assertion and the storage does not
+// acquire a throwing resize for nothing.
+TEST( vector_storage, a_64_bit_byte_counter_keeps_a_noexcept_resize )
+{
+    using wide_storage = heap_storage<std::uint32_t, std::size_t>;
+    static_assert( sizeof( std::size_t ) == sizeof( std::uint64_t ) );
+
+    static_assert( !wide_storage::length_error_is_reportable );
+
+    vector<wide_storage> vec;
+    vec.resize( 4 );
+    EXPECT_EQ( vec.size(), 4u );
+}
+
+// The storage-kind axis: a fixed-capacity container allocates nothing, so it
+// has no byte ceiling to report and keeps the overflow contract its own policy
+// argument selects - asserting by default, independently of any of the above.
+TEST( vector_storage, a_fixed_capacity_container_keeps_its_own_overflow_policy )
+{
+    fc_vector<std::uint32_t, 4> vec;
+    vec.resize( 4 );
+    EXPECT_EQ( vec.size(),     4u );
+    EXPECT_EQ( vec.capacity(), 4u );
+    EXPECT_EQ( vec.max_size(), 4u );
 }
 
 
