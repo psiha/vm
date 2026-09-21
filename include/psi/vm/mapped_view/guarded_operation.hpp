@@ -18,7 +18,9 @@
 #define guarded_operation_hpp__B181EBDC_EA6B_451A_90D0_B6E1BE57DCA8
 #pragma once
 //------------------------------------------------------------------------------
-#include <psi/vm/mapped_view/mapped_view.hpp"
+#include <psi/vm/mapped_view/mapped_view.hpp>
+
+#include <type_traits>
 
 #ifdef _WIN32
 #include <psi/vm/detail/win32.hpp>
@@ -27,8 +29,6 @@
 #else
 #include "boost/assert.hpp"
 #include "boost/config.hpp"
-
-#include "psi/err/detail/thread_singleton.hpp"
 
 #include <csetjmp>
 //#include <sys/signal.h> // requires Android NDK API 21
@@ -71,7 +71,17 @@ namespace details
         void const * exception_location;
     }; // struct bailout_context
 
-    using local_bailout_context = err::detail::thread_singleton<bailout_context>;
+    // Was routed through a generic err::detail::thread_singleton<T> utility that traces back to
+    // the original (pre-C++11, pre-psiha/err) "Boost.Err" this library moved from - that utility
+    // was never carried over into psiha/err, and this was the only call site, so it went unnoticed
+    // until this header (previously broken by an unrelated syntax error - see this repo's history)
+    // got its first real test coverage. The language's own thread_local (already used the same way
+    // elsewhere in this codebase - allocators/mi_scoped_heap.hpp, mapped_view/flush_manifest.hpp)
+    // replaces it directly; no other call site needs the generic utility to exist.
+    struct local_bailout_context
+    {
+        static bailout_context & instance() noexcept { static thread_local bailout_context context; return context; }
+    };
 
     struct ::sigaction const handler
     (([](){
@@ -112,13 +122,13 @@ namespace details
 } // namespace details
 #endif // !_WIN32
 
-template <typename Element, class Operation, class ErrorHandler>
-typename std::result_of<Operation( basic_mapped_span<Element> )>::type
+template <typename View, class Operation, class ErrorHandler>
+std::invoke_result_t<Operation, View>
 guarded_operation
 (
-    basic_mapped_span<Element> const view,
-    Operation                   const operation,
-    ErrorHandler                const error_handler
+    View         const view,
+    Operation    const operation,
+    ErrorHandler const error_handler
 )
 {
 #ifdef _WIN32

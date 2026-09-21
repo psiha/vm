@@ -22,10 +22,10 @@
 #include <psi/vm/mapping/mapping.hpp>
 #include <psi/vm/error/error.hpp>
 #include <psi/vm/handles/handle.hpp>
+#include <psi/vm/mappable_objects/file/file.hpp>
 #include <psi/vm/mappable_objects/file/utility.hpp>
 #include <psi/vm/mappable_objects/shared_memory/policies.hpp>
 
-#include <boost/core/ignore_unused.hpp>
 #include <boost/winapi/system.hpp>
 
 #include <cstddef>
@@ -90,12 +90,12 @@ namespace detail
             DWORD                          const extra_hints
         ) noexcept
         {
-            flags::access_privileges const ap = { flags.object_access, flags.child_access, flags.system_access };
+            flags::access_privileges const ap = flags.ap;
 
             using hints = flags::access_pattern_optimisation_hints;
             auto file
             (
-                mmap::create_file
+                create_file
                 (
                     name.c_str(),
                     flags::opening
@@ -125,7 +125,7 @@ namespace detail
             {
                 create_mapping
                 (
-                    file,
+                    std::move( file ),
                     flags,
                     size,
                     name.name()
@@ -140,8 +140,8 @@ namespace detail
                 case disposition::open_existing                  :
                 case disposition::open_or_create                 : break;
                 case disposition::create_new_or_truncate_existing: break;
-                case disposition::open_and_truncate_existing     : if ( preexisting_mapping && get_section_size( new_mapping.get() ) != size ) return {};
-                case disposition::create_new                     : if ( preexisting_mapping                                                  ) return {};
+                case disposition::open_and_truncate_existing     : if ( preexisting_mapping && get_size( new_mapping ) != size ) return {};
+                case disposition::create_new                     : if ( preexisting_mapping                                    ) return {};
             }
 
             return named_memory_base
@@ -154,7 +154,7 @@ namespace detail
         fallible_result<std::size_t> size() const noexcept
         {
             LARGE_INTEGER sz;
-            if ( BOOST_UNLIKELY( !::GetFileSizeEx( file_.get(), &sz ) ) )
+            if ( BOOST_UNLIKELY( !::GetFileSizeEx( underlying_file().value, &sz ) ) )
                 return error();
             /// \note Memory mappings cannot ever be larger than
             /// std::numeric_limits<std::size_t>::max().
@@ -186,7 +186,7 @@ namespace detail
     public:
         resizable_named_memory_base( resizable_named_memory_base && ) = default;
 
-        fallible_result<void> BOOST_CC_REG resize( std::size_t const new_size )
+        fallible_result<void> BOOST_CC_REG resize( [[ maybe_unused ]] std::size_t const new_size )
         {
             // https://msdn.microsoft.com/en-us/library/windows/desktop/aa365531(v=vs.85).aspx "erratum comment" SetEndOfFile can be used to enlarge a mapped file...
             // http://blogs.msdn.com/b/oldnewthing/archive/2015/01/30/10589818.aspx            TONT Creating a shared memory block that can grow in size
@@ -195,7 +195,7 @@ namespace detail
             // Unix2Win32 migration guides
             // http://www.microsoft.com/en-us/download/details.aspx?id=6904
             // https://msdn.microsoft.com/en-us/library/y23kc048.aspx
-
+        #if 0
             // Recreate/fetch the various attributes required for reopening the
             // mapping handle:
 
@@ -257,21 +257,36 @@ namespace detail
             if ( BOOST_LIKELY( file_resize_success && this_mapping ) )
                 return err::success;
             return error();
+        #else
+            // Recreating a larger mapping in place needs to reopen the underlying kernel object
+            // with the SAME security descriptor and access flags the original was created with
+            // (a resized shared-memory mapping that silently reverted to default security would
+            // be a real access-control regression for anything relying on the original ACL) -
+            // this requires the create-time flags this class does not currently retain (save_flags()
+            // below is a no-op) and a completion path (detail::create_mapping_impl::call_create,
+            // referenced above) that does not exist anywhere in this codebase. Left as an explicit,
+            // loud "not supported" rather than a silent downgrade to default security or invented
+            // completion logic for a security-sensitive, untested path.
+            error::set( ERROR_NOT_SUPPORTED );
+            return error();
+        #endif
         }
 
     protected:
         template <lifetime_policy, resizing_policy> friend class named_memory;
         resizable_named_memory_base( named_memory_base && other ) : named_memory_base( std::move( other ) ) {}
 
-        void save_flags( flags::mapping const & mflags )
+        void save_flags( [[ maybe_unused ]] flags::mapping const & mflags )
         {
         #if 0
             object_access =                                          mflags.object_access;
             child_access  =                                          mflags.child_access ;
             share_mode    = static_cast<flags::viewing::share_mode>( mflags.map_view_flags.map_view_flags );
-        #else
-            ignore_unused( mflags );
         #endif
+            // resize() above no longer needs the create-time flags this would have cached (it
+            // returns ERROR_NOT_SUPPORTED unconditionally instead) - kept as a no-op call site so
+            // file_backed_named_memory::create() below need not special-case whether resize() is
+            // actually implemented.
         }
 
     private:
@@ -280,7 +295,7 @@ namespace detail
         flags::access_privileges::child_process child_access ;
         flags::viewing          ::share_mode    share_mode   ;
     #endif
-    }; // class resizable_named_memory_basey
+    }; // class resizable_named_memory_base
 
     template <lifetime_policy lifetime_policy_param, resizing_policy resizing_policy_param>
     using named_memory_base_t = std::conditional_t
@@ -346,7 +361,13 @@ public:
         flags::shared_memory         const flags
     ) noexcept
     {
-        return detail::create_mapping_impl::do_map( file_handle::reference{ file_handle::traits::invalid_value }, flags, size, name );
+        // No backing file: an anonymous (pagefile-backed) mapping, made by handing the same
+        // create_mapping() a default-constructed (i.e. already "invalid") file_handle to take
+        // ownership of, exactly as any other caller of this public entry point does. Constructed
+        // explicitly (allowed here: create() is native_named_memory's own static member function)
+        // rather than relying on fallible_result's forwarding ctor to find the private
+        // mapping&&-converting constructor through the friend declaration below - it doesn't.
+        return native_named_memory{ create_mapping( file_handle{}, flags, size, name ) };
     }
 
     auto size() const noexcept { return get_size( *this ); }
@@ -367,10 +388,10 @@ private:
 namespace detail
 {
     template <lifetime_policy lifetime, resizing_policy resizability>
-    struct named_memory_impl : std::identity<win32::file_backed_named_memory<lifetime, resizability>> {};
+    struct named_memory_impl : std::type_identity<win32::file_backed_named_memory<lifetime, resizability>> {};
 
     template <>
-    struct named_memory_impl<lifetime_policy::scoped, resizing_policy::fixed> : std::identity<win32::native_named_memory> {};
+    struct named_memory_impl<lifetime_policy::scoped, resizing_policy::fixed> : std::type_identity<win32::native_named_memory> {};
 } // namespace detail
 
 //------------------------------------------------------------------------------
