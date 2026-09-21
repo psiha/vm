@@ -50,11 +50,14 @@ namespace detail
         throw std::bad_alloc{};
 #   endif
     }
+#endif
+    // Deliberately outside the overcommit split above: a length error reports a
+    // request the size type cannot express, which no allocation policy makes
+    // acceptable. See the declaration in allocators/allocator_base.hpp.
     [[ noreturn ]] PSI_COLD void throw_length_error()
     {
         throw std::length_error{ "psi::vm: requested size exceeds the allocator's addressable byte range" };
     }
-#endif
 } // namespace detail
 
 void mem_mapping::publish_size() noexcept
