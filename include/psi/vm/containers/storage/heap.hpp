@@ -369,7 +369,9 @@ public:
         BOOST_ASSUME( current_capacity >= size_ );
         BOOST_ASSUME( target_size      >= size_ );
         if ( target_size > current_capacity ) [[ unlikely ]] {
-            do_grow( G ? G( target_size, current_capacity ) : target_size, current_capacity );
+            // A target past max_size() goes through unchanged and is refused by
+            // the byte-count conversion, like on every other allocating path.
+            do_grow( G ? G( target_size, current_capacity, max_size() ) : target_size, current_capacity );
         }
         size_ = target_size;
         return data();
