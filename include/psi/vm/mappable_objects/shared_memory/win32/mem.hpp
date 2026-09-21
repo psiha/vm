@@ -26,7 +26,6 @@
 #include <psi/vm/mappable_objects/file/utility.hpp>
 #include <psi/vm/mappable_objects/shared_memory/policies.hpp>
 
-#include <boost/core/ignore_unused.hpp>
 #include <boost/winapi/system.hpp>
 
 #include <cstddef>
@@ -142,7 +141,7 @@ namespace detail
                 case disposition::open_or_create                 : break;
                 case disposition::create_new_or_truncate_existing: break;
                 case disposition::open_and_truncate_existing     : if ( preexisting_mapping && get_size( new_mapping ) != size ) return {};
-                case disposition::create_new                     : if ( preexisting_mapping                                                  ) return {};
+                case disposition::create_new                     : if ( preexisting_mapping                                    ) return {};
             }
 
             return named_memory_base
@@ -277,19 +276,17 @@ namespace detail
         template <lifetime_policy, resizing_policy> friend class named_memory;
         resizable_named_memory_base( named_memory_base && other ) : named_memory_base( std::move( other ) ) {}
 
-        void save_flags( flags::mapping const & mflags )
+        void save_flags( [[ maybe_unused ]] flags::mapping const & mflags )
         {
         #if 0
             object_access =                                          mflags.object_access;
             child_access  =                                          mflags.child_access ;
             share_mode    = static_cast<flags::viewing::share_mode>( mflags.map_view_flags.map_view_flags );
-        #else
+        #endif
             // resize() above no longer needs the create-time flags this would have cached (it
             // returns ERROR_NOT_SUPPORTED unconditionally instead) - kept as a no-op call site so
             // file_backed_named_memory::create() below need not special-case whether resize() is
             // actually implemented.
-            boost::ignore_unused( mflags );
-        #endif
         }
 
     private:
