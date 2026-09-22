@@ -823,6 +823,48 @@ TEST( vector_storage, a_64_bit_byte_counter_keeps_a_noexcept_resize )
     EXPECT_EQ( vec.size(), 4u );
 }
 
+// An element that must be moved one by one grows through the allocator's
+// in-place expansion first, and that call cannot throw. A length past the
+// ceiling must therefore be refused before it is attempted - reported where the
+// caller can catch it, rather than escaping a non-throwing call and terminating.
+struct moved_one_by_one
+{
+    static constexpr bool is_trivially_moveable{ false }; // forbids realloc
+    std::uint32_t value;
+};
+
+TEST( vector_storage, length_past_the_ceiling_is_reported_on_the_in_place_expansion_path )
+{
+    using element = moved_one_by_one;
+    using storage = heap_storage<element, std::uint16_t>;
+    using vec_t   = vector<storage>;
+
+    static_assert( !is_trivially_moveable<element> );
+    static_assert( storage::length_error_is_reportable );
+
+    if constexpr ( !has_try_expand<storage::allocator_type> )
+    {
+        GTEST_SKIP() << "the allocator offers no in-place expansion: growth relocates, and the refusal propagates from there";
+    }
+    else
+    {
+        constexpr auto ceiling{ storage::max_size() };
+
+        vec_t vec;
+        vec.resize( 4 ); // something to expand in place
+        auto constexpr past_it{ static_cast<std::uint16_t>( ceiling + 1 ) };
+        EXPECT_THROW( vec.reserve( past_it ), std::length_error );
+        EXPECT_EQ( vec.size(), 4u );
+
+        // The non-relocating variant only ASKS for an in-place expansion, and a
+        // length past the ceiling is one it cannot get: a plain `false`. (It
+        // asks the storage only where the storage offers the query - MSVC-ABI
+        // builds; elsewhere it answers `false` without asking.)
+        EXPECT_FALSE( vec.stable_reserve( past_it ) );
+        EXPECT_EQ( vec.size(), 4u );
+    }
+}
+
 // The storage-kind axis: a fixed-capacity container allocates nothing, so it
 // has no byte ceiling to report and keeps the overflow contract its own policy
 // argument selects - asserting by default, independently of any of the above.

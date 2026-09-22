@@ -228,7 +228,19 @@ private:
     [[ nodiscard ]] pointer shell_grow_to( pointer const ptr, size_type const current_capacity, size_type const target_capacity ) { return reinterpret_cast<pointer>( shell().template grow_to<alignment>( reinterpret_cast<typename shell_t::pointer>( ptr ), shell_byte_count( current_capacity ), shell_byte_count( target_capacity ) ) ); }
     [[ nodiscard ]] pointer shell_shrink_to( pointer const ptr, size_type const current_size, size_type const target_size ) noexcept { return reinterpret_cast<pointer>( shell().template shrink_to<alignment>( reinterpret_cast<typename shell_t::pointer>( ptr ), shell_byte_count( current_size ), shell_byte_count( target_size ) ) ); }
     [[ nodiscard ]] size_type shell_capacity( pointer const ptr ) const noexcept { return static_cast<size_type>( shell().size( reinterpret_cast<typename shell_t::const_pointer>( ptr ) ) / sizeof( value_type ) ); }
-    bool shell_try_expand( pointer const ptr, size_type const target_capacity ) noexcept { return shell().try_expand( reinterpret_cast<typename shell_t::pointer>( ptr ), shell_byte_count( target_capacity ) ); }
+    // A query, so it never throws: a length past max_size() is an expansion
+    // this storage cannot get, answered with `false` before the byte conversion
+    // would refuse it by throwing. A caller that must have the length then
+    // reaches that refusal on its allocating fallback.
+    bool shell_try_expand( pointer const ptr, size_type const target_capacity ) noexcept
+    {
+        if constexpr ( max_size() < std::numeric_limits<size_type>::max() )
+        {
+            if ( target_capacity > max_size() ) [[ unlikely ]]
+                return false;
+        }
+        return shell().try_expand( reinterpret_cast<typename shell_t::pointer>( ptr ), shell_byte_count( target_capacity ) );
+    }
 
 public:
     constexpr heap_storage() noexcept : shell_t{}, p_array_{ nullptr }, size_{ 0 }, capacity_{ 0 } {}
