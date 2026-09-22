@@ -283,11 +283,41 @@ protected: // pass-in-reg public function overloads/impls
     }
 
 private:
+    // The intra-node search: a linear scan for an eligible key and comparator
+    // whose range is short enough (lookup.hpp), binary otherwise.
+    //
+    // Under PSI_VM_BT_RUNTIME_DISPATCH the length tested is the one the node
+    // ACTUALLY has rather than the one it could have: a node is rarely full,
+    // and a half-full one scans half as far.  The searches BOOST_ASSUME
+    // num_vals <= maximum_values, so wherever the whole node fits under the
+    // limit the test folds away and the choice costs nothing.
+    template <node_size_type maximum_values>
+    static constexpr bool use_linear_search( [[ maybe_unused ]] node_size_type const num_vals ) noexcept
+    {
+#   if PSI_VM_BT_RUNTIME_DISPATCH
+        return linear_search_usable<Comparator, Key> && ( num_vals <= linear_search_max_values<Key> );
+#   else
+        return use_linear_search_for_sorted_array<Comparator, Key, maximum_values>;
+#   endif
+    }
+
+    // The capacity a node search is instantiated for.  It is the node's own
+    // only where it changes the generated code - a node that fits under the
+    // linear limit, which then scans unconditionally - and one shared unbounded
+    // value otherwise, so node kinds (and comparators) that compile to the same
+    // search share one instantiation rather than getting one each.
+    template <node_size_type capacity>
+    static node_size_type constexpr search_capacity
+    {
+        use_linear_search_for_sorted_array<Comparator, Key, capacity> ? capacity : std::numeric_limits<node_size_type>::max()
+    };
+
     // lower_bound find >limited to/within a node<
-    // The capacity is the searched node's own, not the leaf's: it bounds
-    // num_vals and it selects the intra-node search. Inner and leaf nodes hold
-    // a different number of entries the moment a leaf carries anything besides
-    // the key (a map), and for a set the two still differ by the child slots.
+    // maximum_values is search_capacity of the searched node - its own, not the
+    // leaf's, wherever it matters: it bounds num_vals and it can select the
+    // intra-node search. Inner and leaf nodes hold a different number of
+    // entries the moment a leaf carries anything besides the key (a map), and
+    // for a set the two still differ by the child slots.
     template <node_size_type maximum_values>
     [[ using gnu: pure, hot, noinline, sysv_abi, leaf ]]
     static find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const key, pass_in_reg<Comparator> const comparator ) noexcept
@@ -305,27 +335,16 @@ private:
         decltype( auto ) value{ prefetch( comp, key ) };
         auto const pos_iter
         {
-#       if PSI_VM_BT_RUNTIME_DISPATCH
-            // Dispatch on the length the node ACTUALLY has, not on the length it
-            // could have.  A node is rarely full - a half-full one scans half as
-            // far - and the compile-time form cannot see that, so it picks the
-            // strategy for a fill the node may never reach.  The BOOST_ASSUME
-            // above states num_vals <= maximum_values, which lets the compiler
-            // fold this check away entirely whenever the whole node fits under
-            // the threshold: the small-node case pays nothing for the choice.
-            psi::vm::lower_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
-#       else
-            use_linear_search_for_sorted_array<Comparator, Key, maximum_values>
+            use_linear_search<maximum_values>( num_vals )
                 ? linear_lower_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
                 :  binary_lower_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
-#       endif
         };
         auto const pos_idx   { static_cast<node_size_type>( std::distance( &keys[ 0 ], pos_iter ) ) };
         auto const exact_find{ ( pos_idx != num_vals ) && !comp( value, keys[ pos_idx ] ) };
         return { pos_idx, exact_find };
     }
     template <node_size_type maximum_values>
-    find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return lower_bound<maximum_values>( keys, num_vals, value, pass_in_reg{ comp() } ); }
+    find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return lower_bound<search_capacity<maximum_values>>( keys, num_vals, value, pass_in_reg{ comp() } ); }
     find_pos lower_bound( auto const & node, auto const & value ) const noexcept { return lower_bound<bptree_base::node_capacity<decltype( node )>>( node.keys, node.num_vals, pass_in_reg{ value } ); }
     [[ using gnu: pure, hot, sysv_abi ]]
     find_pos lower_bound( auto const & node, node_size_type const offset, Reg auto const value ) const noexcept
@@ -356,18 +375,14 @@ protected:
         decltype( auto ) value{ prefetch( comp, key ) };
         auto const pos_iter
         {
-#       if PSI_VM_BT_RUNTIME_DISPATCH // see the lower_bound twin
-            psi::vm::upper_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
-#       else
-            use_linear_search_for_sorted_array<Comparator, Key, maximum_values>
+            use_linear_search<maximum_values>( num_vals )
                 ? linear_upper_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
                 :  binary_upper_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
-#       endif
         };
         return static_cast<node_size_type>( std::distance( &keys[ 0 ], pos_iter ) );
     }
     template <node_size_type maximum_values>
-    node_size_type upper_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return upper_bound<maximum_values>( keys, num_vals, value, pass_in_reg{ comp() } ); }
+    node_size_type upper_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return upper_bound<search_capacity<maximum_values>>( keys, num_vals, value, pass_in_reg{ comp() } ); }
     node_size_type upper_bound( auto const & node, auto const & value ) const noexcept { return upper_bound<bptree_base::node_capacity<decltype( node )>>( node.keys, node.num_vals, pass_in_reg{ value } ); }
     [[ using gnu: pure, hot, sysv_abi ]]
     node_size_type upper_bound( auto const & node, node_size_type const offset, Reg auto const value ) const noexcept

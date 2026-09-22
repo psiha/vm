@@ -64,15 +64,21 @@ template <typename T> requires requires{ T{}.size(); } constexpr bool is_statica
 #   define PSI_VM_BT_RUNTIME_DISPATCH 0
 #endif
 
-// The value limit + eligibility live in lookup.hpp (shared, measured); the node
-// capacity is a compile-time constant here so the dispatch is compile-time.
+// The value limit + eligibility live in lookup.hpp (shared, measured).  Whether
+// Key + Comparator can take the linear path at any length...
+template <typename Comparator, typename Key>
+constexpr bool linear_search_usable
+{
+    ( linear_search_eligible<Comparator, Key> ) &&
+    ( linear_search_max_values<Key> != 0      ) &&
+    ( is_statically_sized<Key>                )
+}; // linear_search_usable
+
+// ...and whether it takes it for every length up to maximum_array_length.
 template <typename Comparator, typename Key, std::uint32_t maximum_array_length>
 constexpr bool use_linear_search_for_sorted_array
 {
-    ( linear_search_eligible<Comparator, Key>                ) &&
-    ( linear_search_max_values<Key> != 0                     ) &&
-    ( maximum_array_length <= linear_search_max_values<Key>  ) &&
-    ( is_statically_sized<Key>                               )
+    linear_search_usable<Comparator, Key> && ( maximum_array_length <= linear_search_max_values<Key> )
 }; // use_linear_search_for_sorted_array
 
 
