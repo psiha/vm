@@ -594,6 +594,33 @@ TEST( bp_tree, merge_keeps_the_existing_key_on_every_tie )
     }
 }
 
+// Merging into an EMPTY tree takes a fast path that copies the source's leaves
+// and then builds the inner levels over them.  It reserves only as many nodes as
+// the source uses, but a source grown by scattered inserts has partly-filled
+// leaves under a different inner shape than a fresh build produces, so building
+// the new inner levels can need nodes the pool does not have - and growing the
+// pool can move the header the build is still writing through.  The sizes
+// straddle the point where the tree needs a third level, which is where that
+// shortfall first appears.
+TEST( bp_tree, merge_into_an_empty_tree_keeps_every_key )
+{
+    std::mt19937 rng{ 20260922 };
+    for ( std::uint32_t n{ 6000 }; n <= 12000; n += 97 )
+    {
+        std::vector<unsigned> keys( n );
+        std::iota( keys.begin(), keys.end(), 0u );
+        auto shuffled{ keys };
+        std::ranges::shuffle( shuffled, rng );
+        bptree_set<unsigned> source; source.map_memory();
+        for ( auto const k : shuffled ) source.insert( k );
+        bptree_set<unsigned> target; target.map_memory(); // fresh: the only reservation is merge's own
+        ASSERT_EQ( target.merge( source ), n ) << "source size " << n;
+        ASSERT_EQ( target.size(), n ) << "source size " << n;
+        ASSERT_EQ( static_cast<std::size_t>( std::ranges::distance( target ) ), n ) << "source size " << n;
+        ASSERT_TRUE( std::ranges::equal( target, keys ) ) << "source size " << n;
+    }
+}
+
 TEST( bp_tree, insert_presorted_merge_at_node_boundary )
 {
     // Same test but for insert_presorted
