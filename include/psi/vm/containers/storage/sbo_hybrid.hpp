@@ -183,10 +183,7 @@ public:
             auto constexpr ceiling{ size_ceiling<decltype( self )>() };
             if ( target_size > ceiling ) [[ unlikely ]]
                 detail::throw_length_error();
-            // The ceiling is itself a reachable size, so geometric overshoot
-            // past it is clamped rather than refused.
-            auto const wanted{ static_cast<bool>( G ) ? G( target_size, current_cap ) : target_size };
-            self.grow_heap( std::min( wanted, ceiling ) );
+            self.grow_heap( static_cast<bool>( G ) ? G( target_size, current_cap, ceiling ) : target_size );
         }
         self.set_size_preserving_flag( target_size );
         return self.data();

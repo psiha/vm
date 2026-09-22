@@ -808,6 +808,71 @@ TEST( vector_storage, length_past_the_byte_counters_range_is_reported )
     EXPECT_EQ( vec.size(), 4u );
 }
 
+// A request of exactly max_size() is servable, and the capacity it leaves
+// behind covers it. At the ceiling the allocator's usable size (request plus
+// slack) can exceed what the narrow counter expresses, so it reads back
+// wrapped; the storage must not cache that as its capacity. (Only a shell that
+// reports usable slack is read back at all - the MSVC CRT one is not, and there
+// this holds trivially.)
+TEST( vector_storage, a_request_at_the_byte_counters_ceiling_keeps_its_capacity )
+{
+    // A 16-bit counter puts the ceiling within cheap reach (64 KiB of
+    // elements) while keeping it a reportable one.
+    using storage = heap_storage<std::uint32_t, std::uint16_t>;
+    constexpr auto ceiling{ storage::max_size() };
+    static_assert( ceiling < std::numeric_limits<std::uint16_t>::max() );
+
+    vector<storage> vec;
+    vec.resize( ceiling );
+    EXPECT_EQ( vec.size(), ceiling );
+
+    // Read through a volatile: capacity() itself assumes that it covers
+    // size(), so an optimiser is otherwise free to fold a comparison of the two
+    // away, and pass a capacity that does not cover it.
+    std::uint16_t volatile const capacity{ vec.capacity() };
+    EXPECT_EQ( static_cast<std::uint16_t>( capacity ), ceiling );
+}
+
+// The ceiling is itself a reachable size: geometric growth that would overshoot
+// it is clamped to it rather than refused, so appending one element at a time
+// fills the storage all the way up. Refusing the overshoot instead would reject
+// every size from roughly ceiling / growth-factor upwards - sizes the storage
+// can hold - as soon as the next growth step happened to cross the ceiling.
+TEST( vector_storage, appending_reaches_the_byte_counters_ceiling )
+{
+    // A 16-bit counter puts the ceiling within cheap reach (64 KiB of
+    // elements) while keeping it a reportable one.
+    using storage = heap_storage<std::uint32_t, std::uint16_t>;
+    using vec_t   = vector<storage>;
+
+    constexpr auto ceiling{ storage::max_size() };
+    static_assert( ceiling < std::numeric_limits<std::uint16_t>::max() );
+    static_assert( storage::length_error_is_reportable );
+
+    {
+        vec_t vec;
+        for ( std::uint32_t i{ 0 }; i < ceiling; ++i )
+            vec.push_back( i );
+        EXPECT_EQ( vec.size(), ceiling );
+        EXPECT_EQ( vec.front(), 0u );
+        EXPECT_EQ( vec.back (), ceiling - 1u );
+
+        // Past the ceiling the request itself is unservable, and still refused.
+        EXPECT_THROW( vec.push_back( 0 ), std::length_error );
+        EXPECT_EQ( vec.size(), ceiling );
+    }
+    {
+        // The same rule for bulk appends, which size their headroom with the
+        // container's growth policy rather than the storage's.
+        vec_t vec;
+        for ( std::uint32_t i{ 0 }; i < ceiling; ++i )
+            vec.grow_by_amortized( 1, value_init );
+        EXPECT_EQ( vec.size(), ceiling );
+        EXPECT_THROW( vec.grow_by_amortized( 1, value_init ), std::length_error );
+        EXPECT_EQ( vec.size(), ceiling );
+    }
+}
+
 // The width axis: a 64-bit byte counter cannot be reached by any plausible
 // size computation, so crossing it stays an assertion and the storage does not
 // acquire a throwing resize for nothing.

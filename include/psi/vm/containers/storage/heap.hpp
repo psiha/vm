@@ -37,6 +37,7 @@
 
 #include <boost/assert.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -380,7 +381,9 @@ public:
         BOOST_ASSUME( current_capacity >= size_ );
         BOOST_ASSUME( target_size      >= size_ );
         if ( target_size > current_capacity ) [[ unlikely ]] {
-            do_grow( G ? G( target_size, current_capacity ) : target_size, current_capacity );
+            // A target past max_size() goes through unchanged and is refused by
+            // the byte-count conversion, like on every other allocating path.
+            do_grow( G ? G( target_size, current_capacity, max_size() ) : target_size, current_capacity );
         }
         size_ = target_size;
         return data();
@@ -583,11 +586,16 @@ private:
                     return true;
             }() };
             if constexpr ( cache_usable ) {
+                // What was just allocated is a floor for the readback, and it
+                // is applied rather than assumed: the allocators report the
+                // usable size in their own size_type, so a block whose slack
+                // carries it past that type's range (a request at max_size()
+                // over a narrow counter) reads back WRAPPED, i.e. smaller than
+                // the request. Caching that would break capacity() >= size().
                 if constexpr ( std::is_void_v<Allocator> )
-                    capacity_ = shell_capacity( p_array_ );
+                    capacity_ = std::max<size_type>( requested_capacity, shell_capacity( p_array_ ) );
                 else
-                    capacity_ = alloc().size( p_array_ );
-                BOOST_ASSUME( capacity_ >= requested_capacity );
+                    capacity_ = std::max<size_type>( requested_capacity, alloc().size( p_array_ ) );
             } else {
                 if constexpr ( std::is_void_v<Allocator> )
                     BOOST_ASSERT( !requested_capacity || ( shell_capacity( p_array_ ) >= requested_capacity ) );

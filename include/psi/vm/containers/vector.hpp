@@ -1305,7 +1305,8 @@ public:
         auto const target{ static_cast<size_type>( this->size() + delta ) };
         if constexpr ( static_cast<bool>( Growth ) ) {
             if ( target > this->capacity() ) {
-                this->reserve( Growth( target, this->capacity() ) );
+                // A target past max_size() is left for reserve() to refuse.
+                this->reserve( Growth( target, this->capacity(), max_size() ) );
             }
         }
         return grow_to( target, init_policy ); // capacity already sized -> no per-call extend

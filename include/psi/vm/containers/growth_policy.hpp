@@ -41,9 +41,20 @@ struct geometric_growth
     template <std::unsigned_integral T>
     [[ nodiscard ]] constexpr T operator()( T const target_size, T const current_capacity ) const noexcept
     {
+        return (*this)( target_size, current_capacity, std::numeric_limits<T>::max() );
+    }
+
+    /// The same, with the geometric overshoot clamped to `ceiling` (a
+    /// container's max_size()): the ceiling is itself a reachable size, so
+    /// growth that would pass it stops at it rather than being refused. Only
+    /// the overshoot is clamped - a target_size that is itself past the ceiling
+    /// is returned unchanged, for the allocating path to refuse.
+    template <std::unsigned_integral T>
+    [[ nodiscard ]] constexpr T operator()( T const target_size, T const current_capacity, T const ceiling ) const noexcept
+    {
         using wide_t = std::common_type_t<T, std::uint64_t>;
         auto const grown{ static_cast<wide_t>( current_capacity ) * num / den };
-        return std::max( target_size, static_cast<T>( std::min<wide_t>( grown, std::numeric_limits<T>::max() ) ) );
+        return std::max( target_size, static_cast<T>( std::min<wide_t>( grown, ceiling ) ) );
     }
 
     [[ nodiscard ]] explicit constexpr operator bool() const noexcept { return num != den; }
