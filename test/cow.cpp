@@ -11,13 +11,23 @@
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 #include <psi/vm/containers/b+tree.hpp>
+#include "../src/containers/storage/dirty_tracker.hpp"
 #include <psi/vm/containers/vm_vector.hpp>
+
+#ifdef _WIN32
+#   include <windows.h>
+#   include <psapi.h>
+#else
+#   include <sys/resource.h>
+#endif
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <numeric>
+#include <print>
 #include <ranges>
 #include <vector>
 //------------------------------------------------------------------------------
@@ -1070,6 +1080,133 @@ TEST( bptree_cow, a_fresh_tree_owes_a_commit_nothing )
         EXPECT_TRUE( has( src, key ) );
     }
 }
+
+#ifdef NDEBUG // bench only release builds (the debug build memcmps every clean node)
+
+namespace
+{
+    // Soft page faults taken by this process: what the commit's search for
+    // changed nodes actually costs on a copy-on-write clone, as opposed to the
+    // copying it then does.
+    [[ nodiscard ]] std::uint64_t soft_page_faults() noexcept
+    {
+#   ifdef _WIN32
+        PROCESS_MEMORY_COUNTERS pmc{};
+        return GetProcessMemoryInfo( GetCurrentProcess(), &pmc, sizeof( pmc ) ) ? pmc.PageFaultCount : 0;
+#   else
+        rusage ru{};
+        return ( getrusage( RUSAGE_SELF, &ru ) == 0 ) ? static_cast<std::uint64_t>( ru.ru_minflt ) : 0;
+#   endif
+    }
+} // anonymous namespace
+
+// What a COW commit costs when almost nothing changed.
+//
+// commit_to() decides per node, and it reads that decision out of the node
+// itself - so it touches the first cache line of every node in the RESERVED
+// pool, however few of them the transaction actually wrote.  On a clone whose
+// pages are copy-on-write that read is also what faults them in.  The numbers
+// below are the ones a different dirty-tracking mechanism has to beat: a pool
+// sweep that is paid per reserved node, not per changed one.
+TEST( bptree_cow, benchmark_commit_of_a_small_change )
+{
+    auto constexpr reps{ 5 };
+    for ( auto const keys : { 10'000u, 100'000u, 1'000'000u, 4'000'000u } )
+    {
+        bptree_set<std::uint32_t> src;
+        src.map_memory();
+        std::vector<std::uint32_t> values( keys );
+        std::iota( values.begin(), values.end(), 0u );
+        src.insert( values );
+
+        // The build leaves every node it wrote dirty, so the first commit after
+        // it copies the whole tree.  That is a one-off; what a transaction pays
+        // over and over is the steady state below, so settle it first.
+        {
+            bptree_set<std::uint32_t> warmup{ src };
+            warmup.commit_to( src );
+        }
+
+        std::uint64_t ns{ 0 };
+        std::uint64_t faults{ 0 };
+        std::size_t   dirty_total{ 0 };
+        for ( auto rep{ 0 }; rep < reps; ++rep )
+        {
+            bptree_set<std::uint32_t> clone{ src };
+            clone.insert( keys + 1 + static_cast<std::uint32_t>( rep ) );
+            auto const dirty{ clone.nodes_dirty() };
+            auto const faults0{ soft_page_faults() };
+            auto const start{ std::chrono::steady_clock::now() };
+            clone.commit_to( src );
+            ns += static_cast<std::uint64_t>( std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::steady_clock::now() - start ).count() );
+            faults += soft_page_faults() - faults0;
+            dirty_total += dirty;
+        }
+        std::println
+        (
+            "{:>9} keys, {:6} nodes ({:6} KiB): commit {:8.1f} us, {:8.1f} page faults, for {:4.1f} dirty nodes",
+            keys, src.nodes_used(),
+            std::size_t( src.nodes_used() ) * bptree_set<std::uint32_t>::node_byte_size() / 1024,
+            double( ns ) / reps / 1000.0,
+            double( faults ) / reps,
+            double( dirty_total ) / reps
+        );
+    }
+} // bptree_cow.benchmark_commit_of_a_small_change
+
+// What the OS's own dirty-page tracking costs per commit, for comparison with
+// the dirty_node_set above: one batch query over the clone's whole mapping,
+// then a lookup per page.  Kernel tracking exists on Linux and Windows and not
+// on macOS, which is why it cannot be the only mechanism.
+TEST( bptree_cow, benchmark_kernel_dirty_tracking )
+{
+    auto constexpr reps{ 5 };
+    for ( auto const keys : { 1'000'000u, 4'000'000u } )
+    {
+        bptree_set<std::uint32_t> src;
+        src.map_memory();
+        std::vector<std::uint32_t> values( keys );
+        std::iota( values.begin(), values.end(), 0u );
+        src.insert( values );
+        { bptree_set<std::uint32_t> warmup{ src }; warmup.commit_to( src ); }
+
+        auto const bytes{ src.node_pool_bytes().size() };
+
+        std::uint64_t arm_ns{ 0 }, snap_ns{ 0 }, scan_ns{ 0 };
+        bool kernel{ false };
+        std::size_t reported_dirty{ 0 };
+        for ( auto rep{ 0 }; rep < reps; ++rep )
+        {
+            bptree_set<std::uint32_t> clone{ src };
+            detail::dirty_tracker tracker;
+            auto const t0{ std::chrono::steady_clock::now() };
+            tracker.arm( const_cast<std::byte *>( clone.node_pool_bytes().data() ), clone.node_pool_bytes().size() );
+            auto const t1{ std::chrono::steady_clock::now() };
+            clone.insert( keys + 1 + static_cast<std::uint32_t>( rep ) );
+            auto const t2{ std::chrono::steady_clock::now() };
+            tracker.snapshot();
+            auto const t3{ std::chrono::steady_clock::now() };
+            std::size_t dirty{ 0 };
+            for ( std::size_t off{ 0 }; off < bytes; off += page_size )
+                dirty += tracker.is_dirty( off );
+            auto const t4{ std::chrono::steady_clock::now() };
+            kernel = tracker.has_kernel_tracking();
+            arm_ns  += static_cast<std::uint64_t>( std::chrono::duration_cast<std::chrono::nanoseconds>( t1 - t0 ).count() );
+            snap_ns += static_cast<std::uint64_t>( std::chrono::duration_cast<std::chrono::nanoseconds>( t3 - t2 ).count() );
+            scan_ns += static_cast<std::uint64_t>( std::chrono::duration_cast<std::chrono::nanoseconds>( t4 - t3 ).count() );
+            reported_dirty += dirty;
+        }
+        std::println
+        (
+            "{:>9} keys ({:6} KiB, {} pages): kernel tracking {}: arm {:7.1f} us, snapshot {:7.1f} us, per-page scan {:7.1f} us, {:.1f} pages reported dirty",
+            keys, bytes / 1024, bytes / page_size, kernel ? "YES" : "no",
+            double( arm_ns ) / reps / 1000.0, double( snap_ns ) / reps / 1000.0, double( scan_ns ) / reps / 1000.0,
+            double( reported_dirty ) / reps
+        );
+    }
+} // bptree_cow.benchmark_kernel_dirty_tracking
+
+#endif // NDEBUG
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm

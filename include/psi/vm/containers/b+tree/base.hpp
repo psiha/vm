@@ -25,6 +25,7 @@
 #include <bit>
 #include <climits>
 #include <cstddef>
+#include <vector>
 #include <cstdint>
 #include <iterator>
 #include <limits>
@@ -121,6 +122,81 @@ struct [[ clang::trivial_abi ]] unique_nonowned_ptr {
 
 
 ////////////////////////////////////////////////////////////////////////////////
+/// \class dirty_node_set
+///
+/// Which nodes a transaction has written, kept BESIDE the node pool rather than
+/// as a bit inside each node.
+///
+/// A commit has to find the changed nodes.  With the bit in the node, finding
+/// them means reading one byte out of every node in the tree - and on a
+/// copy-on-write clone that read is also what faults each of those pages in, so
+/// a commit of one changed node pays for the whole tree.  A bit per node is 8
+/// KiB per 64 Ki nodes (a 32 MiB tree at 512-byte nodes), which the scan walks
+/// as words, so the search for the changed nodes costs a few cache lines
+/// instead of the pool.
+///
+/// The same argument as keeping an allocator's free list out of the blocks it
+/// tracks, and it is the portable one: kernel-level dirty page tracking exists
+/// on Linux and Windows but not on macOS.
+////////////////////////////////////////////////////////////////////////////////
+
+class dirty_node_set
+{
+public:
+    using word_t = std::uint64_t;
+    static constexpr std::uint32_t word_bits{ 64 };
+
+    void reset( std::size_t const nodes ) { words_.assign( ( nodes + word_bits - 1 ) / word_bits, word_t{ 0 } ); }
+    void grow ( std::size_t const nodes ) { words_.resize( ( nodes + word_bits - 1 ) / word_bits, word_t{ 0 } ); }
+    void clear(                         ) noexcept { std::ranges::fill( words_, word_t{ 0 } ); }
+
+    void set( std::uint32_t const node ) noexcept
+    {
+        auto const word{ node / word_bits };
+        BOOST_ASSUME( word < words_.size() );
+        words_[ word ] |= word_t{ 1 } << ( node % word_bits );
+    }
+    void unset( std::uint32_t const node ) noexcept
+    {
+        auto const word{ node / word_bits };
+        if ( word < words_.size() ) [[ likely ]]
+            words_[ word ] &= ~( word_t{ 1 } << ( node % word_bits ) );
+    }
+    [[ nodiscard ]] bool test( std::uint32_t const node ) const noexcept
+    {
+        auto const word{ node / word_bits };
+        return ( word < words_.size() ) && ( ( words_[ word ] >> ( node % word_bits ) ) & 1 );
+    }
+
+    [[ nodiscard ]] std::uint32_t count() const noexcept
+    {
+        std::uint32_t n{ 0 };
+        for ( auto const w : words_ )
+            n += static_cast<std::uint32_t>( std::popcount( w ) );
+        return n;
+    }
+
+    /// Visit the set node indices in order, skipping whole words of clean ones.
+    void for_each_set( std::uint32_t const past_the_last, auto && visit ) const noexcept
+    {
+        auto const words{ std::min<std::size_t>( words_.size(), ( past_the_last + word_bits - 1 ) / word_bits ) };
+        for ( std::size_t w{ 0 }; w < words; ++w )
+        {
+            for ( auto bits{ words_[ w ] }; bits; bits &= bits - 1 )
+            {
+                auto const node{ static_cast<std::uint32_t>( w * word_bits + static_cast<std::uint32_t>( std::countr_zero( bits ) ) ) };
+                if ( node >= past_the_last ) [[ unlikely ]]
+                    return;
+                visit( node );
+            }
+        }
+    }
+
+private:
+    std::vector<word_t> words_;
+}; // class dirty_node_set
+
+////////////////////////////////////////////////////////////////////////////////
 // \class bptree_base
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -164,6 +240,9 @@ public:
     // this tree costs to commit.  A tree nobody has mutated owes nothing.
     [[ gnu::pure, nodiscard ]] std::uint32_t nodes_dirty   () const noexcept;
     [[ nodiscard ]] static constexpr std::uint32_t node_byte_size() noexcept { return node_size; }
+    // The node pool as bytes: its address and extent, for whoever needs to talk
+    // to the OS about these pages (dirty tracking, advice, residency).
+    [[ gnu::pure, nodiscard ]] std::span<std::byte const> node_pool_bytes() const noexcept;
 
 protected:
     // TODO make this properly configurable (a template parameter)
@@ -281,7 +360,8 @@ protected:
 
         [[ gnu::pure ]] bool is_root() const noexcept { return !parent; }
 
-        void mark_dirty() noexcept { dirty = true; }
+        // Marking is bptree_base::mark_dirty( node ): the bit lives in the
+        // tree's dirty_node_set, not here - see the class comment there.
 
 #   ifndef __clang__ // https://github.com/llvm/llvm-project/issues/36032
         // merely to prevent slicing (in return-node-by-ref cases)
@@ -496,7 +576,7 @@ protected:
         {
             auto & child{ node( ch_slot ) };
             child.parent_child_idx++;
-            child.mark_dirty();
+            mark_dirty( child );
         }
     }
     template <typename N>
@@ -506,7 +586,7 @@ protected:
         {
             auto & child{ node( ch_slot ) };
             child.parent_child_idx--;
-            child.mark_dirty();
+            mark_dirty( child );
         }
     }
 
@@ -574,10 +654,24 @@ private:
 
     void update_leaf_list_ends( node_header & removed_leaf ) noexcept;
 
+
     void update_cached_pointers() noexcept;
     void update_dbg_helpers() noexcept;
 
 protected:
+    // Which node this is in the pool, and the tree-level marking that records
+    // it - the bit lives in dirty_ (see dirty_node_set), not in the node.
+    [[ gnu::pure ]] std::uint32_t node_index( node_header const & node ) const noexcept
+    {
+        auto const offset{ reinterpret_cast<std::byte const *>( &node ) - reinterpret_cast<std::byte const *>( nodes_.data() ) };
+        BOOST_ASSUME( offset >= 0 );
+        return static_cast<std::uint32_t>( static_cast<std::size_t>( offset ) / node_size );
+    }
+    // const like the node mutators that call it: it records what happened to
+    // the storage, and does not change the tree's own state.
+    void mark_dirty( node_header const & node ) const noexcept { dirty_.set( node_index( node ) ); }
+
+    mutable dirty_node_set dirty_; // which nodes this tree has written - see dirty_node_set
     unique_nonowned_ptr<header> p_hdr_; // cached pointer to header in mapped storage (compilers/clang still unable to fully optimize away the vm::header_data code)
     node_pool nodes_;
 #ifndef NDEBUG // debugging helpers (undoing type erasure done by contiguous_container_storage_base)

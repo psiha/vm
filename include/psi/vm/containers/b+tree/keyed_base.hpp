@@ -486,8 +486,8 @@ protected: // split_to_insert and its helpers
             shift_entries_left( node, 0, max, to_move );
             left_sibling.num_vals = static_cast<node_size_type>( left_prior_num + to_move );
             node        .num_vals = static_cast<node_size_type>( max            - to_move );
-            left_sibling.mark_dirty();
-            node        .mark_dirty();
+            this->mark_dirty( left_sibling );
+            this->mark_dirty( node );
             // this node's first key moved, so its separator has to follow
             update_separator( node, key_at( node, 0 ) );
             verify_min_max( left_sibling );
@@ -505,8 +505,8 @@ protected: // split_to_insert and its helpers
             move_entries( node, kept, max, right_sibling, 0 );
             right_sibling.num_vals = static_cast<node_size_type>( right_sibling.num_vals + to_move );
             node         .num_vals = kept;
-            right_sibling.mark_dirty();
-            node         .mark_dirty();
+            this->mark_dirty( right_sibling );
+            this->mark_dirty( node );
             // the sibling's first key moved, so its separator has to follow
             update_separator( right_sibling, key_at( right_sibling, 0 ) );
             verify_min_max( right_sibling );
@@ -573,7 +573,7 @@ protected: // 'other'
             ++target_node.num_vals;
             rshift_entries( target_node, target_node_pos );
             key_at( target_node, target_node_pos ) = std::move( v );
-            target_node.mark_dirty();
+            this->mark_dirty( target_node );
             if constexpr ( requires { target_node.children; } ) {
                 node_size_type const ch_pos( target_node_pos + /*>right< child*/ 1 );
                 rshift_chldrn( target_node, ch_pos );
@@ -594,7 +594,7 @@ protected: // 'other'
     {
         lshift_entries( leaf, leaf_key_offset );
         --leaf.num_vals;
-        leaf.mark_dirty();
+        this->mark_dirty( leaf );
 
         iter_pos next_pos{ slot_of( leaf ), leaf_key_offset };
 
@@ -665,7 +665,7 @@ protected: // 'other'
             BOOST_ASSUME( leaf_key_offset + 1 < leaf.num_vals );
             static_assert( leaf_node::min_values > 1 ); // makes this simpler to handle: we can assume that key_at( leaf, 1 ) exists
             separator_key = key_at( leaf, leaf_key_offset + 1 );
-            inner.mark_dirty();
+            this->mark_dirty( inner );
         }
 
         erase( leaf, leaf_key_offset );
@@ -702,7 +702,7 @@ protected: // 'other'
         lshift_entries( parent,   key_idx );
         lshift_chldrn ( parent, child_idx );
         parent.num_vals--;
-        parent.mark_dirty();
+        this->mark_dirty( parent );
         BOOST_ASSUME( parent.num_vals || parent.is_root() );
 
         // propagate underflow
@@ -719,7 +719,7 @@ protected: // 'other'
                 root_ = root.children[ 0 ];
                 auto & new_root_node{ bptree_base::node<root_node>( root_ ) };
                 new_root_node.parent = {};
-                new_root_node.mark_dirty();
+                this->mark_dirty( new_root_node );
                 --depth_;
                 free( root );
             }
@@ -790,7 +790,7 @@ protected: // 'other'
                 // commit_to left behind — typically clean. Without re-marking,
                 // the next commit_to would skip this freshly-populated leaf and
                 // leave stale bytes in master, blowing up later tree walks.
-                leaf.mark_dirty();
+                this->mark_dirty( leaf );
                 count         += size_to_copy;
                 *p_node++      = &leaf;
                 BOOST_ASSUME( hdr().free_node_count_ ); // manual/local free node accounting
@@ -856,7 +856,7 @@ protected: // 'other'
         auto const last_index{ static_cast<std::uint32_t>( ( new_size - 1 ) / leaf_node::max_values ) };
         auto &     last_leaf { *nodes[ last_index ] };
         last_leaf.num_vals = static_cast<node_size_type>( new_size - ( size_type{ last_index } * leaf_node::max_values ) );
-        last_leaf.mark_dirty();
+        this->mark_dirty( last_leaf );
         BOOST_ASSUME( last_leaf.num_vals > 0 );
         // Back to front, so that each node's right link is already cleared by
         // the time it is freed (bptree_base::free wants no dangling backlink).
@@ -951,8 +951,8 @@ protected: // 'other'
             this->move_entries( preceding, preceding.num_vals - missing_keys, preceding.num_vals, leaf, 0 );
             leaf     .num_vals += missing_keys;
             preceding.num_vals -= missing_keys;
-            leaf     .mark_dirty();
-            preceding.mark_dirty();
+            this->mark_dirty( leaf );
+            this->mark_dirty( preceding );
             verify_min_max( leaf      );
             verify_min_max( preceding );
             return incomplete_resolution::filled;
@@ -1076,7 +1076,7 @@ protected: // 'other'
         BOOST_ASSUME( parent_child_idx > 0 );
         auto & parent_key{ key_at( *parent, parent_child_idx - 1 ) };
         parent_key = new_separator;
-        parent->mark_dirty();
+        this->mark_dirty( *parent );
     }
     void update_separator( leaf_node & leaf ) noexcept { update_separator( leaf, key_at( leaf, 0 ) ); }
 
@@ -1173,9 +1173,9 @@ protected: // 'other'
             }
 
             p_left_sibling->num_vals--;
-            node.mark_dirty();
-            parent.mark_dirty();
-            p_left_sibling->mark_dirty();
+            this->mark_dirty( node );
+            this->mark_dirty( parent );
+            this->mark_dirty( *p_left_sibling );
             verify_min_max( *p_left_sibling );
 
             final_node_original_keys_offset = 1;
@@ -1214,9 +1214,9 @@ protected: // 'other'
             }
 
             p_right_sibling->num_vals--;
-            node.mark_dirty();
-            parent.mark_dirty();
-            p_right_sibling->mark_dirty();
+            this->mark_dirty( node );
+            this->mark_dirty( parent );
+            this->mark_dirty( *p_right_sibling );
             verify_min_max( *p_right_sibling );
 
             BOOST_ASSUME( node.            num_vals == N::min_values - ( missing_values - 1 ) );
@@ -1277,7 +1277,7 @@ protected: // 'other'
         children( target )[ pos ] = child_slot;
         child.parent              = cached_target_slot;
         child.parent_child_idx = pos;
-        child.mark_dirty();
+        this->mark_dirty( child );
     }
     void insrt_child( inner_node & target, node_size_type const pos, node_slot const child_slot ) noexcept
     {
@@ -1291,7 +1291,7 @@ protected: // 'other'
         std::ranges::move( keys( source ), &key_at( target, target.num_vals ) );
         target.num_vals += source.num_vals;
         source.num_vals  = 0;
-        target.mark_dirty();
+        this->mark_dirty( target );
 
         // need not hold for nonunique trees&bulk erase underflow
         //verify_min_max( target );
@@ -1337,7 +1337,7 @@ protected: // 'other'
         last_left_key = std::move( separator_key );
         std::ranges::move( keys( right ), std::next( &last_left_key ) );
         left.num_vals += right.num_vals;
-        left.mark_dirty();
+        this->mark_dirty( left );
         BOOST_ASSUME( left.num_vals >= left.max_values - 1 ); BOOST_ASSUME( left.num_vals <= left.max_values );
 
         verify_min_max( left );
@@ -1741,7 +1741,7 @@ bptree_base_wkey<Key>::erase( const_iterator const first, const_iterator const l
         auto const erased_count{ static_cast<node_size_type>( node_end_offset - pos.value_offset ) };
         shift_entries_left( node, pos.value_offset, node.num_vals, erased_count );
         node.num_vals -= erased_count;
-        node.mark_dirty();
+        this->mark_dirty( node );
         if ( single_node_bulk_erase ) {
             auto new_pos{ check_and_handle_bulk_erase_underflow( node ) };
             new_pos.value_offset += pos.value_offset;
@@ -1762,7 +1762,7 @@ bptree_base_wkey<Key>::erase( const_iterator const first, const_iterator const l
                 auto const erased_count{ end_pos.value_offset };
                 shift_entries_left( node, 0, node.num_vals, erased_count );
                 node.num_vals -= erased_count;
-                node.mark_dirty();
+                this->mark_dirty( node );
                 // erasure not to the end but from the beginning of the node -
                 // this also means we've reached the end of the erasure loop
                 // (i.e. no more keys to erase)
@@ -1895,7 +1895,7 @@ void bptree_base_wkey<Key>::move_chldrn
         target.children[ tgt_begin + ch_idx ] = std::move( ch_slot );
         child.parent                          = target_slot;
         child.parent_child_idx           = tgt_begin + ch_idx;
-        child.mark_dirty();
+        this->mark_dirty( child );
     }
 }
 
