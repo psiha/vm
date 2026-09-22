@@ -119,9 +119,9 @@ bptree_base::node_slot::value_type bptree_base::used_number_of_nodes() const noe
 std::uint32_t bptree_base::nodes_used    () const noexcept { return used_number_of_nodes(); }
 std::uint32_t bptree_base::nodes_reserved() const noexcept { return static_cast<std::uint32_t>( nodes_.size() ); }
 //--- dirty_node_set -----------------------------------------------------------
-// Everything that is not on the mutation path lives here rather than in the
-// header: sizing happens when the pool is (re)mapped or grown, counting and
-// the scan happen once per commit.
+// All of it lives here rather than in the header: the build is LTO'd, so the
+// marking path still inlines, and the class does not have to be read to use the
+// tree.
 void dirty_node_set::reset( std::size_t const nodes )
 {
     words_.clear();
@@ -135,12 +135,49 @@ void dirty_node_set::clear() noexcept
 {
     std::ranges::fill( words_, word_t{ 0 } );
 }
+void dirty_node_set::set( std::uint32_t const node ) noexcept
+{
+    auto const word{ node / word_bits };
+    BOOST_ASSUME( word < words_.size() );
+    words_[ word ] |= word_t{ 1 } << ( node % word_bits );
+}
+void dirty_node_set::unset( std::uint32_t const node ) noexcept
+{
+    auto const word{ node / word_bits };
+    if ( word < words_.size() ) [[ likely ]]
+        words_[ word ] &= ~( word_t{ 1 } << ( node % word_bits ) );
+}
+bool dirty_node_set::test( std::uint32_t const node ) const noexcept
+{
+    auto const word{ node / word_bits };
+    return ( word < words_.size() ) && ( ( words_[ word ] >> ( node % word_bits ) ) & 1 );
+}
 std::uint32_t dirty_node_set::count() const noexcept
 {
     std::uint32_t n{ 0 };
     for ( auto const w : words_ )
         n += static_cast<std::uint32_t>( std::popcount( w ) );
     return n;
+}
+std::uint32_t dirty_node_set::past_the_end() const noexcept
+{
+    return static_cast<std::uint32_t>( words_.size() * word_bits );
+}
+std::uint32_t dirty_node_set::next_set( std::uint32_t const from ) const noexcept
+{
+    auto word{ from / word_bits };
+    if ( word >= words_.size() ) [[ unlikely ]]
+        return past_the_end();
+    // the first word starts at `from`, the rest are whole - a word of clean
+    // nodes is skipped by a single test.
+    auto bits{ words_[ word ] & ( ~word_t{ 0 } << ( from % word_bits ) ) };
+    while ( !bits )
+    {
+        if ( ++word >= words_.size() ) [[ unlikely ]]
+            return past_the_end();
+        bits = words_[ word ];
+    }
+    return static_cast<std::uint32_t>( word * word_bits + static_cast<std::uint32_t>( std::countr_zero( bits ) ) );
 }
 
 std::uint32_t bptree_base::nodes_dirty   () const noexcept { return dirty_.count(); }
@@ -757,11 +794,11 @@ void bptree_base::commit_to( bptree_base & target ) const noexcept
     // in every page of a copy-on-write clone to find the few that moved.
     auto const node_count{ static_cast<node_slot::value_type>( std::min( nodes_.size(), target.nodes_.size() ) ) };
 
-    dirty_.for_each_set( node_count, [ & ]( std::uint32_t const i ) noexcept
+    for ( auto i{ dirty_.next_set( 0 ) }; i < node_count; i = dirty_.next_set( i + 1 ) )
     {
         std::memcpy( &tgt_nodes[ i ], &src_nodes[ i ], stride );
         target.dirty_.unset( i ); // the target now holds what this node says
-    } );
+    }
 
     // Sync the target's cached header pointer (the header contents may have
     // changed -- size_, root_, depth_, free list, etc.).

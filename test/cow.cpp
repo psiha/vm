@@ -1279,7 +1279,7 @@ TEST( bptree_cow, benchmark_bit_vs_byte_per_node )
         bytes.reset( nodes ); bytes.set( nodes - 7 );
         {
             auto const t0{ std::chrono::steady_clock::now() };
-            bits.for_each_set( nodes, [ & ]( std::uint32_t const i ) noexcept { sink += i + 1; } );
+            for ( auto i{ bits.next_set( 0 ) }; i < nodes; i = bits.next_set( i + 1 ) ) sink += i + 1;
             bit_scan_ns += static_cast<std::uint64_t>( std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::steady_clock::now() - t0 ).count() );
         }
         {

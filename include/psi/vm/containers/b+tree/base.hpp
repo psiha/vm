@@ -148,51 +148,23 @@ public:
     void reset( std::size_t nodes );          // size to `nodes`, all clean
     void grow ( std::size_t nodes );          // keep what is set, cover `nodes`
     void clear() noexcept;
+
+    void set  ( std::uint32_t node ) noexcept;
+    void unset( std::uint32_t node ) noexcept;
+    [[ nodiscard ]] bool test( std::uint32_t node ) const noexcept;
+
     [[ nodiscard ]] std::uint32_t count() const noexcept;
 
-    // The two on the mutation path, so they stay here: a set is one or-into a
-    // word that the caller has just written a node through.
-    void set( std::uint32_t const node ) noexcept
-    {
-        auto const word{ node / word_bits };
-        BOOST_ASSUME( word < words_.size() );
-        words_[ word ] |= word_t{ 1 } << ( node % word_bits );
-    }
-    void unset( std::uint32_t const node ) noexcept
-    {
-        auto const word{ node / word_bits };
-        if ( word < words_.size() ) [[ likely ]]
-            words_[ word ] &= ~( word_t{ 1 } << ( node % word_bits ) );
-    }
-    [[ nodiscard ]] bool test( std::uint32_t const node ) const noexcept
-    {
-        auto const word{ node / word_bits };
-        return ( word < words_.size() ) && ( ( words_[ word ] >> ( node % word_bits ) ) & 1 );
-    }
-
-    /// Visit the set node indices in order, skipping whole words of clean ones.
-    void for_each_set( std::uint32_t past_the_last, auto && visit ) const noexcept;
+    /// The first set node at or after `from`, or `past_the_end()` - so a commit
+    /// walks what changed without looking at what did not.
+    [[ nodiscard ]] std::uint32_t next_set( std::uint32_t from ) const noexcept;
+    [[ nodiscard ]] std::uint32_t past_the_end() const noexcept;
 
 private:
     // The library's own vector: this grows every time the node pool does, and
     // that is the operation it expands in place instead of reallocating.
     heap_vector<word_t> words_;
 }; // class dirty_node_set
-
-inline void dirty_node_set::for_each_set( std::uint32_t const past_the_last, auto && visit ) const noexcept
-{
-    auto const words{ std::min<std::size_t>( words_.size(), ( past_the_last + word_bits - 1 ) / word_bits ) };
-    for ( std::size_t w{ 0 }; w < words; ++w )
-    {
-        for ( auto bits{ words_[ w ] }; bits; bits &= bits - 1 )
-        {
-            auto const node{ static_cast<std::uint32_t>( w * word_bits + static_cast<std::uint32_t>( std::countr_zero( bits ) ) ) };
-            if ( node >= past_the_last ) [[ unlikely ]]
-                return;
-            visit( node );
-        }
-    }
-}
 
 ////////////////////////////////////////////////////////////////////////////////
 // \class bptree_base
@@ -656,24 +628,17 @@ private:
     void update_dbg_helpers() noexcept;
 
 protected:
-    // Which node this is in the pool, and the tree-level marking that records
-    // it - the bit lives in dirty_ (see dirty_node_set), not in the node.
-    [[ gnu::pure ]] std::uint32_t node_index( node_header const & node ) const noexcept
-    {
-        auto const offset{ reinterpret_cast<std::byte const *>( &node ) - reinterpret_cast<std::byte const *>( nodes_.data() ) };
-        BOOST_ASSUME( offset >= 0 );
-        return static_cast<std::uint32_t>( static_cast<std::size_t>( offset ) / node_size );
-    }
-    // const like the node mutators that call it: it records what happened to
-    // the storage, and does not change the tree's own state.
-    void mark_dirty( node_header const & node ) const noexcept { dirty_.set( node_index( node ) ); }
-    // For callers that already know which node it is - a slot they just walked
-    // through - so the index is not recomputed from the address.
-    void mark_dirty( node_slot const node ) const noexcept { dirty_.set( *node ); }
+    // Records what a mutation did to the storage, so const like the node
+    // mutators that call it.  The bit lives in dirty_ (see dirty_node_set), not
+    // in the node.  Prefer the slot overload wherever the caller already knows
+    // which node it is holding: deriving the slot back from the address is
+    // needless there.
+    void mark_dirty( node_slot   const   slot ) const noexcept { dirty_.set( *slot ); }
+    void mark_dirty( node_header const & node ) const noexcept { mark_dirty( slot_of( node ) ); }
     void mark_dirty( node_header const & node, node_slot const slot ) const noexcept
     {
-        BOOST_ASSERT_MSG( node_index( node ) == *slot, "the slot does not name the node being marked" );
-        dirty_.set( *slot );
+        BOOST_ASSERT_MSG( slot_of( node ) == slot, "the slot does not name the node being marked" );
+        mark_dirty( slot );
     }
 
     mutable dirty_node_set dirty_; // which nodes this tree has written - see dirty_node_set

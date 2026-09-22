@@ -486,8 +486,8 @@ protected: // split_to_insert and its helpers
             shift_entries_left( node, 0, max, to_move );
             left_sibling.num_vals = static_cast<node_size_type>( left_prior_num + to_move );
             node        .num_vals = static_cast<node_size_type>( max            - to_move );
-            this->mark_dirty( left_sibling );
-            this->mark_dirty( node );
+            this->mark_dirty( left_sibling, node.left );
+            this->mark_dirty( node         , this_slot );
             // this node's first key moved, so its separator has to follow
             update_separator( node, key_at( node, 0 ) );
             verify_min_max( left_sibling );
@@ -505,8 +505,8 @@ protected: // split_to_insert and its helpers
             move_entries( node, kept, max, right_sibling, 0 );
             right_sibling.num_vals = static_cast<node_size_type>( right_sibling.num_vals + to_move );
             node         .num_vals = kept;
-            this->mark_dirty( right_sibling );
-            this->mark_dirty( node );
+            this->mark_dirty( right_sibling, node.right );
+            this->mark_dirty( node          , this_slot  );
             // the sibling's first key moved, so its separator has to follow
             update_separator( right_sibling, key_at( right_sibling, 0 ) );
             verify_min_max( right_sibling );
@@ -1173,9 +1173,9 @@ protected: // 'other'
             }
 
             p_left_sibling->num_vals--;
-            this->mark_dirty( node );
-            this->mark_dirty( parent );
-            this->mark_dirty( *p_left_sibling );
+            this->mark_dirty( node            , this_slot   );
+            this->mark_dirty( parent          , node.parent );
+            this->mark_dirty( *p_left_sibling , node.left   );
             verify_min_max( *p_left_sibling );
 
             final_node_original_keys_offset = 1;
@@ -1214,9 +1214,9 @@ protected: // 'other'
             }
 
             p_right_sibling->num_vals--;
-            this->mark_dirty( node );
-            this->mark_dirty( parent );
-            this->mark_dirty( *p_right_sibling );
+            this->mark_dirty( node            , this_slot   );
+            this->mark_dirty( parent          , node.parent );
+            this->mark_dirty( *p_right_sibling, node.right  );
             verify_min_max( *p_right_sibling );
 
             BOOST_ASSUME( node.            num_vals == N::min_values - ( missing_values - 1 ) );
