@@ -27,6 +27,7 @@
 #include <chrono>
 #include <cstdint>
 #include <numeric>
+#include <random>
 #include <print>
 #include <ranges>
 #include <vector>
@@ -1205,6 +1206,99 @@ TEST( bptree_cow, benchmark_kernel_dirty_tracking )
         );
     }
 } // bptree_cow.benchmark_kernel_dirty_tracking
+
+// Bit per node vs byte per node, both in ONE binary.
+//
+// Two builds cannot answer this: the marking path is a few instructions inside
+// a much larger tree operation, and the difference between two builds of the
+// whole library moved an unrelated metric (lookup) by 1.5%.  Here the two sets
+// are measured back to back in the same process, over the same sequence of
+// node indices, so what is left is the mechanism: a byte store versus an
+// or-into-a-word read-modify-write on the marking side, and 1/8th the memory
+// to walk on the scanning side.
+namespace
+{
+    struct byte_per_node
+    {
+        void reset( std::size_t const n ) { bytes_.clear(); bytes_.resize( n, std::uint8_t{ 0 } ); }
+        void set  ( std::uint32_t const i ) noexcept { bytes_[ i ] = 1; }
+        [[ nodiscard ]] std::uint32_t scan( std::uint32_t const past_the_last ) const noexcept
+        {
+            std::uint32_t seen{ 0 };
+            for ( std::uint32_t i{ 0 }; i < past_the_last; ++i )
+                seen += ( bytes_[ i ] != 0 ) ? ( i + 1 ) : 0;
+            return seen;
+        }
+        heap_vector<std::uint8_t> bytes_;
+    };
+} // anonymous namespace
+
+TEST( bptree_cow, benchmark_bit_vs_byte_per_node )
+{
+    auto constexpr nodes { 33'604u };  // the 4M-key tree above
+    auto constexpr marks { 3'000'000u };
+    auto constexpr blocks{ 4 };
+
+    // A random insert marks the leaf it lands in, its parent, and now and then
+    // a sibling: indices that are near each other within a level, and far
+    // apart between levels.
+    std::mt19937 rng{ 20260923 };
+    std::vector<std::uint32_t> sequence( marks );
+    {
+        std::uniform_int_distribution<std::uint32_t> leaf { nodes / 3, nodes - 1 };
+        std::uniform_int_distribution<std::uint32_t> inner{ 0u, nodes / 3 };
+        for ( std::size_t i{ 0 }; i < sequence.size(); ++i )
+            sequence[ i ] = ( i % 3 ) ? leaf( rng ) : inner( rng );
+    }
+
+    dirty_node_set bits; byte_per_node bytes;
+    std::uint64_t bit_mark_ns{ 0 }, byte_mark_ns{ 0 }, bit_scan_ns{ 0 }, byte_scan_ns{ 0 };
+    std::uint64_t sink{ 0 };
+
+    for ( auto block{ 0 }; block < blocks; ++block )
+    {
+        auto const mark_bits{ [ & ]
+        {
+            bits.reset( nodes );
+            auto const t0{ std::chrono::steady_clock::now() };
+            for ( auto const i : sequence ) bits.set( i );
+            bit_mark_ns += static_cast<std::uint64_t>( std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::steady_clock::now() - t0 ).count() );
+        } };
+        auto const mark_bytes{ [ & ]
+        {
+            bytes.reset( nodes );
+            auto const t0{ std::chrono::steady_clock::now() };
+            for ( auto const i : sequence ) bytes.set( i );
+            byte_mark_ns += static_cast<std::uint64_t>( std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::steady_clock::now() - t0 ).count() );
+        } };
+        // reversed on alternate blocks, so a monotone drift cannot read as an arm effect
+        if ( block % 2 ) { mark_bytes(); mark_bits(); } else { mark_bits(); mark_bytes(); }
+
+        // the scan, with a single node dirty - what a commit of a small change does
+        bits.reset( nodes ); bits.set( nodes - 7 );
+        bytes.reset( nodes ); bytes.set( nodes - 7 );
+        {
+            auto const t0{ std::chrono::steady_clock::now() };
+            bits.for_each_set( nodes, [ & ]( std::uint32_t const i ) noexcept { sink += i + 1; } );
+            bit_scan_ns += static_cast<std::uint64_t>( std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::steady_clock::now() - t0 ).count() );
+        }
+        {
+            auto const t0{ std::chrono::steady_clock::now() };
+            sink += bytes.scan( nodes );
+            byte_scan_ns += static_cast<std::uint64_t>( std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::steady_clock::now() - t0 ).count() );
+        }
+    }
+
+    EXPECT_GT( sink, 0u ); // the timed work must not be dead code
+    std::println
+    (
+        "{} nodes: mark {:6.3f} ns/mark (bit) vs {:6.3f} ns/mark (byte)   |   scan of one dirty node {:8.2f} us (bit) vs {:8.2f} us (byte)   |   footprint {} vs {} KiB",
+        nodes,
+        double( bit_mark_ns  ) / ( blocks * marks ), double( byte_mark_ns ) / ( blocks * marks ),
+        double( bit_scan_ns  ) / blocks / 1000.0,    double( byte_scan_ns ) / blocks / 1000.0,
+        nodes / 8 / 1024, nodes / 1024
+    );
+} // bptree_cow.benchmark_bit_vs_byte_per_node
 
 #endif // NDEBUG
 
