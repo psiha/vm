@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <ranges>
 #include <span>
 #include <tuple>
@@ -278,11 +279,24 @@ protected: // pass-in-reg public function overloads/impls
     }
 
 private:
+    // The capacity a node search is instantiated for.  It is the node's own
+    // only where it changes the generated code - a node that fits under the
+    // linear limit, and so scans unconditionally - and one shared unbounded
+    // value otherwise.  A comparator that can never scan, and a node kind whose
+    // capacity is past the limit, therefore share ONE instantiation instead of
+    // getting one each for a body that does not read the number.
+    template <node_size_type capacity>
+    static node_size_type constexpr search_capacity
+    {
+        use_linear_search_for_sorted_array<Comparator, Key, capacity> ? capacity : std::numeric_limits<node_size_type>::max()
+    };
+
     // lower_bound find >limited to/within a node<
-    // The capacity is the searched node's own, not the leaf's: it bounds
-    // num_vals and it selects the intra-node search. Inner and leaf nodes hold
-    // a different number of entries the moment a leaf carries anything besides
-    // the key (a map), and for a set the two still differ by the child slots.
+    // maximum_values is search_capacity of the searched node - its own, not the
+    // leaf's, wherever that matters: it bounds num_vals and it can select the
+    // intra-node search. Inner and leaf nodes hold a different number of entries
+    // the moment a leaf carries anything besides the key (a map), and for a set
+    // the two still differ by the child slots.
     template <node_size_type maximum_values>
     [[ using gnu: pure, hot, noinline, sysv_abi, leaf ]]
     static find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const key, pass_in_reg<Comparator> const comparator ) noexcept
@@ -307,7 +321,7 @@ private:
         return { pos_idx, exact_find };
     }
     template <node_size_type maximum_values>
-    find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return lower_bound<maximum_values>( keys, num_vals, value, pass_in_reg{ comp() } ); }
+    find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return lower_bound<search_capacity<maximum_values>>( keys, num_vals, value, pass_in_reg{ comp() } ); }
     find_pos lower_bound( auto const & node, auto const & value ) const noexcept { return lower_bound<bptree_base::node_capacity<decltype( node )>>( node.keys, node.num_vals, pass_in_reg{ value } ); }
     [[ using gnu: pure, hot, sysv_abi ]]
     find_pos lower_bound( auto const & node, node_size_type const offset, Reg auto const value ) const noexcept
@@ -345,7 +359,7 @@ protected:
         return static_cast<node_size_type>( std::distance( &keys[ 0 ], pos_iter ) );
     }
     template <node_size_type maximum_values>
-    node_size_type upper_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return upper_bound<maximum_values>( keys, num_vals, value, pass_in_reg{ comp() } ); }
+    node_size_type upper_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return upper_bound<search_capacity<maximum_values>>( keys, num_vals, value, pass_in_reg{ comp() } ); }
     node_size_type upper_bound( auto const & node, auto const & value ) const noexcept { return upper_bound<bptree_base::node_capacity<decltype( node )>>( node.keys, node.num_vals, pass_in_reg{ value } ); }
     [[ using gnu: pure, hot, sysv_abi ]]
     node_size_type upper_bound( auto const & node, node_size_type const offset, Reg auto const value ) const noexcept
