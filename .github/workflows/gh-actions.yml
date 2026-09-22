@@ -44,19 +44,24 @@ jobs:
         which git
         git --version
 
-    - name: Install LLVM/Clang 21
+    - name: Install LLVM/Clang
       if: matrix.config.name == 'Clang'
       # https://apt.llvm.org
+      env:
+        LLVM_MAJOR: 23
       run: |
         wget https://apt.llvm.org/llvm.sh
         chmod u+x llvm.sh
-        sudo ./llvm.sh 21 all
-        echo "PATH=/usr/lib/llvm-21/bin:$PATH" >> $GITHUB_ENV
-        echo "LLVM_PATH=/usr/lib/llvm-21" >> $GITHUB_ENV
-        echo "LD_LIBRARY_PATH=/usr/lib/llvm-21/lib" >> $GITHUB_ENV
-        echo "DYLD_LIBRARY_PATH=/usr/lib/llvm-21/lib" >> $GITHUB_ENV
-        echo "CC=/usr/lib/llvm-21/bin/clang" >> $GITHUB_ENV
-        echo "CXX=/usr/lib/llvm-21/bin/clang++" >> $GITHUB_ENV
+        sudo ./llvm.sh $LLVM_MAJOR all
+        LLVM_PATH=/usr/lib/llvm-$LLVM_MAJOR
+        major="$($LLVM_PATH/bin/clang++ -dumpversion | cut -d. -f1)"
+        [ "$major" = "$LLVM_MAJOR" ] || { echo "::error::$LLVM_PATH/bin/clang++ is LLVM '$major', expected $LLVM_MAJOR"; exit 1; }
+        echo "PATH=$LLVM_PATH/bin:$PATH" >> $GITHUB_ENV
+        echo "LLVM_PATH=$LLVM_PATH" >> $GITHUB_ENV
+        echo "LD_LIBRARY_PATH=$LLVM_PATH/lib" >> $GITHUB_ENV
+        echo "DYLD_LIBRARY_PATH=$LLVM_PATH/lib" >> $GITHUB_ENV
+        echo "CC=$LLVM_PATH/bin/clang" >> $GITHUB_ENV
+        echo "CXX=$LLVM_PATH/bin/clang++" >> $GITHUB_ENV
 
     - name: Install build tools (GCC container)
       if: matrix.config.name == 'GCC'
