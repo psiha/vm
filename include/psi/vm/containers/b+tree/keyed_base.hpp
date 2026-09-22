@@ -761,6 +761,10 @@ protected: // 'other'
         BOOST_ASSUME( hdr->depth_ == 2 );
         if ( first_unconnected_node ) { // first check if there are more than two nodes
             bulk_append_tail( &leaf( first_unconnected_node ), { hdr->root_, 1 } );
+            // bulk_append_tail allocates the new inner levels, and when the pool
+            // has no free node left that grows it - which can move the header,
+            // since it lives in the same mapping.
+            hdr = &this->hdr();
         }
         BOOST_ASSUME( hdr->last_leaf_ == end_leaf.node || /*in case it got merged*/ hdr->free_list_ == end_leaf.node );
         BOOST_ASSUME( !!hdr->last_leaf_ );
