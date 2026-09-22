@@ -1048,6 +1048,16 @@ bp_tree_impl<Key, Comparator>::merge_interleaved_values
     node_size_type const input_size( source0_size + source1_size );
     if ( unique )
     {
+        // On a tie the EXISTING key (source1) stays and the incoming one
+        // (source0) is dropped - the same outcome the merge loop gives a tie it
+        // meets at a leaf boundary, where it skips the incoming key, and the
+        // same as std::set::insert, and as C++17 std::set::merge, which leaves an
+        // element whose key the destination already holds in the source.  The
+        // tree being merged into is the newer state, so it rejects its
+        // equivalents from the older one.  With keys compared through what they point
+        // at, two equivalent keys are different entries, so a rule that depended
+        // on where in a leaf the tie happened to fall would decide which entry
+        // survives by leaf layout.
         if ( dedup_source )
         {
             // Like std::set_union but also removes consecutive duplicates
@@ -1067,10 +1077,10 @@ bp_tree_impl<Key, Comparator>::merge_interleaved_values
                     *out++ = *s0++;
                     while ( s0 != s0_end && eq( *s0, out[ -1 ] ) ) ++s0;
                 }
-                else // equivalent
+                else // equivalent: the existing key stays (see below)
                 {
-                    *out++ = *s0++;
-                    ++s1;
+                    *out++ = *s1++;
+                    ++s0;
                     while ( s0 != s0_end && eq( *s0, out[ -1 ] ) ) ++s0;
                 }
             }
@@ -1087,7 +1097,9 @@ bp_tree_impl<Key, Comparator>::merge_interleaved_values
         }
         else
         {
-            auto const out_pos{ std::set_union( source0, &source0[ source0_size ], source1, &source1[ source1_size ], target, comp() ) };
+            // std::set_union copies equivalent elements from its FIRST range, so
+            // the existing keys go first - see the note at the top of this branch.
+            auto const out_pos{ std::set_union( source1, &source1[ source1_size ], source0, &source0[ source0_size ], target, comp() ) };
             auto const merged_size{ static_cast<node_size_type>( out_pos - target ) };
             BOOST_ASSUME( merged_size <= input_size );
             return merged_size;
