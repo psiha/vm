@@ -519,6 +519,81 @@ TEST( bp_tree, merge_carries_on_past_a_key_that_is_already_present )
     for ( auto const v : odds ) EXPECT_NE( target.find( v ), target.end() );
 }
 
+namespace
+{
+    // Keys are row handles ordered by the value each one points at, so two
+    // DIFFERENT keys can be equivalent - the shape of an index over a column,
+    // and the only kind of comparator for which "which of two equivalent keys
+    // survives a merge" is observable at all.
+    struct by_value
+    {
+        std::uint32_t const * values;
+        [[ gnu::pure ]] bool operator()( std::uint32_t const l, std::uint32_t const r ) const noexcept { return values[ l ] < values[ r ]; }
+    };
+
+    // Merge a source into an existing unique tree where many source keys are
+    // equivalent to existing ones.  The pairs are spread over the whole range
+    // and interleaved with non-equivalent keys, so ties land both where the
+    // merge loop meets them at a leaf boundary and inside a leaf's interleave.
+    // Returns { ties the SOURCE key won, ties in total }.
+    template <bool move_other>
+    std::pair<std::uint32_t, std::uint32_t> merge_ties_source_won()
+    {
+        using tree = bp_tree<std::uint32_t, true, by_value>;
+        constexpr std::uint32_t existing_count{ 2000 };
+        std::vector<std::uint32_t> values, existing, incoming;
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> ties; // { existing row, source row }
+        for ( std::uint32_t i{ 0 }; i < existing_count; ++i ) {
+            existing.push_back( std::uint32_t( values.size() ) );
+            values.push_back( i * 4 );
+        }
+        for ( std::uint32_t i{ 0 }; i < existing_count; ++i ) {
+            incoming.push_back( std::uint32_t( values.size() ) ); // between two existing keys
+            values.push_back( i * 4 + 2 );
+            if ( i % 3 == 1 && i + 1 < existing_count ) {         // equivalent to existing key i + 1
+                ties.push_back( { existing[ i + 1 ], std::uint32_t( values.size() ) } );
+                incoming.push_back( std::uint32_t( values.size() ) );
+                values.push_back( ( i + 1 ) * 4 );
+            }
+        }
+        by_value const comp{ values.data() };
+        tree target{ comp }; target.map_memory();
+        tree source{ comp }; source.map_memory();
+        EXPECT_EQ( target.insert( existing ), existing.size() );
+        EXPECT_EQ( source.insert( incoming ), incoming.size() );
+
+        if constexpr ( move_other ) target.merge( std::move( source ) );
+        else                        target.merge( source );
+
+        EXPECT_TRUE( std::ranges::is_sorted( target, target.comp() ) );
+        EXPECT_EQ( target.size(), existing.size() + incoming.size() - ties.size() ) << "a unique merge keeps exactly one of each equivalent pair";
+        std::uint32_t source_won{ 0 };
+        for ( auto const [ e, n ] : ties ) {
+            auto const pos{ target.find( e ) };
+            EXPECT_NE( pos, target.end() );
+            if ( pos != target.end() ) {
+                EXPECT_TRUE( *pos == e || *pos == n );
+                source_won += ( *pos == n );
+            }
+        }
+        return { source_won, std::uint32_t( ties.size() ) };
+    }
+} // anonymous namespace
+
+// On a tie a unique merge keeps the key the target already has, and it keeps it
+// wherever the tie falls: the merge loop meeting it at a leaf boundary and the
+// in-leaf interleave used to disagree, so which of two equivalent entries
+// survived depended on leaf layout.  Keeping the existing key matches
+// std::set::insert and the flat containers' merge.
+TEST( bp_tree, merge_keeps_the_existing_key_on_every_tie )
+{
+    for ( auto const [ source_won, ties ] : { merge_ties_source_won<false>(), merge_ties_source_won<true>() } )
+    {
+        ASSERT_GT( ties, 0u );
+        EXPECT_EQ( source_won, 0u ) << source_won << " of " << ties << " ties kept the source's key";
+    }
+}
+
 TEST( bp_tree, insert_presorted_merge_at_node_boundary )
 {
     // Same test but for insert_presorted
