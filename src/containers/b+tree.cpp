@@ -118,6 +118,31 @@ bptree_base::node_slot::value_type bptree_base::used_number_of_nodes() const noe
 
 std::uint32_t bptree_base::nodes_used    () const noexcept { return used_number_of_nodes(); }
 std::uint32_t bptree_base::nodes_reserved() const noexcept { return static_cast<std::uint32_t>( nodes_.size() ); }
+//--- dirty_node_set -----------------------------------------------------------
+// Everything that is not on the mutation path lives here rather than in the
+// header: sizing happens when the pool is (re)mapped or grown, counting and
+// the scan happen once per commit.
+void dirty_node_set::reset( std::size_t const nodes )
+{
+    words_.clear();
+    words_.resize( ( nodes + word_bits - 1 ) / word_bits, word_t{ 0 } );
+}
+void dirty_node_set::grow( std::size_t const nodes )
+{
+    words_.resize( ( nodes + word_bits - 1 ) / word_bits, word_t{ 0 } );
+}
+void dirty_node_set::clear() noexcept
+{
+    std::ranges::fill( words_, word_t{ 0 } );
+}
+std::uint32_t dirty_node_set::count() const noexcept
+{
+    std::uint32_t n{ 0 };
+    for ( auto const w : words_ )
+        n += static_cast<std::uint32_t>( std::popcount( w ) );
+    return n;
+}
+
 std::uint32_t bptree_base::nodes_dirty   () const noexcept { return dirty_.count(); }
 std::span<std::byte const> bptree_base::node_pool_bytes() const noexcept
 {

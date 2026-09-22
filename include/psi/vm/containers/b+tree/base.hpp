@@ -7,6 +7,7 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 
+#include <psi/vm/containers/heap_vector.hpp>
 #include <psi/vm/containers/vm_vector.hpp>
 #include <psi/vm/allocation.hpp>
 #include <psi/vm/containers/lookup.hpp>
@@ -22,10 +23,8 @@
 #include <algorithm>
 #include <bit>
 #include <array>
-#include <bit>
 #include <climits>
 #include <cstddef>
-#include <vector>
 #include <cstdint>
 #include <iterator>
 #include <limits>
@@ -146,10 +145,13 @@ public:
     using word_t = std::uint64_t;
     static constexpr std::uint32_t word_bits{ 64 };
 
-    void reset( std::size_t const nodes ) { words_.assign( ( nodes + word_bits - 1 ) / word_bits, word_t{ 0 } ); }
-    void grow ( std::size_t const nodes ) { words_.resize( ( nodes + word_bits - 1 ) / word_bits, word_t{ 0 } ); }
-    void clear(                         ) noexcept { std::ranges::fill( words_, word_t{ 0 } ); }
+    void reset( std::size_t nodes );          // size to `nodes`, all clean
+    void grow ( std::size_t nodes );          // keep what is set, cover `nodes`
+    void clear() noexcept;
+    [[ nodiscard ]] std::uint32_t count() const noexcept;
 
+    // The two on the mutation path, so they stay here: a set is one or-into a
+    // word that the caller has just written a node through.
     void set( std::uint32_t const node ) noexcept
     {
         auto const word{ node / word_bits };
@@ -168,33 +170,29 @@ public:
         return ( word < words_.size() ) && ( ( words_[ word ] >> ( node % word_bits ) ) & 1 );
     }
 
-    [[ nodiscard ]] std::uint32_t count() const noexcept
-    {
-        std::uint32_t n{ 0 };
-        for ( auto const w : words_ )
-            n += static_cast<std::uint32_t>( std::popcount( w ) );
-        return n;
-    }
-
     /// Visit the set node indices in order, skipping whole words of clean ones.
-    void for_each_set( std::uint32_t const past_the_last, auto && visit ) const noexcept
-    {
-        auto const words{ std::min<std::size_t>( words_.size(), ( past_the_last + word_bits - 1 ) / word_bits ) };
-        for ( std::size_t w{ 0 }; w < words; ++w )
-        {
-            for ( auto bits{ words_[ w ] }; bits; bits &= bits - 1 )
-            {
-                auto const node{ static_cast<std::uint32_t>( w * word_bits + static_cast<std::uint32_t>( std::countr_zero( bits ) ) ) };
-                if ( node >= past_the_last ) [[ unlikely ]]
-                    return;
-                visit( node );
-            }
-        }
-    }
+    void for_each_set( std::uint32_t past_the_last, auto && visit ) const noexcept;
 
 private:
-    std::vector<word_t> words_;
+    // The library's own vector: this grows every time the node pool does, and
+    // that is the operation it expands in place instead of reallocating.
+    heap_vector<word_t> words_;
 }; // class dirty_node_set
+
+inline void dirty_node_set::for_each_set( std::uint32_t const past_the_last, auto && visit ) const noexcept
+{
+    auto const words{ std::min<std::size_t>( words_.size(), ( past_the_last + word_bits - 1 ) / word_bits ) };
+    for ( std::size_t w{ 0 }; w < words; ++w )
+    {
+        for ( auto bits{ words_[ w ] }; bits; bits &= bits - 1 )
+        {
+            auto const node{ static_cast<std::uint32_t>( w * word_bits + static_cast<std::uint32_t>( std::countr_zero( bits ) ) ) };
+            if ( node >= past_the_last ) [[ unlikely ]]
+                return;
+            visit( node );
+        }
+    }
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // \class bptree_base
@@ -332,7 +330,6 @@ protected:
         size_type        num_vals        {};
         child_index_type parent_child_idx{};
         std::uint8_t     start           {};
-        bool             dirty           {};
 
         static constexpr std::uint32_t max_front_gap{ std::numeric_limits<std::uint8_t>::max() };
 
@@ -360,8 +357,8 @@ protected:
 
         [[ gnu::pure ]] bool is_root() const noexcept { return !parent; }
 
-        // Marking is bptree_base::mark_dirty( node ): the bit lives in the
-        // tree's dirty_node_set, not here - see the class comment there.
+        // A node carries no dirty bit: which nodes a transaction wrote is the
+        // tree's dirty_node_set, see the class comment there.
 
 #   ifndef __clang__ // https://github.com/llvm/llvm-project/issues/36032
         // merely to prevent slicing (in return-node-by-ref cases)
@@ -670,6 +667,14 @@ protected:
     // const like the node mutators that call it: it records what happened to
     // the storage, and does not change the tree's own state.
     void mark_dirty( node_header const & node ) const noexcept { dirty_.set( node_index( node ) ); }
+    // For callers that already know which node it is - a slot they just walked
+    // through - so the index is not recomputed from the address.
+    void mark_dirty( node_slot const node ) const noexcept { dirty_.set( *node ); }
+    void mark_dirty( node_header const & node, node_slot const slot ) const noexcept
+    {
+        BOOST_ASSERT_MSG( node_index( node ) == *slot, "the slot does not name the node being marked" );
+        dirty_.set( *slot );
+    }
 
     mutable dirty_node_set dirty_; // which nodes this tree has written - see dirty_node_set
     unique_nonowned_ptr<header> p_hdr_; // cached pointer to header in mapped storage (compilers/clang still unable to fully optimize away the vm::header_data code)
