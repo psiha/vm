@@ -1607,14 +1607,34 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
 
     auto [tgt_leaf, tgt_leaf_next_pos]{ find_insertion_point( *p_new_keys, unique ) };
 
+    // Once p_new_keys has moved on: re-derive the source position from it and
+    // find where its key goes in the target, searching forward from tgt_start.
+    // Returns false when the source is exhausted.  Skipping a key the target
+    // already has and finishing a merge round both move on through here, so
+    // they cannot disagree about what moving on has to update.
+    auto const seek_next_source_key{ [ & ]( node_size_type const tgt_start )
+    {
+        if ( p_new_keys == p_new_nodes_end ) [[ unlikely ]]
+            return false;
+        auto const new_pos{ p_new_keys.base().pos() };
+        src_leaf           = &other.leaf( new_pos.node );
+        source_slot_offset = new_pos.value_offset;
+        BOOST_ASSUME( src_leaf->num_vals );
+        std::tie( tgt_leaf, tgt_leaf_next_pos ) =
+            find_next_insertion_point( *tgt_leaf, tgt_start, key_const_arg{ src_leaf->keys[ source_slot_offset ] }, unique );
+        return true;
+    } };
+
     size_type inserted{ 0 };
     for ( ;; )
     {
         if ( tgt_leaf_next_pos.exact_find ) [[ unlikely ]]
         {
             BOOST_ASSUME( unique );
+            // Skip just this key.  Re-testing the position found for it would
+            // report it present again, and every remaining key with it.
             ++p_new_keys;
-            if ( p_new_keys == p_new_nodes_end ) [[ unlikely ]]
+            if ( !seek_next_source_key( tgt_leaf_next_pos.pos ) ) [[ unlikely ]]
                 break;
             continue;
         }
@@ -1722,16 +1742,8 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
         p_new_keys += consumed_source;
         inserted   += inserted_count;
 
-        if ( p_new_keys == p_new_nodes_end ) [[ unlikely ]]
+        if ( !seek_next_source_key( tgt_next_offset ) ) [[ unlikely ]]
             break;
-
-        auto const new_pos{ p_new_keys.base().pos() };
-        src_leaf           = &other.leaf( new_pos.node );
-        source_slot_offset = new_pos.value_offset;
-        BOOST_ASSUME( src_leaf->num_vals );
-
-        std::tie( tgt_leaf, tgt_leaf_next_pos ) =
-            find_next_insertion_point( *tgt_leaf, tgt_next_offset, key_const_arg{ src_leaf->keys[ source_slot_offset ] }, unique );
     }
 
     BOOST_ASSUME( inserted <= total_size );

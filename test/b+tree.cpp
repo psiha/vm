@@ -500,6 +500,25 @@ TEST( bp_tree, insert_merge_at_node_boundary )
         EXPECT_NE( bpt.find( v ), bpt.end() );
 }
 
+// A unique merge that meets a key already present must skip THAT key and carry
+// on with the next one.  It used to skip every remaining key instead: the skip
+// advanced the source but not the position it had found in the target, so the
+// next round re-tested the same "already present" result, and so on to the end.
+TEST( bp_tree, merge_carries_on_past_a_key_that_is_already_present )
+{
+    bptree_set<unsigned> target; target.map_memory();
+    bptree_set<unsigned> source; source.map_memory();
+    std::vector<unsigned> evens, odds;
+    for ( unsigned i{ 0 }; i < 1000; ++i ) { evens.push_back( 2 * i ); odds.push_back( 2 * i + 1 ); }
+    target.insert( evens );
+    source.insert( { 0u } );   // the source's FIRST key is already in the target...
+    source.insert( odds );     // ...and none of the rest are
+    EXPECT_EQ( target.merge( source ), odds.size() );
+    EXPECT_EQ( target.size(), evens.size() + odds.size() );
+    EXPECT_TRUE( std::ranges::is_sorted( target, target.comp() ) );
+    for ( auto const v : odds ) EXPECT_NE( target.find( v ), target.end() );
+}
+
 TEST( bp_tree, insert_presorted_merge_at_node_boundary )
 {
     // Same test but for insert_presorted
