@@ -7,6 +7,7 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 
+#include <psi/vm/containers/heap_vector.hpp>
 #include <psi/vm/containers/vm_vector.hpp>
 #include <psi/vm/allocation.hpp>
 #include <psi/vm/containers/lookup.hpp>
@@ -22,7 +23,6 @@
 #include <algorithm>
 #include <bit>
 #include <array>
-#include <bit>
 #include <climits>
 #include <cstddef>
 #include <cstdint>
@@ -121,6 +121,52 @@ struct [[ clang::trivial_abi ]] unique_nonowned_ptr {
 
 
 ////////////////////////////////////////////////////////////////////////////////
+/// \class dirty_node_set
+///
+/// Which nodes a transaction has written, kept BESIDE the node pool rather than
+/// as a bit inside each node.
+///
+/// A commit has to find the changed nodes.  With the bit in the node, finding
+/// them means reading one byte out of every node in the tree - and on a
+/// copy-on-write clone that read is also what faults each of those pages in, so
+/// a commit of one changed node pays for the whole tree.  A bit per node is 8
+/// KiB per 64 Ki nodes (a 32 MiB tree at 512-byte nodes), which the scan walks
+/// as words, so the search for the changed nodes costs a few cache lines
+/// instead of the pool.
+///
+/// The same argument as keeping an allocator's free list out of the blocks it
+/// tracks, and it is the portable one: kernel-level dirty page tracking exists
+/// on Linux and Windows but not on macOS.
+////////////////////////////////////////////////////////////////////////////////
+
+class dirty_node_set
+{
+public:
+    using word_t = std::uint64_t;
+    static constexpr std::uint32_t word_bits{ 64 };
+
+    void reset( std::size_t nodes );          // size to `nodes`, all clean
+    void grow ( std::size_t nodes );          // keep what is set, cover `nodes`
+    void clear() noexcept;
+
+    void set  ( std::uint32_t node ) noexcept;
+    void unset( std::uint32_t node ) noexcept;
+    [[ nodiscard ]] bool test( std::uint32_t node ) const noexcept;
+
+    [[ nodiscard ]] std::uint32_t count() const noexcept;
+
+    /// The first set node at or after `from`, or `past_the_end()` - so a commit
+    /// walks what changed without looking at what did not.
+    [[ nodiscard ]] std::uint32_t next_set( std::uint32_t from ) const noexcept;
+    [[ nodiscard ]] std::uint32_t past_the_end() const noexcept;
+
+private:
+    // The library's own vector: this grows every time the node pool does, and
+    // that is the operation it expands in place instead of reallocating.
+    heap_vector<word_t> words_;
+}; // class dirty_node_set
+
+////////////////////////////////////////////////////////////////////////////////
 // \class bptree_base
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -164,6 +210,9 @@ public:
     // this tree costs to commit.  A tree nobody has mutated owes nothing.
     [[ gnu::pure, nodiscard ]] std::uint32_t nodes_dirty   () const noexcept;
     [[ nodiscard ]] static constexpr std::uint32_t node_byte_size() noexcept { return node_size; }
+    // The node pool as bytes: its address and extent, for whoever needs to talk
+    // to the OS about these pages (dirty tracking, advice, residency).
+    [[ gnu::pure, nodiscard ]] std::span<std::byte const> node_pool_bytes() const noexcept;
 
 protected:
     // TODO make this properly configurable (a template parameter)
@@ -253,7 +302,6 @@ protected:
         size_type        num_vals        {};
         child_index_type parent_child_idx{};
         std::uint8_t     start           {};
-        bool             dirty           {};
 
         static constexpr std::uint32_t max_front_gap{ std::numeric_limits<std::uint8_t>::max() };
 
@@ -281,7 +329,8 @@ protected:
 
         [[ gnu::pure ]] bool is_root() const noexcept { return !parent; }
 
-        void mark_dirty() noexcept { dirty = true; }
+        // A node carries no dirty bit: which nodes a transaction wrote is the
+        // tree's dirty_node_set, see the class comment there.
 
 #   ifndef __clang__ // https://github.com/llvm/llvm-project/issues/36032
         // merely to prevent slicing (in return-node-by-ref cases)
@@ -496,7 +545,7 @@ protected:
         {
             auto & child{ node( ch_slot ) };
             child.parent_child_idx++;
-            child.mark_dirty();
+            mark_dirty( child );
         }
     }
     template <typename N>
@@ -506,7 +555,7 @@ protected:
         {
             auto & child{ node( ch_slot ) };
             child.parent_child_idx--;
-            child.mark_dirty();
+            mark_dirty( child );
         }
     }
 
@@ -574,10 +623,25 @@ private:
 
     void update_leaf_list_ends( node_header & removed_leaf ) noexcept;
 
+
     void update_cached_pointers() noexcept;
     void update_dbg_helpers() noexcept;
 
 protected:
+    // Records what a mutation did to the storage, so const like the node
+    // mutators that call it.  The bit lives in dirty_ (see dirty_node_set), not
+    // in the node.  Prefer the slot overload wherever the caller already knows
+    // which node it is holding: deriving the slot back from the address is
+    // needless there.
+    void mark_dirty( node_slot   const   slot ) const noexcept { dirty_.set( *slot ); }
+    void mark_dirty( node_header const & node ) const noexcept { mark_dirty( slot_of( node ) ); }
+    void mark_dirty( node_header const & node, node_slot const slot ) const noexcept
+    {
+        BOOST_ASSERT_MSG( slot_of( node ) == slot, "the slot does not name the node being marked" );
+        mark_dirty( slot );
+    }
+
+    mutable dirty_node_set dirty_; // which nodes this tree has written - see dirty_node_set
     unique_nonowned_ptr<header> p_hdr_; // cached pointer to header in mapped storage (compilers/clang still unable to fully optimize away the vm::header_data code)
     node_pool nodes_;
 #ifndef NDEBUG // debugging helpers (undoing type erasure done by contiguous_container_storage_base)

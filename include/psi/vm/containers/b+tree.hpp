@@ -173,7 +173,7 @@ public:
             {
                 bptree_base::shift_entries_left( node, node_offset, node.num_vals, erased_count );
                 node.num_vals -= erased_count;
-                node.mark_dirty();
+                this->mark_dirty( node );
                 if ( node_offset == 0 ) {
                     // erasure from the beginning of the node - implies not till
                     // the end of the node (as this, entire node erasure case,

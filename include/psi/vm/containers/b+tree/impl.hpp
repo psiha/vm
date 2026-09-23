@@ -765,7 +765,7 @@ bp_tree_impl<Key, Comparator>::replace_keys_inplace( std::span<Key const> const 
         if ( offset == 0 ) [[ unlikely ]] {
             this->update_separator( *p_leaf, new_keys[ key_idx ] );
         }
-        p_leaf->mark_dirty();
+        this->mark_dirty( *p_leaf );
         ++replaced;
         ++key_idx;
 
@@ -1077,7 +1077,7 @@ bp_tree_impl<Key, Comparator>::merge
         target.num_vals        = static_cast<node_size_type>( new_tgt_size            );
         next_tgt_offset = target_offset + inserted_size;
     }
-    target.mark_dirty();
+    this->mark_dirty( target );
     if ( !target.is_root() )
         verify_min_max( target );
     BOOST_ASSUME( inserted_size <= copy_size );
@@ -1301,8 +1301,8 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
                 shift_entries_left( *src_leaf, 0, src_leaf->num_vals, missing_keys );
                 tgt_leaf->num_vals += missing_keys;
                 src_leaf->num_vals -= missing_keys;
-                tgt_leaf->mark_dirty();
-                src_leaf->mark_dirty();
+                this->mark_dirty( *tgt_leaf );
+                this->mark_dirty( *src_leaf );
             }
             verify_min_max( *tgt_leaf );
             verify_min_max( *src_leaf );
@@ -1497,7 +1497,7 @@ bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const
                         ++input_offset;
                     }
                     tgt_leaf->num_vals += fill;
-                    tgt_leaf->mark_dirty();
+                    this->mark_dirty( *tgt_leaf );
                     inserted        += fill;
                     remaining_count  = total_size - input_offset;
                 }
@@ -1506,7 +1506,7 @@ bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const
                     auto const fill_size{ static_cast<node_size_type>( std::min<size_type>( remaining_count, missing ) ) };
                     std::copy_n( &presorted_input[ input_offset ], fill_size, &key_at( *tgt_leaf, tgt_leaf->num_vals ) );
                     tgt_leaf->num_vals += fill_size;
-                    tgt_leaf->mark_dirty();
+                    this->mark_dirty( *tgt_leaf );
                     input_offset       += fill_size;
                     inserted           += fill_size;
                     remaining_count    -= fill_size;
@@ -1713,7 +1713,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
                 BOOST_ASSUME( copy_size );
                 this->move_entries( *src_leaf, source_slot_offset, source_slot_offset + copy_size, *tgt_leaf, tgt_leaf->num_vals );
                 tgt_leaf->num_vals += copy_size;
-                tgt_leaf->mark_dirty();
+                this->mark_dirty( *tgt_leaf );
                 if ( copy_size == remaining_src_node_data )
                 {
                     if ( !src_leaf->right )
