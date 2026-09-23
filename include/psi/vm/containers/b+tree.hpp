@@ -143,10 +143,10 @@ public:
         (
             (
                 ( ( leaf_key_offset + 1 ) < leaf.num_vals ) &&
-                lt( key, bptree_base::key_at( leaf, leaf_key_offset + 1 ) )
+                lt( key, leaf.key( leaf_key_offset + 1 ) )
             ) ||
             ( !leaf.right ) ||
-            lt( key, bptree_base::key_at( this->right( leaf ), 0 ) )
+            lt( key, this->right( leaf ).key( 0 ) )
         ) [[ likely ]]
         {
             return this->erase_single( location );

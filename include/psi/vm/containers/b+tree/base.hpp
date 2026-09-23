@@ -329,6 +329,30 @@ protected:
 
         [[ gnu::pure ]] bool is_root() const noexcept { return !parent; }
 
+        // A node's own view of its entries.  The live ones begin at `start` (the
+        // front gap), so every index into them goes through here rather than
+        // through the storage arrays - which the node types therefore name for
+        // what they are: keys_ and children_.  Defined once, here, for every node
+        // type: `self` is the derived node, which is where the arrays and the
+        // key type live.
+        [[ gnu::pure ]] constexpr decltype( auto ) key( this auto & self, auto const i ) noexcept { return ( self.keys_[ self.start + i ] ); }
+        [[ gnu::pure ]] constexpr auto keys( this auto & self ) noexcept
+        {
+            BOOST_ASSUME( self.num_vals <= self.max_values );
+            return std::span{ &self.keys_[ self.start ], static_cast<std::size_t>( self.num_vals ) };
+        }
+        [[ gnu::pure ]] constexpr auto children( this auto & self ) noexcept
+        {
+            BOOST_ASSUME( self.num_vals <= self.max_values );
+            if constexpr ( requires{ self.children_; } ) return std::span{ &self.children_[ self.start ], static_cast<std::size_t>( self.num_vals + 1U ) };
+            else                                         return std::array<node_slot, 0>{};
+        }
+        [[ gnu::pure ]] constexpr size_type num_chldrn( this auto const & self ) noexcept
+        {
+            if constexpr ( requires{ self.children_; } ) { BOOST_ASSUME( self.num_vals ); return static_cast<size_type>( self.num_vals + 1U ); }
+            else                                         return 0;
+        }
+
         // A node carries no dirty bit: which nodes a transaction wrote is the
         // tree's dirty_node_set, see the class comment there.
 
@@ -439,10 +463,6 @@ protected:
         BOOST_ASSUME( node.num_vals >= node.min_values );
     }
 
-    static constexpr auto keys    ( auto       & node ) noexcept { verify( node );                                             return std::span{ &node.keys    [ node.start ], static_cast<size_type>( node.num_vals      ) }; }
-    static constexpr auto keys    ( auto const & node ) noexcept { verify( node );                                             return std::span{ &node.keys    [ node.start ], static_cast<size_type>( node.num_vals      ) }; }
-    static constexpr auto children( auto       & node ) noexcept { verify( node ); if constexpr ( requires{ node.children; } ) return std::span{ &node.children[ node.start ], static_cast<size_type>( node.num_vals + 1U ) }; else return std::array<node_slot, 0>{}; }
-    static constexpr auto children( auto const & node ) noexcept { verify( node ); if constexpr ( requires{ node.children; } ) return std::span{ &node.children[ node.start ], static_cast<size_type>( node.num_vals + 1U ) }; else return std::array<node_slot, 0>{}; }
 
     // How many entries the node type actually being worked on holds. Leaf and
     // inner capacities are not interchangeable: they already differ for a set
@@ -453,27 +473,14 @@ protected:
     template <typename N>
     static node_size_type constexpr node_capacity{ std::remove_cvref_t<N>::max_values };
 
-    // Every index into a node's entries goes through here. Today it is just
-    // keys[ i ]; it exists so that where a node's first live entry sits is
-    // stated in exactly one place rather than in seventy call sites.
-public:
-    // Public only because the key-typed iterators need it and they are nested
-    // classes of bptree_base_wkey, not of this class: [class.access.nest] gives
-    // a nested class its enclosing class's access rights, but MSVC does not
-    // grant that through a dependent base.  Nothing outside can call it anyway -
-    // the node types it takes are themselves not nameable from out here.
-    static constexpr decltype( auto ) key_at( auto       & node, auto const i ) noexcept { return ( node.keys[ node.start + i ] ); }
-    static constexpr decltype( auto ) key_at( auto const & node, auto const i ) noexcept { return ( node.keys[ node.start + i ] ); }
 protected:
 
-    [[ gnu::pure ]] static constexpr node_size_type num_vals  ( auto const & node ) noexcept { return node.num_vals; }
-    [[ gnu::pure ]] static constexpr node_size_type num_chldrn( auto const & node ) noexcept { if constexpr ( requires{ node.children; } ) { BOOST_ASSUME( node.num_vals ); return node.num_vals + 1U; } else return 0; }
 
     template <auto array>
     static constexpr node_size_type size( auto const & node ) noexcept
     {
-        if constexpr ( requires{ &(node.*array) == &node.keys; } ) return num_vals  ( node );
-        else                                                       return num_chldrn( node );
+        if constexpr ( requires{ &(node.*array) == &node.keys_; } ) return node.num_vals;
+        else                                                       return node.num_chldrn();
     }
 
     template <auto array>
@@ -516,31 +523,31 @@ protected:
 
     template <typename N> static void rshift_entries( N & node, auto... args ) noexcept
     {
-        rshift<&N::keys>( node, args... );
+        rshift<&N::keys_>( node, args... );
         if constexpr ( has_mapped_values<N> ) rshift<&N::values>( node, args... );
     }
     template <typename N> static void lshift_entries( N & node, auto... args ) noexcept
     {
-        lshift<&N::keys>( node, args... );
+        lshift<&N::keys_>( node, args... );
         if constexpr ( has_mapped_values<N> ) lshift<&N::values>( node, args... );
     }
     // shift a half-open entry range by 'distance' slots, the whole entry moving
     template <typename N>
     static void shift_entries_left( N & node, auto const first, auto const last, auto const distance ) noexcept
     {
-        std::shift_left( &key_at( node, first ), &key_at( node, last ), distance );
+        std::shift_left( &node.key( first ), &node.key( last ), distance );
         if constexpr ( has_mapped_values<N> ) std::shift_left( &node.values[ node.start + first ], &node.values[ node.start + last ], distance );
     }
     template <typename N>
     static void shift_entries_right( N & node, auto const first, auto const last, auto const distance ) noexcept
     {
-        std::shift_right( &key_at( node, first ), &key_at( node, last ), distance );
+        std::shift_right( &node.key( first ), &node.key( last ), distance );
         if constexpr ( has_mapped_values<N> ) std::shift_right( &node.values[ node.start + first ], &node.values[ node.start + last ], distance );
     }
 
     template <typename N>
     void rshift_chldrn( N & parent, auto... args ) noexcept {
-        auto const shifted_children{ rshift<&N::children>( parent, static_cast<node_size_type>( args )... ) };
+        auto const shifted_children{ rshift<&N::children_>( parent, static_cast<node_size_type>( args )... ) };
         for ( auto ch_slot : shifted_children )
         {
             auto & child{ node( ch_slot ) };
@@ -550,7 +557,7 @@ protected:
     }
     template <typename N>
     void lshift_chldrn( N & parent, auto... args ) noexcept {
-        auto const shifted_children{ lshift<&N::children>( parent, static_cast<node_size_type>( args )... ) };
+        auto const shifted_children{ lshift<&N::children_>( parent, static_cast<node_size_type>( args )... ) };
         for ( auto ch_slot : shifted_children )
         {
             auto & child{ node( ch_slot ) };

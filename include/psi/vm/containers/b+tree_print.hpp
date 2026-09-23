@@ -24,7 +24,7 @@ void bptree_base_wkey<Key>::print() const
     {
         std::print( "Level {}:\t", std::uint16_t( level ) );
 
-        auto p_next_level{ &node<inner_node>( children( *p_node ).front() ) };
+        auto p_next_level{ &node<inner_node>( p_node->children().front() ) };
 
         std::uint32_t level_node_count{ 0 };
         size_type     level_key_count { 0 };
@@ -32,12 +32,12 @@ void bptree_base_wkey<Key>::print() const
         for ( ; ; )
         {
             // Internal node, print keys and add children to the queue
-            level_key_count += num_vals( *p_node );
+            level_key_count += p_node->num_vals;
             std::putchar( '<' );
-            for ( auto i{ 0U }; i < num_vals( *p_node ); ++i )
+            for ( auto i{ 0U }; i < p_node->num_vals; ++i )
             {
-                std::print( "{}", keys( *p_node )[ i ] );
-                if ( i < num_vals( *p_node ) - 1U )
+                std::print( "{}", p_node->key( i ) );
+                if ( i < p_node->num_vals - 1U )
                     std::print( ", " );
             }
             std::print( "> " );
@@ -59,11 +59,11 @@ void bptree_base_wkey<Key>::print() const
         auto p_leaf{ &as<leaf_node>( *p_node ) };
         for ( ; ; )
         {
-            level_key_count += num_vals( *p_leaf );
+            level_key_count += p_leaf->num_vals;
             std::putchar( '[' );
-            for ( auto i{ 0U }; i < num_vals( *p_leaf ); ++i ) {
-                std::print( "{}", keys( *p_leaf )[ i ] );
-                if ( i < num_vals( *p_leaf ) - 1U ) {
+            for ( auto i{ 0U }; i < p_leaf->num_vals; ++i ) {
+                std::print( "{}", p_leaf->key( i ) );
+                if ( i < p_leaf->num_vals - 1U ) {
                     std::print( ", " );
                 }
             }
