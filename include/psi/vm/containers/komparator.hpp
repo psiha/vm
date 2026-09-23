@@ -27,6 +27,7 @@
 #include "abi.hpp"
 #include "../sort.hpp"
 
+#include <concepts>
 #include <functional>
 #include <iterator>
 #include <ranges>
@@ -80,14 +81,34 @@ template <typename C> inline constexpr bool is_simple_comparator<erasure_opt_out
 /// own shape should say so here rather than inherit this.
 ///
 /// std::less/greater name the key type's own ordering, so they read the keys and
-/// nothing else however that ordering is spelled.
+/// nothing else however that ordering is spelled.  The transparent forms leave
+/// the ordering to whatever the key's comparison operator does, which for a
+/// scalar - arithmetic, enumeration, pointer - is a comparison of the key
+/// itself, and for a class type is unknown unless the type says so.
+///
+/// A key type says so with a member
+///     static constexpr bool orders_directly{ true };
+/// e.g. a strong typedef around an integer with a defaulted <=>.  It is stated
+/// on the key rather than by specialising a trait because a key type is
+/// visible wherever it is compared, so every translation unit sees the same
+/// answer - a trait specialisation that only some of them include would give
+/// the same container two definitions.
+namespace detail
+{
+    // the key half of the question, for the comparators that delegate to the
+    // key's own ordering
+    template <typename Key> constexpr bool key_orders_directly{ std::is_scalar_v<Key> || std::is_same_v<Key, void> };
+    template <typename Key> requires requires { { Key::orders_directly } -> std::convertible_to<bool>; }
+    constexpr bool key_orders_directly<Key>{ Key::orders_directly };
+} // namespace detail
+
 template <typename Comparator, typename Key = void> constexpr bool is_direct_comparator{ false };
 template <typename T, typename Key> constexpr bool is_direct_comparator<std::less   <T>, Key>{ true };
 template <typename T, typename Key> constexpr bool is_direct_comparator<std::greater<T>, Key>{ true };
-template <typename Key> inline constexpr bool is_direct_comparator<std::less   <void>, Key>{ std::is_fundamental_v<Key> || std::is_same_v<Key, void> };
-template <typename Key> inline constexpr bool is_direct_comparator<std::greater<void>, Key>{ std::is_fundamental_v<Key> || std::is_same_v<Key, void> };
-template <typename Key> inline constexpr bool is_direct_comparator<std::ranges::less   , Key>{ std::is_fundamental_v<Key> || std::is_same_v<Key, void> };
-template <typename Key> inline constexpr bool is_direct_comparator<std::ranges::greater, Key>{ std::is_fundamental_v<Key> || std::is_same_v<Key, void> };
+template <typename Key> inline constexpr bool is_direct_comparator<std::less   <void>, Key>{ detail::key_orders_directly<Key> };
+template <typename Key> inline constexpr bool is_direct_comparator<std::greater<void>, Key>{ detail::key_orders_directly<Key> };
+template <typename Key> inline constexpr bool is_direct_comparator<std::ranges::less   , Key>{ detail::key_orders_directly<Key> };
+template <typename Key> inline constexpr bool is_direct_comparator<std::ranges::greater, Key>{ detail::key_orders_directly<Key> };
 template <typename C, typename Key> inline constexpr bool is_direct_comparator<erasure_opt_in <C>, Key>{ is_direct_comparator<C, Key> };
 template <typename C, typename Key> inline constexpr bool is_direct_comparator<erasure_opt_out<C>, Key>{ is_direct_comparator<C, Key> };
 
