@@ -642,7 +642,7 @@ protected:
     // needless there.
     void mark_dirty( node_slot   const   slot ) const noexcept { dirty_.set( *slot ); }
     void mark_dirty( node_header const & node ) const noexcept { mark_dirty( slot_of( node ) ); }
-    void mark_dirty( node_header const & node, node_slot const slot ) const noexcept
+    void mark_dirty( [[ maybe_unused ]] node_header const & node, node_slot const slot ) const noexcept
     {
         BOOST_ASSERT_MSG( slot_of( node ) == slot, "the slot does not name the node being marked" );
         mark_dirty( slot );
