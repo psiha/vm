@@ -1038,8 +1038,10 @@ TEST( bptree_cow, a_fresh_tree_owes_a_commit_nothing )
 {
     bptree_set<int> src;
     // Reserve far more than the tree will hold, so the free pool dominates and
-    // a per-pool-node cost would be unmissable.
-    src.map_memory( 20000 );
+    // a per-pool-node cost would be unmissable.  map_memory counts values, and
+    // how many nodes a given count comes to depends on the node size, so ask
+    // for roughly 200 nodes' worth whatever that size is.
+    src.map_memory( 200 * bptree_set<int>::node_byte_size() / sizeof( int ) );
     EXPECT_GT( src.nodes_reserved(), 100u ) << "the pool has to be large for this to measure anything";
     EXPECT_EQ( src.nodes_dirty(), 0u ) << "a just-created tree has nothing to commit";
 
