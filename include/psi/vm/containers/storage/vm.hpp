@@ -500,30 +500,22 @@ public:
 
     template <typename InitPolicy = value_init_t>
     err::fallible_result<void, error>
-    map_memory( sz_t const initial_data_size = 0, header_info const hdr_info = {}, InitPolicy = {} ) noexcept
+    map_memory( sz_t const initial_data_size = 0, header_info const hdr_info = {}, InitPolicy const init_policy = {} ) noexcept
     {
-        auto result{ base::map_memory(
+        return construct_fresh( initial_data_size, init_policy, base::map_memory(
             to_byte_sz( initial_data_size ),
             hdr_info.with_final_alignment_for<T>()
-        ) };
-        if ( !initial_data_size || !result || std::is_same_v<InitPolicy, no_init_t> || std::is_trivially_default_constructible_v<T> )
-            return result.as_fallible_result();
-
-        // Non-trivial init for the mapped region
-        auto * const p{ data() };
-        if constexpr ( std::is_same_v<InitPolicy, value_init_t> )
-            std::uninitialized_value_construct_n( p, initial_data_size );
-        else
-            std::uninitialized_default_construct_n( p, initial_data_size );
-
-        return err::success;
+        ) );
     }
 
+    template <typename InitPolicy = value_init_t>
     err::fallible_result<void, error>
-    map_cow_memory( sz_t const initial_data_size = 0, header_info const hdr_info = {} ) noexcept
-    requires is_trivially_moveable<T>
+    map_cow_memory( sz_t const initial_data_size = 0, header_info const hdr_info = {}, InitPolicy const init_policy = {} ) noexcept
     {
-        return base::map_cow_memory( to_byte_sz( initial_data_size ), hdr_info.with_final_alignment_for<T>() ).as_fallible_result();
+        return construct_fresh( initial_data_size, init_policy, base::map_cow_memory(
+            to_byte_sz( initial_data_size ),
+            hdr_info.with_final_alignment_for<T>()
+        ) );
     }
 
     [[ nodiscard, gnu::pure ]] T       * data()       noexcept { return has_attached_storage() ? to_t_ptr( base::data() ) : nullptr; }
@@ -562,6 +554,25 @@ public:
     void storage_inc_size() noexcept { base::grow_into_available_capacity_by( sizeof( T ) ); }
 
     void storage_free() noexcept {} // NO-OP: mem_mapping dtor closes the mapping cleanly
+
+private:
+    // Freshly mapped memory reads as zeros, which is a constructed T only for a
+    // trivially default constructible one - anything else is constructed here,
+    // whichever kind of memory the mapping is.
+    template <typename InitPolicy>
+    err::fallible_result<void, error> construct_fresh( sz_t const count, InitPolicy, err::result_or_error<void, error> result ) noexcept
+    {
+        if ( !count || !result || std::is_same_v<InitPolicy, no_init_t> || std::is_trivially_default_constructible_v<T> )
+            return result.as_fallible_result();
+
+        auto * const p{ data() };
+        if constexpr ( std::is_same_v<InitPolicy, value_init_t> )
+            std::uninitialized_value_construct_n( p, count );
+        else
+            std::uninitialized_default_construct_n( p, count );
+
+        return err::success;
+    }
 }; // class vm_storage
 
 PSI_WARNING_DISABLE_POP()
