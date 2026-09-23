@@ -641,6 +641,7 @@ bptree_base::new_node()
         auto & cached_node{ node<free_node>( free_list ) };
         BOOST_ASSUME( !cached_node.num_vals );
         BOOST_ASSUME( !cached_node.left     );
+        BOOST_ASSUME( !cached_node.start    ); // free() reset the whole header: a recycled node inherits no gap
         free_list = cached_node.right;
         unlink_right( cached_node );
         BOOST_ASSUME( hdr.free_node_count_ );
