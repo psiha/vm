@@ -67,21 +67,33 @@ bptree_base::map_memory( std::uint32_t const initial_capacity_as_number_of_nodes
 {
     auto success{ nodes_.map_memory( initial_capacity_as_number_of_nodes, hdr_info.add_header<header>(), value_init )() };
     if ( success )
-    {
-        update_cached_pointers();
-        hdr() = {};
-        if ( initial_capacity_as_number_of_nodes ) {
-            dirty_.reset( nodes_.size() ); // sized before anything can mark
-            assign_nodes_to_free_pool( 0 );
-            // assign_nodes_to_free_pool() threads the pool through free(),
-            // which marks every node it writes.  Here those marks mean nothing:
-            // the tree has just been created, so there is no target a COW clone
-            // of it could owe those nodes to, and the storage already holds
-            // what they say.
-            dirty_.clear();
-        }
-    }
+        init_fresh_pool( initial_capacity_as_number_of_nodes );
     return success;
+}
+
+bptree_base::storage_result
+bptree_base::map_cow_memory( std::uint32_t const initial_capacity_as_number_of_nodes, header_info const hdr_info ) noexcept
+{
+    auto success{ nodes_.map_cow_memory( initial_capacity_as_number_of_nodes, hdr_info.add_header<header>(), value_init )() };
+    if ( success )
+        init_fresh_pool( initial_capacity_as_number_of_nodes );
+    return success;
+}
+
+void bptree_base::init_fresh_pool( std::uint32_t const initial_capacity_as_number_of_nodes ) noexcept
+{
+    update_cached_pointers();
+    hdr() = {};
+    if ( initial_capacity_as_number_of_nodes ) {
+        dirty_.reset( nodes_.size() ); // sized before anything can mark
+        assign_nodes_to_free_pool( 0 );
+        // assign_nodes_to_free_pool() threads the pool through free(),
+        // which marks every node it writes.  Here those marks mean nothing:
+        // the tree has just been created, so there is no target a COW clone
+        // of it could owe those nodes to, and the storage already holds
+        // what they say.
+        dirty_.clear();
+    }
 }
 
 PSI_COLD

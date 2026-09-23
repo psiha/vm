@@ -394,6 +394,81 @@ TEST( bptree_cow, commit_clone_grows_beyond_source )
     EXPECT_FALSE( src.empty() );
 }
 
+// map_cow_memory(): the same tree semantics over a pool that (on Linux) is
+// memfd-backed, so the clone shares the source's pages instead of copying them.
+// A preallocated pool exercises the fresh-pool setup (free list threaded over
+// every node) that map_memory() also performs.
+
+TEST( bptree_cow, cow_memory_clone_mutate_commit )
+{
+    auto constexpr N{ 20000 };
+    bptree_set<int> src;
+    src.map_cow_memory( N );
+
+    std::vector<int> values( N );
+    std::iota( values.begin(), values.end(), 0 );
+    src.insert( values );
+
+    for ( auto cycle{ 0 }; cycle < 3; ++cycle )
+    {
+        bptree_set<int> clone{ src };
+        EXPECT_TRUE( std::ranges::equal( src, clone ) );
+
+        EXPECT_TRUE( clone.erase( cycle ) );
+        EXPECT_TRUE( clone.insert( N + cycle ).second );
+
+        // the source does not see the clone's writes
+        EXPECT_TRUE ( has( src, cycle     ) );
+        EXPECT_FALSE( has( src, N + cycle ) );
+
+        clone.commit_to( src );
+        EXPECT_FALSE( has( src, cycle     ) );
+        EXPECT_TRUE ( has( src, N + cycle ) );
+        EXPECT_EQ( src.size(), static_cast<std::size_t>( N ) );
+    }
+    // a clone taken after the commits sees what they wrote into the pool
+    bptree_set<int> const late_clone{ src };
+    EXPECT_TRUE( std::ranges::equal( src, late_clone ) );
+}
+
+TEST( bptree_cow, cow_memory_clone_grows_beyond_source )
+{
+    bptree_set<int> src;
+    src.map_cow_memory( 64 );
+
+    auto constexpr N{ 50 };
+    for ( int i{ 0 }; i < N; ++i )
+        src.insert( i );
+
+    bptree_set<int> clone{ src };
+    auto constexpr M{ 20000 };
+    for ( int i{ N }; i < M; ++i )
+        clone.insert( i );
+
+    clone.commit_to( src );
+    EXPECT_EQ( src.size(), static_cast<std::size_t>( M ) );
+    EXPECT_TRUE( std::ranges::equal( src, std::ranges::iota_view{ 0, M } ) );
+
+    bptree_set<int> const late_clone{ src };
+    EXPECT_TRUE( std::ranges::equal( late_clone, std::ranges::iota_view{ 0, M } ) );
+}
+
+TEST( bptree_cow, cow_memory_source_grows_then_clones )
+{
+    bptree_set<int> src;
+    src.map_cow_memory();
+
+    auto constexpr N{ 30000 };
+    for ( int i{ 0 }; i < N; ++i ) // scattered growth of the source's own pool
+        src.insert( ( i * 7919 ) % N );
+
+    bptree_set<int> clone{ src };
+    EXPECT_EQ( clone.size(), static_cast<std::size_t>( N ) );
+    EXPECT_TRUE( std::ranges::equal( clone, std::ranges::iota_view{ 0, N } ) );
+    EXPECT_TRUE( clone.erase( N / 2 ) );
+    EXPECT_TRUE( has( src, N / 2 ) );
+}
+
 TEST( bptree_cow, commit_to_file_backed )
 {
     auto const test_bpt{ "test_cow_commit.bpt" };
