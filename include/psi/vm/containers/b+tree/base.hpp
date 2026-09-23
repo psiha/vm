@@ -150,6 +150,21 @@ protected:
 
     using depth_t = std::uint8_t;
 
+    // Overflow policy: hand values to a sibling with room before splitting.
+    // On by default: a tree that is only ever built settles at ~70% occupancy
+    // under random insertion and 50% under sequential, and one that is built
+    // and then modified decays back toward the former; relieving first holds
+    // it near 90%. See relieve_into_sibling for the mechanism and its cost.
+    // Define PSI_VM_BT_REDISTRIBUTE_ON_OVERFLOW=0 to get plain split-on-full.
+    static bool constexpr redistribute_on_overflow
+    {
+#if defined( PSI_VM_BT_REDISTRIBUTE_ON_OVERFLOW )
+        PSI_VM_BT_REDISTRIBUTE_ON_OVERFLOW != 0
+#else
+        true
+#endif
+    };
+
     template <auto value>
     // ceil( m / 2 )
     static constexpr auto ihalf_ceil{ static_cast<decltype( value )>( ( value + 1 ) / 2 ) };
