@@ -214,17 +214,12 @@ is individually cheaper. `to_move = room / 2` is the tuning knob.
 
 ## 5. Open
 
-- **Devector nodes.** `node_header` carries a `start` TODO: *"make keys and
-  children arrays function as devectors: allow empty space at the beginning to
-  avoid moves for smaller borrowings."* It was written for
-  `handle_underflow`'s borrow; §4's relief is its exact dual, so it pays
-  twice. Both directions currently carry a **full-node** memmove to relocate
-  `to_move` entries, and `to_move` is smallest exactly when the policy fires
-  most. Header cost is alignment, not the field: 16 bytes is already a
-  multiple of `alignof( node_slot )`, so any added member rounds to 20 —
-  unless `num_vals`, `start`, `parent_child_idx` and `dirty` share one 32-bit
-  unit (30 bits suffice at 4096-byte nodes with 4-byte keys), which costs no
-  capacity but makes `num_vals` a bit extract.
+- **Devector nodes.** `node_header` carries `start`, where a node's live
+  entries begin, and every accessor honours it; nothing opens a gap yet. The
+  step that pays is `handle_underflow`'s borrow and §4's relief handing entries
+  over at the front instead of moving the whole node: both currently carry a
+  **full-node** memmove to relocate `to_move` entries, and `to_move` is
+  smallest exactly when the policy fires most.
 - **Map support.** The prerequisites have landed: entries move and shift as
   whole entries rather than as keys, and intra-node search takes the searched
   node's own capacity rather than the leaf's — the latter is a latent
