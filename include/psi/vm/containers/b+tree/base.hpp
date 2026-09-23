@@ -179,6 +179,28 @@ public:
 
     static bool constexpr all_bulk_erase_keys_must_exist{ false };
 
+    // Whether leaves use their front gap (node_header::start): hand entries over
+    // at the front without moving the rest.  Off, start is a constant 0 rather
+    // than a field, so every index into a node compiles to what a plain array's
+    // would, and every handover moves the entries it displaces.
+    // -DPSI_VM_BT_FRONT_GAP=0|1.
+    //
+    // On by default because it pays where moves are long: with page-sized
+    // (4096-byte) nodes, random insertion into a large tree measured 12% and
+    // bulk erasure 26% faster, and lookup is unaffected.  With 512-byte nodes it
+    // costs: against this switch turned off, lookup and random insertion
+    // measured 15-20% slower and bulk insertion 5-13% (7.6M int keys, x86-64
+    // Linux; the lookup cost survives forced code alignment).  Most of that is
+    // the start field itself rather than the gap - a runtime start has to be
+    // loaded before a node's keys can be addressed, on every node a search
+    // visits, and a small-node tree visits more of them.  Both the cost and the
+    // benefit scale with node size, so this could be decided per node geometry
+    // rather than globally.
+#ifndef PSI_VM_BT_FRONT_GAP
+#   define PSI_VM_BT_FRONT_GAP 1
+#endif
+    static bool constexpr front_gap{ PSI_VM_BT_FRONT_GAP };
+
     bptree_base(                      ) noexcept;
     bptree_base( bptree_base const &  );  // COW copy (shares file-mapped pages)
     bptree_base( bptree_base       && ) noexcept = default;
@@ -306,7 +328,11 @@ protected:
         // Largest first, so no field is padded to its successor's alignment.
         size_type        num_vals        {};
         child_index_type parent_child_idx{};
+#   if PSI_VM_BT_FRONT_GAP
         std::uint8_t     start           {};
+#   else
+        static constexpr std::uint8_t start{ 0 }; // no gap: every access folds to a plain array index
+#   endif
 
         static constexpr std::uint32_t max_front_gap{ std::numeric_limits<std::uint8_t>::max() };
 
@@ -458,14 +484,24 @@ protected:
 
     static void verify( auto const & node ) noexcept
     {
-        BOOST_ASSUME( node.num_vals <= node.max_values );
+        verify_gap( node );
         // also used for underflowing nodes and (most problematically) for root nodes 'interpreted' as inner nodes...TODO...
         //BOOST_ASSUME( node.num_vals >= node.min_values );
     }
     static void verify_min_max( auto const & node ) noexcept
     { // temporary wrkrnd version for the comment above in version()
-        BOOST_ASSUME( node.num_vals <= node.max_values );
+        verify_gap( node );
         BOOST_ASSUME( node.num_vals >= node.min_values );
+    }
+    // The entries, gap included, fit the array; and only a leaf has a gap - an
+    // inner node's children are indexed by their parent_child_idx, which a gap
+    // would have to be folded into.
+    static void verify_gap( auto const & node ) noexcept
+    {
+        BOOST_ASSERT( std::size_t{ node.start } + node.num_vals <= node.max_values );
+        BOOST_ASSUME( std::size_t{ node.start } + node.num_vals <= node.max_values );
+        if constexpr ( requires{ node.children_; } )
+            BOOST_ASSERT( !node.start );
     }
 
 
@@ -548,6 +584,88 @@ protected:
     {
         std::shift_right( &node.key( first ), &node.key( last ), distance );
         if constexpr ( has_mapped_values<N> ) std::shift_right( &node.values[ node.start + first ], &node.values[ node.start + last ], distance );
+    }
+
+    // The front gap.  Only a leaf carries one (see verify_gap), and every path
+    // that writes behind a node's entries either reckons with it or closes it
+    // first: 'full' means num_vals == max_values, but a node with a gap has
+    // only max_values - start - num_vals slots behind its entries.
+
+    // The one writer of start, which is a constant 0 with the gap off - where a
+    // call is either unreachable or writes the 0 that is already there.
+    static constexpr void set_start( auto & node, auto const value ) noexcept
+    {
+        if constexpr ( front_gap ) { node.start = static_cast<std::uint8_t>( value ); }
+        else                       { BOOST_ASSUME( !value ); }
+    }
+
+    // Room behind a node's entries - what an append at key( num_vals ) can use.
+    [[ gnu::pure ]] static constexpr node_size_type tail_room( auto const & node ) noexcept
+    {
+        verify_gap( node );
+        return static_cast<node_size_type>( node.max_values - node.start - node.num_vals );
+    }
+
+    // Make room at logical position 'pos' by moving the entries BELOW it one
+    // slot down into the gap, instead of the entries above it one slot up.  The
+    // free slot lands at the same logical position either way; this direction
+    // moves 'pos' entries rather than 'num_vals - pos', and it is the only one
+    // available once a leaf's entries reach the end of their array.  Expects
+    // num_vals to count the opened slot already, as rshift_entries does.
+    template <typename N>
+    static void open_slot_from_front( N & node, node_size_type const pos ) noexcept
+    {
+        static_assert( !requires( N & n ) { n.children_; }, "only a leaf has a gap" );
+        BOOST_ASSUME( node.start > 0 );
+        // one slot further in, the entries below 'pos' step back down into it
+        set_start( node, node.start - 1 );
+        shift_entries_left( node, 0, pos + 1, 1 );
+    }
+
+    // Open 'count' slots in front of a leaf's entries: the gap supplies what it
+    // can and only the deficit is shifted.  Expects room for num_vals + count
+    // entries, and leaves num_vals to the caller.
+    template <typename N>
+    static void open_front( N & node, node_size_type const count ) noexcept
+    {
+        static_assert( !requires( N & n ) { n.children_; }, "only a leaf has a gap" );
+        BOOST_ASSUME( node.num_vals + count <= N::max_values );
+        if ( node.start >= count ) {
+            set_start( node, node.start - count );
+            return;
+        }
+        auto const deficit{ static_cast<node_size_type>( count - node.start ) };
+        shift_entries_right( node, 0, node.num_vals + deficit, deficit );
+        set_start( node, 0 );
+    }
+
+    // Retire a leaf's first 'count' entries (already moved out or destroyed):
+    // they become gap when the gap can hold them, and are closed over
+    // otherwise.  Leaves num_vals to the caller.
+    template <typename N>
+    static void drop_front( N & node, node_size_type const count ) noexcept
+    {
+        static_assert( !requires( N & n ) { n.children_; }, "only a leaf has a gap" );
+        BOOST_ASSUME( count <= node.num_vals );
+        if ( front_gap && ( node.start + count <= node_header::max_front_gap ) ) {
+            set_start( node, node.start + count );
+            return;
+        }
+        shift_entries_left( node, 0, node.num_vals, count );
+    }
+
+    // Move a node's entries back to the front of their array, closing the gap -
+    // for the paths that fill a node towards capacity, to which a gap is worth
+    // nothing.  Every logical index is preserved.
+    template <typename N>
+    void recentre( N & node ) noexcept
+    {
+        if ( !node.start ) [[ likely ]]
+            return;
+        auto const base{ node.start };
+        set_start( node, 0 );
+        shift_entries_left( node, 0, base + node.num_vals, base );
+        mark_dirty( node );
     }
 
     template <typename N>

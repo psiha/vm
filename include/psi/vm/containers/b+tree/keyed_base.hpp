@@ -483,8 +483,12 @@ protected: // split_to_insert and its helpers
             auto & left_sibling{ *p_left };
             auto const to_move       { static_cast<node_size_type>( left_room / 2 ) };
             auto const left_prior_num{ left_sibling.num_vals };
+            // the left sibling receives behind its entries, where its gap is no
+            // help - close it if it is in the way
+            if ( tail_room( left_sibling ) < to_move )
+                this->recentre( left_sibling );
             move_entries( node, 0, to_move, left_sibling, left_prior_num );
-            shift_entries_left( node, 0, max, to_move );
+            drop_front  ( node, to_move ); // what the node keeps simply begins further in
             left_sibling.num_vals = static_cast<node_size_type>( left_prior_num + to_move );
             node        .num_vals = static_cast<node_size_type>( max            - to_move );
             this->mark_dirty( left_sibling, node.left );
@@ -502,7 +506,7 @@ protected: // split_to_insert and its helpers
             auto & right_sibling{ *p_right };
             auto const to_move   { static_cast<node_size_type>( right_room / 2 ) };
             auto const kept      { static_cast<node_size_type>( max - to_move ) };
-            shift_entries_right( right_sibling, 0, right_sibling.num_vals + to_move, to_move );
+            open_front  ( right_sibling, to_move );
             move_entries( node, kept, max, right_sibling, 0 );
             right_sibling.num_vals = static_cast<node_size_type>( right_sibling.num_vals + to_move );
             node         .num_vals = kept;
@@ -571,8 +575,29 @@ protected: // 'other'
         if ( full( target_node ) ) [[ unlikely ]] {
             return overflow_to_insert( target_node, target_node_pos, std::move( v ), right_child );
         } else {
-            ++target_node.num_vals;
-            rshift_entries( target_node, target_node_pos );
+            // A leaf opens the slot from whichever side moves fewer entries,
+            // and must use the front once its entries reach the end of the
+            // array.
+            if constexpr ( requires { target_node.children_; } ) {
+                ++target_node.num_vals;
+                rshift_entries( target_node, target_node_pos );
+            } else {
+                // Front or back, whichever moves fewer entries - and with no
+                // room left behind the entries, the front, except for an
+                // append: closing the gap once then lets an ascending run keep
+                // appending, where opening from the front would move the whole
+                // leaf on every insertion.
+                bool const no_tail_room{ !tail_room( target_node ) };
+                if ( no_tail_room && ( target_node_pos == target_node.num_vals ) )
+                    this->recentre( target_node );
+                bool const from_front
+                {
+                    target_node.start && ( no_tail_room || ( target_node_pos * 2u < target_node.num_vals ) )
+                };
+                ++target_node.num_vals;
+                if ( from_front ) open_slot_from_front( target_node, target_node_pos );
+                else              rshift_entries      ( target_node, target_node_pos );
+            }
             target_node.key( target_node_pos ) = std::move( v );
             this->mark_dirty( target_node );
             if constexpr ( requires { target_node.children_; } ) {
@@ -961,7 +986,7 @@ protected: // 'other'
         auto & preceding{ left( leaf ) };
         if ( preceding.num_vals + leaf.num_vals >= leaf_node::min_values * 2 ) [[ likely ]]
         {
-            shift_entries_right( leaf, 0, leaf.num_vals + missing_keys, missing_keys );
+            open_front( leaf, missing_keys );
             this->move_entries( preceding, preceding.num_vals - missing_keys, preceding.num_vals, leaf, 0 );
             leaf     .num_vals += missing_keys;
             preceding.num_vals -= missing_keys;
@@ -1249,8 +1274,13 @@ protected: // 'other'
         if ( p_left_sibling && can_borrow( *p_left_sibling ) )
         {
             verify_min_max( *p_left_sibling );
-            node.num_vals++;
-            rshift_entries( node );
+            if constexpr ( leaf_node_type ) {
+                open_front( node, 1 ); // the borrow the gap exists for
+                node.num_vals++;
+            } else {
+                node.num_vals++;
+                rshift_entries( node );
+            }
             node_size_type const left_separator_key_idx( parent_child_idx - 1 );
             auto & left_separator_key{ parent.keys()[ left_separator_key_idx ] };
             auto const node_keys{ node.keys() };
@@ -1291,6 +1321,10 @@ protected: // 'other'
         if ( p_right_sibling && can_borrow( *p_right_sibling ) )
         {
             verify_min_max( *p_right_sibling );
+            if constexpr ( leaf_node_type ) {
+                if ( !tail_room( node ) )
+                    this->recentre( node );
+            }
             node.num_vals++;
             auto const right_separator_key_idx{ parent_child_idx };
             auto & right_separator_key{ parent.keys()[ right_separator_key_idx ] };
@@ -1300,9 +1334,10 @@ protected: // 'other'
                 auto & leftmost_right_key{ p_right_sibling->keys().front() };
                 BOOST_ASSUME( right_separator_key == leftmost_right_key ); // yes we expect exact or bitwise equality for key-copies in inner nodes
                 node_keys.back() = std::move( leftmost_right_key );
-                lshift_entries( *p_right_sibling );
-                // adjust the separator key in the parent
-                right_separator_key = leftmost_right_key;
+                drop_front( *p_right_sibling, 1 );
+                // adjust the separator key in the parent - to the sibling's new
+                // first key, which is no longer where leftmost_right_key points
+                right_separator_key = p_right_sibling->keys().front();
             } else {
                 // Move/rotate the smallest key from the right sibling to the current node 'through' the parent
 
@@ -1390,6 +1425,8 @@ protected: // 'other'
     void append_and_free( leaf_node & __restrict target, leaf_node & __restrict source ) noexcept
     {
         BOOST_ASSUME( target.num_vals + source.num_vals <= target.max_values );
+        if ( tail_room( target ) < source.num_vals )
+            this->recentre( target );
 
         std::ranges::move( source.keys(), &target.key( target.num_vals ) );
         target.num_vals += source.num_vals;
@@ -1874,7 +1911,11 @@ bptree_base_wkey<Key>::erase( const_iterator const first, const_iterator const l
             }
             auto & node{ leaf( pos.node ) };
             if ( ( pos.node == end_pos.node ) && ( end_pos.value_offset < node.num_vals ) ) {
-                erase_values( node, 0, end_pos.value_offset );
+                // the values before the end become gap (when it can hold them)
+                drop_front( node, end_pos.value_offset );
+                node.num_vals -= end_pos.value_offset;
+                this->mark_dirty( node );
+                erased_count += end_pos.value_offset;
                 p_end           = &node;
                 separator_stale = true;
                 break;
