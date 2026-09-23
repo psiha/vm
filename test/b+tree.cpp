@@ -118,9 +118,9 @@ TEST( bp_tree, benchamrk )
     std::println
     (
         "geometry: {}-byte nodes, {} values/leaf, {} values/inner\n"
-        "intra-node search: linear_search_byte_limit={}, leaf={}, inner={}",
+        "intra-node search: linear_search_max_values={}, leaf={}, inner={}",
         bpt_t::node_byte_size(), leaf_values, inner_values,
-        linear_search_byte_limit,
+        linear_search_max_values<int>,
         use_linear_search_for_sorted_array<std::less<>, int, leaf_values  > ? "LINEAR" : "binary",
         use_linear_search_for_sorted_array<std::less<>, int, inner_values > ? "LINEAR" : "binary"
     );
@@ -232,9 +232,9 @@ TEST( bp_tree, benchmark_indirect_comparator )
     std::println
     (
         "indirect comparator - geometry: {}-byte nodes, {} values/leaf, {} values/inner\n"
-        "intra-node search: linear_search_byte_limit={}, leaf={}, inner={}",
+        "intra-node search: linear_search_max_values={}, leaf={}, inner={}",
         bpt_t::node_byte_size(), leaf_values, inner_values,
-        linear_search_byte_limit,
+        linear_search_max_values<int>,
         use_linear_search_for_sorted_array<indirect_less, std::uint32_t, leaf_values  > ? "LINEAR" : "binary",
         use_linear_search_for_sorted_array<indirect_less, std::uint32_t, inner_values > ? "LINEAR" : "binary"
     );
@@ -306,6 +306,12 @@ TEST( bp_tree, benchmark_key_width )
     std::mt19937 rng{ PSI_VM_BENCH_SEED };
     time_key_width<std::uint32_t>( "narrow", test_size, rng );
     time_key_width<std::uint64_t>( "wide  ", test_size, rng );
+    // A third width, because two points cannot distinguish "the crossover is a
+    // number of values" from "it is a number of bytes that happens to line up".
+    // A unique tree can hold at most 65536 uint16 keys, so this one is small and
+    // shallow by necessity - it is here for the geometry, not for the absolute
+    // timings, which are not comparable with the two above.
+    time_key_width<std::uint16_t>( "16-bit", 60000, rng );
 } // bp_tree.benchmark_key_width
 
 #if HAVE_ABSL

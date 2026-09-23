@@ -5,7 +5,7 @@
 /// Does the shipped linear-vs-binary threshold actually hold, on this platform,
 /// for this key type?
 ///
-/// lookup.hpp dispatches on a single constant, `linear_search_byte_limit`, and
+/// lookup.hpp dispatches on a single constant, `linear_search_max_values`, and
 /// the comment above it records a crossover measured "between 1 and 4 KiB of
 /// scanned data -- the same BYTE size for 32-bit and 64-bit keys, so the limit
 /// is expressed in bytes, not element count", with the linear path disabled
@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <numeric>
 #include <print>
 #include <random>
@@ -69,6 +70,16 @@ namespace
     // the per-probe figures are comparable across lengths.
     constexpr std::uint32_t probes{ 200'000 };
     constexpr int           passes{ 3 };
+
+    // A narrow key cannot represent every length: the generator below strides by
+    // 3, so uint8_t tops out at 84 values and would otherwise WRAP - producing an
+    // unsorted range and a meaningless, silently-wrong measurement.
+    template <typename Key>
+    [[ nodiscard ]] constexpr bool length_representable( std::uint32_t const n ) noexcept
+    {
+        if constexpr ( std::is_floating_point_v<Key> ) { return true; }
+        else { return ( static_cast<std::uint64_t>( n ) * 3 + 1 ) <= static_cast<std::uint64_t>( std::numeric_limits<Key>::max() ); }
+    }
 
     template <typename Key>
     [[ nodiscard ]] std::vector<Key> sorted_range( std::uint32_t const n )
@@ -216,6 +227,7 @@ namespace
         std::uint32_t crossover_bytes { 0 };
         for ( auto const n : lengths )
         {
+            if ( !length_representable<Key>( n ) ) { continue; }
             auto const range{ sorted_range<Key>( n ) };
             std::vector<Key> keys( probes );
             std::uniform_int_distribution<std::uint32_t> pick{ 0, n * 3 };
@@ -228,7 +240,7 @@ namespace
             auto const linear_wins{ lin <= bin };
             if ( !linear_wins && !crossover_values ) { crossover_values = n; crossover_bytes = static_cast<std::uint32_t>( bytes ); }
             // What the shipped constant would pick for a range of this size.
-            auto const shipped_linear{ ( linear_search_byte_limit != 0 ) && ( bytes <= linear_search_byte_limit ) && linear_search_eligible<std::less<>, Key> };
+            auto const shipped_linear{ ( linear_search_max_values<Key> != 0 ) && ( n <= linear_search_max_values<Key> ) && linear_search_eligible<std::less<>, Key> };
             std::println
             (
                 "  {:6} | {:6} | {:9.2f} | {:9.2f} | {:6} | {:5.1f}% | {}{}",
@@ -250,10 +262,11 @@ TEST( lookup, threshold_sweep )
 {
     std::println
     (
-        "linear_search_byte_limit = {}  (0 means the linear path is compiled out)",
-        linear_search_byte_limit
+        "linear_search_max_values<uint32> = {}  (0 means the linear path is compiled out)",
+        linear_search_max_values<std::uint32_t>
     );
     std::println( "\n########## RESIDENT (array already in cache) ##########" );
+    sweep<std::uint8_t >( "uint8_t " ); // caps out at 84 values - see length_representable
     sweep<std::uint16_t>( "uint16_t" );
     sweep<std::uint32_t>( "uint32_t" );
     sweep<std::uint64_t>( "uint64_t" );
