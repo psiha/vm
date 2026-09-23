@@ -50,6 +50,39 @@ concept InsertableType = ( transparent_comparator && std::is_convertible_v<K, St
 template <typename T>                                  constexpr bool is_statically_sized   { true };
 template <typename T> requires requires{ T{}.size(); } constexpr bool is_statically_sized<T>{ T{}.size() != 0 };
 
+// Dispatch the intra-node search on the node's ACTUAL fill (lookup.hpp's
+// runtime form) rather than on its capacity.  Off by default, and the default
+// is measured: wherever the two forms differ, dispatching on fill LOSES.
+// Random lookup, 4 blocks with the arm order reversed on alternate blocks and a
+// same-config duplicate arm as the noise floor (<= 1.6%):
+//
+//   4096-byte nodes, 4-byte keys   +11.8% (Zen 5, clang)  +19.7% (Arrow Lake, clang-cl)
+//   4096-byte nodes, 8-byte keys    +8.6%                 +27.7%
+//   2048-byte nodes                 within noise except 8-byte keys, +10.6% (Zen 5)
+//
+// The reason is one-sided: fill dispatch can only ADD scans, since it sends
+// every node filled under the limit to a scan that the capacity rule had given
+// to binary search.  In a large tree those nodes are reached by a pointer chase
+// and are cold, and a scan of up to `linear_search_max_values` of them loses to
+// the handful of dependent probes a binary search needs.
+//
+// Where the two forms agree they are the same code: at 512-byte nodes, and on
+// AArch64 (limit 0), the whole test binary disassembles identically either way.
+//
+// What this does NOT settle: the regime (test/lookup_threshold.cpp measures
+// both).  In a cache-RESIDENT range a binary search wins at every length: its few
+// probes are cheap and a scan's extra comparisons are not.  In a COLD one it is
+// the scan that wins, up to a few hundred values, even though it touches more
+// cache lines: each binary probe is a dependent miss - the next address is not
+// known until the previous comparison resolves, so the misses serialise - while
+// a scan's addresses are known in advance and stream under the prefetcher with
+// their misses overlapped.  Neither the capacity nor the fill says which regime
+// a given tree is in; that is a property of how a consumer uses it, so it wants
+// to be stated by the consumer rather than guessed here.
+#ifndef PSI_VM_BT_RUNTIME_DISPATCH
+#   define PSI_VM_BT_RUNTIME_DISPATCH 0
+#endif
+
 // Byte limit + eligibility live in lookup.hpp (shared, measured constants);
 // node size is a compile-time constant here so the dispatch is compile-time.
 template <typename Comparator, typename Key, std::uint32_t maximum_array_length>
