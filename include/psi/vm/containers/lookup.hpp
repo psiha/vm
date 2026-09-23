@@ -82,24 +82,63 @@ using key_const_arg_t = std::conditional_t<
 
 
 //==============================================================================
-// Sorted-range search primitives: linear vs binary, byte-size dispatched.
+// Sorted-range search primitives: linear vs binary, dispatched on the number of
+// VALUES in the range.
 //
-// For trivially-comparable keys a linear early-exit scan beats std::lower_bound
-// on x64 for small ranges: measured (b+tree node search + isolated sorted-array
-// probes, clang, -O3) the crossover sits between 1 and 4 KiB of scanned data --
-// the same BYTE size for 32-bit and 64-bit keys, so the limit is expressed in
-// bytes, not element count. On AArch64 (Apple Silicon measured) clang emits a
-// branchless (csel) binary search whose latency is essentially flat in range
-// size and which wins at EVERY size -- so the linear path is disabled there.
+// Why values and not bytes.  The limit used to be denominated in bytes, on the
+// grounds that the crossover had been found at the same byte size for 32- and
+// 64-bit keys.  Re-measured with both widths in a real tree (test/b+tree.cpp,
+// bp_tree.benchmark_key_width), it is not: the crossover sits between ~250 and
+// ~510 VALUES for 4-byte keys AND for 8-byte keys, which is 1004-2028 bytes in
+// one case and 2024-4072 in the other.  Denominated in bytes, one constant
+// therefore means two different policies for two widths of the same type.
+//
+// Why AArch64 is zero.  clang emits a genuinely branchless binary search there -
+// `fcmp; csel; csel; cbnz`, no data-dependent branch - and binary wins at every
+// length and every key type measured, floating point included (48-289% ahead).
+//
+// ⚠ It is NOT simply "branchless wins, branchy loses".  clang-cl emits a
+// branchless integer binary search on Windows too (`cmovae` under the MSVC STL,
+// where libstdc++ on the same ISA emits `cmp;jae`), and a linear scan still won
+// in-tree there up to ~250-510 values.  So what keeps the scan competitive
+// inside a b+tree is not branch misprediction: it is that a node has just been
+// pointer-chased to and is cold, where a scan streams it under the prefetcher
+// while binary search issues dependent misses.  The same code measured on a
+// RESIDENT array reverses the verdict (binary wins from 8 values), which is why
+// these numbers may only be re-tuned from an in-tree measurement.
+//
+// The limit therefore depends on the ISA *and* on the key type, because those
+// are the two axes the measurements actually separate:
+//
+//   ISA        integral keys                 floating-point keys
+//   AArch64    binary always                 binary always
+//   x86-64     linear to 256 values          linear to 128 values
+//
+// Integers: in-tree crossover ~250-510 values, at BOTH 4- and 8-byte widths
+// (bp_tree.benchmark_key_width); 256 sits at the safe end of that band.
+// Floating point: no in-tree data - psi::vm's own trees are not float-keyed -
+// so this is the isolated measurement, where float and double cross together at
+// 96 (Xeon 8581C) / 192 (Zen 5) / 256 (Arrow Lake).  128 is below all three, and
+// at 128 a scan is still ahead on every x86 box measured (26.6% on Zen 5, a wash
+// on the Xeon).  Being the conservative end of an isolated measurement, it is
+// the number to revisit first if a float-keyed tree ever appears.
+//
+// test/lookup_threshold.cpp prints both regimes per type and flags every length
+// where this policy disagrees with what it measures.
 //==============================================================================
 
-// Range byte-size up to which the dispatched functions below use a linear scan.
-inline constexpr std::size_t linear_search_byte_limit
+// Number of values up to which the dispatched functions below use a linear scan
+// (0 disables the linear path entirely).  Overridable so the dispatch can be
+// A/B'd without editing this header.
+template <typename Key>
+inline constexpr std::size_t linear_search_max_values
 {
-#if defined( __aarch64__ ) || defined( _M_ARM64 )
+#if defined( PSI_VM_LINEAR_SEARCH_MAX_VALUES )
+    PSI_VM_LINEAR_SEARCH_MAX_VALUES
+#elif defined( __aarch64__ ) || defined( _M_ARM64 )
     0
 #else
-    2048
+    std::is_floating_point_v<Key> ? 128 : 256
 #endif
 };
 
@@ -138,15 +177,15 @@ std::optional<It> linear_find( It const first, It const last, auto const & key, 
 }
 
 // Runtime-dispatched versions: linear for trivial data & comparators when the
-// range is small enough (see linear_search_byte_limit), std:: otherwise.
+// range is short enough (see linear_search_max_values), std:: otherwise.
 template <typename It, typename Comp = std::less<>>
 [[ nodiscard, gnu::pure ]] constexpr
 It lower_bound( It const first, It const last, auto const & key, Comp const & comp = {} ) noexcept
 {
     using Key = std::remove_cvref_t<decltype( *first )>;
-    if constexpr ( linear_search_eligible<Comp, Key> && ( linear_search_byte_limit != 0 ) )
+    if constexpr ( linear_search_eligible<Comp, Key> && ( linear_search_max_values<Key> != 0 ) )
     {
-        if ( static_cast<std::size_t>( last - first ) * sizeof( Key ) <= linear_search_byte_limit ) [[ likely ]]
+        if ( static_cast<std::size_t>( last - first ) <= linear_search_max_values<Key> ) [[ likely ]]
             return linear_lower_bound( first, last, key, comp );
     }
     return std::lower_bound( first, last, key, comp );
@@ -156,9 +195,9 @@ template <typename It, typename Comp = std::less<>>
 It upper_bound( It const first, It const last, auto const & key, Comp const & comp = {} ) noexcept
 {
     using Key = std::remove_cvref_t<decltype( *first )>;
-    if constexpr ( linear_search_eligible<Comp, Key> && ( linear_search_byte_limit != 0 ) )
+    if constexpr ( linear_search_eligible<Comp, Key> && ( linear_search_max_values<Key> != 0 ) )
     {
-        if ( static_cast<std::size_t>( last - first ) * sizeof( Key ) <= linear_search_byte_limit ) [[ likely ]]
+        if ( static_cast<std::size_t>( last - first ) <= linear_search_max_values<Key> ) [[ likely ]]
             return linear_upper_bound( first, last, key, comp );
     }
     return std::upper_bound( first, last, key, comp );
