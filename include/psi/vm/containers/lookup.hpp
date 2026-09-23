@@ -94,9 +94,13 @@ using key_const_arg_t = std::conditional_t<
 //==============================================================================
 
 // Range byte-size up to which the dispatched functions below use a linear scan.
+// Overridable so the dispatch itself can be A/B'd without editing this header
+// (-DPSI_VM_LINEAR_SEARCH_BYTE_LIMIT=0 disables the linear path everywhere).
 inline constexpr std::size_t linear_search_byte_limit
 {
-#if defined( __aarch64__ ) || defined( _M_ARM64 )
+#if defined( PSI_VM_LINEAR_SEARCH_BYTE_LIMIT )
+    PSI_VM_LINEAR_SEARCH_BYTE_LIMIT
+#elif defined( __aarch64__ ) || defined( _M_ARM64 )
     0
 #else
     2048

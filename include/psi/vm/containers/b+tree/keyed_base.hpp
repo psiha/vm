@@ -219,6 +219,13 @@ protected: // node types
     static_assert( sizeof( inner_node ) == node_size );
     static_assert( sizeof(  leaf_node ) == node_size );
 
+public: // the node geometry, for callers that measure or report it
+    // node_size alone does not say how many values a node holds - that follows
+    // from the header size and sizeof( Key ), and it is what both the occupancy
+    // numbers and the linear-vs-binary intra-node search dispatch are keyed on.
+    [[ nodiscard ]] static constexpr node_size_type max_values_per_leaf () noexcept { return  leaf_node::max_values; }
+    [[ nodiscard ]] static constexpr node_size_type max_values_per_inner() noexcept { return inner_node::max_values; }
+
 protected: // split_to_insert and its helpers
     root_node & new_root( node_slot const left_child, node_slot const right_child, key_rv_arg separator_key )
     {
