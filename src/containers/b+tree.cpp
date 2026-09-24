@@ -563,6 +563,7 @@ void bptree_base::swap( bptree_base & other ) noexcept
     using std::swap;
     swap( this->nodes_ , other.nodes_  );
     swap( this->p_hdr_ , other.p_hdr_  );
+    swap( this->dirty_ , other.dirty_  ); // indexed by the pool it describes, so it goes with it
 #ifndef NDEBUG
     swap( this->nodes__, other.nodes__ );
 #endif
@@ -751,10 +752,10 @@ bptree_base::bptree_base( bptree_base const & source )
 ////////////////////////////////////////////////////////////////////////////////
 // commit_to(): commit a COW clone's changes back to the target tree.
 //
-// Selective dirty-node copy: uses the node_header::dirty bit (set by
-// mark_dirty() on every mutation) to skip clean nodes entirely.  Only dirty
-// nodes are copied into the target.  In debug builds a memcmp cross-check
-// validates dirty-bit correctness (catches missing mark_dirty() calls).
+// Selective dirty-node copy: uses the dirty_node_set (set by mark_dirty() on
+// every mutation) to skip clean nodes entirely.  Only dirty nodes are copied
+// into the target.  In debug builds a memcmp cross-check validates the set
+// (catches missing mark_dirty() calls).
 //
 // For memory-backed targets: if the clone grew (new_node() called
 // emplace_back), the target's node pool is extended first so the new dirty
