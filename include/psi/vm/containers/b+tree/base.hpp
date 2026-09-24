@@ -83,6 +83,45 @@ template <typename T> requires requires{ T{}.size(); } constexpr bool is_statica
 #   define PSI_VM_BT_RUNTIME_DISPATCH 0
 #endif
 
+// Software prefetch on the way down (bp_tree_impl::find_nodes_for): as soon as
+// the next child's slot is known, request this many of its 64-byte lines.  0
+// turns it off; the default covers a whole 512-byte node.
+//
+// Left to demand loads, a cold node arrives in dependent rounds.  Its header
+// line comes first, and only then can the search reach the rest: the search's
+// extent (num_vals) is in the header, a leaf's key array is indexed through
+// its runtime front gap (node_header::start), so none of its keys' addresses
+// is known before the header is, and an inner node's child slot is read only
+// after its search resolves.  The slot alone, though, already fixes where
+// every line of the node is, so they can all be requested while the header is
+// still in flight - overlapping the rounds instead of serialising them.  The
+// addresses are compile-time offsets from the node's base: nothing of the
+// child (not start, not num_vals) is read to form them.
+//
+// Which lines, when the extent is less than a whole node: a node searched by a
+// linear scan is fetched from its front, where the scan starts.  A node
+// searched by bisection gets its header line plus a band ending at the line of
+// a FULL node's first probe, keys_[max_values/2]: the first probe of a node
+// holding n values is keys_[n/2], never above that line, so the band catches
+// it for any fill from full down to however far the band reaches.  (A leaf's
+// front gap moves its probes up by `start` entries, which the band - being
+// independent of start - does not follow.)
+#ifndef PSI_VM_BT_PREFETCH_LINES
+#   define PSI_VM_BT_PREFETCH_LINES 8
+#endif
+
+// A read hint for the cache line holding `address`.  It cannot fault and it
+// changes no result, so where the compiler offers no way to express it, it is
+// simply nothing.
+[[ gnu::always_inline ]] inline void prefetch_for_read( [[ maybe_unused ]] void const * const address ) noexcept
+{
+#if defined( __has_builtin ) // (not folded into one #if: MSVC's preprocessor rejects __has_builtin( x ) when it is not defined)
+#   if __has_builtin( __builtin_prefetch )
+    __builtin_prefetch( address, 0 /*read*/, 3 /*keep in every cache level: it is searched next*/ );
+#   endif
+#endif
+}
+
 // The value limit + eligibility live in lookup.hpp (shared, measured); the node
 // capacity is a compile-time constant here so the dispatch is compile-time.
 template <typename Comparator, typename Key, std::uint32_t maximum_array_length>
