@@ -1003,6 +1003,89 @@ void verify_invariants( BPTree const & bpt, std::string_view context = "" )
     }
 }
 
+// A sorted bulk build fills its inner nodes as well as its leaves: only the
+// last two nodes of a level can be less than full, so the tree comes out as
+// shallow, and made of as few nodes, as the node geometry allows.
+TEST( bp_tree, bulk_insert_fills_inner_nodes )
+{
+    using tree_t = bptree_set<int>;
+    int constexpr leaf_capacity{ tree_t::leaf_node ::max_values   };
+    int constexpr fanout       { tree_t::inner_node::max_children };
+
+    // each level made of as few nodes as can hold the level below it
+    auto const fewest_nodes{ []( int const keys ) noexcept
+    {
+        auto level{ ( keys + leaf_capacity - 1 ) / leaf_capacity };
+        auto total{ level };
+        while ( level > 1 ) {
+            level  = ( level + fanout - 1 ) / fanout;
+            total += level;
+        }
+        return static_cast<std::uint32_t>( total );
+    } };
+
+    // Erasing the largest keys one at a time drives the right edge - the only
+    // place a bulk build leaves nodes less than full - through the underflow
+    // handling, whose checks are what hold the minimum fill.  One leaf
+    // parent's worth reaches the level above the leaf parents as well.
+    int constexpr tail{ fanout * leaf_capacity };
+    auto const erase_tail{ []( tree_t & bpt, int const end )
+    {
+        auto const new_end{ std::max( 0, end - tail ) };
+        for ( auto key{ end }; key-- > new_end; ) {
+            ASSERT_TRUE( bpt.erase( key ) ) << key;
+        }
+        EXPECT_EQ( bpt.size(), static_cast<std::size_t>( new_end ) );
+        EXPECT_TRUE( std::ranges::equal( bpt, std::views::iota( 0, new_end ) ) );
+    } };
+
+    // In leaves: one more than an inner node holds, which leaves the new
+    // rightmost inner node a lone child to be topped up; two inner nodes'
+    // worth, and one leaf more; and one more than two inner levels hold, which
+    // opens a node with a single child at two levels at once.  Each also with
+    // a last leaf holding a single key.
+    for ( auto const leaves : { fanout + 1, 2 * fanout, 2 * fanout + 1, fanout * fanout + 1 } )
+    {
+        for ( auto const short_by : { 0, leaf_capacity - 1 } )
+        {
+            // the deepest case takes too many keys at the widest nodes - more
+            // than an int holds, at some - and is skipped there
+            auto const wide_size{ std::int64_t{ leaves } * leaf_capacity - short_by };
+            if ( wide_size > 2'000'000 )
+                continue;
+            auto const size{ static_cast<int>( wide_size ) };
+            tree_t bpt;
+            bpt.map_memory();
+            EXPECT_EQ( bpt.insert( std::views::iota( 0, size ) ), static_cast<std::size_t>( size ) );
+            EXPECT_EQ( bpt.nodes_used(), fewest_nodes( size ) ) << size << " keys";
+            verify_invariants( bpt, "bulk insert" );
+            erase_tail( bpt, size );
+        }
+    }
+
+    // Appending in runs: onto a lone root, then onto a deeper tree, each run
+    // following the top-up the previous one ended with - through both
+    // insert( range ) and insert_presorted, which reach the right edge
+    // separately.
+    {
+        auto const run{ ( 2 * fanout + 1 ) * leaf_capacity + leaf_capacity / 2 };
+        tree_t bpt;
+        bpt.map_memory();
+        auto end{ 3 };
+        EXPECT_EQ( bpt.insert( std::views::iota( 0, end ) ), static_cast<std::size_t>( end ) );
+        EXPECT_EQ( bpt.insert( std::views::iota( end, end + run ) ), static_cast<std::size_t>( run ) );
+        end += run;
+        auto const presorted{ std::ranges::to<std::vector>( std::views::iota( end, end + run ) ) };
+        EXPECT_EQ( bpt.insert_presorted( presorted ), static_cast<std::size_t>( run ) );
+        end += run;
+        EXPECT_EQ( bpt.insert( std::views::iota( end, end + run ) ), static_cast<std::size_t>( run ) );
+        end += run;
+        EXPECT_TRUE( std::ranges::equal( bpt, std::views::iota( 0, end ) ) );
+        verify_invariants( bpt, "bulk appends" );
+        erase_tail( bpt, end );
+    }
+}
+
 
 namespace {
     std::vector<int> indirect_values;

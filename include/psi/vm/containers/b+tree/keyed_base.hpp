@@ -984,13 +984,11 @@ protected: // 'other'
                     break;
                 }
             }
-            auto & rightmost_parent{ inner( rightmost_parent_pos.node ) };
-            BOOST_ASSUME( rightmost_parent_pos.next_insert_offset == rightmost_parent.num_vals );
+            BOOST_ASSUME( rightmost_parent_pos.next_insert_offset == inner( rightmost_parent_pos.node ).num_vals );
             auto const src_slot{ slot_of( *src_leaf ) };
-            rightmost_parent_pos = insert // add src_leaf into (a) parent
+            rightmost_parent_pos = bulk_append_child // add src_leaf into (a) parent
             (
-                rightmost_parent,
-                rightmost_parent_pos.next_insert_offset,
+                rightmost_parent_pos.node,
                 key_rv_arg{ /*mrmlj*/Key{ src_leaf->key( 0 ) } },
                 src_slot
             );
@@ -1001,6 +999,97 @@ protected: // 'other'
             src_leaf = &leaf( next_src_slot );
         }
         set_last_leaf( hdr(), slot_of( *src_leaf ) );
+        bulk_append_fill_right_edge();
+    }
+    // Add a child, and the separator in front of it, behind everything in the
+    // rightmost inner node of its level - the only place a bulk append ever
+    // adds to.  A full node is not split in half, the way insert() splits one:
+    // that leaves every inner node a bulk build passes through half empty,
+    // and the tree a level deeper than its fanout calls for.  It is left as it
+    // is, full, and a new rightmost node is opened next to it holding only the
+    // new child, with the separator going up to the parent - also its level's
+    // rightmost node - the same way.  An opened node holds no key until the
+    // next child arrives and can still be short of the minimum when the run
+    // ends; bulk_append_fill_right_edge tops it up then.
+    insert_pos_t bulk_append_child( node_slot const target_slot, key_rv_arg separator, node_slot const child )
+    {
+        auto & target{ inner( target_slot ) };
+        BOOST_ASSUME( !target.right );
+        if ( !full( target ) ) [[ likely ]] {
+            return insert( target, target.num_vals, std::move( separator ), child );
+        }
+
+        auto const [full_slot, opened_slot]{ bptree_base::new_spillover_node_for( target ) }; // may relocate the pool
+        auto & opened{ inner( opened_slot ) };
+        BOOST_ASSUME( opened.num_vals == 0 );
+        insrt_child( opened, 0, child, opened_slot );
+        auto & full_node{ inner( full_slot ) };
+        if ( full_node.is_root() ) [[ unlikely ]] {
+            new_root( full_slot, opened_slot, std::move( separator ) );
+        } else {
+            BOOST_ASSUME( full_node.parent_child_idx == parent( full_node ).num_vals );
+            bulk_append_child( full_node.parent, std::move( separator ), opened_slot );
+        }
+        return { opened_slot, 0 };
+    }
+    // The other half of bulk_append_child: the rightmost inner node of a level
+    // can be left with fewer children than the minimum when a run ends - as
+    // few as one - but only if bulk_append_child opened it, next to a node it
+    // left full.  It takes what it is missing from the back of that left
+    // sibling, which is left no less than half full.  Top-down, because until
+    // the level above has been topped up a node opened with a lone child can
+    // be its parent's only child, its left sibling under a different parent;
+    // once its parent has the minimum the two share it.  The root needs only
+    // two children, and the leaves were topped up as the run was linked in
+    // (bulk_append_fill_leaf_if_incomplete).
+    void bulk_append_fill_right_edge() noexcept
+    {
+        auto const depth{ hdr().depth_ };
+        auto parent_slot{ hdr().root_ };
+        for ( depth_t level{ 1 }; level + 1 < depth; ++level )
+        {
+            auto &     parent        { inner( parent_slot ) };
+            auto const rightmost_slot{ parent.children().back() };
+            auto &     rightmost     { inner( rightmost_slot ) };
+            parent_slot = rightmost_slot;
+            if ( !underflowed( rightmost ) ) [[ likely ]]
+                continue;
+
+            BOOST_ASSUME( parent.num_vals > 0 );
+            BOOST_ASSERT( parent.children()[ parent.num_vals - 1 ] == rightmost.left );
+            auto &               left_sibling{ left( rightmost ) };
+            node_size_type const missing( inner_node::min_values - rightmost.num_vals );
+            BOOST_ASSUME( left_sibling.num_vals >= inner_node::min_values + missing );
+
+            // Make room: the node's own entries and children move 'missing'
+            // slots in - NB the children by hand, and never through
+            // num_chldrn(), as the node can still be one without a key.
+            shift_entries_right( rightmost, 0, rightmost.num_vals + missing, missing );
+            for ( auto ch{ rightmost.num_vals + 1 }; ch-- > 0; )
+            {
+                auto const ch_slot{ rightmost.children_[ ch ] };
+                rightmost.children_[ ch + missing ] = ch_slot;
+                node( ch_slot ).parent_child_idx = static_cast<node_header::child_index_type>( ch + missing );
+                this->mark_dirty( ch_slot );
+            }
+            // Rotate the left sibling's last 'missing' children over through
+            // the parent, as handle_underflow does one at a time: the
+            // separator comes down in front of the node's own first child and
+            // the key in front of the first child moved goes up in its place.
+            auto & separator{ parent.keys().back() };
+            rightmost.key( missing - 1 ) = std::move( separator );
+            move_entries( left_sibling, left_sibling.num_vals - ( missing - 1 ), left_sibling.num_vals, rightmost, 0 );
+            separator = std::move( left_sibling.key( left_sibling.num_vals - missing ) );
+            move_chldrn ( left_sibling, left_sibling.num_vals + 1 - missing, left_sibling.num_vals + 1, rightmost, 0 );
+            left_sibling.num_vals -= missing;
+            rightmost   .num_vals += missing;
+
+            this->mark_dirty( rightmost   , rightmost_slot );
+            this->mark_dirty( left_sibling, rightmost.left );
+            this->mark_dirty( parent      , rightmost.parent );
+            verify_min_max( left_sibling );
+            verify_min_max( rightmost    );
+        }
     }
     [[ gnu::noinline ]]
     size_t bulk_append( node_header const & tgt_leaf, leaf_node & src_leaf, size_t const total_insertion_size, iter_pos const end_pos, node_slot const begin_leaf )
