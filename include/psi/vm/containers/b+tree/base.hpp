@@ -96,6 +96,31 @@ template <typename T> requires requires{ T{}.size(); } constexpr bool is_statica
 #   define PSI_VM_BT_FRONT_GAP_COMPILED 1
 #endif
 
+// Software prefetch on the way down (bp_tree_impl::find_nodes_for): as soon as
+// the next child's slot is known, request this many of its 64-byte lines.  0
+// turns it off; the default covers a whole 512-byte node.
+//
+// Left to demand loads, a cold node's lines are requested only as its search
+// reaches them: the header first (num_vals bounds the search, and a leaf with a
+// front gap addresses its keys through its start), then whichever keys the
+// search touches - one probe after another for a bisection.  The slot alone,
+// though, already fixes where every line of the node is, so they can all be
+// requested at once, before anything of the child has arrived.  The addresses are compile-time offsets
+// from the node's base; only a leaf with a front gap, whose entries move with
+// its start, reads that start (from the header line) to place the lines past
+// the header.
+//
+// Which lines, when the extent is less than a whole node: a node searched by a
+// linear scan is fetched from the front of its entries, where the scan starts.  A node
+// searched by bisection gets its header line plus a band ending at the line of
+// a FULL node's first probe, keys_[max_values/2]: the first probe of a node
+// holding n values is keys_[n/2] (keys_[start + n/2] with a front gap, where
+// the band moves with start), never above that line, so the band catches it
+// for any fill from full down to however far the band reaches.
+#ifndef PSI_VM_BT_PREFETCH_LINES
+#   define PSI_VM_BT_PREFETCH_LINES 8
+#endif
+
 // The value limit + eligibility live in lookup.hpp (shared, measured); the node
 // capacity is a compile-time constant here so the dispatch is compile-time.
 template <typename Comparator, typename Key, std::uint32_t maximum_array_length>
