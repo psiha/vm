@@ -196,6 +196,11 @@ public:
 
     storage_result map_file  ( auto file, flags::named_object_construction_policy, header_info = {} ) noexcept;
     storage_result map_memory( std::uint32_t initial_capacity_as_number_of_nodes = 0, header_info = {} ) noexcept;
+    // map_memory() for a tree that will be COW cloned (see the copy
+    // constructor): on Linux the node pool is memfd-backed, so a clone shares
+    // its pages (dup + MAP_PRIVATE) instead of copying the whole pool up front.
+    // Elsewhere it is exactly map_memory().
+    storage_result map_cow_memory( std::uint32_t initial_capacity_as_number_of_nodes = 0, header_info = {} ) noexcept;
 
     std::span<std::byte> user_header_data() noexcept;
 
@@ -627,6 +632,8 @@ private:
     header & get_hdr() noexcept;
 
     void assign_nodes_to_free_pool( node_slot::value_type starting_node ) noexcept;
+
+    void init_fresh_pool( std::uint32_t initial_capacity_as_number_of_nodes ) noexcept;
 
     void update_leaf_list_ends( node_header & removed_leaf ) noexcept;
 
