@@ -185,17 +185,19 @@ public:
     // would, and every handover moves the entries it displaces.
     // -DPSI_VM_BT_FRONT_GAP=0|1.
     //
+    // Only a leaf pays for the runtime start.  An inner node never carries a
+    // gap and addresses its keys and children from a compile-time 0
+    // (node_header::live_start), so a descent loads start once, at the leaf it
+    // ends in - where it sits on the address path of the leaf's keys, which
+    // cannot be addressed until the leaf's header has arrived.
+    //
     // On by default because it pays where moves are long: with page-sized
     // (4096-byte) nodes, random insertion into a large tree measured 12% and
-    // bulk erasure 26% faster, and lookup is unaffected.  With 512-byte nodes it
-    // costs: against this switch turned off, lookup and random insertion
-    // measured 15-20% slower and bulk insertion 5-13% (7.6M int keys, x86-64
-    // Linux; the lookup cost survives forced code alignment).  Most of that is
-    // the start field itself rather than the gap - a runtime start has to be
-    // loaded before a node's keys can be addressed, on every node a search
-    // visits, and a small-node tree visits more of them.  Both the cost and the
-    // benefit scale with node size, so this could be decided per node geometry
-    // rather than globally.
+    // bulk erasure 26% faster, and lookup is unaffected.  With 512-byte nodes
+    // the moves it saves are short while every search still waits on its
+    // leaf's start, so there it costs.  Both the cost and the benefit scale
+    // with node size, so this could be decided per node geometry rather than
+    // globally.
 #ifndef PSI_VM_BT_FRONT_GAP
 #   define PSI_VM_BT_FRONT_GAP 1
 #endif
@@ -360,22 +362,39 @@ protected:
 
         [[ gnu::pure ]] bool is_root() const noexcept { return !parent; }
 
-        // A node's own view of its entries.  The live ones begin at `start` (the
-        // front gap), so every index into them goes through here rather than
-        // through the storage arrays - which the node types therefore name for
-        // what they are: keys_ and children_.  Defined once, here, for every node
-        // type: `self` is the derived node, which is where the arrays and the
-        // key type live.
-        [[ gnu::pure ]] constexpr decltype( auto ) key( this auto & self, auto const i ) noexcept { return ( self.keys_[ self.start + i ] ); }
+        // Where a node's live entries begin in its storage arrays: at a leaf's
+        // front gap, and at a compile-time 0 for an inner node - which never
+        // carries a gap, so its keys and children are addressed from the
+        // node's address alone.  That the stored field is 0 is asserted here,
+        // on every read, which also catches a leaf read through an inner
+        // node's type.  A runtime start sits on the address path of every key
+        // load: a search cannot issue its first probe into a node until the
+        // node's header has arrived, so a descent pays that once, at the leaf,
+        // rather than at every level.  Same type as the field, so every index
+        // computed from it promotes exactly as one computed from the field.
+        [[ gnu::pure ]] constexpr std::uint8_t live_start( this auto const & self ) noexcept
+        {
+            if constexpr ( requires{ self.children_; } ) { BOOST_ASSERT( !self.start ); return 0; }
+            else                                         return self.start;
+        }
+
+        // A node's own view of its entries.  The live ones begin at
+        // live_start() (a leaf's front gap), so every index into them goes
+        // through here rather than through the storage arrays - which the node
+        // types therefore name for what they are: keys_ and children_.  Defined
+        // once, here, for every node type: `self` is the derived node, which is
+        // where the arrays and the key type live.
+        [[ gnu::pure ]] constexpr decltype( auto ) key( this auto & self, auto const i ) noexcept { return ( self.keys_[ self.live_start() + i ] ); }
         [[ gnu::pure ]] constexpr auto keys( this auto & self ) noexcept
         {
             BOOST_ASSUME( self.num_vals <= self.max_values );
-            return std::span{ &self.keys_[ self.start ], static_cast<std::size_t>( self.num_vals ) };
+            return std::span{ &self.keys_[ self.live_start() ], static_cast<std::size_t>( self.num_vals ) };
         }
         [[ gnu::pure ]] constexpr auto children( this auto & self ) noexcept
         {
             BOOST_ASSUME( self.num_vals <= self.max_values );
-            if constexpr ( requires{ self.children_; } ) return std::span{ &self.children_[ self.start ], static_cast<std::size_t>( self.num_vals + 1U ) };
+            // only an inner node has children, and an inner node has no gap
+            if constexpr ( requires{ self.children_; } ) return std::span{ &self.children_[ 0 ], static_cast<std::size_t>( self.num_vals + 1U ) };
             else                                         return std::array<node_slot, 0>{};
         }
         [[ gnu::pure ]] constexpr size_type num_chldrn( this auto const & self ) noexcept
@@ -498,8 +517,10 @@ protected:
     // would have to be folded into.
     static void verify_gap( auto const & node ) noexcept
     {
-        BOOST_ASSERT( std::size_t{ node.start } + node.num_vals <= node.max_values );
-        BOOST_ASSUME( std::size_t{ node.start } + node.num_vals <= node.max_values );
+        // the stored field is checked, the assumption is about the index used
+        BOOST_ASSERT( std::size_t{ node.start        } + node.num_vals <= node.max_values );
+        BOOST_ASSUME( std::size_t{ node.live_start() } + node.num_vals <= node.max_values );
+        // what lets live_start() read an inner node's start as a constant 0
         if constexpr ( requires{ node.children_; } )
             BOOST_ASSERT( !node.start );
     }
@@ -527,12 +548,12 @@ protected:
     template <auto array>
     static auto rshift( auto & node, node_size_type const start_offset, node_size_type const end_offset ) noexcept
     {
-        auto const max{ std::size( node.*array ) - node.start };
+        auto const max{ std::size( node.*array ) - node.live_start() };
         BOOST_ASSUME(   end_offset <= max        );
         BOOST_ASSUME( start_offset  < max        );
         BOOST_ASSUME( start_offset  < end_offset );
-        auto const begin{ &(node.*array)[ node.start + start_offset ] };
-        auto const end  { &(node.*array)[ node.start +   end_offset ] };
+        auto const begin{ &(node.*array)[ node.live_start() + start_offset ] };
+        auto const end  { &(node.*array)[ node.live_start() +   end_offset ] };
         auto const new_begin{ std::shift_right( begin, end, 1 ) };
         BOOST_ASSUME( new_begin == begin + 1 );
         return std::span{ new_begin, end };
@@ -542,12 +563,12 @@ protected:
     template <auto array>
     static auto lshift( auto & node, node_size_type const start_offset, node_size_type const end_offset ) noexcept
     {
-        auto const max{ std::size( node.*array ) - node.start };
+        auto const max{ std::size( node.*array ) - node.live_start() };
         BOOST_ASSUME(   end_offset <= max        );
         BOOST_ASSUME( start_offset  < max        );
         BOOST_ASSUME( start_offset  < end_offset );
-        auto const begin{ &(node.*array)[ node.start + start_offset ] };
-        auto const end  { &(node.*array)[ node.start +   end_offset ] };
+        auto const begin{ &(node.*array)[ node.live_start() + start_offset ] };
+        auto const end  { &(node.*array)[ node.live_start() +   end_offset ] };
         auto const new_end{ std::shift_left( begin, end, 1 ) };
         BOOST_ASSUME( new_end == end - 1 );
         return std::span{ begin, new_end };
@@ -603,7 +624,7 @@ protected:
     [[ gnu::pure ]] static constexpr node_size_type tail_room( auto const & node ) noexcept
     {
         verify_gap( node );
-        return static_cast<node_size_type>( node.max_values - node.start - node.num_vals );
+        return static_cast<node_size_type>( node.max_values - node.live_start() - node.num_vals );
     }
 
     // Make room at logical position 'pos' by moving the entries BELOW it one
