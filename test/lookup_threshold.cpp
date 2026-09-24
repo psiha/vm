@@ -384,6 +384,33 @@ TEST( lookup, branchless_agrees_with_std_uint32 ) { check_branchless_agrees_with
 TEST( lookup, branchless_agrees_with_std_uint64 ) { check_branchless_agrees_with_std<std::uint64_t>(); }
 TEST( lookup, branchless_agrees_with_std_float  ) { check_branchless_agrees_with_std<float       >(); }
 
+////////////////////////////////////////////////////////////////////////////////
+// Which keys the transparent comparators may scan: any scalar, and a class type
+// only when it says its ordering reads nothing but itself.
+////////////////////////////////////////////////////////////////////////////////
+
+namespace direct_ordering
+{
+    enum class small_enum : std::uint16_t {};
+    struct strong_id {
+        std::uint32_t value;
+        constexpr auto operator<=>( strong_id const & ) const noexcept = default;
+        static constexpr bool orders_directly{ true };
+    };
+    struct silent_id { // the same shape, but it does not say so
+        std::uint32_t value;
+        constexpr auto operator<=>( silent_id const & ) const noexcept = default;
+    };
+
+    static_assert(  linear_search_eligible<std::less<>          , std::uint32_t > );
+    static_assert(  linear_search_eligible<std::less<>          , small_enum    > );
+    static_assert(  linear_search_eligible<std::ranges::less    , int const *   > );
+    static_assert(  linear_search_eligible<std::less<>          , strong_id     > );
+    static_assert(  linear_search_eligible<std::greater<>       , strong_id     > );
+    static_assert( !linear_search_eligible<std::less<>          , silent_id     > );
+    static_assert( !linear_search_eligible<std::ranges::greater , silent_id     > );
+} // namespace direct_ordering
+
 //------------------------------------------------------------------------------
 } // namespace psi::vm
 //------------------------------------------------------------------------------
