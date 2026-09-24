@@ -1120,6 +1120,36 @@ TEST( cow, bptree_cow_expand )
 // reserved pool through it - so without care a tree nobody has touched owes its
 // entire pool to the first commit_to() of its first COW clone.  Measured before
 // the fix: 169 of the 170 nodes that commit copied held no values at all.
+// The dirty set is indexed by node, so it belongs to a pool: when two trees
+// swap pools (merge into an empty tree does exactly that) each must take the
+// other's set with it.  Left behind, the set is sized for the wrong pool, and
+// the next node allocated past its end is marked outside it.
+TEST( bptree_cow, swapped_pools_keep_their_dirty_sets )
+{
+    bptree_set<int> filled;
+    filled.map_memory( 200 * bptree_set<int>::node_byte_size() / sizeof( int ) );
+    std::vector<int> values( 20000 );
+    std::iota( values.begin(), values.end(), 0 );
+    filled.insert( values );
+
+    bptree_set<int> empty;
+    empty.map_memory();
+    ASSERT_EQ( empty.merge( std::move( filled ) ), values.size() ); // takes the pool over
+
+    // grow the adopted pool well past what the set it arrived with would cover -
+    // one key at a time: a bulk insert reserves first, and reserving resizes
+    // the set, which would hide a set left behind by the swap
+    std::iota( values.begin(), values.end(), 100000 );
+    for ( auto const v : values )
+        empty.insert( v );
+    EXPECT_EQ( empty.size(), 2 * values.size() );
+    EXPECT_GT( empty.nodes_dirty(), 0u );
+    EXPECT_LE( empty.nodes_dirty(), empty.nodes_reserved() );
+    // and the tree that got the empty pool is just as usable
+    filled.insert( values );
+    EXPECT_EQ( filled.size(), values.size() );
+}
+
 TEST( bptree_cow, a_fresh_tree_owes_a_commit_nothing )
 {
     bptree_set<int> src;
