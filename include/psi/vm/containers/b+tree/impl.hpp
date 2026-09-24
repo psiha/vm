@@ -415,7 +415,7 @@ protected:
 
 
     [[ using gnu: pure, hot, sysv_abi, noinline ]]
-    base::key_locations find_nodes_for( Reg auto const key, bool const nonuniques_span_across_nodes_check_not_needed ) noexcept
+    base::key_locations find_nodes_for( Reg auto const key, bool const unique ) noexcept
     {
         node_slot      separator_key_node;
         node_size_type separator_key_offset{};
@@ -425,51 +425,95 @@ protected:
         auto       current_node{ this->hdr().root_  };
         auto const depth       { this->hdr().depth_ };
         BOOST_ASSUME( depth >= 1 );
-        for ( auto level{ 0 }; level < depth - 1; ++level )
+        // The upper bound descent below needs the searched key to be
+        // equivalent to at most one key of the tree.  In a unique tree that
+        // holds for a lookup of the tree's own Key type, and for any lookup
+        // through a comparator that is not transparent (it compares the lookup
+        // as a Key).  A heterogeneous lookup through a transparent comparator
+        // can be equivalent to a whole run of keys - the upper bound would
+        // pass every separator of that run and land on its last leaf rather
+        // than on its first - so it takes the lower bound descent, the one
+        // non-unique trees take for their runs of copies.
+        constexpr bool key_lookup{ !transparent_comparator || std::is_same_v<reg_value_t<decltype( key )>, Key> };
+        if ( unique && key_lookup ) [[ likely ]]
         {
-            auto const & node{ this->inner( current_node ) };
-            auto [pos, exact_find]{ lower_bound( node, key ) };
-            if ( exact_find ) [[ unlikely ]] // "most keys are in leaves"
+            // Descend by upper bound.  With unique separators the first key
+            // greater than the searched one is exactly the child to follow (a
+            // separator equal to the searched key sits just left of it and
+            // sends the search to its right child anyway), so the next node's
+            // address hangs off the search result alone.  The lower bound form
+            // (the non-unique loop below) cannot know which child to take until
+            // it has reloaded the key it stopped at and tested it for equality:
+            // a dependent load and compare on the pointer chase at every level,
+            // i.e. on the latency of every lookup.
+            // An equal separator is still reported (erase must update it, and
+            // it lets the leaf search be skipped), but it is looked for once,
+            // after the descent, off that chain: it can only be the key left of
+            // the LAST right turn - the deepest level whose position is not
+            // zero - because every separator under such a separator's right
+            // child is ordered after it, so below it the descent takes the
+            // first child at every level.
+            node_slot      right_turn_node;
+            node_size_type right_turn_pos{};
+            for ( auto level{ 0 }; level < depth - 1; ++level )
             {
-                // separator key - it also means we have to traverse to the right
-
-                // In non unique instances it may happen that so many copies of
-                // a key K are inserted that they spill into more than one leaf
-                // (or even inner nodes in more extreme cases) - in case K
-                // starts to appear later than from the beginning of the first
-                // leaf (KL1), the parent will contain a separator key K that
-                // would 'point' the downward search below to the right sibling
-                // of KL1 (because the said right sibling contains K copies
-                // again, from its beginning) - to blindly follow to the right
-                // child/sibling would be a mistake as we would skip the first
-                // K appearance in the left child/sibling (i.e. incorrect lower
-                // bound behaviour).
-                // This check requires extra memory access so we rather pay with
-                // extra, predictable, branching through the added 
-                // nonuniques_span_across_nodes_check_not_needed argument
-                // (typically unique instances would set it to signal this
-                // behaviour is not needed).
-                PSI_WARNING_DISABLE_PUSH()
-                PSI_WARNING_GCC_OR_CLANG_DISABLE( -Winvalid-offsetof )
-                // At ( level == depth - 2 ) the child would already be a leaf,
-                // however node layout/design guarantees that keys start at the
-                // same offset regardless (only the capacity of the array
-                // differs).
-                static_assert( offsetof( inner_node, keys_ ) == offsetof( leaf_node, keys_ ) );
-                PSI_WARNING_DISABLE_POP()
-                if
-                (
-                    nonuniques_span_across_nodes_check_not_needed ||
-                    lt( this->leaf( node.children_[ pos ] ).keys().back(), key )
-                ) [[ likely ]]
-                {
-                    // BOOST_ASSUME( !separator_key_node || !unique ); // exact_find may happen at most once (in unique trees :/)
-                    separator_key_node   = current_node;
-                    separator_key_offset = pos;
-                    ++pos; // traverse to the right child
-                }
+                auto const & node{ this->inner( current_node ) };
+                auto const   pos { upper_bound( node, key ) };
+                // selects rather than a branch: pos is zero about once per
+                // node fanout, often enough to cost mispredictions
+                right_turn_node = pos ? current_node : right_turn_node;
+                right_turn_pos  = pos ? pos          : right_turn_pos;
+                current_node = node.children_[ pos ];
             }
-            current_node = node.children_[ pos ];
+            if ( right_turn_pos && !lt( this->inner( right_turn_node ).key( right_turn_pos - 1 ), key ) ) [[ unlikely ]] // "most keys are in leaves"
+            {
+                separator_key_node   = right_turn_node;
+                separator_key_offset = right_turn_pos - 1;
+            }
+        }
+        else
+        {
+            for ( auto level{ 0 }; level < depth - 1; ++level )
+            {
+                auto const & node{ this->inner( current_node ) };
+                auto [pos, exact_find]{ lower_bound( node, key ) };
+                if ( exact_find ) [[ unlikely ]] // "most keys are in leaves"
+                {
+                    // separator key - it also means we have to traverse to the right
+
+                    // In non unique instances it may happen that so many copies of
+                    // a key K are inserted that they spill into more than one leaf
+                    // (or even inner nodes in more extreme cases) - in case K
+                    // starts to appear later than from the beginning of the first
+                    // leaf (KL1), the parent will contain a separator key K that
+                    // would 'point' the downward search below to the right sibling
+                    // of KL1 (because the said right sibling contains K copies
+                    // again, from its beginning) - to blindly follow to the right
+                    // child/sibling would be a mistake as we would skip the first
+                    // K appearance in the left child/sibling (i.e. incorrect lower
+                    // bound behaviour).
+                    // A heterogeneous lookup in a unique tree can be equivalent
+                    // to such a run of (distinct) keys just the same.
+                    // This check requires an extra memory access, which key
+                    // lookups in unique trees avoid by taking the upper bound
+                    // descent above instead (where no run can exist).
+                    PSI_WARNING_DISABLE_PUSH()
+                    PSI_WARNING_GCC_OR_CLANG_DISABLE( -Winvalid-offsetof )
+                    // At ( level == depth - 2 ) the child would already be a leaf,
+                    // however node layout/design guarantees that keys start at the
+                    // same offset regardless (only the capacity of the array
+                    // differs).
+                    static_assert( offsetof( inner_node, keys_ ) == offsetof( leaf_node, keys_ ) );
+                    PSI_WARNING_DISABLE_POP()
+                    if ( lt( this->leaf( node.children_[ pos ] ).keys().back(), key ) ) [[ likely ]]
+                    {
+                        separator_key_node   = current_node;
+                        separator_key_offset = pos;
+                        ++pos; // traverse to the right child
+                    }
+                }
+                current_node = node.children_[ pos ];
+            }
         }
         auto & leaf{ this->leaf( current_node ) };
         return
