@@ -18,6 +18,7 @@
 #include <boost/stl_interfaces/sequence_container_interface.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -414,7 +415,63 @@ protected:
         return { { slot_of( *p_node ), pos }, count };
     }
 
+private:
+    // The byte offsets, within a node of type N, of the lines prefetch_child()
+    // requests - see PSI_VM_BT_PREFETCH_LINES for which lines and why.  They are
+    // constants, so the prefetches depend on the child's slot and nothing else.
+    template <typename N>
+    static consteval auto make_prefetch_offsets() noexcept
+    {
+        std::uint32_t constexpr line_size { 64 };
+        std::uint32_t constexpr node_lines{ sizeof( N ) / line_size };
+        std::uint32_t constexpr count     { std::min<std::uint32_t>( PSI_VM_BT_PREFETCH_LINES, node_lines ) };
+        std::array<std::uint32_t, count> offsets{};
+        if constexpr ( ( count == node_lines ) || use_linear_search_for_sorted_array<Comparator, Key, N::max_values> )
+        {
+            // the whole node, or the front of it a scan starts from
+            for ( std::uint32_t line{ 0 }; line < count; ++line ) { offsets[ line ] = line * line_size; }
+        }
+        else if constexpr ( count != 0 )
+        {
+            // the header line, and the band ending at a full node's first probe
+            // (at or above line 1: the header line is already the first entry)
+            std::uint32_t constexpr keys_offset{ sizeof( N ) - N::storage_space };
+            std::uint32_t constexpr probe_line { ( keys_offset + sizeof( Key ) * ( N::max_values / 2 ) ) / line_size };
+            std::uint32_t constexpr band_top   { std::max( probe_line, count - 1 ) };
+            offsets[ 0 ] = 0;
+            for ( std::uint32_t line{ 1 }; line < count; ++line ) { offsets[ line ] = ( band_top - ( count - 1 ) + line ) * line_size; }
+        }
+        return offsets;
+    }
+    template <typename N>
+    static constexpr auto prefetch_offsets{ make_prefetch_offsets<N>() };
 
+    // Unrolled by construction: one prefetch per line at a constant
+    // displacement - as a loop over the table (which is what -Os leaves it
+    // as) each prefetch would first have to load its offset.
+    template <typename N, std::size_t... line>
+    [[ gnu::always_inline ]] static void prefetch_offsets_from( std::byte const * const node_bytes, std::index_sequence<line...> ) noexcept
+    {
+        ( prefetch_for_read( node_bytes + prefetch_offsets<N>[ line ] ), ... );
+    }
+    template <typename N>
+    [[ gnu::always_inline ]] void prefetch_lines( node_slot const slot ) const noexcept
+    {
+        static_assert( std::ranges::all_of( prefetch_offsets<N>, []( std::uint32_t const offset ) { return offset < sizeof( N ); } ) );
+        prefetch_offsets_from<N>( reinterpret_cast<std::byte const *>( &this->node( slot ) ), std::make_index_sequence<prefetch_offsets<N>.size()>{} );
+    }
+    // Start fetching the child a descent is about to search, from its slot
+    // alone (PSI_VM_BT_PREFETCH_LINES).
+    [[ gnu::always_inline ]] void prefetch_child( node_slot const child, bool const child_is_inner ) const noexcept
+    {
+        // With the same lines for either kind of node (a whole 512-byte one, or
+        // a front for both scans) there is nothing to choose, so no branch.
+        if constexpr ( prefetch_offsets<inner_node> == prefetch_offsets<leaf_node> ) { prefetch_lines<leaf_node>( child ); }
+        else if ( child_is_inner )                                                   { prefetch_lines<inner_node>( child ); }
+        else                                                                         { prefetch_lines<leaf_node >( child ); }
+    }
+
+protected:
     [[ using gnu: pure, hot, sysv_abi, noinline ]]
     base::key_locations find_nodes_for( Reg auto const key, bool const unique ) noexcept
     {
@@ -455,6 +512,8 @@ protected:
                 right_turn_node = pos ? current_node : right_turn_node;
                 right_turn_pos  = pos ? pos          : right_turn_pos;
                 current_node = node.children_[ pos ];
+                // the child is itself an inner node until the last inner level
+                prefetch_child( current_node, level + 2 < depth );
             }
             if ( right_turn_pos && !lt( this->inner( right_turn_node ).key( right_turn_pos - 1 ), key ) ) [[ unlikely ]] // "most keys are in leaves"
             {
@@ -502,6 +561,7 @@ protected:
                     }
                 }
                 current_node = node.children_[ pos ];
+                prefetch_child( current_node, level + 2 < depth );
             }
         }
         auto & leaf{ this->leaf( current_node ) };
