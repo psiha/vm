@@ -417,7 +417,7 @@ protected:
 
 
     [[ using gnu: pure, hot, sysv_abi, noinline ]]
-    base::key_locations find_nodes_for( Reg auto const key, bool const nonuniques_span_across_nodes_check_not_needed ) noexcept
+    base::key_locations find_nodes_for( Reg auto const key, bool const unique ) noexcept
     {
         node_slot      separator_key_node;
         node_size_type separator_key_offset{};
@@ -427,37 +427,82 @@ protected:
         auto       current_node{ this->hdr().root_  };
         auto const depth       { this->hdr().depth_ };
         BOOST_ASSUME( depth >= 1 );
-        for ( auto level{ 0 }; level < depth - 1; ++level )
+        // The upper bound descent below needs the searched key to be
+        // equivalent to at most one key of the tree.  In a unique tree that
+        // holds for a lookup of the tree's own Key type, and for any lookup
+        // through a comparator that is not transparent (it compares the lookup
+        // as a Key).  A heterogeneous lookup through a transparent comparator
+        // can be equivalent to a whole run of keys - the upper bound would
+        // pass every separator of that run and land on its last leaf rather
+        // than on its first - so it takes the lower bound descent, the one
+        // non-unique trees take for their runs of copies.
+        constexpr bool key_lookup{ !transparent_comparator || std::is_same_v<reg_value_t<decltype( key )>, Key> };
+        if ( unique && key_lookup ) [[ likely ]]
         {
-            auto const & node{ this->inner( current_node ) };
-            auto [pos, exact_find]{ lower_bound( node, key ) };
-            if ( exact_find ) [[ unlikely ]] // "most keys are in leaves"
+            // Descend by upper bound.  With unique separators the first key
+            // greater than the searched one is exactly the child to follow (a
+            // separator equal to the searched key sits just left of it and
+            // sends the search to its right child anyway), so the next node's
+            // address hangs off the search result alone.  The lower bound form
+            // (the non-unique loop below) cannot know which child to take until
+            // it has reloaded the key it stopped at and tested it for equality:
+            // a dependent load and compare on the pointer chase at every level,
+            // i.e. on the latency of every lookup.
+            // An equal separator is still reported (erase must update it, and
+            // it lets the leaf search be skipped), but it is looked for once,
+            // after the descent, off that chain: it can only be the key left of
+            // the LAST right turn - the deepest level whose position is not
+            // zero - because every separator under such a separator's right
+            // child is ordered after it, so below it the descent takes the
+            // first child at every level.
+            node_slot      right_turn_node;
+            node_size_type right_turn_pos{};
+            for ( auto level{ 0 }; level < depth - 1; ++level )
             {
-                // separator key: the first key of the right child's subtree
-                separator_key_node   = current_node;
-                separator_key_offset = pos;
-                // In non unique instances copies of the key can also END the
-                // left child's subtree - a run of equal keys may start
-                // anywhere in its last leaf (or span several leaves and inner
-                // nodes). The left subtree is therefore searched with plain
-                // lower bound semantics and, should all of its keys turn out
-                // to be smaller, the leaf level resolves to the right sibling
-                // (whose first key is this separator).
-                // Unique instances (typically) skip this through the
-                // nonuniques_span_across_nodes_check_not_needed argument and
-                // go right directly.
-                if ( nonuniques_span_across_nodes_check_not_needed ) [[ likely ]]
-                    ++pos; // traverse to the right child
+                auto const & node{ this->inner( current_node ) };
+                auto const   pos { upper_bound( node, key ) };
+                // selects rather than a branch: pos is zero about once per
+                // node fanout, often enough to cost mispredictions
+                right_turn_node = pos ? current_node : right_turn_node;
+                right_turn_pos  = pos ? pos          : right_turn_pos;
+                current_node = node.children_[ pos ];
             }
-            current_node = node.children_[ pos ];
+            if ( right_turn_pos && !lt( this->inner( right_turn_node ).key( right_turn_pos - 1 ), key ) ) [[ unlikely ]] // "most keys are in leaves"
+            {
+                separator_key_node   = right_turn_node;
+                separator_key_offset = right_turn_pos - 1;
+            }
+        }
+        else
+        {
+            for ( auto level{ 0 }; level < depth - 1; ++level )
+            {
+                auto const & node{ this->inner( current_node ) };
+                auto const [pos, exact_find]{ lower_bound( node, key ) };
+                if ( exact_find ) [[ unlikely ]] // "most keys are in leaves"
+                {
+                    // separator key: the first key of the right child's subtree
+                    separator_key_node   = current_node;
+                    separator_key_offset = pos;
+                    // Keys equivalent to the searched one can also END the
+                    // left child's subtree - a run of them may start anywhere
+                    // in its last leaf (or span several leaves and inner
+                    // nodes). The left subtree is therefore searched with
+                    // plain lower bound semantics and, should all of its keys
+                    // turn out to be smaller, the leaf level resolves to the
+                    // right sibling (whose first key is this separator).
+                }
+                current_node = node.children_[ pos ];
+            }
         }
         auto & leaf{ this->leaf( current_node ) };
         if ( BOOST_LIKELY( !separator_key_node ) )
             return { leaf, lower_bound( leaf, key ), {}, {} };
-        if ( nonuniques_span_across_nodes_check_not_needed ) // short circuit since we know separator keys only exist for first keys
+        if ( unique && key_lookup ) // short circuit since we know separator keys only exist for first keys
             return { leaf, find_pos{ 0, true }, separator_key_offset, separator_key_node };
-        // non unique: the last separator equal to the key is the one of the leaf
-        // following the one reached (if the key is not found in the latter)
+        // lower bound descent: the last separator equivalent to the key is the
+        // one of the leaf following the one reached (if the key is not found in
+        // the latter)
         auto const leaf_pos{ lower_bound( leaf, key ) };
         if ( leaf_pos.pos != leaf.num_vals )
             return { leaf, leaf_pos, {}, {} };

@@ -2738,6 +2738,84 @@ TEST( bp_tree, hinted_insert_boundaries )
     EXPECT_NE( tree.find( 30U ), tree.end() );
 }
 
+namespace
+{
+    // A lookup that stands for a whole run of keys: every key whose quotient by
+    // the width is the bucket's value is equivalent to it.  Keys themselves
+    // keep their plain order, so the tree is still unique.
+    struct bucket { int value; };
+
+    struct bucketing_comparator
+    {
+        using is_transparent = std::true_type;
+
+        int width;
+
+        bool operator()( int    const a, int    const b ) const noexcept { return a < b; }
+        bool operator()( int    const a, bucket const b ) const noexcept { return a / width < b.value; }
+        bool operator()( bucket const a, int    const b ) const noexcept { return a.value < b / width; }
+    };
+} // anonymous namespace
+
+// A heterogeneous lookup through a transparent comparator can be equivalent to
+// several keys of a unique tree, and every lookup has to land on the first of
+// them.  Each bucket here starts a leaf and spans three, so the keys of most
+// buckets are among the separators of one inner node - the layout in which a
+// descent that passes every equivalent separator lands on the bucket's last
+// leaf instead of its first.  Buckets can also straddle two inner nodes, and
+// the tree is three levels deep, so the separators above that level are
+// covered too.
+TEST( bp_tree, heterogeneous_lookup_lands_on_the_first_equivalent_key )
+{
+    using tree_t = bptree_set<int, bucketing_comparator>;
+    auto constexpr leaf_values{ tree_t::max_values_per_leaf() };
+    auto constexpr leaf_count { 3 * ( tree_t::max_values_per_inner() + 1 ) };
+    auto const width{ static_cast<int>( 3 * leaf_values ) };
+    auto const n    { static_cast<int>( leaf_count * leaf_values ) };
+
+    bucketing_comparator const comparator{ width };
+    tree_t bpt{ comparator };
+    bpt.map_memory( static_cast<std::size_t>( n ) );
+
+    std::vector<int> vals( static_cast<std::size_t>( n ) );
+    std::iota( vals.begin(), vals.end(), 0 );
+    bpt.insert_presorted( vals );
+
+    // every leaf is full, i.e. every bucket starts a leaf
+    for ( auto it{ bpt.node_begin() }; it != bpt.node_end(); ++it )
+        ASSERT_EQ( ( *it ).size(), leaf_values );
+
+    // one bucket below and one past all the keys
+    for ( int b{ -1 }; b <= n / width + 1; ++b )
+    {
+        bucket const key{ b };
+        auto   const expected{ std::lower_bound( vals.begin(), vals.end(), key, comparator ) };
+        bool   const present { expected != vals.end() && !comparator( key, *expected ) };
+
+        auto const lb{ bpt.lower_bound( key ) };
+        if ( expected == vals.end() ) {
+            EXPECT_EQ( lb, bpt.end() ) << "bucket " << b;
+        } else {
+            ASSERT_NE( lb, bpt.end() ) << "bucket " << b;
+            EXPECT_EQ( *lb, *expected ) << "bucket " << b;
+        }
+
+        auto const found{ bpt.find( key ) };
+        auto const range{ bpt.equal_range( key ) };
+        EXPECT_EQ( bpt.contains( key ), present ) << "bucket " << b;
+        if ( present ) {
+            ASSERT_NE( found, bpt.end() ) << "bucket " << b;
+            EXPECT_EQ( *found, *expected ) << "bucket " << b;
+            ASSERT_FALSE( range.empty() ) << "bucket " << b;
+            EXPECT_EQ( *range.begin(), *expected ) << "bucket " << b;
+        } else {
+            EXPECT_EQ( found, bpt.end() ) << "bucket " << b;
+            EXPECT_TRUE( range.empty() ) << "bucket " << b;
+            EXPECT_EQ( range.begin(), bpt.end() ) << "bucket " << b;
+        }
+    }
+}
+
 TEST( bp_tree, lower_bound_from )
 {
     // Test lower_bound_from edge cases:
