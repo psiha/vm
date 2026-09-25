@@ -401,7 +401,7 @@ protected:
         [[ gnu::pure ]] constexpr decltype( auto ) key( this auto & self, auto const i ) noexcept { return ( self.keys_[ self.live_start() + i ] ); }
         [[ gnu::pure ]] constexpr auto keys( this auto & self ) noexcept
         {
-            BOOST_ASSUME( self.num_vals <= self.max_values );
+            BOOST_ASSUME( std::size_t{ self.live_start() } + self.num_vals <= self.max_values );
             return std::span{ &self.keys_[ self.live_start() ], static_cast<std::size_t>( self.num_vals ) };
         }
         [[ gnu::pure ]] constexpr auto children( this auto & self ) noexcept
@@ -714,7 +714,9 @@ protected:
 
     // Retire a leaf's first 'count' entries (already moved out or destroyed):
     // they become gap when the gap can hold them, and are closed over
-    // otherwise.  Leaves num_vals to the caller.
+    // otherwise.  Takes them out of num_vals too, in the same step, so that
+    // start + num_vals never runs past the array - not even between this and
+    // the caller's next line.
     template <typename N>
     static void drop_front( N & node, node_size_type const count ) noexcept
     {
@@ -722,9 +724,10 @@ protected:
         BOOST_ASSUME( count <= node.num_vals );
         if ( N::front_gap && ( node.start + count <= node_header::max_front_gap ) ) {
             set_start( node, node.start + count );
-            return;
+        } else {
+            shift_entries_left( node, 0, node.num_vals, count );
         }
-        shift_entries_left( node, 0, node.num_vals, count );
+        node.num_vals -= count;
     }
 
     // Move a node's entries back to the front of their array, closing the gap -

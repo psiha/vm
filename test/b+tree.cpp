@@ -21,6 +21,7 @@
 #include <random>
 #include <ranges>
 #include <utility>
+#include <set>
 #include <vector>
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -2397,6 +2398,43 @@ namespace
 TEST( bp_tree, front_handover_int    ) { front_handover_roundtrip<int          >(); }
 TEST( bp_tree, front_handover_uint64 ) { front_handover_roundtrip<std::uint64_t>(); }
 TEST( bp_tree, front_handover_double ) { front_handover_roundtrip<double       >(); }
+
+namespace
+{
+    // The one layout where a leaf's front gap meets the end of its array: a
+    // full leaf relieved into its left sibling keeps its entries where they
+    // were, so they begin further in and still end at the last slot.  A borrow
+    // from that leaf by its underflowing left neighbour then takes an entry off
+    // the front - which must never, even transiently, leave start + num_vals
+    // past the array (keys() asserts it).
+    template <typename Key>
+    void borrow_from_a_relieved_leaf()
+    {
+        auto const leaf{ static_cast<int>( bptree_set<Key>::max_values_per_leaf() ) };
+        bptree_set<Key> bpt;
+        bpt.map_memory();
+        std::set<Key> expected;
+        auto const add{ [&]( int const k ) { EXPECT_TRUE( bpt.insert( static_cast<Key>( k ) ).second ); expected.insert( static_cast<Key>( k ) ); } };
+        auto const del{ [&]( int const k ) { EXPECT_TRUE( bpt.erase ( static_cast<Key>( k ) )        ); expected.erase ( static_cast<Key>( k ) ); } };
+
+        // two leaves: fill one, overflow it (a split), then fill the right one
+        for ( int k{ 0 }; k <= leaf; ++k ) { add( 10 * k ); }
+        for ( int k{ leaf + 1 }; bpt.size() < static_cast<std::size_t>( leaf + leaf / 2 + 1 ); ++k ) { add( 10 * k ); }
+        // a full right leaf with room on its left: an insertion into it relieves
+        // into the left leaf rather than splitting
+        add( 10 * ( leaf - 1 ) + 5 );
+        EXPECT_TRUE( std::ranges::equal( bpt, expected ) );
+        // underflow the left leaf so it borrows from the relieved right one
+        for ( int k{ 0 }; k < leaf / 2; ++k ) { del( 10 * k ); }
+        EXPECT_TRUE( std::ranges::equal( bpt, expected ) );
+        for ( auto const k : expected ) { EXPECT_NE( bpt.find( k ), bpt.end() ); }
+        verify_invariants( bpt, "borrow from a relieved leaf" );
+    }
+} // anonymous namespace
+
+TEST( bp_tree, borrow_from_a_relieved_leaf_int    ) { borrow_from_a_relieved_leaf<int          >(); }
+TEST( bp_tree, borrow_from_a_relieved_leaf_uint64 ) { borrow_from_a_relieved_leaf<std::uint64_t>(); }
+TEST( bp_tree, borrow_from_a_relieved_leaf_double ) { borrow_from_a_relieved_leaf<double       >(); }
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm
