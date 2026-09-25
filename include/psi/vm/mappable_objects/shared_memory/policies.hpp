@@ -48,14 +48,17 @@ enum struct resizing_policy
 ///
 ////////////////////////////////////////////////////////////////////////////////
 
-inline namespace PSI_VM_IMPL() { namespace detail
+// Names declared in the platform inline namespaces are also found as members
+// of psi::vm, so the backends' internals must not be called `detail`: that
+// would make every psi::vm::detail lookup ambiguous.
+inline namespace PSI_VM_IMPL() { namespace impl
 {
     template <lifetime_policy, resizing_policy>
     struct named_memory_impl;
 } }
 
 template <lifetime_policy lifetime, resizing_policy resizability>
-using named_memory = typename PSI_VM_IMPL()::detail::named_memory_impl<lifetime, resizability>::type;
+using named_memory = typename PSI_VM_IMPL()::impl::named_memory_impl<lifetime, resizability>::type;
 
 //------------------------------------------------------------------------------
 } // namespace vm

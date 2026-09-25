@@ -33,7 +33,7 @@ inline namespace win32
 // http://en.wikipedia.org/wiki/File_locking#In_UNIX
 DWORD const default_unix_shared_semantics{ FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE };
 
-namespace detail
+namespace impl
 {
     struct create_file
     {
@@ -60,11 +60,11 @@ namespace detail
             return handle;
         }
     }; // struct create_file
-} // namespace detail
+} // namespace impl
 
 BOOST_ATTRIBUTES( BOOST_EXCEPTIONLESS, BOOST_RESTRICTED_FUNCTION_L1 )
-file_handle create_file( char    const * const file_name, flags::opening const flags ) noexcept { return file_handle{ detail::create_file::do_create( file_name, flags ) }; }
-file_handle create_file( wchar_t const * const file_name, flags::opening const flags ) noexcept { return file_handle{ detail::create_file::do_create( file_name, flags ) }; }
+file_handle create_file( char    const * const file_name, flags::opening const flags ) noexcept { return file_handle{ impl::create_file::do_create( file_name, flags ) }; }
+file_handle create_file( wchar_t const * const file_name, flags::opening const flags ) noexcept { return file_handle{ impl::create_file::do_create( file_name, flags ) }; }
 
 
 bool delete_file( char    const * const file_name ) noexcept { return ::DeleteFileA( file_name ) != false; }
@@ -104,7 +104,7 @@ std::uint64_t get_size( file_handle::const_reference const file_handle ) noexcep
 }
 
 
-namespace detail
+namespace impl
 {
     std::uint64_t get_section_size( HANDLE const mapping_handle ) noexcept { return get_size( mapping::const_handle{ mapping_handle } ); }
 
@@ -202,11 +202,11 @@ namespace detail
             return { mapping_handle, flags.map_view_flags(), flags.ap.object_access, std::move( file ) };
         }
     } // namepsace create_mapping_impl
-} // namespace detail
+} // namespace impl
 
 mapping create_mapping( file_handle && file, flags::mapping const flags, std::uint64_t const maximum_size, char const * const name ) noexcept
 {
-    return detail::create_mapping_impl::do_map( std::move( file ), flags, maximum_size, name );
+    return impl::create_mapping_impl::do_map( std::move( file ), flags, maximum_size, name );
 }
 
 #if 0
@@ -214,7 +214,7 @@ mapping create_mapping( handle::reference const file, flags::mapping const flags
 {
     auto const mapping_handle
     (
-        detail::create_mapping_impl::map_file( file, flags.create_mapping_flags )
+        impl::create_mapping_impl::map_file( file, flags.create_mapping_flags )
     );
     return { mapping_handle, flags.map_view_flags };
 }
@@ -234,7 +234,7 @@ mapping create_mapping
     auto const page_protection{ flags::detail::object_access_to_page_access( section_object_access, share_mode ) };
     auto const mapping_handle
     (
-        detail::create_mapping_impl::map_file( file, section_object_access, page_protection, size )
+        impl::create_mapping_impl::map_file( file, section_object_access, page_protection, size )
     );
     return { mapping_handle, { page_protection }, section_object_access, std::move( file ) };
 }
