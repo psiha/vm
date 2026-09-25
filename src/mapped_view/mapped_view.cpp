@@ -298,6 +298,20 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
         new_address = nullptr;
     }
 
+    if ( new_address ) [[ likely ]]
+    {
+        if ( current_address != nullptr ) [[ likely ]]
+        {
+            BOOST_ASSUME( new_address == current_address + kernel_current_size );
+            static_cast<span &>( *this ) = { current_address, target_size };
+        }
+        else
+        {
+            static_cast<span &>( *this ) = { static_cast<std::byte *>( new_address ), target_size };
+        }
+        return err::success;
+    }
+
     // Step 2b: plain fallback — no over-reservation.
     auto remapped_span{ this->map( original_mapping, 0, target_size )() };
     if ( !remapped_span )
