@@ -322,6 +322,16 @@ public:
     // identical to map_memory.
     err::result_or_error<void, error> map_cow_memory( size_type data_size, header_info ) noexcept;
 
+    // Ask for the current view to be backed by transparent huge pages (Linux
+    // MADV_HUGEPAGE). A hint, applied only to private anonymous (map_memory)
+    // storage - the only kind for which anonymous THP exists - and a no-op
+    // for everything else and on every other platform. One call covers the
+    // life of the mapping: the advice is a property of the kernel's VMA, which
+    // growth (mremap, in place or moved) and shrinking (a tail munmap) keep,
+    // and the view is never mapped afresh - it always spans at least the
+    // sizes header, so expand() never takes its from-empty path.
+    void advise_huge_pages() noexcept;
+
     explicit operator bool() const noexcept { return has_attached_storage(); }
 
 protected:
