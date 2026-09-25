@@ -129,7 +129,6 @@ public:
     // Forward-only lower_bound: returns the first element >= key, starting from pos.
     // Returns end() only when key > all elements.
     [[ nodiscard ]] const_iterator lower_bound_from( const_iterator const pos, LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return lower_bound_from_impl( pos.base().pos(), pass_in_reg{ key } ); }
-    [[ nodiscard ]] bool           contains        (                           LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return contains_impl        (                   pass_in_reg{ key } ); }
 
     size_type merge( bp_tree_impl       && other, bool unique );
     size_type merge( bp_tree_impl const &  other, bool unique );

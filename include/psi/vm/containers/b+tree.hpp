@@ -70,6 +70,7 @@ public:
     [[ nodiscard ]] const_iterator find       ( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return impl_base::find_impl       ( pass_in_reg{ key }, unique ); }
     [[ nodiscard ]] const_iterator lower_bound( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return impl_base::lower_bound_impl( pass_in_reg{ key }, unique ); }
     [[ nodiscard ]] auto           equal_range( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return            equal_range_impl( pass_in_reg{ key } ); }
+    [[ nodiscard ]] bool           contains   ( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return impl_base::contains_impl   ( pass_in_reg{ key }, unique ); }
 
     const_iterator insert( const_iterator const pos_hint, InsertableType<transparent_comparator, Key> auto const & key ) { return impl_base::insert_impl( pos_hint, pass_in_reg{ key }, unique ); }
     auto           insert(                                InsertableType<transparent_comparator, Key> auto const & key )
