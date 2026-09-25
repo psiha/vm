@@ -303,12 +303,10 @@ private:
     [[ using gnu: pure, hot, noinline, sysv_abi, leaf ]]
     static find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const key, pass_in_reg<Comparator> const comparator ) noexcept
     {
-        // The binary arm is psi::vm::binary_lower_bound (lookup.hpp), which is
-        // std::lower_bound unless PSI_VM_BRANCHLESS_BINARY_SEARCH says
-        // otherwise - see the note there on why that is a measurement and not
-        // an obvious win.
-        // TODO still open - refinements beyond the plain branchless halving
-        // measured there:
+        // The binary arm is node_binary_lower_bound (base.hpp): a branchless
+        // halving that prefetches both candidate next probes, unless
+        // PSI_VM_BT_PREFETCHING_BINARY_SEARCH says otherwise.
+        // TODO still open - refinements beyond that:
         // Alexandrescu's TLC: the binary search tweaks from his conference
         // talks, e.g. https://conftalks.com/v/rethinking-binary-search-improving-on-a
         // https://orlp.net/blog/bitwise-binary-search
@@ -332,8 +330,8 @@ private:
             psi::vm::lower_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
 #       else
             use_linear_search_for_sorted_array<Comparator, Key, maximum_values>
-                ? linear_lower_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
-                : binary_lower_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
+                ?      linear_lower_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
+                : node_binary_lower_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
 #       endif
         };
         auto const pos_idx   { static_cast<node_size_type>( std::distance( &keys[ 0 ], pos_iter ) ) };
@@ -376,8 +374,8 @@ protected:
             psi::vm::upper_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
 #       else
             use_linear_search_for_sorted_array<Comparator, Key, maximum_values>
-                ? linear_upper_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
-                : binary_upper_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
+                ?      linear_upper_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
+                : node_binary_upper_bound( &keys[ 0 ], &keys[ num_vals ], value, make_trivially_copyable_predicate( comp ) )
 #       endif
         };
         return static_cast<node_size_type>( std::distance( &keys[ 0 ], pos_iter ) );

@@ -106,21 +106,11 @@ template <typename T> requires requires{ T{}.size(); } constexpr bool is_statica
 // it for any fill from full down to however far the band reaches.  (A leaf's
 // front gap moves its probes up by `start` entries, which the band - being
 // independent of start - does not follow.)
+// (The read hint itself, prefetch_for_read, is lookup.hpp's, shared with the
+// prefetching binary search.)
 #ifndef PSI_VM_BT_PREFETCH_LINES
 #   define PSI_VM_BT_PREFETCH_LINES 8
 #endif
-
-// A read hint for the cache line holding `address`.  It cannot fault and it
-// changes no result, so where the compiler offers no way to express it, it is
-// simply nothing.
-[[ gnu::always_inline ]] inline void prefetch_for_read( [[ maybe_unused ]] void const * const address ) noexcept
-{
-#if defined( __has_builtin ) // (not folded into one #if: MSVC's preprocessor rejects __has_builtin( x ) when it is not defined)
-#   if __has_builtin( __builtin_prefetch )
-    __builtin_prefetch( address, 0 /*read*/, 3 /*keep in every cache level: it is searched next*/ );
-#   endif
-#endif
-}
 
 // The value limit + eligibility live in lookup.hpp (shared, measured); the node
 // capacity is a compile-time constant here so the dispatch is compile-time.
@@ -132,6 +122,39 @@ constexpr bool use_linear_search_for_sorted_array
     ( maximum_array_length <= linear_search_max_values<Key>  ) &&
     ( is_statically_sized<Key>                               )
 }; // use_linear_search_for_sorted_array
+
+// The binary arm of the intra-node search: the one a node takes whenever it does
+// not scan (a capacity past linear_search_max_values, a comparator or key that
+// cannot scan, or AArch64, where the limit is 0).  It prefetches both candidate
+// next probes on every step (lookup.hpp, prefetching_lower_bound), for the same
+// reason the scan threshold sits where it does: a node has just been reached by a
+// pointer chase and is cold, so every probe of a plain binary search is a
+// dependent miss, and the prefetch lets consecutive probes' misses overlap.  A
+// flat container searches a range whose residency this cannot assume and keeps
+// plain binary_lower_bound.  0 restores that here too, for an A/B.
+#ifndef PSI_VM_BT_PREFETCHING_BINARY_SEARCH
+#   define PSI_VM_BT_PREFETCHING_BINARY_SEARCH 1
+#endif
+template <typename It, typename Comp>
+[[ nodiscard, gnu::pure ]] constexpr
+It node_binary_lower_bound( It const first, It const last, auto const & key, Comp const & comp ) noexcept
+{
+#if PSI_VM_BT_PREFETCHING_BINARY_SEARCH
+    return prefetching_lower_bound( first, last, key, comp );
+#else
+    return binary_lower_bound( first, last, key, comp );
+#endif
+}
+template <typename It, typename Comp>
+[[ nodiscard, gnu::pure ]] constexpr
+It node_binary_upper_bound( It const first, It const last, auto const & key, Comp const & comp ) noexcept
+{
+#if PSI_VM_BT_PREFETCHING_BINARY_SEARCH
+    return prefetching_upper_bound( first, last, key, comp );
+#else
+    return binary_upper_bound( first, last, key, comp );
+#endif
+}
 
 
 // utility to help avoid having to write custom move ctors/assignments when having
