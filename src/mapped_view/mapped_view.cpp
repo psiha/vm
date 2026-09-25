@@ -303,7 +303,11 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
     if ( !remapped_span )
         return remapped_span.error();
 
-    if ( !original_mapping.is_file_based() )
+    // The fresh view shows what the mapped object holds, which is this view's
+    // content only for a shared view of a file. Anonymous memory maps fresh
+    // zero pages, and a private (COW) view keeps its writes in private copies
+    // the object never received - both must carry the old pages over.
+    if ( !original_mapping.is_file_based() || original_mapping.view_mapping_flags.is_cow() )
     {
         // mach_vm_remap: zero-copy page transfer from old to new mapping.
         auto new_addr{ reinterpret_cast<mach_vm_address_t>( const_cast<std::byte *>( remapped_span->data() ) ) };

@@ -50,6 +50,12 @@ struct [[ clang::trivial_abi ]] viewing
         share_mode
     ) noexcept;
 
+    //! A private (MAP_PRIVATE) view: writes through it land in private page
+    //! copies that no other view of the same object ever sees. (Masked with
+    //! both type bits: Linux's MAP_SHARED_VALIDATE is MAP_SHARED | MAP_PRIVATE.)
+    bool is_cow   () const noexcept { return ( flags & ( MAP_SHARED | MAP_PRIVATE ) ) == MAP_PRIVATE; }
+    bool is_hidden() const noexcept { return is_cow(); }
+
     bool operator< ( viewing const other ) const noexcept
     {
         return
