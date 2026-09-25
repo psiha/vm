@@ -2342,7 +2342,7 @@ namespace
 #   elif defined( __x86_64__ ) || defined( _M_X64 )
     // 512-byte leaves scan (124 4-byte keys), and are below the size threshold anyway
     static_assert( ( node_bytes != 512 ) || none_gap<int, std::uint64_t, float, double> );
-    // 253 8-byte integers still scan (limit 256); 507 4-byte keys and 253
+    // 254 8-byte integers still scan (limit 256); 507 4-byte keys and 253
     // doubles (limit 128) are searched binary
     static_assert( ( node_bytes != 2048 ) || ( all_gap<int, float, double> && none_gap<std::uint64_t> ) );
     // ...as is every key type at 4096 bytes

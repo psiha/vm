@@ -296,14 +296,14 @@ private:
     };
 
 #if !defined( PSI_VM_BT_FRONT_GAP )
-    // a leaf has a front gap exactly when its search is binary (and its node
-    // large enough) - see bptree_base::front_gap_min_node_size
+    // a leaf with a front gap is searched binary (and its node is large
+    // enough) - see bptree_base::front_gap_min_node_size
     static_assert
     (
-        leaf_node::front_gap ==
+        !leaf_node::front_gap ||
         (
             ( base::node_byte_size() >= bptree_base::front_gap_min_node_size ) &&
-            ( search_capacity<leaf_node::max_values> == std::numeric_limits<node_size_type>::max() )
+            !use_linear_search_for_sorted_array<Comparator, Key, leaf_node::max_values>
         )
     );
 #endif
@@ -466,18 +466,21 @@ protected:
                 // nonuniques_span_across_nodes_check_not_needed argument
                 // (typically unique instances would set it to signal this
                 // behaviour is not needed).
-                PSI_WARNING_DISABLE_PUSH()
-                PSI_WARNING_GCC_OR_CLANG_DISABLE( -Winvalid-offsetof )
-                // At ( level == depth - 2 ) the child would already be a leaf,
-                // however node layout/design guarantees that keys start at the
-                // same offset regardless (only the capacity of the array
-                // differs).
-                static_assert( offsetof( inner_node, keys_ ) == offsetof( leaf_node, keys_ ) );
-                PSI_WARNING_DISABLE_POP()
+                // The child is a leaf only one level above the leaves, and the
+                // two node types lay their keys out differently (a leaf may
+                // begin its keys further in, and at a gap), so it is read
+                // through its own type.
+                auto const child{ node.children_[ pos ] };
                 if
                 (
                     nonuniques_span_across_nodes_check_not_needed ||
-                    lt( this->leaf( node.children_[ pos ] ).keys().back(), key )
+                    lt
+                    (
+                        ( level == depth - 2 )
+                            ? this->leaf ( child ).keys().back()
+                            : this->inner( child ).keys().back(),
+                        key
+                    )
                 ) [[ likely ]]
                 {
                     // BOOST_ASSUME( !separator_key_node || !unique ); // exact_find may happen at most once (in unique trees :/)

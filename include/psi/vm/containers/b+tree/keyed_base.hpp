@@ -13,6 +13,7 @@
 #include <psi/vm/containers/heap_vector.hpp>
 
 #include <psi/build/disable_warnings.hpp>
+#include <psi/build/no_unique_address.hpp>
 
 #include <boost/assert.hpp>
 #include <boost/config_ex.hpp>
@@ -192,17 +193,25 @@ protected: // node types
         static node_size_type constexpr min_values  { min_children - 1 };
     }; // struct root_node
 
-    // A leaf carries a front gap or reads start as a compile-time 0, as the
-    // tree's leaf_front_gap<Key, Comparator> decides (see bptree_base).
-    struct alignas( node_size ) leaf_node : std::conditional_t<leaf_gap, node_header, gapless_node_header>
+    // Nothing: what a leaf stores for its start in a byte of its own when it
+    // has no front gap (it reads start as a compile-time 0,
+    // node_header::live_start), or when the header's spare byte holds start.
+    struct no_front_gap_start {};
+
+    // A leaf carries a front gap, and stores its start, iff the tree's
+    // leaf_front_gap<Key, Comparator> says so (see bptree_base).
+    struct alignas( node_size ) leaf_node : node_header
     {
         // TODO support for maps (i.e. keys+values)
         using value_type = Key;
 
         static bool constexpr front_gap{ leaf_gap };
+        // whether its start takes a byte of its own, behind the header - only
+        // when the header has no spare byte to hold it
+        static bool constexpr own_start_byte{ front_gap && !node_header::has_spare_byte };
 
-        static node_size_type constexpr storage_space{ static_cast<node_size_type>( node_size - align_up( sizeof( node_header ), alignof( Key ) ) ) };
-        static node_size_type constexpr max_values   { leaf_capacity<Key> };
+        static node_size_type constexpr storage_space{ static_cast<node_size_type>( node_size - leaf_keys_offset( alignof( Key ), front_gap ) ) };
+        static node_size_type constexpr max_values   { storage_space / sizeof( Key ) };
         static node_size_type constexpr min_values   { ihalf_ceil<max_values> };
 
         // The tree's central inequality, and the reason a minimum fill of half
@@ -218,11 +227,55 @@ protected: // node types
         // bump.
         static_assert( 2 * min_values <= max_values + 1 );
 
+        // Where the live entries begin (node_header::live_start) - the devector
+        // front gap.  It lets entries be taken from or given to the FRONT of a
+        // leaf without moving the rest: relieve_into_sibling and
+        // handle_underflow's borrow branches each hand over a few entries, and
+        // without a gap each pays a whole-node move to do it - largest exactly
+        // when the number of entries handed over is smallest.
+        //
+        // A byte with a gap: the header's spare byte when it has one, which
+        // costs no room, and otherwise one of the leaf's own right behind the
+        // header.  Without a gap nothing - the keys then begin right behind
+        // the header, and start() does not exist, so a read that escaped the
+        // compile-time choice of every gap helper does not compile.  Capped
+        // at 8 bits - a gap of 255 entries.  A wider gap would only serve a
+        // handover of more than 255 entries, where the whole-node move it
+        // avoids is at most about twice the handover anyway; at 512-byte
+        // nodes it cannot bind at all.
+        PSI_NO_UNIQUE_ADDRESS std::conditional_t<own_start_byte, std::uint8_t, no_front_gap_start> own_start{};
+
         Key keys_[ max_values ]; // storage: the live entries are keys()
+
+        [[ gnu::pure ]] constexpr std::uint8_t start() const noexcept requires front_gap
+        {
+            // the member itself rather than through start_byte(): read through
+            // a deducing-this reference, clang allocates the handover paths'
+            // registers differently from a plain member read
+            if constexpr ( own_start_byte ) return own_start;
+            else                            return spare_byte;
+        }
+        // the byte itself, for bptree_base::set_start - its one writer
+        constexpr auto & start_byte( this auto & self ) noexcept requires front_gap
+        {
+            if constexpr ( own_start_byte ) return ( self.own_start  );
+            else                            return ( self.spare_byte );
+        }
     }; // struct leaf_node
 
     static_assert( sizeof( inner_node ) == node_size );
     static_assert( sizeof(  leaf_node ) == node_size );
+    PSI_WARNING_DISABLE_PUSH()
+    PSI_WARNING_GCC_OR_CLANG_DISABLE( -Winvalid-offsetof )
+    // the start byte is where free() clears it...
+    static_assert(   !leaf_node::own_start_byte                            || ( offsetof( leaf_node, own_start  ) == front_gap_start_offset ) );
+    static_assert( !( leaf_node::front_gap && !leaf_node::own_start_byte ) || ( offsetof( leaf_node, spare_byte ) == front_gap_start_offset ) );
+    // ...and the keys begin no later than max_values reckons with: without a
+    // byte of its own start takes no room at all...
+    static_assert( offsetof( leaf_node, keys_ ) <= leaf_keys_offset( alignof( Key ), leaf_node::front_gap ) );
+    // ...so where the header has a spare byte a gap costs a leaf no capacity
+    static_assert( leaf_node::own_start_byte || ( leaf_node::max_values == leaf_capacity( sizeof( Key ), alignof( Key ), false ) ) );
+    PSI_WARNING_DISABLE_POP()
 
 public: // the node geometry, for callers that measure or report it
     // node_size alone does not say how many values a node holds - that follows
@@ -581,10 +634,10 @@ protected: // 'other'
         if ( full( target_node ) ) [[ unlikely ]] {
             return overflow_to_insert( target_node, target_node_pos, std::move( v ), right_child );
         } else {
-            // A leaf opens the slot from whichever side moves fewer entries,
-            // and must use the front once its entries reach the end of the
-            // array.
-            if constexpr ( requires { target_node.children_; } ) {
+            // A leaf with a gap opens the slot from whichever side moves fewer
+            // entries, and must use the front once its entries reach the end
+            // of the array; every other node type has only the back.
+            if constexpr ( !N::front_gap ) {
                 ++target_node.num_vals;
                 rshift_entries( target_node, target_node_pos );
             } else {
@@ -598,7 +651,7 @@ protected: // 'other'
                     this->recentre( target_node );
                 bool const from_front
                 {
-                    target_node.start && ( no_tail_room || ( target_node_pos * 2u < target_node.num_vals ) )
+                    target_node.start() && ( no_tail_room || ( target_node_pos * 2u < target_node.num_vals ) )
                 };
                 ++target_node.num_vals;
                 if ( from_front ) open_slot_from_front( target_node, target_node_pos );
@@ -1914,7 +1967,7 @@ void bptree_base_wkey<Key, leaf_gap>::move_entries
     BOOST_ASSUME( tgt_begin < N::max_values );
     std::uninitialized_move( &source.key( src_begin ), &source.key( src_end ), &target.key( tgt_begin ) );
     if constexpr ( has_mapped_values<N> )
-        std::uninitialized_move( &source.values[ source.start + src_begin ], &source.values[ source.start + src_end ], &target.values[ target.start + tgt_begin ] );
+        std::uninitialized_move( &source.values[ source.live_start() + src_begin ], &source.values[ source.live_start() + src_end ], &target.values[ target.live_start() + tgt_begin ] );
 }
 template <typename Key, bool leaf_gap> [[ gnu::noinline, gnu::sysv_abi ]]
 void bptree_base_wkey<Key, leaf_gap>::move_chldrn
