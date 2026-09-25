@@ -411,6 +411,17 @@ err::result_or_error<void, error> mem_mapping::map_cow_memory( size_type const d
     return map_memory( data_size, hdr_info );
 }
 
+PSI_COLD
+void mem_mapping::advise_huge_pages() noexcept
+{
+#if defined( __linux__ ) && !defined( __ANDROID__ ) // server Linux
+    // Only a hint, and the kernel decides per backing whether it applies, so
+    // its result is not checked (a kernel built without THP rejects it with
+    // EINVAL).
+    (void)::madvise( view_.data(), view_.size(), MADV_HUGEPAGE );
+#endif
+}
+
 err::result_or_error<void, error>
 mem_mapping::map( file_handle file, std::size_t const mapping_size ) noexcept
 {
