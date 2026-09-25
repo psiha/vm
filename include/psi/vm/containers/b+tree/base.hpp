@@ -94,6 +94,68 @@ constexpr bool use_linear_search_for_sorted_array
     ( is_statically_sized<Key>                               )
 }; // use_linear_search_for_sorted_array
 
+// The binary arm of the intra-node search: the one a node takes whenever it does
+// not scan (a capacity past linear_search_max_values, a comparator or key that
+// cannot scan, or AArch64, where the limit is 0).  For a comparator that reads
+// only the keys it prefetches both candidate next probes on every step
+// (lookup.hpp, prefetching_lower_bound), for the same reason the scan threshold
+// sits where it does: a node has just been reached by a pointer chase and is
+// cold, so every probe of a plain binary search is a dependent miss, and the
+// prefetch lets consecutive probes' misses overlap.  A flat container searches a
+// range whose residency this cannot assume and keeps plain binary_lower_bound.
+// 0 restores that here too, for an A/B.
+#ifndef PSI_VM_BT_PREFETCHING_BINARY_SEARCH
+#   define PSI_VM_BT_PREFETCHING_BINARY_SEARCH 1
+#endif
+
+// Which comparators get the prefetching search: only those whose comparison
+// operand IS the key in the probed line.  The prefetching search is a chain of
+// conditional moves - the next probe's address is a data dependency of the
+// current comparison - and that is only a win when the comparison waits on
+// nothing but the line the prefetch already requested.  An indirect comparator
+// (e.g. one that orders row ids by a column: values[ left ] < values[ right ])
+// loads its operand from outside the node, so each step becomes a full,
+// serialised round trip to that operand, and the prefetches fetch the row ids
+// rather than the values that are actually compared.  A predicted branch -
+// what std::lower_bound normally compiles to - instead lets the CPU run ahead
+// through the probes and keep several of those operand misses in flight at
+// once; its occasional mispredict costs less than one miss.  Such a comparator therefore
+// keeps the plain binary_lower_bound.
+//
+// is_direct_comparator alone does not say enough here: it holds for
+// std::less<T>/std::greater<T> with ANY T (they name the key's own ordering,
+// which is all the scan needs to know about equality), including a class key
+// whose operator< dereferences a pointer - a string, or a handle into another
+// array - and that is exactly the indirect case again.  So the key must also
+// be one whose ordering reads only itself: a scalar, or a class type that says
+// so with `orders_directly` (komparator.hpp).  The cost is that an unannotated
+// class key that does order directly keeps the plain search, which is the
+// status quo for it and one member away from the faster one; the alternative
+// is to guess, and the price of a wrong guess is the indirect pathology.
+template <typename Comparator, typename Key>
+constexpr bool use_prefetching_binary_search
+{
+    ( PSI_VM_BT_PREFETCHING_BINARY_SEARCH != 0  ) &&
+    ( is_direct_comparator<Comparator, Key>      ) &&
+    ( detail::key_orders_directly<Key>           )
+}; // use_prefetching_binary_search
+
+// The result is std::lower_bound's / std::upper_bound's exactly either way.
+template <typename Comparator, typename Key, typename It, typename Comp>
+[[ nodiscard, gnu::pure ]] constexpr
+It node_binary_lower_bound( It const first, It const last, auto const & key, Comp const & comp ) noexcept
+{
+    if constexpr ( use_prefetching_binary_search<Comparator, Key> ) { return prefetching_lower_bound( first, last, key, comp ); }
+    else                                                            { return      binary_lower_bound( first, last, key, comp ); }
+}
+template <typename Comparator, typename Key, typename It, typename Comp>
+[[ nodiscard, gnu::pure ]] constexpr
+It node_binary_upper_bound( It const first, It const last, auto const & key, Comp const & comp ) noexcept
+{
+    if constexpr ( use_prefetching_binary_search<Comparator, Key> ) { return prefetching_upper_bound( first, last, key, comp ); }
+    else                                                            { return      binary_upper_bound( first, last, key, comp ); }
+}
+
 
 // utility to help avoid having to write custom move ctors/assignments when having
 // non-owning unique pointers as members
