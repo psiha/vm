@@ -9,8 +9,8 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
-template <typename Key>
-void bptree_base_wkey<Key>::print() const
+template <typename Key, bool leaf_gap>
+void bptree_base_wkey<Key, leaf_gap>::print() const
 {
     if ( empty() )
     {

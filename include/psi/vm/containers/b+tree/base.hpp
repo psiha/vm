@@ -9,6 +9,7 @@
 
 #include <psi/vm/containers/heap_vector.hpp>
 #include <psi/vm/containers/vm_vector.hpp>
+#include <psi/vm/align.hpp>
 #include <psi/vm/allocation.hpp>
 #include <psi/vm/containers/lookup.hpp>
 
@@ -179,29 +180,40 @@ public:
 
     static bool constexpr all_bulk_erase_keys_must_exist{ false };
 
-    // Whether leaves use their front gap (node_header::start): hand entries over
-    // at the front without moving the rest.  Off, start is a constant 0 rather
-    // than a field, so every index into a node compiles to what a plain array's
-    // would, and every handover moves the entries it displaces.
-    // -DPSI_VM_BT_FRONT_GAP=0|1.
+    // The leaf front gap (node_header::start): a leaf's live entries may begin
+    // past the front of its arrays, so entries are handed over at its front -
+    // to or from a sibling, or on erasure - without moving the rest.
     //
-    // Only a leaf pays for the runtime start.  An inner node never carries a
-    // gap and addresses its keys and children from a compile-time 0
-    // (node_header::live_start), so a descent loads start once, at the leaf it
-    // ends in - where it sits on the address path of the leaf's keys, which
-    // cannot be addressed until the leaf's header has arrived.
+    // Decided per leaf type (leaf_front_gap<Key, Comparator>).  A leaf has a
+    // gap iff
+    //  * its in-node search is binary - use_linear_search_for_sorted_array is
+    //    false for its capacity, which folds in the ISA, the key type and the
+    //    comparator - and
+    //  * its node is at least front_gap_min_node_size bytes.
     //
-    // On by default because it pays where moves are long: with page-sized
-    // (4096-byte) nodes, random insertion into a large tree measured 12% and
-    // bulk erasure 26% faster, and lookup is unaffected.  With 512-byte nodes
-    // the moves it saves are short while every search still waits on its
-    // leaf's start, so there it costs.  Both the cost and the benefit scale
-    // with node size, so this could be decided per node geometry rather than
-    // globally.
-#ifndef PSI_VM_BT_FRONT_GAP
-#   define PSI_VM_BT_FRONT_GAP 1
-#endif
-    static bool constexpr front_gap{ PSI_VM_BT_FRONT_GAP };
+    // The cost is a runtime start on the address path of every key load in the
+    // leaf, which cannot be issued until the leaf's header has arrived.  A
+    // linear scan issues its loads back to back and overlaps their misses, and
+    // waiting on start first costs it that overlap: with 512-byte nodes and
+    // 4-byte keys on x86-64 (a scan) +6% on lookup, +11% on random insertion
+    // and +3.5% on bulk insertion.  A binary search waits on its first probe
+    // anyway and start hides behind it: lookup within noise with 4096-byte
+    // nodes on x86-64, +1-4% with 512-byte nodes on AArch64.
+    // The benefit grows with the number of entries a front handover would
+    // otherwise move: with 4096-byte nodes random insertion is 12% and bulk
+    // erasure 26% faster, while with 512-byte nodes no measured workload gains.
+    // The size threshold lies between those two measured geometries and is the
+    // number to tune.  PSI_VM_BT_RUNTIME_DISPATCH=1 lets an under-filled leaf
+    // scan whatever its capacity; the rule still keys on the capacity.
+    //
+    // A leaf without a gap reads start as a compile-time 0, so every index into
+    // it compiles to what a plain array's would, and every handover moves the
+    // entries it displaces.  An inner node never has a gap (see
+    // node_header::live_start).
+    //
+    // -DPSI_VM_BT_FRONT_GAP=0|1 forces the gap off or on for every leaf type
+    // (0 also drops the start byte from the header); unset, the rule decides.
+    static constexpr std::uint16_t front_gap_min_node_size{ 2048 };
 
     bptree_base(                      ) noexcept;
     bptree_base( bptree_base const &  );  // COW copy (shares file-mapped pages)
@@ -330,20 +342,22 @@ protected:
         // Largest first, so no field is padded to its successor's alignment.
         size_type        num_vals        {};
         child_index_type parent_child_idx{};
-#   if PSI_VM_BT_FRONT_GAP
-        std::uint8_t     start           {};
+#   if defined( PSI_VM_BT_FRONT_GAP ) && !PSI_VM_BT_FRONT_GAP
+        static constexpr std::uint8_t start{ 0 }; // no leaf has a gap: every access folds to a plain array index
 #   else
-        static constexpr std::uint8_t start{ 0 }; // no gap: every access folds to a plain array index
+        std::uint8_t     start           {};      // read as a constant 0 by every node type without a gap
 #   endif
+        static constexpr bool front_gap{ false }; // a leaf type with a gap says so (and an inner node never has one)
 
         static constexpr std::uint32_t max_front_gap{ std::numeric_limits<std::uint8_t>::max() };
 
-        // Where this node's live entries begin - the devector front gap.  It
-        // lets entries be taken from or given to the FRONT of a node without
-        // moving the rest: relieve_into_sibling and handle_underflow's borrow
-        // branches each hand over a few entries and today pay a whole-node
-        // move to do it, which is the wrong way round - the move is largest
-        // exactly when the number of entries handed over is smallest.
+        // Where this node's live entries begin - the devector front gap, which
+        // only a leaf type with bptree_base::leaf_front_gap carries.  It lets
+        // entries be taken from or given to the FRONT of a leaf without moving
+        // the rest: relieve_into_sibling and handle_underflow's borrow branches
+        // each hand over a few entries, and without a gap each pays a
+        // whole-node move to do it - largest exactly when the number of
+        // entries handed over is smallest.
         //
         // Each counted field is the smallest standard integer type that holds
         // its range, and none of them is a bitfield.  num_vals and start are
@@ -417,6 +431,40 @@ protected:
 #   endif
     }; // struct node_header
     using node_size_type = node_header::size_type;
+
+    // The header of a node type without a front gap: it shadows the header's
+    // start byte - which such a node never writes, so it stays 0 - with a
+    // compile-time 0, which node_header::key()/keys() (deducing this) then
+    // index from.
+    struct gapless_node_header : node_header
+    {
+        static constexpr std::uint8_t start{ 0 };
+    }; // struct gapless_node_header
+    static_assert( sizeof( gapless_node_header ) == sizeof( node_header ) );
+
+public: // the leaf geometry and the front gap policy, which follow from Key
+    // How many values a leaf holds: what is left of the node after the header,
+    // aligned for Key.  Independent of the gap decision (the header's start
+    // byte stays whether a leaf uses it or not), so the decision can be made
+    // from it.
+    template <typename Key>
+    static node_size_type constexpr leaf_capacity
+    {
+        static_cast<node_size_type>( ( node_size - align_up( sizeof( node_header ), alignof( Key ) ) ) / sizeof( Key ) )
+    };
+
+    // Whether the leaves of a tree of Key ordered by Comparator carry a front
+    // gap - see front_gap_min_node_size for the rule and its basis.
+    template <typename Key, typename Comparator>
+    static bool constexpr leaf_front_gap
+    {
+#   if defined( PSI_VM_BT_FRONT_GAP )
+        PSI_VM_BT_FRONT_GAP != 0
+#   else
+        ( node_size >= front_gap_min_node_size ) &&
+        !use_linear_search_for_sorted_array<Comparator, Key, leaf_capacity<Key>>
+#   endif
+    };
 
 public: //...mrmlj...needs to be public for does_not_hold_addresses<> specialization at namespace scope
     struct alignas( node_size ) node_placeholder : node_header {};
@@ -523,6 +571,9 @@ protected:
         // what lets live_start() read an inner node's start as a constant 0
         if constexpr ( requires{ node.children_; } )
             BOOST_ASSERT( !node.start );
+        // ...and a leaf without a gap never writes its start byte
+        if constexpr ( std::is_base_of_v<gapless_node_header, std::remove_cvref_t<decltype( node )>> )
+            BOOST_ASSERT( !static_cast<node_header const &>( node ).start );
     }
 
 
@@ -612,11 +663,12 @@ protected:
     // first: 'full' means num_vals == max_values, but a node with a gap has
     // only max_values - start - num_vals slots behind its entries.
 
-    // The one writer of start, which is a constant 0 with the gap off - where a
-    // call is either unreachable or writes the 0 that is already there.
+    // The one writer of start, which is a constant 0 for a node type without a
+    // gap - where a call is either unreachable or writes the 0 that is already
+    // there.
     static constexpr void set_start( auto & node, auto const value ) noexcept
     {
-        if constexpr ( front_gap ) { node.start = static_cast<std::uint8_t>( value ); }
+        if constexpr ( std::remove_cvref_t<decltype( node )>::front_gap ) { node.start = static_cast<std::uint8_t>( value ); }
         else                       { BOOST_ASSUME( !value ); }
     }
 
@@ -668,7 +720,7 @@ protected:
     {
         static_assert( !requires( N & n ) { n.children_; }, "only a leaf has a gap" );
         BOOST_ASSUME( count <= node.num_vals );
-        if ( front_gap && ( node.start + count <= node_header::max_front_gap ) ) {
+        if ( N::front_gap && ( node.start + count <= node_header::max_front_gap ) ) {
             set_start( node, node.start + count );
             return;
         }
