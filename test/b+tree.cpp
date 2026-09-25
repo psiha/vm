@@ -2289,6 +2289,225 @@ TEST( bp_tree, nonunique_lower_bound_from )
     EXPECT_EQ( it, bpt.end() );
 }
 
+// A run of equal keys in a multiset can start near the end of one leaf - or of
+// the last leaf under one inner node - and continue into the next one(s).
+// lower_bound, and everything built on it (find, equal_range, count, erase),
+// has to land on the run's FIRST key wherever those boundaries fall.
+TEST( bp_tree, nonunique_runs_straddling_node_boundaries )
+{
+    using tree_type = bptree_multiset<int>;
+    auto constexpr L{ static_cast<int>( tree_type::max_values_per_leaf () ) };
+    auto constexpr F{ static_cast<int>( tree_type::max_values_per_inner() ) + 1 }; // children per inner node
+    // more than one full inner node's worth of leaves: the root has inner
+    // nodes as children, so runs can cross an inner-node boundary
+    auto constexpr size{ L * F + 2 * L };
+    // Runs start `offset` keys before the end of every `spacing`-th leaf (0:
+    // right at the start of the next one); stepping `phase` through the
+    // spacing puts a run at every leaf boundary - the inner-node ones
+    // included, wherever the bulk load placed them.
+    auto constexpr spacing{ 4 };
+
+    int const widths [] { 2, L, L + 1, 2 * L, 3 * L };
+    int const offsets[] { 0, 1, L / 2, L - 1 };
+    for ( auto const width : widths )
+    for ( auto const offset : offsets )
+    for ( int phase{ 0 }; phase < spacing; ++phase )
+    {
+        SCOPED_TRACE( std::format( "width {} offset {} phase {}", width, offset, phase ) );
+
+        // distinct keys 2*i, except that each run repeats the key of its first position
+        std::vector<int> keys( static_cast<std::size_t>( size ) );
+        for ( int i{ 0 }; i < size; ++i ) keys[ static_cast<std::size_t>( i ) ] = 2 * i;
+        std::vector<int> run_keys;
+        for ( int leaf{ phase + 1 }; ( leaf * L - offset + width ) <= size; leaf += spacing )
+        {
+            auto const start{ leaf * L - offset };
+            std::fill_n( keys.begin() + start, width, 2 * start );
+            run_keys.push_back( 2 * start );
+        }
+        ASSERT_FALSE( run_keys.empty() );
+
+        tree_type bpt;
+        bpt.map_memory( keys.size() );
+        bpt.insert_presorted( keys );
+        ASSERT_EQ( bpt.size(), keys.size() );
+        // the placement above relies on the bulk load filling every leaf but the last
+        {
+            std::size_t leaf_count{ 0 }, full_leaves{ 0 };
+            for ( auto const leaf : bpt.leaves() ) { ++leaf_count; full_leaves += ( leaf.size() == static_cast<std::size_t>( L ) ); }
+            ASSERT_GT( leaf_count, static_cast<std::size_t>( F ) );
+            ASSERT_GE( full_leaves, leaf_count - 1 );
+        }
+
+        for ( auto const key : run_keys )
+        {
+            auto const expected{ std::ranges::equal_range( keys, key ) };
+            ASSERT_EQ( std::ssize( expected ), width );
+            auto const key_before{ *std::prev( expected.begin() ) };
+
+            auto const lb{ bpt.lower_bound( key ) };
+            ASSERT_NE( lb, bpt.end() ) << "key " << key;
+            EXPECT_EQ( *lb, key );
+            EXPECT_EQ( *std::prev( lb ), key_before ) << "lower_bound( " << key << " ) is past the first occurrence";
+
+            EXPECT_EQ( bpt.find( key ), lb ) << "key " << key;
+
+            auto const range{ bpt.equal_range( key ) };
+            EXPECT_EQ( range.begin(), lb ) << "key " << key;
+            EXPECT_EQ( std::ssize( range ), width ) << "key " << key; // count
+            EXPECT_EQ( std::ranges::distance( range.begin(), range.end() ), width ) << "key " << key;
+            if ( expected.end() != keys.end() ) {
+                ASSERT_NE( range.end(), bpt.end() );
+                EXPECT_EQ( *range.end(), *expected.end() ) << "upper_bound( " << key << " )";
+            } else {
+                EXPECT_EQ( range.end(), bpt.end() );
+            }
+        }
+
+        for ( auto const key : run_keys )
+        {
+            EXPECT_EQ( bpt.erase( key ), static_cast<std::size_t>( width ) ) << "key " << key;
+            EXPECT_EQ( bpt.find( key ), bpt.end() ) << "key " << key;
+            std::erase( keys, key );
+        }
+        EXPECT_EQ( bpt.size(), keys.size() );
+        EXPECT_TRUE( std::ranges::equal( bpt, keys ) );
+    }
+}
+
+// Erasing a key erases all of its copies also as leaves drain, underflow and
+// merge - including a run that starts at the front of a leaf and ends inside it.
+TEST( bp_tree, nonunique_erase_every_run_while_leaves_underflow )
+{
+    using tree_type = bptree_multiset<int>;
+    auto const distinct{ static_cast<int>( tree_type::max_values_per_leaf() ) * 8 };
+    auto const keys{ keys_each_twice( distinct ) };
+
+    tree_type bpt;
+    bpt.map_memory( keys.size() );
+    bpt.insert_presorted( keys );
+
+    std::vector<int> erase_order( static_cast<std::size_t>( distinct ) );
+    std::iota( erase_order.begin(), erase_order.end(), 0 );
+    std::ranges::shuffle( erase_order, std::mt19937{ 0x5eed1234u } );
+    std::vector<int> remaining{ keys };
+    for ( auto const key : erase_order )
+    {
+        ASSERT_EQ( bpt.erase( key ), 2u ) << "key " << key;
+        std::erase( remaining, key );
+        if ( remaining.size() % 64 == 0 ) {
+            ASSERT_EQ( bpt.size(), remaining.size() );
+            ASSERT_TRUE( std::ranges::equal( bpt, remaining ) );
+        }
+    }
+    EXPECT_TRUE( bpt.empty() );
+
+    // a run at the very front of the tree, taking whole leaves with it - and
+    // then one that is the entire tree
+    auto const L{ static_cast<int>( tree_type::max_values_per_leaf() ) };
+    for ( auto const width : { 2, L, 2 * L + 1, 5 * L } )
+    {
+        SCOPED_TRACE( std::format( "width {}", width ) );
+        std::vector<int> front( static_cast<std::size_t>( width ), -1 );
+        for ( int i{ 0 }; i < 4 * L; ++i ) front.push_back( i );
+        tree_type front_run;
+        front_run.map_memory( front.size() );
+        front_run.insert_presorted( front );
+        EXPECT_EQ( front_run.erase( -1 ), static_cast<std::size_t>( width ) );
+        EXPECT_TRUE( std::ranges::equal( front_run, std::views::iota( 0, 4 * L ) ) );
+
+        tree_type all_equal;
+        all_equal.map_memory( static_cast<std::size_t>( width ) );
+        all_equal.insert_presorted( std::vector<int>( static_cast<std::size_t>( width ), 7 ) );
+        EXPECT_EQ( all_equal.erase( 7 ), static_cast<std::size_t>( width ) );
+        EXPECT_TRUE( all_equal.empty() );
+    }
+}
+
+// A run that starts at the tree's first key is erased leaf by leaf like any
+// other: whole leaves go from the front - up to whole inner subtrees and the
+// entire tree - and the tree stays searchable and insertable.
+TEST( bp_tree, nonunique_erase_run_at_the_front )
+{
+    using tree_type = bptree_multiset<int>;
+    auto constexpr L{ static_cast<int>( tree_type::max_values_per_leaf () ) };
+    auto constexpr F{ static_cast<int>( tree_type::max_values_per_inner() ) + 1 }; // children per inner node
+
+    auto const check{ [&]( tree_type & bpt, std::vector<int> & rest, std::string_view const what )
+    {
+        verify_invariants( bpt, what );
+        ASSERT_EQ( bpt.size(), rest.size() );
+        ASSERT_TRUE( std::ranges::equal( bpt, rest ) );
+        for ( auto const key : rest )
+        {
+            auto const it{ bpt.find( key ) };
+            ASSERT_NE( it, bpt.end() ) << what << ": key " << key;
+            ASSERT_EQ( *it, key );
+            ASSERT_EQ( bpt.lower_bound( key - 1 ), it ) << what << ": key " << key;
+        }
+        EXPECT_EQ( bpt.find( -1 ), bpt.end() );
+        // the (new) first leaf and the leaf links: insert a new smallest key
+        // and one past the end
+        bpt.insert( -2 );
+        bpt.insert( 1 << 30 );
+        rest.insert( rest.begin(), -2 );
+        rest.push_back( 1 << 30 );
+        verify_invariants( bpt, what );
+        ASSERT_TRUE( std::ranges::equal( bpt, rest ) );
+        EXPECT_EQ( *bpt.begin(), -2 );
+    } };
+
+    // { run width, keys after it }
+    std::pair<int, int> const shapes[]
+    {
+        { 2              , 3 * L         }, // within the first leaf
+        { L - 1          , L / 2         },
+        { L              , 3 * L         }, // exactly the first leaf
+        { L + 1          , L / 2         }, // collapses to a root leaf
+        { 2 * L          , 0             }, // the whole tree
+        { 3 * L + L / 2  , 3 * L         }, // many leaves
+        { L * F          , L * F + L     }, // the whole leftmost inner subtree
+        { L * F + L + 1  , L / 2         },
+        { L * F + 1      , 0             }, // the whole (multi level) tree
+        { 5 * L          , L * F         },
+    };
+    for ( auto const [width, rest_size] : shapes )
+    {
+        auto const what{ std::format( "run {} before {}", width, rest_size ) };
+        SCOPED_TRACE( what );
+        std::vector<int> keys( static_cast<std::size_t>( width ), -1 );
+        std::vector<int> rest;
+        for ( int i{ 0 }; i < rest_size; ++i ) rest.push_back( 2 * i );
+        keys.insert( keys.end(), rest.begin(), rest.end() );
+
+        tree_type bpt;
+        bpt.map_memory( keys.size() );
+        bpt.insert_presorted( keys );
+        EXPECT_EQ( bpt.erase( -1 ), static_cast<std::size_t>( width ) );
+        EXPECT_EQ( bpt.empty(), rest.empty() );
+        check( bpt, rest, what );
+    }
+
+    // leaves that are not full, from shuffled single inserts
+    for ( auto const [width, rest_size] : { std::pair{ 5 * L, 20 * L }, std::pair{ 3 * L, 0 }, std::pair{ L + 1, L / 2 } } )
+    {
+        auto const what{ std::format( "inserted: run {} before {}", width, rest_size ) };
+        SCOPED_TRACE( what );
+        std::vector<int> keys( static_cast<std::size_t>( width ), -1 );
+        std::vector<int> rest;
+        for ( int i{ 0 }; i < rest_size; ++i ) rest.push_back( 2 * i );
+        keys.insert( keys.end(), rest.begin(), rest.end() );
+        std::ranges::shuffle( keys, std::mt19937{ 0x5eed4321u } );
+
+        tree_type bpt;
+        bpt.map_memory( keys.size() );
+        for ( auto const key : keys ) bpt.insert( key );
+        EXPECT_EQ( bpt.erase( -1 ), static_cast<std::size_t>( width ) );
+        EXPECT_EQ( bpt.empty(), rest.empty() );
+        check( bpt, rest, what );
+    }
+}
+
 // flatten: default identity projection (pre-existing behaviour).
 TEST( bp_tree, flatten_identity )
 {
