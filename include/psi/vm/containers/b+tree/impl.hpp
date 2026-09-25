@@ -47,19 +47,22 @@ PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
 template <typename Key, typename Comparator = std::less<>>
 class bp_tree_impl
     :
-    public  bptree_base_wkey<Key>,
+    public  bptree_base_wkey<Key, bptree_base::leaf_front_gap<Key, Comparator>>,
 #if 0 // reexamining...
     public  boost::stl_interfaces::sequence_container_interface<bp_tree_impl<Key, Comparator>, boost::stl_interfaces::element_layout::discontiguous>,
 #endif
     protected Komparator<Comparator>
 {
 protected:
-    using base = bptree_base_wkey<Key>;
+    using base = bptree_base_wkey<Key, bptree_base::leaf_front_gap<Key, Comparator>>;
 
     using Komp = Komparator<Comparator>;
 
     using depth_t        = base::depth_t;
-    using node_size_type = base::node_size_type;
+    // named where it is defined, not through base: spelled through base, MSVC
+    // rejects every explicit capacity argument of the node-local searches
+    // (lower_bound<N>/upper_bound<N>) for a leaf
+    using node_size_type = bptree_base::node_size_type;
     using key_const_arg  = base::key_const_arg;
     using node_slot      = base::node_slot;
     using node_header    = base::node_header;
@@ -292,6 +295,19 @@ private:
         use_linear_search_for_sorted_array<Comparator, Key, capacity> ? capacity : std::numeric_limits<node_size_type>::max()
     };
 
+#if !defined( PSI_VM_BT_FRONT_GAP )
+    // a leaf with a front gap is searched binary (and its node is large
+    // enough) - see bptree_base::front_gap_min_node_size
+    static_assert
+    (
+        !leaf_node::front_gap ||
+        (
+            ( base::node_byte_size() >= bptree_base::front_gap_min_node_size ) &&
+            !use_linear_search_for_sorted_array<Comparator, Key, leaf_node::max_values>
+        )
+    );
+#endif
+
     // lower_bound find >limited to/within a node<
     // maximum_values is search_capacity of the searched node - its own, not the
     // leaf's, wherever that matters: it bounds num_vals and it can select the
@@ -450,18 +466,21 @@ protected:
                 // nonuniques_span_across_nodes_check_not_needed argument
                 // (typically unique instances would set it to signal this
                 // behaviour is not needed).
-                PSI_WARNING_DISABLE_PUSH()
-                PSI_WARNING_GCC_OR_CLANG_DISABLE( -Winvalid-offsetof )
-                // At ( level == depth - 2 ) the child would already be a leaf,
-                // however node layout/design guarantees that keys start at the
-                // same offset regardless (only the capacity of the array
-                // differs).
-                static_assert( offsetof( inner_node, keys_ ) == offsetof( leaf_node, keys_ ) );
-                PSI_WARNING_DISABLE_POP()
+                // The child is a leaf only one level above the leaves, and the
+                // two node types lay their keys out differently (a leaf may
+                // begin its keys further in, and at a gap), so it is read
+                // through its own type.
+                auto const child{ node.children_[ pos ] };
                 if
                 (
                     nonuniques_span_across_nodes_check_not_needed ||
-                    lt( this->leaf( node.children_[ pos ] ).keys().back(), key )
+                    lt
+                    (
+                        ( level == depth - 2 )
+                            ? this->leaf ( child ).keys().back()
+                            : this->inner( child ).keys().back(),
+                        key
+                    )
                 ) [[ likely ]]
                 {
                     // BOOST_ASSUME( !separator_key_node || !unique ); // exact_find may happen at most once (in unique trees :/)
@@ -955,6 +974,9 @@ bp_tree_impl<Key, Comparator>::merge
 {
     BOOST_ASSUME( input_length > 0 );
     verify( target );
+    // the room and the move that opens the merge point below are both reckoned
+    // from num_vals, so a front gap has to be closed first
+    this->recentre( target );
     node_size_type const available_space( target.max_values - target.num_vals ); // recheck: do we need a different value for roots here?
     auto * const tgt_keys{ &target.key( 0 ) }; // indexed past num_vals: it writes into the spare capacity
     BOOST_ASSERT
@@ -1293,6 +1315,8 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
                 BOOST_ASSUME( tgt_leaf->is_root() );
                 node_size_type const missing_keys( tgt_leaf->min_values - tgt_leaf->num_vals );
                 BOOST_ASSUME( tgt_leaf->num_vals + src_leaf->num_vals >= leaf_node::min_values * 2 );
+                if ( base::tail_room( *tgt_leaf ) < missing_keys )
+                    this->recentre( *tgt_leaf );
                 this->move_entries( *src_leaf, 0, missing_keys, *tgt_leaf, tgt_leaf->num_vals );
                 shift_entries_left( *src_leaf, 0, src_leaf->num_vals, missing_keys );
                 tgt_leaf->num_vals += missing_keys;
@@ -1477,7 +1501,9 @@ bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const
             // All remaining input goes after all existing data - use bulk append
             auto remaining_count{ total_size - input_offset };
 
-            // First, fill up the current target leaf if there's space
+            // First, fill up the current target leaf if there's space - all of
+            // it, so a front gap is closed first
+            this->recentre( *tgt_leaf );
             if ( auto const missing{ static_cast<node_size_type>( tgt_leaf->max_values - tgt_leaf->num_vals ) } )
             {
                 if ( do_dedup )
@@ -1701,7 +1727,8 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
         if ( ( tgt_leaf_next_pos.pos == tgt_leaf->num_vals ) && !tgt_leaf->right )
         {
             // first fill up tgt_leaf (and handle when that's all that's left of
-            // the input)
+            // the input) - all of it, so a front gap is closed first
+            this->recentre( *tgt_leaf );
             if ( auto const remaining_tgt_node_space{ node_size_type( tgt_leaf->max_values - tgt_leaf->num_vals ) } )
             {
                 node_size_type const remaining_src_node_data( src_leaf->num_vals - source_slot_offset );

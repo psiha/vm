@@ -13,6 +13,7 @@
 #include <psi/vm/containers/heap_vector.hpp>
 
 #include <psi/build/disable_warnings.hpp>
+#include <psi/build/no_unique_address.hpp>
 
 #include <boost/assert.hpp>
 #include <boost/config_ex.hpp>
@@ -46,7 +47,7 @@ PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
 // \class bptree_base_wkey
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename Key>
+template <typename Key, bool leaf_gap>
 class bptree_base_wkey : public bptree_base
 {
 private:
@@ -192,12 +193,24 @@ protected: // node types
         static node_size_type constexpr min_values  { min_children - 1 };
     }; // struct root_node
 
+    // Nothing: what a leaf stores for its start in a byte of its own when it
+    // has no front gap (it reads start as a compile-time 0,
+    // node_header::live_start), or when the header's spare byte holds start.
+    struct no_front_gap_start {};
+
+    // A leaf carries a front gap, and stores its start, iff the tree's
+    // leaf_front_gap<Key, Comparator> says so (see bptree_base).
     struct alignas( node_size ) leaf_node : node_header
     {
         // TODO support for maps (i.e. keys+values)
         using value_type = Key;
 
-        static node_size_type constexpr storage_space{ static_cast<node_size_type>( node_size - align_up( sizeof( node_header ), alignof( Key ) ) ) };
+        static bool constexpr front_gap{ leaf_gap };
+        // whether its start takes a byte of its own, behind the header - only
+        // when the header has no spare byte to hold it
+        static bool constexpr own_start_byte{ front_gap && !node_header::has_spare_byte };
+
+        static node_size_type constexpr storage_space{ static_cast<node_size_type>( node_size - leaf_keys_offset( alignof( Key ), front_gap ) ) };
         static node_size_type constexpr max_values   { storage_space / sizeof( Key ) };
         static node_size_type constexpr min_values   { ihalf_ceil<max_values> };
 
@@ -214,11 +227,55 @@ protected: // node types
         // bump.
         static_assert( 2 * min_values <= max_values + 1 );
 
+        // Where the live entries begin (node_header::live_start) - the devector
+        // front gap.  It lets entries be taken from or given to the FRONT of a
+        // leaf without moving the rest: relieve_into_sibling and
+        // handle_underflow's borrow branches each hand over a few entries, and
+        // without a gap each pays a whole-node move to do it - largest exactly
+        // when the number of entries handed over is smallest.
+        //
+        // A byte with a gap: the header's spare byte when it has one, which
+        // costs no room, and otherwise one of the leaf's own right behind the
+        // header.  Without a gap nothing - the keys then begin right behind
+        // the header, and start() does not exist, so a read that escaped the
+        // compile-time choice of every gap helper does not compile.  Capped
+        // at 8 bits - a gap of 255 entries.  A wider gap would only serve a
+        // handover of more than 255 entries, where the whole-node move it
+        // avoids is at most about twice the handover anyway; at 512-byte
+        // nodes it cannot bind at all.
+        PSI_NO_UNIQUE_ADDRESS std::conditional_t<own_start_byte, std::uint8_t, no_front_gap_start> own_start{};
+
         Key keys_[ max_values ]; // storage: the live entries are keys()
+
+        [[ gnu::pure ]] constexpr std::uint8_t start() const noexcept requires front_gap
+        {
+            // the member itself rather than through start_byte(): read through
+            // a deducing-this reference, clang allocates the handover paths'
+            // registers differently from a plain member read
+            if constexpr ( own_start_byte ) return own_start;
+            else                            return spare_byte;
+        }
+        // the byte itself, for bptree_base::set_start - its one writer
+        constexpr auto & start_byte( this auto & self ) noexcept requires front_gap
+        {
+            if constexpr ( own_start_byte ) return ( self.own_start  );
+            else                            return ( self.spare_byte );
+        }
     }; // struct leaf_node
 
     static_assert( sizeof( inner_node ) == node_size );
     static_assert( sizeof(  leaf_node ) == node_size );
+    PSI_WARNING_DISABLE_PUSH()
+    PSI_WARNING_GCC_OR_CLANG_DISABLE( -Winvalid-offsetof )
+    // the start byte is where free() clears it...
+    static_assert(   !leaf_node::own_start_byte                            || ( offsetof( leaf_node, own_start  ) == front_gap_start_offset ) );
+    static_assert( !( leaf_node::front_gap && !leaf_node::own_start_byte ) || ( offsetof( leaf_node, spare_byte ) == front_gap_start_offset ) );
+    // ...and the keys begin no later than max_values reckons with: without a
+    // byte of its own start takes no room at all...
+    static_assert( offsetof( leaf_node, keys_ ) <= leaf_keys_offset( alignof( Key ), leaf_node::front_gap ) );
+    // ...so where the header has a spare byte a gap costs a leaf no capacity
+    static_assert( leaf_node::own_start_byte || ( leaf_node::max_values == leaf_capacity( sizeof( Key ), alignof( Key ), false ) ) );
+    PSI_WARNING_DISABLE_POP()
 
 public: // the node geometry, for callers that measure or report it
     // node_size alone does not say how many values a node holds - that follows
@@ -226,6 +283,8 @@ public: // the node geometry, for callers that measure or report it
     // numbers and the linear-vs-binary intra-node search dispatch are keyed on.
     [[ nodiscard ]] static constexpr node_size_type max_values_per_leaf () noexcept { return  leaf_node::max_values; }
     [[ nodiscard ]] static constexpr node_size_type max_values_per_inner() noexcept { return inner_node::max_values; }
+    // whether a leaf carries a front gap (bptree_base::leaf_front_gap)
+    [[ nodiscard ]] static constexpr bool           has_leaf_front_gap  () noexcept { return  leaf_node::front_gap; }
 
 protected: // split_to_insert and its helpers
     root_node & new_root( node_slot const left_child, node_slot const right_child, key_rv_arg separator_key )
@@ -483,10 +542,14 @@ protected: // split_to_insert and its helpers
             auto & left_sibling{ *p_left };
             auto const to_move       { static_cast<node_size_type>( left_room / 2 ) };
             auto const left_prior_num{ left_sibling.num_vals };
+            // the left sibling receives behind its entries, where its gap is no
+            // help - close it if it is in the way
+            if ( tail_room( left_sibling ) < to_move )
+                this->recentre( left_sibling );
             move_entries( node, 0, to_move, left_sibling, left_prior_num );
-            shift_entries_left( node, 0, max, to_move );
+            drop_front  ( node, to_move ); // what the node keeps simply begins further in
             left_sibling.num_vals = static_cast<node_size_type>( left_prior_num + to_move );
-            node        .num_vals = static_cast<node_size_type>( max            - to_move );
+            BOOST_ASSUME( node.num_vals == max - to_move );
             this->mark_dirty( left_sibling, node.left );
             this->mark_dirty( node         , this_slot );
             // this node's first key moved, so its separator has to follow
@@ -502,7 +565,7 @@ protected: // split_to_insert and its helpers
             auto & right_sibling{ *p_right };
             auto const to_move   { static_cast<node_size_type>( right_room / 2 ) };
             auto const kept      { static_cast<node_size_type>( max - to_move ) };
-            shift_entries_right( right_sibling, 0, right_sibling.num_vals + to_move, to_move );
+            open_front  ( right_sibling, to_move );
             move_entries( node, kept, max, right_sibling, 0 );
             right_sibling.num_vals = static_cast<node_size_type>( right_sibling.num_vals + to_move );
             node         .num_vals = kept;
@@ -571,8 +634,29 @@ protected: // 'other'
         if ( full( target_node ) ) [[ unlikely ]] {
             return overflow_to_insert( target_node, target_node_pos, std::move( v ), right_child );
         } else {
-            ++target_node.num_vals;
-            rshift_entries( target_node, target_node_pos );
+            // A leaf with a gap opens the slot from whichever side moves fewer
+            // entries, and must use the front once its entries reach the end
+            // of the array; every other node type has only the back.
+            if constexpr ( !N::front_gap ) {
+                ++target_node.num_vals;
+                rshift_entries( target_node, target_node_pos );
+            } else {
+                // Front or back, whichever moves fewer entries - and with no
+                // room left behind the entries, the front, except for an
+                // append: closing the gap once then lets an ascending run keep
+                // appending, where opening from the front would move the whole
+                // leaf on every insertion.
+                bool const no_tail_room{ !tail_room( target_node ) };
+                if ( no_tail_room && ( target_node_pos == target_node.num_vals ) )
+                    this->recentre( target_node );
+                bool const from_front
+                {
+                    target_node.start() && ( no_tail_room || ( target_node_pos * 2u < target_node.num_vals ) )
+                };
+                ++target_node.num_vals;
+                if ( from_front ) open_slot_from_front( target_node, target_node_pos );
+                else              rshift_entries      ( target_node, target_node_pos );
+            }
             target_node.key( target_node_pos ) = std::move( v );
             this->mark_dirty( target_node );
             if constexpr ( requires { target_node.children_; } ) {
@@ -948,7 +1032,7 @@ protected: // 'other'
         auto & preceding{ left( leaf ) };
         if ( preceding.num_vals + leaf.num_vals >= leaf_node::min_values * 2 ) [[ likely ]]
         {
-            shift_entries_right( leaf, 0, leaf.num_vals + missing_keys, missing_keys );
+            open_front( leaf, missing_keys );
             this->move_entries( preceding, preceding.num_vals - missing_keys, preceding.num_vals, leaf, 0 );
             leaf     .num_vals += missing_keys;
             preceding.num_vals -= missing_keys;
@@ -1147,8 +1231,13 @@ protected: // 'other'
         if ( p_left_sibling && can_borrow( *p_left_sibling ) )
         {
             verify_min_max( *p_left_sibling );
-            node.num_vals++;
-            rshift_entries( node );
+            if constexpr ( leaf_node_type ) {
+                open_front( node, 1 ); // the borrow the gap exists for
+                node.num_vals++;
+            } else {
+                node.num_vals++;
+                rshift_entries( node );
+            }
             node_size_type const left_separator_key_idx( parent_child_idx - 1 );
             auto & left_separator_key{ parent.keys()[ left_separator_key_idx ] };
             auto const node_keys{ node.keys() };
@@ -1189,6 +1278,10 @@ protected: // 'other'
         if ( p_right_sibling && can_borrow( *p_right_sibling ) )
         {
             verify_min_max( *p_right_sibling );
+            if constexpr ( leaf_node_type ) {
+                if ( !tail_room( node ) )
+                    this->recentre( node );
+            }
             node.num_vals++;
             auto const right_separator_key_idx{ parent_child_idx };
             auto & right_separator_key{ parent.keys()[ right_separator_key_idx ] };
@@ -1198,9 +1291,10 @@ protected: // 'other'
                 auto & leftmost_right_key{ p_right_sibling->keys().front() };
                 BOOST_ASSUME( right_separator_key == leftmost_right_key ); // yes we expect exact or bitwise equality for key-copies in inner nodes
                 node_keys.back() = std::move( leftmost_right_key );
-                lshift_entries( *p_right_sibling );
-                // adjust the separator key in the parent
-                right_separator_key = leftmost_right_key;
+                drop_front( *p_right_sibling, 1 );
+                // adjust the separator key in the parent - to the sibling's new
+                // first key, which is no longer where leftmost_right_key points
+                right_separator_key = p_right_sibling->keys().front();
             } else {
                 // Move/rotate the smallest key from the right sibling to the current node 'through' the parent
 
@@ -1212,9 +1306,9 @@ protected: // 'other'
                 insrt_child( node, node.num_chldrn() - 1, p_right_sibling->children().front(), this_slot );
                 lshift_entries( *p_right_sibling );
                 lshift_chldrn ( *p_right_sibling );
+                p_right_sibling->num_vals--; // a leaf's drop_front above counts its entry out itself
             }
 
-            p_right_sibling->num_vals--;
             this->mark_dirty( node            , this_slot   );
             this->mark_dirty( parent          , node.parent );
             this->mark_dirty( *p_right_sibling, node.right  );
@@ -1288,6 +1382,8 @@ protected: // 'other'
     void append_and_free( leaf_node & __restrict target, leaf_node & __restrict source ) noexcept
     {
         BOOST_ASSUME( target.num_vals + source.num_vals <= target.max_values );
+        if ( tail_room( target ) < source.num_vals )
+            this->recentre( target );
 
         std::ranges::move( source.keys(), &target.key( target.num_vals ) );
         target.num_vals += source.num_vals;
@@ -1405,8 +1501,8 @@ private:
 // \class bptree_base_wkey::fwd_iterator
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename Key>
-class [[ clang::trivial_abi, gsl::Pointer ]] bptree_base_wkey<Key>::fwd_iterator
+template <typename Key, bool leaf_gap>
+class [[ clang::trivial_abi, gsl::Pointer ]] bptree_base_wkey<Key, leaf_gap>::fwd_iterator
     :
     public base_iterator,
     public iter_impl<fwd_iterator, std::bidirectional_iterator_tag>
@@ -1449,13 +1545,13 @@ public:
 // \class bptree_base_wkey::ra_iterator
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename Key>
-class [[ clang::trivial_abi, gsl::Pointer ]] bptree_base_wkey<Key>::ra_iterator
+template <typename Key, bool leaf_gap>
+class [[ clang::trivial_abi, gsl::Pointer ]] bptree_base_wkey<Key, leaf_gap>::ra_iterator
     :
     public base_random_access_iterator,
     public iter_impl<ra_iterator, std::random_access_iterator_tag>
 {
-private: friend class bptree_base_wkey<Key>;
+private: friend class bptree_base_wkey<Key, leaf_gap>;
     using base = base_random_access_iterator;
     using base::base;
 
@@ -1500,8 +1596,8 @@ public:
 }; // class ra_iterator
 
 
-template <typename Key>
-class [[ clang::trivial_abi ]] bptree_base_wkey<Key>::ra_full_node_iterator
+template <typename Key, bool leaf_gap>
+class [[ clang::trivial_abi ]] bptree_base_wkey<Key, leaf_gap>::ra_full_node_iterator
     // Not using stl_interfaces because Clang 19.1.6 under OSX keeps using the
     // stl_interfaces implementations/wrappers for equality operators (even
     // though proper class specific ones are provided - as members, friends,
@@ -1627,8 +1723,8 @@ private:
 // Bidirectional iterator over the doubly-linked list of leaf nodes: dereferences
 // to std::span<Key const> of the leaf's keys.  Enables two-level loops that
 // skip the per-step pos_ bookkeeping inside fwd_iterator.
-template <typename Key>
-class [[ clang::trivial_abi, gsl::Pointer ]] bptree_base_wkey<Key>::leaf_iterator
+template <typename Key, bool leaf_gap>
+class [[ clang::trivial_abi, gsl::Pointer ]] bptree_base_wkey<Key, leaf_gap>::leaf_iterator
 {
 public:
     using iterator_category = std::bidirectional_iterator_tag;
@@ -1695,25 +1791,25 @@ private:
     bptree_base_wkey const * __restrict p_tree_{};
 }; // class leaf_iterator
 
-template <typename Key>
-typename bptree_base_wkey<Key>::leaf_iterator
-bptree_base_wkey<Key>::node_begin() const noexcept
+template <typename Key, bool leaf_gap>
+typename bptree_base_wkey<Key, leaf_gap>::leaf_iterator
+bptree_base_wkey<Key, leaf_gap>::node_begin() const noexcept
 {
     return { *this, empty() ? nullptr : &leaf( first_leaf() ) };
 }
 
-template <typename Key>
-typename bptree_base_wkey<Key>::leaf_iterator
-bptree_base_wkey<Key>::node_end() const noexcept
+template <typename Key, bool leaf_gap>
+typename bptree_base_wkey<Key, leaf_gap>::leaf_iterator
+bptree_base_wkey<Key, leaf_gap>::node_end() const noexcept
 {
     return { *this, nullptr };
 }
 
 
-template <typename Key>
+template <typename Key, bool leaf_gap>
 typename
-bptree_base_wkey<Key>::const_iterator
-bptree_base_wkey<Key>::erase( const_iterator const iter ) noexcept
+bptree_base_wkey<Key, leaf_gap>::const_iterator
+bptree_base_wkey<Key, leaf_gap>::erase( const_iterator const iter ) noexcept
 {
     auto const [node, key_offset]{ iter.base().pos() };
     auto & lf{ leaf( node ) };
@@ -1724,10 +1820,10 @@ bptree_base_wkey<Key>::erase( const_iterator const iter ) noexcept
     return make_iter( erase( lf, key_offset ) );
 }
 
-template <typename Key>
+template <typename Key, bool leaf_gap>
 typename
-bptree_base_wkey<Key>::const_iterator
-bptree_base_wkey<Key>::erase( const_iterator const first, const_iterator const last ) noexcept
+bptree_base_wkey<Key, leaf_gap>::const_iterator
+bptree_base_wkey<Key, leaf_gap>::erase( const_iterator const first, const_iterator const last ) noexcept
 {
     auto const end_pos{ last.base().pos() };
     auto pos{ first.base().pos() };
@@ -1761,8 +1857,7 @@ bptree_base_wkey<Key>::erase( const_iterator const first, const_iterator const l
             if ( end_pos.value_offset < node.num_vals ) // partial, certainly last, node
             {
                 auto const erased_count{ end_pos.value_offset };
-                shift_entries_left( node, 0, node.num_vals, erased_count );
-                node.num_vals -= erased_count;
+                drop_front( node, erased_count );
                 this->mark_dirty( node );
                 // erasure not to the end but from the beginning of the node -
                 // this also means we've reached the end of the erasure loop
@@ -1792,9 +1887,9 @@ bptree_base_wkey<Key>::erase( const_iterator const first, const_iterator const l
     return make_iter( pos );
 }
 
-template <typename Key>
+template <typename Key, bool leaf_gap>
 template <typename Proj>
-auto bptree_base_wkey<Key>::flatten( node_slot const begin_node, node_slot const end_node, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, Proj proj ) const noexcept( std::is_nothrow_invocable_v<Proj &, Key const &> ) {
+auto bptree_base_wkey<Key, leaf_gap>::flatten( node_slot const begin_node, node_slot const end_node, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, Proj proj ) const noexcept( std::is_nothrow_invocable_v<Proj &, Key const &> ) {
     auto node{ begin_node };
     do {
         auto const & lf{ leaf( node ) };
@@ -1804,9 +1899,9 @@ auto bptree_base_wkey<Key>::flatten( node_slot const begin_node, node_slot const
     return output;
 }
 
-template <typename Key>
+template <typename Key, bool leaf_gap>
 template <typename Proj>
-auto bptree_base_wkey<Key>::flatten( std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto const output, size_type const available_space, Proj proj ) const noexcept( std::is_nothrow_invocable_v<Proj &, Key const &> ) {
+auto bptree_base_wkey<Key, leaf_gap>::flatten( std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto const output, size_type const available_space, Proj proj ) const noexcept( std::is_nothrow_invocable_v<Proj &, Key const &> ) {
     BOOST_VERIFY( available_space >= this->size() );
     if ( empty() ) [[ unlikely ]]
         return output;
@@ -1814,9 +1909,9 @@ auto bptree_base_wkey<Key>::flatten( std::output_iterator<std::invoke_result_t<P
     return flatten( first_leaf(), {}, output, std::move( proj ) );
 }
 
-template <typename Key>
+template <typename Key, bool leaf_gap>
 template <typename Proj>
-auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator const end, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, size_type available_space, Proj proj ) const noexcept( std::is_nothrow_invocable_v<Proj &, Key const &> ) {
+auto bptree_base_wkey<Key, leaf_gap>::flatten( const_iterator const begin, const_iterator const end, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, size_type available_space, Proj proj ) const noexcept( std::is_nothrow_invocable_v<Proj &, Key const &> ) {
     BOOST_ASSERT( available_space >= static_cast<std::size_t>( std::distance( begin, end ) ) );
     auto const   end_pos{   end.base().pos() };
     auto       start_pos{ begin.base().pos() };
@@ -1858,9 +1953,9 @@ auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator 
     return output;
 }
 
-template <typename Key>
+template <typename Key, bool leaf_gap>
 template <typename N> [[ gnu::sysv_abi ]]
-void bptree_base_wkey<Key>::move_entries
+void bptree_base_wkey<Key, leaf_gap>::move_entries
 (
     N const & source, node_size_type const src_begin, node_size_type const src_end,
     N       & target, node_size_type const tgt_begin
@@ -1872,10 +1967,10 @@ void bptree_base_wkey<Key>::move_entries
     BOOST_ASSUME( tgt_begin < N::max_values );
     std::uninitialized_move( &source.key( src_begin ), &source.key( src_end ), &target.key( tgt_begin ) );
     if constexpr ( has_mapped_values<N> )
-        std::uninitialized_move( &source.values[ source.start + src_begin ], &source.values[ source.start + src_end ], &target.values[ target.start + tgt_begin ] );
+        std::uninitialized_move( &source.values[ source.live_start() + src_begin ], &source.values[ source.live_start() + src_end ], &target.values[ target.live_start() + tgt_begin ] );
 }
-template <typename Key> [[ gnu::noinline, gnu::sysv_abi ]]
-void bptree_base_wkey<Key>::move_chldrn
+template <typename Key, bool leaf_gap> [[ gnu::noinline, gnu::sysv_abi ]]
+void bptree_base_wkey<Key, leaf_gap>::move_chldrn
 (
     inner_node const & source, node_size_type const src_begin, node_size_type const src_end,
     inner_node       & target, node_size_type const tgt_begin

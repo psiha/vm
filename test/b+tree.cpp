@@ -21,6 +21,7 @@
 #include <random>
 #include <ranges>
 #include <utility>
+#include <set>
 #include <vector>
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -2322,6 +2323,118 @@ TEST( bp_tree, leaf_iterator_ordering_by_first_key )
     // Final leaf is still strictly less than end.
     EXPECT_TRUE( prev < end );
 }
+
+// The leaf front gap policy (bptree_base::front_gap_min_node_size): a leaf has a
+// gap iff its in-node search is binary and its node is at least that large.
+// node_size is fixed per build, so each build checks the rows of its own size.
+#if !defined( PSI_VM_BT_FRONT_GAP ) && !defined( PSI_VM_LINEAR_SEARCH_MAX_VALUES )
+namespace
+{
+    template <typename Key> constexpr bool leaf_gap{ bptree_set<Key>::has_leaf_front_gap() };
+    template <typename... Keys> constexpr bool all_gap { (  leaf_gap<Keys> && ... ) };
+    template <typename... Keys> constexpr bool none_gap{ ( !leaf_gap<Keys> && ... ) };
+    constexpr auto node_bytes{ bptree_base::node_byte_size() };
+
+    static_assert( ( node_bytes >= bptree_base::front_gap_min_node_size ) || none_gap<int, std::uint64_t, float, double> );
+#   if defined( __aarch64__ ) || defined( _M_ARM64 )
+    // every in-node search is binary, so the node size alone decides
+    static_assert( ( node_bytes < bptree_base::front_gap_min_node_size ) || all_gap<int, std::uint64_t, float, double> );
+#   elif defined( __x86_64__ ) || defined( _M_X64 )
+    // 512-byte leaves scan (124 4-byte keys), and are below the size threshold anyway
+    static_assert( ( node_bytes != 512 ) || none_gap<int, std::uint64_t, float, double> );
+    // 254 8-byte integers still scan (limit 256); 507 4-byte keys and 253
+    // doubles (limit 128) are searched binary
+    static_assert( ( node_bytes != 2048 ) || ( all_gap<int, float, double> && none_gap<std::uint64_t> ) );
+    // ...as is every key type at 4096 bytes
+    static_assert( ( node_bytes != 4096 ) || all_gap<int, std::uint64_t, float, double> );
+#   endif
+} // anonymous namespace
+#endif
+
+namespace
+{
+    // Every path that hands entries over at a leaf's front - single insertion
+    // relieving into a sibling, bulk insertion, erasure of single keys and of a
+    // sorted run with the underflow borrows it triggers - checked against the
+    // set it must equal.  Instantiated per key type, which is what decides
+    // whether the leaves have a gap (see the policy checks above), so builds
+    // where the two kinds of leaf coexist run both.
+    template <typename Key>
+    void front_handover_roundtrip()
+    {
+        std::mt19937 rng{ 20260925 };
+        auto const n{ static_cast<std::uint32_t>( bptree_set<Key>::max_values_per_leaf() ) * 64U };
+        std::vector<Key> keys( n );
+        for ( auto i{ 0U }; i < n; ++i ) { keys[ i ] = static_cast<Key>( 2 * i ); }
+        std::ranges::shuffle( keys, rng );
+
+        bptree_set<Key> bpt;
+        bpt.map_memory();
+        std::span const all{ keys };
+        for ( auto const k : all.first( n / 2 ) ) { EXPECT_TRUE( bpt.insert( k ).second ); }
+        EXPECT_EQ( bpt.insert( all.subspan( n / 2 ) ), n - n / 2 );
+        EXPECT_EQ( bpt.size(), n );
+        verify_invariants( bpt, "front handover: insertion" );
+
+        std::ranges::shuffle( keys, rng );
+        for ( auto const k : all.first( n / 4 ) ) { EXPECT_TRUE( bpt.erase( k ) ); }
+        std::vector<Key> remaining( keys.begin() + n / 4, keys.end() );
+        std::ranges::sort( remaining );
+        std::vector<Key> run, kept;
+        for ( auto i{ 0U }; i < remaining.size(); ++i ) { ( ( i % 3 == 0 ) ? run : kept ).push_back( remaining[ i ] ); }
+        EXPECT_EQ( bpt.erase_sorted( run ), run.size() );
+        EXPECT_TRUE( std::ranges::equal( bpt, kept ) );
+        verify_invariants( bpt, "front handover: erasure" );
+
+        // back into leaves that erasure left with a gap
+        for ( auto const k : all.first( n / 4 ) ) { EXPECT_TRUE( bpt.insert( k ).second ); }
+        kept.insert( kept.end(), keys.begin(), keys.begin() + n / 4 );
+        std::ranges::sort( kept );
+        EXPECT_TRUE( std::ranges::equal( bpt, kept ) );
+        verify_invariants( bpt, "front handover: reinsertion" );
+    }
+} // anonymous namespace
+
+TEST( bp_tree, front_handover_int    ) { front_handover_roundtrip<int          >(); }
+TEST( bp_tree, front_handover_uint64 ) { front_handover_roundtrip<std::uint64_t>(); }
+TEST( bp_tree, front_handover_double ) { front_handover_roundtrip<double       >(); }
+
+namespace
+{
+    // The one layout where a leaf's front gap meets the end of its array: a
+    // full leaf relieved into its left sibling keeps its entries where they
+    // were, so they begin further in and still end at the last slot.  A borrow
+    // from that leaf by its underflowing left neighbour then takes an entry off
+    // the front - which must never, even transiently, leave start + num_vals
+    // past the array (keys() asserts it).
+    template <typename Key>
+    void borrow_from_a_relieved_leaf()
+    {
+        auto const leaf{ static_cast<int>( bptree_set<Key>::max_values_per_leaf() ) };
+        bptree_set<Key> bpt;
+        bpt.map_memory();
+        std::set<Key> expected;
+        auto const add{ [&]( int const k ) { EXPECT_TRUE( bpt.insert( static_cast<Key>( k ) ).second ); expected.insert( static_cast<Key>( k ) ); } };
+        auto const del{ [&]( int const k ) { EXPECT_TRUE( bpt.erase ( static_cast<Key>( k ) )        ); expected.erase ( static_cast<Key>( k ) ); } };
+
+        // two leaves: fill one, overflow it (a split), then fill the right one
+        for ( int k{ 0 }; k <= leaf; ++k ) { add( 10 * k ); }
+        for ( int k{ leaf + 1 }; bpt.size() < static_cast<std::size_t>( leaf + leaf / 2 + 1 ); ++k ) { add( 10 * k ); }
+        // a full right leaf with room on its left: an insertion into it relieves
+        // into the left leaf rather than splitting
+        add( 10 * ( leaf - 1 ) + 5 );
+        EXPECT_TRUE( std::ranges::equal( bpt, expected ) );
+        // underflow the left leaf so it borrows from the relieved right one
+        for ( int k{ 0 }; k < leaf / 2; ++k ) { del( 10 * k ); }
+        EXPECT_TRUE( std::ranges::equal( bpt, expected ) );
+        for ( auto const k : expected ) { EXPECT_NE( bpt.find( k ), bpt.end() ); }
+        verify_invariants( bpt, "borrow from a relieved leaf" );
+    }
+} // anonymous namespace
+
+TEST( bp_tree, borrow_from_a_relieved_leaf_int    ) { borrow_from_a_relieved_leaf<int          >(); }
+TEST( bp_tree, borrow_from_a_relieved_leaf_uint64 ) { borrow_from_a_relieved_leaf<std::uint64_t>(); }
+TEST( bp_tree, borrow_from_a_relieved_leaf_double ) { borrow_from_a_relieved_leaf<double       >(); }
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm
