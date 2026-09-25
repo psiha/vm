@@ -1789,6 +1789,181 @@ TEST( bp_tree, erase_sorted_exact_mixed_present_absent )
     indirect_values.clear();
 }
 
+// Iterator-range erase, for ranges starting at begin(), ending at end() and in
+// between. The ranges are expressed in leaves (read off the tree itself) so
+// that they cover the same shapes - part of a leaf, exactly one leaf, several
+// leaves, whole inner subtrees, the whole tree - for any node size.
+namespace
+{
+    template <typename Tree>
+    Tree build_range_erase_tree( std::vector<int> const & keys )
+    {
+        Tree bpt;
+        bpt.map_memory( keys.size() + 2 );
+        bpt.insert( keys );
+        return bpt;
+    }
+
+    template <typename Tree>
+    std::vector<std::size_t> leaf_ends( Tree const & bpt ) // the rank just past each leaf
+    {
+        std::vector<std::size_t> ends;
+        std::size_t rank{ 0 };
+        for ( auto const leaf : bpt.leaves() )
+            ends.push_back( rank += leaf.size() );
+        return ends;
+    }
+
+    // Erases the ranks [first, last) and checks the returned iterator, the
+    // tree structure and contents, every lookup - of the remaining and of the
+    // erased keys - and that the tree still grows at both ends.
+    template <typename Tree, bool unique>
+    void check_range_erase( std::vector<int> const & keys, std::size_t const first, std::size_t const last, std::string_view const what )
+    {
+        SCOPED_TRACE( std::format( "{}: erase [{}, {}) of {}", what, first, last, keys.size() ) );
+
+        auto bpt{ build_range_erase_tree<Tree>( keys ) };
+        ASSERT_EQ( bpt.size(), keys.size() );
+
+        auto const next{ bpt.erase( std::next( bpt.begin(), static_cast<std::ptrdiff_t>( first ) ), std::next( bpt.begin(), static_cast<std::ptrdiff_t>( last ) ) ) };
+
+        auto expected{ keys };
+        expected.erase( expected.begin() + static_cast<std::ptrdiff_t>( first ), expected.begin() + static_cast<std::ptrdiff_t>( last ) );
+
+        verify_invariants( bpt, what );
+        ASSERT_EQ( bpt.size(), expected.size() );
+        ASSERT_TRUE( std::ranges::equal( bpt, expected ) );
+
+        // the returned iterator points at what followed the range
+        EXPECT_EQ( static_cast<std::size_t>( std::distance( bpt.begin(), next ) ), first );
+        if ( last == keys.size() )
+            EXPECT_EQ( next, bpt.end() );
+        else if ( next != bpt.end() )
+            EXPECT_EQ( *next, keys[ last ] );
+        else
+            ADD_FAILURE() << "end() returned for a range that does not reach the end";
+
+        for ( std::size_t i{ 0 }; i < keys.size(); ++i )
+        {
+            auto const key{ keys[ i ] };
+            if ( !unique && i && keys[ i - 1 ] == key ) // each key once
+                continue;
+            auto const found{ bpt.find( key ) };
+            if ( !std::ranges::binary_search( expected, key ) ) {
+                EXPECT_EQ( found, bpt.end() ) << "erased " << key << " still found";
+                continue;
+            }
+            ASSERT_NE( found, bpt.end() ) << "remaining " << key << " not found";
+            EXPECT_EQ( *found, key );
+            auto const lb{ bpt.lower_bound( key ) };
+            ASSERT_NE( lb, bpt.end() );
+            EXPECT_EQ( *lb, key );
+            if constexpr ( unique )
+                EXPECT_EQ( lb, found );
+        }
+
+        // the tree still grows at both of its ends
+        auto const below{ keys.front() - 2 };
+        auto const above{ keys.back () + 2 };
+        bpt.insert( below );
+        bpt.insert( above );
+        verify_invariants( bpt, what );
+        EXPECT_EQ( bpt.size(), expected.size() + 2 );
+        EXPECT_EQ( *bpt.begin(), below );
+        EXPECT_EQ( *std::prev( bpt.end() ), above );
+        EXPECT_NE( bpt.find( below ), bpt.end() );
+        EXPECT_NE( bpt.find( above ), bpt.end() );
+    }
+
+    template <typename Tree, bool unique>
+    void check_range_erases( std::vector<int> const & keys )
+    {
+        auto const ends{ leaf_ends( build_range_erase_tree<Tree>( keys ) ) };
+        ASSERT_GE( ends.size(), 6U ) << "too few leaves for the ranges below";
+        auto const n    { keys.size() };
+        auto const leaf0{ ends[ 0 ] };                    // the size of the first leaf
+        auto const leafz{ n - ends[ ends.size() - 2 ] }; // ...and of the last one
+        auto const check{ [ & ]( std::size_t const first, std::size_t const last, std::string_view const what ) { check_range_erase<Tree, unique>( keys, first, last, what ); } };
+
+        // starting at begin()
+        check( 0, 1                              , "the first key"                     );
+        check( 0, leaf0 / 2                      , "part of the first leaf"            );
+        check( 0, leaf0 - 1                      , "all but one key of the first leaf" );
+        check( 0, leaf0                          , "exactly the first leaf"            );
+        check( 0, leaf0 + 1                      , "the first leaf and one key"        );
+        check( 0, ends[ 2 ]                      , "the first three leaves"            );
+        check( 0, ends[ 2 ] + 1                  , "three leaves and one key"          );
+        check( 0, ( ends[ 2 ] + ends[ 3 ] ) / 2  , "three and a half leaves"           );
+        check( 0, n / 2                          , "the first half"                    );
+        check( 0, n - leafz                      , "all but the last leaf"             );
+        check( 0, n - 3                          , "all but the last three keys"       );
+        check( 0, n - 1                          , "all but the last key"              );
+        // ending at end()
+        check( n - 1                  , n, "the last key"              );
+        check( n - leafz / 2          , n, "part of the last leaf"     );
+        check( n - leafz              , n, "exactly the last leaf"     );
+        check( n - leafz - 1          , n, "the last leaf and one key" );
+        check( ends[ ends.size() - 4 ], n, "the last three leaves"     );
+        check( n / 2                  , n, "the second half"           );
+        check( leaf0                  , n, "all but the first leaf"    );
+        check( 3                      , n, "all but the first three keys" );
+        check( 1                      , n, "all but the first key"     );
+        // the whole tree
+        check( 0, n, "the whole tree" );
+        // in between: partial first and last leaves, with and without whole
+        // leaves between them, and within one leaf
+        check( leaf0 / 2, ( ends[ 1 ] + ends[ 2 ] ) / 2, "half a leaf to half a leaf, one leaf between" );
+        check( leaf0 / 2, ( leaf0 + ends[ 1 ] ) / 2    , "half a leaf to half the next one"            );
+        check( leaf0 - 1, ends[ 1 ] + 1                , "one key, a whole leaf, one key"              );
+        check( leaf0 + 1, ends[ 1 ] - 1                , "within one leaf"                             );
+        check( leaf0    , ends[ 3 ]                    , "whole leaves in the middle"                  );
+        check( 3        , n - 3                        , "all but three keys at each end"              );
+    }
+
+    std::vector<int> range_erase_keys( std::size_t const count, bool const doubled ) // 10, 12, 14... (each twice when doubled)
+    {
+        std::vector<int> keys;
+        keys.reserve( count );
+        for ( int key{ 10 }; keys.size() < count; key += 2 ) {
+            keys.push_back( key );
+            if ( doubled && keys.size() < count )
+                keys.push_back( key );
+        }
+        return keys;
+    }
+
+    // Keys for a tree of at least three levels (more than one inner node below
+    // the root), so that the larger ranges cover whole inner subtrees.
+    template <typename Tree>
+    std::vector<int> three_level_range_erase_keys( bool const doubled )
+    {
+        for ( std::size_t count{ Tree::max_values_per_leaf() * std::size_t{ 8 } }; ; count *= 2 )
+        {
+            auto keys{ range_erase_keys( count, doubled ) };
+            auto const bpt{ build_range_erase_tree<Tree>( keys ) };
+            auto const leaves{ static_cast<std::size_t>( std::ranges::distance( bpt.leaves() ) ) };
+            if ( bpt.nodes_used() >= leaves + 3 ) // the root and at least two inner nodes below it
+                return keys;
+        }
+    }
+} // anonymous namespace
+
+TEST( bp_tree, range_erase )
+{
+    using tree = bptree_set<int>;
+    auto const leaf{ std::size_t{ tree::max_values_per_leaf() } };
+    check_range_erases<tree, true>( range_erase_keys( leaf * 7 + leaf / 3, false ) );
+    check_range_erases<tree, true>( three_level_range_erase_keys<tree>( false ) );
+}
+
+TEST( bp_tree, range_erase_nonunique )
+{
+    using tree = bptree_multiset<int>;
+    auto const leaf{ std::size_t{ tree::max_values_per_leaf() } };
+    check_range_erases<tree, false>( range_erase_keys( leaf * 7 + leaf / 3, true ) );
+    check_range_erases<tree, false>( three_level_range_erase_keys<tree>( true ) );
+}
+
 // Documents the hinted-insert contract at the boundaries the sorted-index
 // maintenance pattern ( insert( lower_bound( k ), k ) ) naturally produces:
 // an empty tree and a key greater than every key already present.
