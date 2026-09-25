@@ -31,6 +31,10 @@
 #include <cstddef>
 #include <optional>
 #include <type_traits>
+
+#if defined( _MSC_VER ) && !defined( __clang__ ) // prefetch_for_read
+#   include <intrin.h>
+#endif
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -224,6 +228,24 @@ It branchless_upper_bound( It first, It const last, auto const & key, Comp const
         length = go_right ? length - half - 1 : half;
     }
     return first;
+}
+
+// A hint that the cache line holding `address` is about to be read.  It never
+// faults and has no effect but on timing, so it may be issued for an address
+// that ends up not being read.
+[[ gnu::always_inline ]] constexpr
+void prefetch_for_read( void const * const address ) noexcept
+{
+    if !consteval
+    {
+#   if defined( __GNUC__ ) || defined( __clang__ )
+        __builtin_prefetch( address, 0 /*read*/, 3 /*keep in every cache level*/ );
+#   elif defined( _M_X64 ) || defined( _M_IX86 )
+        _mm_prefetch( static_cast<char const *>( address ), _MM_HINT_T0 );
+#   elif defined( _M_ARM64 )
+        __prefetch( address );
+#   endif
+    }
 }
 
 // Which binary search the dispatched functions below fall back to.  Off by
