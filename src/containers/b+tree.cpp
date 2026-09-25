@@ -67,7 +67,20 @@ bptree_base::map_memory( std::uint32_t const initial_capacity_as_number_of_nodes
 {
     auto success{ nodes_.map_memory( initial_capacity_as_number_of_nodes, hdr_info.add_header<header>(), value_init )() };
     if ( success )
+    {
+        // Every lookup and insertion descent is a chain of dependent loads,
+        // one per level, into nodes scattered across the whole pool: with 4 KiB
+        // pages nearly every one of those also misses the TLB once the pool
+        // outgrows its reach, so the walk pays a page walk per level on top of
+        // the cache miss. Huge pages cut the number of translations the pool
+        // needs by 512x. Every page the pool grows into from here on faults in
+        // huge; only an initial capacity is already resident in small pages
+        // (map_memory() constructed those nodes), which is left to khugepaged.
+        // map_cow_memory() does not advise: its pool is memfd (shmem) backed,
+        // which anonymous THP does not cover.
+        nodes_.advise_huge_pages();
         init_fresh_pool( initial_capacity_as_number_of_nodes );
+    }
     return success;
 }
 

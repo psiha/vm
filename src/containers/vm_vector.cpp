@@ -411,6 +411,19 @@ err::result_or_error<void, error> mem_mapping::map_cow_memory( size_type const d
     return map_memory( data_size, hdr_info );
 }
 
+PSI_COLD
+void mem_mapping::advise_huge_pages() noexcept
+{
+#if defined( __linux__ ) && !defined( __ANDROID__ ) // server Linux
+    // Private anonymous only: a file (or memfd - which includes a COW clone's
+    // storage) mapping's pages belong to the page cache/shmem, whose huge page
+    // use is the filesystem's (shmem_enabled/huge=) policy, not this advice's.
+    auto const map_flags{ mapping_.view_mapping_flags.flags };
+    if ( mapping_.is_anonymous() && ( ( map_flags & MAP_TYPE ) == MAP_PRIVATE ) && !view_.empty() )
+        (void)::madvise( view_.data(), view_.size(), MADV_HUGEPAGE ); // only a hint: a kernel built without THP rejects it with EINVAL
+#endif
+}
+
 err::result_or_error<void, error>
 mem_mapping::map( file_handle file, std::size_t const mapping_size ) noexcept
 {
