@@ -137,22 +137,22 @@ public:
         leaf_node & leaf{ location.leaf };
         auto const leaf_key_offset{ location.leaf_offset.pos };
         // Complex check to see if there is only one key to erase, i.e. expect
-        // nonunique keys to be an unlikely occurrence.
+        // nonunique keys to be an unlikely occurrence: the key that follows -
+        // in this leaf or, past its end, at the start of the next one - has to
+        // be greater.
         // TODO measure if this is worth it.
         if
         (
-            (
-                ( ( leaf_key_offset + 1 ) < leaf.num_vals ) &&
-                lt( key, leaf.key( leaf_key_offset + 1 ) )
-            ) ||
-            ( !leaf.right ) ||
-            lt( key, this->right( leaf ).key( 0 ) )
+            ( ( leaf_key_offset + 1 ) < leaf.num_vals )
+                ? lt( key, leaf.key( leaf_key_offset + 1 ) )
+                : ( !leaf.right || lt( key, this->right( leaf ).key( 0 ) ) )
         ) [[ likely ]]
         {
             return this->erase_single( location );
         }
 
-        // try and efficiently handle multiple erased values
+        // try and efficiently handle multiple erased values: leaf by leaf, a
+        // whole leaf at a time where the run covers it
         auto p_node{ &leaf };
         auto node_offset{ leaf_key_offset };
         size_type count{ 0 };
@@ -166,8 +166,15 @@ public:
             auto const next_node{ node.right };
             if ( erased_count == node.num_vals ) // entire node erased
             {
+                if ( node.is_root() ) [[ unlikely ]] // the run was the whole tree
+                {
+                    this->free_root_leaf( node );
+                    break;
+                }
+                // (also the leftmost leaf - whose right sibling then becomes
+                // the leftmost)
                 this->remove_from_parent  ( node );
-                this->unlink_and_free_node( node, this->left( node ) );
+                this->unlink_and_free_leaf( node );
             }
             else
             {
@@ -183,8 +190,10 @@ public:
                     this->update_separator                     ( node );
                     this->check_and_handle_bulk_erase_underflow( node );
                     break;
-                } else {
-                    BOOST_ASSUME( end_pos == node.num_vals + erased_count );
+                } else if ( end_pos < node.num_vals + erased_count ) {
+                    // the run ended within the starting node (whose underflow
+                    // is handled below)
+                    break;
                 }
             }
             if ( !next_node )

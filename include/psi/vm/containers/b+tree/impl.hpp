@@ -432,54 +432,36 @@ protected:
             auto [pos, exact_find]{ lower_bound( node, key ) };
             if ( exact_find ) [[ unlikely ]] // "most keys are in leaves"
             {
-                // separator key - it also means we have to traverse to the right
-
-                // In non unique instances it may happen that so many copies of
-                // a key K are inserted that they spill into more than one leaf
-                // (or even inner nodes in more extreme cases) - in case K
-                // starts to appear later than from the beginning of the first
-                // leaf (KL1), the parent will contain a separator key K that
-                // would 'point' the downward search below to the right sibling
-                // of KL1 (because the said right sibling contains K copies
-                // again, from its beginning) - to blindly follow to the right
-                // child/sibling would be a mistake as we would skip the first
-                // K appearance in the left child/sibling (i.e. incorrect lower
-                // bound behaviour).
-                // This check requires extra memory access so we rather pay with
-                // extra, predictable, branching through the added 
-                // nonuniques_span_across_nodes_check_not_needed argument
-                // (typically unique instances would set it to signal this
-                // behaviour is not needed).
-                PSI_WARNING_DISABLE_PUSH()
-                PSI_WARNING_GCC_OR_CLANG_DISABLE( -Winvalid-offsetof )
-                // At ( level == depth - 2 ) the child would already be a leaf,
-                // however node layout/design guarantees that keys start at the
-                // same offset regardless (only the capacity of the array
-                // differs).
-                static_assert( offsetof( inner_node, keys_ ) == offsetof( leaf_node, keys_ ) );
-                PSI_WARNING_DISABLE_POP()
-                if
-                (
-                    nonuniques_span_across_nodes_check_not_needed ||
-                    lt( this->leaf( node.children_[ pos ] ).keys().back(), key )
-                ) [[ likely ]]
-                {
-                    // BOOST_ASSUME( !separator_key_node || !unique ); // exact_find may happen at most once (in unique trees :/)
-                    separator_key_node   = current_node;
-                    separator_key_offset = pos;
+                // separator key: the first key of the right child's subtree
+                separator_key_node   = current_node;
+                separator_key_offset = pos;
+                // In non unique instances copies of the key can also END the
+                // left child's subtree - a run of equal keys may start
+                // anywhere in its last leaf (or span several leaves and inner
+                // nodes). The left subtree is therefore searched with plain
+                // lower bound semantics and, should all of its keys turn out
+                // to be smaller, the leaf level resolves to the right sibling
+                // (whose first key is this separator).
+                // Unique instances (typically) skip this through the
+                // nonuniques_span_across_nodes_check_not_needed argument and
+                // go right directly.
+                if ( nonuniques_span_across_nodes_check_not_needed ) [[ likely ]]
                     ++pos; // traverse to the right child
-                }
             }
             current_node = node.children_[ pos ];
         }
         auto & leaf{ this->leaf( current_node ) };
-        return
-        {
-            leaf,
-            BOOST_LIKELY( !separator_key_node ) ? lower_bound( leaf, key ) : find_pos{ 0, true }, // short circuit since we know separator keys only exist for first keys
-            separator_key_offset,
-            separator_key_node
-        };
+        if ( BOOST_LIKELY( !separator_key_node ) )
+            return { leaf, lower_bound( leaf, key ), {}, {} };
+        if ( nonuniques_span_across_nodes_check_not_needed ) // short circuit since we know separator keys only exist for first keys
+            return { leaf, find_pos{ 0, true }, separator_key_offset, separator_key_node };
+        // non unique: the last separator equal to the key is the one of the leaf
+        // following the one reached (if the key is not found in the latter)
+        auto const leaf_pos{ lower_bound( leaf, key ) };
+        if ( leaf_pos.pos != leaf.num_vals )
+            return { leaf, leaf_pos, {}, {} };
+        BOOST_ASSUME( !!leaf.right );
+        return { this->leaf( leaf.right ), find_pos{ 0, true }, separator_key_offset, separator_key_node };
     }
     auto find_nodes_for( Key const & key, bool const unique ) noexcept { return find_nodes_for<Key>( key, unique ); }
 

@@ -575,6 +575,7 @@ protected:
     void update_right_sibling_link( node_header const & left_node, node_slot left_node_slot ) noexcept;
     void unlink_and_free_node( node_header & node, node_header & cached_left_sibling ) noexcept;
     void unlink_and_free_leaf( node_header & leaf, node_header & cached_left_sibling ) noexcept;
+    void unlink_and_free_leaf( node_header & leaf ) noexcept; // also the leftmost one (but not a lone root)
 
     void unlink_left ( node_header & nd ) noexcept;
     void unlink_right( node_header & nd ) noexcept;
