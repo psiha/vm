@@ -298,14 +298,14 @@ private:
     };
 
 #if !defined( PSI_VM_BT_FRONT_GAP )
-    // a leaf has a front gap exactly when its search is binary (and its node
-    // large enough) - see bptree_base::front_gap_min_node_size
+    // a leaf with a front gap is searched binary (and its node is large
+    // enough) - see bptree_base::front_gap_min_node_size
     static_assert
     (
-        leaf_node::front_gap ==
+        !leaf_node::front_gap ||
         (
             ( base::node_byte_size() >= bptree_base::front_gap_min_node_size ) &&
-            ( search_capacity<leaf_node::max_values> == std::numeric_limits<node_size_type>::max() )
+            !use_linear_search_for_sorted_array<Comparator, Key, leaf_node::max_values>
         )
     );
 #endif
