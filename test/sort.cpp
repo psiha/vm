@@ -9,9 +9,12 @@
 /// thresholds.
 ////////////////////////////////////////////////////////////////////////////////
 
+#include <psi/vm/sort.hpp>
 #include <psi/vm/sort_keys.hpp>
 #include <psi/vm/sort_keys_radix.hpp>
+#include <psi/vm/containers/flat_set.hpp>
 #include <psi/vm/containers/heap_vector.hpp>
+#include <psi/vm/containers/komparator.hpp>
 
 #include <gtest/gtest.h>
 
@@ -410,6 +413,191 @@ TEST( argsort_keys, refuses_more_keys_than_an_index_addresses )
     std::uint32_t       perm{ ~0U };
     EXPECT_THROW( argsort_keys( oversized_keys{ &key }, std::span{ &perm, 1 } ), std::length_error );
     EXPECT_EQ( perm, ~0U );
+}
+
+//==============================================================================
+// sort(): which partitioning it picks without being told, and that each one
+// sorts
+//==============================================================================
+
+namespace
+{
+    // A class key that states its comparison reads only itself.
+    struct direct_key
+    {
+        std::uint32_t value;
+
+        static constexpr bool orders_directly{ true };
+
+        friend constexpr auto operator<=>( direct_key, direct_key ) noexcept = default;
+    };
+
+    // Two members compared in turn: a comparison that reads only the key, and
+    // branches.
+    struct two_field_key
+    {
+        std::uint32_t major;
+        std::uint32_t minor;
+
+        static constexpr bool orders_directly{ true };
+
+        friend constexpr auto operator<=>( two_field_key const &, two_field_key const & ) noexcept = default;
+    };
+
+    // A comparison that reads only the key, of a key that is costly to move.
+    struct wide_key
+    {
+        std::uint64_t words[ 8 ];
+
+        static constexpr bool orders_directly{ true };
+
+        friend constexpr auto operator<=>( wide_key const &, wide_key const & ) noexcept = default;
+    };
+    static_assert( sizeof( wide_key ) == 64 );
+
+    // A key without the statement: std::less<> on it calls an operator< that
+    // could do anything.
+    struct plain_key
+    {
+        std::uint32_t value;
+
+        friend constexpr auto operator<=>( plain_key, plain_key ) noexcept = default;
+    };
+
+    enum struct colour : std::uint8_t  { red, green, blue };
+    enum struct ticket : std::uint32_t {};
+
+    auto constexpr int_lambda{ []( int const l, int const r ) noexcept { return l < r; } };
+
+    // the standard comparators over scalar keys
+    static_assert( key_sort_detail::branchless_by_default<std::less   <>       , int          > );
+    static_assert( key_sort_detail::branchless_by_default<std::less   <int>    , int          > );
+    static_assert( key_sort_detail::branchless_by_default<std::ranges::less    , int          > );
+    static_assert( key_sort_detail::branchless_by_default<std::ranges::greater , double       > );
+    static_assert( key_sort_detail::branchless_by_default<std::greater<>       , colour       > );
+    static_assert( key_sort_detail::branchless_by_default<std::less   <>       , int const *  > );
+    static_assert( key_sort_detail::branchless_by_default<erasure_opt_in<std::ranges::less>, std::uint64_t> );
+
+    // never a class key, not even one whose comparison reads only itself:
+    // orders_directly says where a comparison reads, not that it is free of
+    // branches or that the key is cheap to move
+    static_assert( is_direct_comparator<std::less<>, direct_key   > && !key_sort_detail::branchless_by_default<std::less<>, direct_key   > );
+    static_assert( is_direct_comparator<std::less<>, two_field_key> && !key_sort_detail::branchless_by_default<std::less<>, two_field_key> );
+    static_assert( is_direct_comparator<std::less<>, wide_key     > && !key_sort_detail::branchless_by_default<std::less<>, wide_key     > );
+    static_assert( !key_sort_detail::branchless_by_default<std::less<direct_key>, direct_key> );
+    static_assert( !key_sort_detail::branchless_by_default<std::less   <>        , plain_key                 > );
+    static_assert( !key_sort_detail::branchless_by_default<std::less<plain_key>  , plain_key                 > );
+    static_assert( !key_sort_detail::branchless_by_default<std::ranges::less     , plain_key                 > );
+    static_assert( !key_sort_detail::branchless_by_default<std::greater<>        , std::pair<int, int>       > );
+    // nor a comparator that is not a standard one
+    static_assert( !key_sort_detail::branchless_by_default<decltype( int_lambda ), int                       > );
+
+    // what a comparator states to the containers
+    struct stated_branchless : std::less<> { static constexpr bool is_branchless{ true  }; };
+    struct stated_branching  : std::less<> { static constexpr bool is_branchless{ false }; };
+    static_assert( Komparator<std::less<>      >::partitioning == sort_partitioning::automatic  );
+    static_assert( Komparator<stated_branchless>::partitioning == sort_partitioning::branchless );
+    static_assert( Komparator<stated_branching >::partitioning == sort_partitioning::branching  );
+    static_assert( Komparator<erasure_opt_in<stated_branching>>::partitioning == sort_partitioning::branching );
+
+    // Keys of n / 2 + 1 values, so that equal keys are frequent.
+    template <typename Key>
+    std::vector<Key> make_sort_input( std::size_t const n, auto const make_key_of )
+    {
+        std::mt19937 rng{ 7 };
+        std::vector<Key> keys( n );
+        for ( auto & key : keys )
+            key = make_key_of( static_cast<std::uint32_t>( rng() % ( n / 2 + 1 ) ) );
+        return keys;
+    }
+
+    auto constexpr as_is           { []( std::uint32_t const v ) noexcept { return v; } };
+    auto constexpr as_ticket       { []( std::uint32_t const v ) noexcept { return ticket{ v }; } };
+    auto constexpr as_two_field_key{ []( std::uint32_t const v ) noexcept { return two_field_key{ v >> 2, v & 3 }; } };
+    auto constexpr as_wide_key     { []( std::uint32_t const v ) noexcept { wide_key key; std::ranges::fill( key.words, v ); return key; } };
+} // anonymous namespace
+
+template <typename Key, sort_partitioning Partitioning = sort_partitioning::automatic, typename Comparator, typename MakeKey>
+void check_sort( Comparator const comp, MakeKey const make_key_of )
+{
+    for ( auto const n : sizes )
+    {
+        auto actual  { make_sort_input<Key>( n, make_key_of ) };
+        auto expected{ actual };
+        std::stable_sort( expected.begin(), expected.end(), comp );
+        vm::sort<comparator_erasure::never, Partitioning>( actual.begin(), actual.end(), comp );
+        EXPECT_TRUE( same_bytes( actual, expected ) ) << "n " << n;
+    }
+}
+
+template <typename Key, typename Comparator, typename MakeKey>
+void check_every_partitioning( Comparator const comp, MakeKey const make_key_of )
+{
+    check_sort<Key, sort_partitioning::automatic >( comp, make_key_of );
+    check_sort<Key, sort_partitioning::branchless>( comp, make_key_of );
+    check_sort<Key, sort_partitioning::branching >( comp, make_key_of );
+}
+
+TEST( sort, agrees_with_std_stable_sort_whichever_partitioning_it_picks_or_is_told )
+{
+    std::vector<int> const pointees( sizes[ std::size( sizes ) - 1 ] / 2 + 1 );
+    auto const as_pointer{ [ &pointees ]( std::uint32_t const v ) noexcept { return &pointees[ v ]; } };
+
+    check_every_partitioning<direct_key   >( std::less<>{}, []( std::uint32_t const v ) noexcept { return direct_key{ v }; } );
+    check_every_partitioning<plain_key    >( std::less<>{}, []( std::uint32_t const v ) noexcept { return plain_key { v }; } );
+    check_every_partitioning<two_field_key>( std::less<>{}, as_two_field_key );
+    check_every_partitioning<wide_key     >( std::less<>{}, as_wide_key );
+    check_every_partitioning<std::uint32_t>( std::less<std::uint32_t>{}, as_is );
+    check_every_partitioning<std::uint32_t>( std::ranges::less   {}, as_is );
+    check_every_partitioning<std::uint32_t>( std::ranges::greater{}, as_is );
+    check_every_partitioning<std::uint32_t>( []( std::uint32_t const l, std::uint32_t const r ) noexcept { return l < r; }, as_is );
+    check_every_partitioning<ticket       >( std::less   <>{}, as_ticket );
+    check_every_partitioning<ticket       >( std::greater<>{}, as_ticket );
+    check_every_partitioning<int const *  >( std::less<>{}, as_pointer );
+    check_every_partitioning<int const *  >( std::ranges::greater{}, as_pointer );
+}
+
+// The containers' sorts go through Komparator::sort with the partitioning the
+// comparator states, or sort()'s own choice where it states none.
+template <typename Comparator, typename Key, typename MakeKey>
+void check_komparator_sort( MakeKey const make_key_of )
+{
+    for ( auto const n : sizes )
+    {
+        auto actual  { make_sort_input<Key>( n, make_key_of ) };
+        auto expected{ actual };
+        std::stable_sort( expected.begin(), expected.end(), Comparator{} );
+        Komparator<Comparator>{}.sort( actual.begin(), actual.end() );
+        EXPECT_TRUE( same_bytes( actual, expected ) ) << "n " << n;
+    }
+}
+
+TEST( Komparator, sort_agrees_with_std_stable_sort_by_default_and_as_stated )
+{
+    check_komparator_sort<std::less<>      , std::uint32_t>( as_is );
+    check_komparator_sort<std::less<>      , ticket       >( as_ticket );
+    check_komparator_sort<std::less<>      , two_field_key>( as_two_field_key );
+    check_komparator_sort<stated_branchless, ticket       >( as_ticket );
+    check_komparator_sort<stated_branchless, two_field_key>( as_two_field_key );
+    check_komparator_sort<stated_branching , std::uint32_t>( as_is );
+    check_komparator_sort<stated_branching , ticket       >( as_ticket );
+}
+
+// The default path through a container: a bulk insert of enumeration keys,
+// which the default comparator sorts with the branchless partitioning.
+TEST( flat_set, bulk_insert_of_enumeration_keys_agrees_with_std_sort_and_unique )
+{
+    for ( auto const n : sizes )
+    {
+        auto const input{ make_sort_input<ticket>( n, as_ticket ) };
+        auto expected{ input };
+        std::sort( expected.begin(), expected.end() );
+        expected.erase( std::unique( expected.begin(), expected.end() ), expected.end() );
+
+        flat_set<ticket> set;
+        set.insert( input.begin(), input.end() );
+        EXPECT_TRUE( std::ranges::equal( set, expected ) ) << "n " << n;
+    }
 }
 
 //------------------------------------------------------------------------------

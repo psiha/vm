@@ -30,6 +30,7 @@
 #pragma once
 
 #include "containers/abi.hpp" // can_be_passed_in_reg, make_trivially_copyable_predicate
+#include "containers/comparator_traits.hpp" // is_direct_comparator
 #include "erased_ref_predicate.hpp"
 
 #if __has_include( <boost/sort/pdqsort/pdqsort.hpp> )
@@ -66,6 +67,37 @@ constexpr comparator_erasure comparator_erasure_of{
     requires { requires( Comparator::allow_comparator_erasure ); }
         ? comparator_erasure::allowed
         : comparator_erasure::never
+};
+
+/// Which of pdqsort's two partitionings sort() uses. The branchless one (block
+/// partitioning) removes the branch on each comparison's result at the price
+/// of more work per element, so it wins when a comparison is a single cheap
+/// compare of keys that are cheap to move, and can lose when the comparison
+/// branches itself or the keys are large.
+///  * automatic  -- branchless for one of the standard comparators over a
+///                  scalar key (see key_sort_detail::branchless_by_default),
+///                  branching otherwise;
+///  * branchless -- always branchless;
+///  * branching  -- always branching, also for the comparisons Boost.Sort's
+///                  pdqsort would otherwise partition branchlessly by itself.
+/// Without Boost.Sort both are Boost.Move's pdqsort, which only branches.
+enum struct sort_partitioning : std::uint8_t
+{
+    automatic,
+    branchless,
+    branching
+}; // enum struct sort_partitioning
+
+/// Comparator opt-in/opt-out trait: a comparator type carrying
+/// `static constexpr bool is_branchless{ true };` selects
+/// sort_partitioning::branchless wherever the containers sort with it,
+/// `{ false }` selects sort_partitioning::branching, and one that states
+/// nothing gets sort_partitioning::automatic.
+template <typename Comparator>
+constexpr sort_partitioning comparator_partitioning_of{
+    requires { requires(  Comparator::is_branchless ); } ? sort_partitioning::branchless :
+    requires { requires( !Comparator::is_branchless ); } ? sort_partitioning::branching  :
+                                                           sort_partitioning::automatic
 };
 
 /// Container-level opt-in/opt-out adapters: wrap the comparator at the
@@ -135,30 +167,78 @@ namespace detail
     }
 } // namespace detail
 
+namespace key_sort_detail
+{
+    // What sort_partitioning::automatic picks: the branchless partitioning for
+    // one of the standard comparators (is_direct_comparator) over a scalar key
+    // - arithmetic, enumeration, pointer. That extends Boost.Sort's own rule,
+    // std::less and std::greater over an arithmetic key, to std::ranges::less
+    // and greater, to enumeration and pointer keys, and to the erasure
+    // adapters around any of those. A class key does not get it, not even one
+    // that states orders_directly: that promises that a comparison reads
+    // nothing but the key, not that the comparison is free of branches
+    // (several members compared in turn) or that the key is cheap to move, and
+    // the containers' sorts (Komparator::sort) come through here too.
+    // Both partitionings sort unstably, so the relative order of keys that
+    // compare equal without being the same - a floating-point -0.0 and +0.0 -
+    // is unspecified with either, and the two can leave them in different
+    // orders.
+    template <typename Comparator, typename Key>
+    bool constexpr branchless_by_default{ is_direct_comparator<Comparator, Key> && std::is_scalar_v<Key> };
+
+    // Boost.Sort's pdqsort partitions branchlessly by itself for std::less and
+    // std::greater over an arithmetic key; a predicate of any other type keeps
+    // it on the branching partition.
+    template <typename Predicate>
+    struct branching_predicate
+    {
+        Predicate predicate;
+
+        constexpr bool operator()( auto const & left, auto const & right ) const noexcept( noexcept( predicate( left, right ) ) ) { return predicate( left, right ); }
+    };
+} // namespace key_sort_detail
+
 /// pdqsort front end. Erasure (when allowed AND applicable per the heuristic)
 /// routes through a [[gnu::noinline]] type-erased worker -- over naked
 /// pointers for contiguous ranges -- so one worker instantiation serves all
 /// callers; otherwise fully-typed pdqsort with the trivially-copyable
-/// predicate wrapper.
-template <comparator_erasure Erasure = comparator_erasure::never, bool Branchless = false, std::random_access_iterator It, typename Comparator>
+/// predicate wrapper. Partitioning picks between pdqsort's branchless and
+/// branching variants (see sort_partitioning).
+template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::random_access_iterator It, typename Comparator>
 constexpr void sort( It const first, It const last, Comparator const & __restrict comp ) noexcept
 {
     using key_t = std::iter_value_t<It>;
+    bool constexpr branchless
+    {
+        Partitioning == sort_partitioning::branchless ||
+        ( Partitioning == sort_partitioning::automatic && key_sort_detail::branchless_by_default<Comparator, key_t> )
+    };
     if constexpr ( Erasure == comparator_erasure::allowed && detail::erasure_applies<Comparator, key_t> )
     {
         if !consteval
         {
             if constexpr ( std::contiguous_iterator<It> )
-                detail::erased_ptr_sort<Branchless>( std::to_address( first ), std::to_address( last ), erased_ref_predicate<key_t>::bind( comp ) );
+                detail::erased_ptr_sort<branchless>( std::to_address( first ), std::to_address( last ), erased_ref_predicate<key_t>::bind( comp ) );
             else
-                detail::erased_iter_sort<Branchless>( first, last, erased_ref_predicate<key_t>::bind( comp ) );
+                detail::erased_iter_sort<branchless>( first, last, erased_ref_predicate<key_t>::bind( comp ) );
             return;
         }
     }
-    if constexpr ( Branchless )
+    if constexpr ( branchless )
+    {
         PSI_VM_PDQSORT_BRANCHLESS( first, last, make_trivially_copyable_predicate( comp ) );
+    }
+    else if constexpr ( Partitioning == sort_partitioning::branching )
+    {
+        using predicate_t = std::remove_cvref_t<decltype( make_trivially_copyable_predicate( comp ) )>;
+        PSI_VM_PDQSORT( first, last, key_sort_detail::branching_predicate<predicate_t>{ make_trivially_copyable_predicate( comp ) } );
+    }
     else
-        PSI_VM_PDQSORT           ( first, last, make_trivially_copyable_predicate( comp ) );
+    {
+        // automatic, where Boost.Sort's own rule never picks the branchless
+        // partitioning either (see branchless_by_default)
+        PSI_VM_PDQSORT( first, last, make_trivially_copyable_predicate( comp ) );
+    }
 }
 
 //------------------------------------------------------------------------------
