@@ -590,6 +590,19 @@ protected: // 'other'
             return { slot_of( target_node ), static_cast<node_size_type>( target_node_pos + 1 ) };
         }
     }
+    // the lone root leaf lost its last value: the tree is now empty
+    void free_root_leaf( leaf_node & leaf ) noexcept
+    {
+        auto & hdr{ this->hdr() };
+        BOOST_ASSUME( hdr.depth_ == 1 );
+        BOOST_ASSUME( hdr.root_       == slot_of( leaf ) );
+        BOOST_ASSUME( hdr.first_leaf_ == hdr.root_ );
+        BOOST_ASSUME( hdr.last_leaf_  == hdr.root_ );
+        hdr.root_ = hdr.first_leaf_ = hdr.last_leaf_ = {};
+        bptree_base::free( leaf );
+        --hdr.depth_;
+    }
+
     [[ gnu::sysv_abi, gnu::noinline ]]
     iter_pos erase( leaf_node & leaf, node_size_type const leaf_key_offset ) noexcept
     {
@@ -611,11 +624,7 @@ protected: // 'other'
             BOOST_ASSUME( !leaf.right );
             if ( leaf.num_vals == 0 )
             {
-                BOOST_ASSUME( hdr.first_leaf_ == root_ );
-                BOOST_ASSUME( hdr.last_leaf_  == root_ );
-                root_ = hdr.first_leaf_ = hdr.last_leaf_ = {};
-                bptree_base::free( leaf );
-                --depth_;
+                free_root_leaf( leaf );
                 BOOST_ASSUME( depth_ == 0 );
                 BOOST_ASSUME( hdr.size_ == 1 );
                 next_pos = {}; // empty end_pos
@@ -673,7 +682,8 @@ protected: // 'other'
         return true; // courtesy return to enable tail calls
     }
 
-    // underflow handler helper for nonunique or bulk/range erase
+    // underflow handler helper for nonunique or bulk/range erase: returns
+    // where the node's first value ends up
     iter_pos check_and_handle_bulk_erase_underflow( leaf_node & node ) noexcept
     {
         iter_pos pos{ slot_of( node ), 0 };
@@ -685,10 +695,13 @@ protected: // 'other'
         // handle_underflow is designed for unique data, as such it may fill in
         // only a single missing value - for now call it in a loop (until a
         // specialized nonunique version becomes necessary)
+        // (a merge can also collapse the tree down to the merged, then root,
+        // leaf - which is fine with any number of values)
         auto p_node( &node );
-        while ( underflowed( *p_node ) )
+        while ( underflowed( *p_node ) && !p_node->is_root() )
         {
-            pos = handle_underflow( *p_node );
+            auto const moved{ handle_underflow( *p_node ) }; // where the values of *p_node went
+            pos    = { moved.node, static_cast<node_size_type>( moved.value_offset + pos.value_offset ) };
             p_node = &this->leaf( pos.node );
         }
         return pos;
@@ -1730,66 +1743,97 @@ bptree_base_wkey<Key>::const_iterator
 bptree_base_wkey<Key>::erase( const_iterator const first, const_iterator const last ) noexcept
 {
     auto const end_pos{ last.base().pos() };
-    auto pos{ first.base().pos() };
+    auto       pos    { first.base().pos() };
     if ( pos == end_pos ) [[ unlikely ]]
         return last;
 
+    size_type erased_count{ 0 };
+    auto const erase_values{ [ & ]( leaf_node & node, node_size_type const offset, node_size_type const count ) noexcept {
+        shift_entries_left( node, offset, node.num_vals, count );
+        node.num_vals -= count;
+        this->mark_dirty( node );
+        erased_count += count;
+    } };
+
+    // The starting leaf, when the range starts inside it, keeps its values
+    // before the range (it is the only leaf which can be partially erased at
+    // its end).
+    bool const     within_one_leaf{ pos.node == end_pos.node };
+    leaf_node *    p_start        { nullptr };
+    node_size_type start_kept     { 0 };
     if ( pos.value_offset != 0 )
     {
         auto & node{ leaf( pos.node ) };
-        auto const single_node_bulk_erase{ pos.node == end_pos.node };
-        auto const node_end_offset{ single_node_bulk_erase ? end_pos.value_offset : node.num_vals };
-        auto const erased_count{ static_cast<node_size_type>( node_end_offset - pos.value_offset ) };
-        shift_entries_left( node, pos.value_offset, node.num_vals, erased_count );
-        node.num_vals -= erased_count;
-        this->mark_dirty( node );
-        if ( single_node_bulk_erase ) {
-            auto new_pos{ check_and_handle_bulk_erase_underflow( node ) };
-            new_pos.value_offset += pos.value_offset;
-            return make_iter( new_pos );
-        }
-        pos = { node.right, 0 };
+        start_kept = pos.value_offset;
+        erase_values( node, start_kept, static_cast<node_size_type>( ( within_one_leaf ? end_pos.value_offset : node.num_vals ) - start_kept ) );
+        p_start = &node;
+        pos     = { node.right, 0 };
     }
 
-    while ( pos != end_pos )
+    // Then the leaves the range covers entirely, freed a whole leaf at a time,
+    // and the leaf in which it ends (which loses its values before the end).
+    leaf_node * p_end{ nullptr }; // the leaf following the range (if any)
+    if ( !p_start || !within_one_leaf )
     {
-        BOOST_ASSUME( pos.value_offset == 0 );
-        auto & node{ leaf( pos.node ) };
-        if ( pos.node == end_pos.node ) 
+        bool separator_stale{ false };
+        for ( ; ; )
         {
-            pos.value_offset = end_pos.value_offset;
-            if ( end_pos.value_offset < node.num_vals ) // partial, certainly last, node
-            {
-                auto const erased_count{ end_pos.value_offset };
-                shift_entries_left( node, 0, node.num_vals, erased_count );
-                node.num_vals -= erased_count;
-                this->mark_dirty( node );
-                // erasure not to the end but from the beginning of the node -
-                // this also means we've reached the end of the erasure loop
-                // (i.e. no more keys to erase)
-                this->update_separator                     ( node );
-                this->check_and_handle_bulk_erase_underflow( node );
+            if ( pos == end_pos ) { // the range ends at the start of a leaf
+                p_end = &leaf( pos.node );
                 break;
             }
-        } else {
-            pos.node = node.right;
+            auto & node{ leaf( pos.node ) };
+            if ( ( pos.node == end_pos.node ) && ( end_pos.value_offset < node.num_vals ) ) {
+                erase_values( node, 0, end_pos.value_offset );
+                p_end           = &node;
+                separator_stale = true;
+                break;
+            }
+            // the entire leaf
+            erased_count += node.num_vals;
+            auto const next{ node.right };
+            if ( node.is_root() ) [[ unlikely ]] { // the range was the whole tree
+                this->free_root_leaf( node );
+                break;
+            }
+            // (also the leftmost leaf - whose right sibling then becomes the
+            // leftmost)
+            this->remove_from_parent  ( node );
+            this->unlink_and_free_leaf( node );
+            separator_stale = true;
+            if ( !next ) // the range ended at end()
+                break;
+            pos = { next, 0 };
         }
-        // entire node erased
-        this->remove_from_parent  ( node );
-        this->unlink_and_free_node( node, this->left( node ) );
+        // Freeing whole leaves can leave (only) the separator before the
+        // following leaf out of date - and underflow handling relies on exact
+        // separators.
+        if ( p_end && separator_stale )
+            this->update_separator( *p_end );
     }
 
-    // handling of possible underflow of the starting node is delayed to avoid
-    // constant moving/refilling of values from succeeding right leaves - rather
-    // this case is handled faster by removing entire same-valued nodes (in case
-    // there are any) and then the starting and ending, potentially partially
-    // erased, leaves are handled for possible underflow
-    this->check_and_handle_bulk_erase_underflow( leaf( first.base().pos().node ) );
-    // pos cannot point to the starting node here as that case is handled at the
-    // beginning of the function so no need to check/use the return of the above
-    // call
+    // Underflow of the (live) partially erased leaves: the end one first, the
+    // starting one last - so that the latter can locate the value following
+    // the range, as its surviving values are immediately followed by it.
+    iter_pos result;
+    if ( p_end )
+        result = check_and_handle_bulk_erase_underflow( *p_end );
+    if ( p_start )
+    {
+        result = check_and_handle_bulk_erase_underflow( *p_start );
+        result.value_offset += start_kept;
+        for ( ; ; ) {
+            auto const & node{ leaf( result.node ) };
+            if ( ( result.value_offset < node.num_vals ) || !node.right )
+                break;
+            result = { node.right, static_cast<node_size_type>( result.value_offset - node.num_vals ) };
+        }
+    }
+    else if ( !p_end ) // erased through the end
+        result = this->end_pos();
 
-    return make_iter( pos );
+    this->hdr().size_ -= erased_count;
+    return make_iter( result );
 }
 
 template <typename Key>
