@@ -47,11 +47,16 @@ CPMAddPackage( "gh:boostorg/utility#${boost_ver}"         )
 
 # Boost.Sort: sort.hpp takes pdqsort and pdqsort_branchless from it when its
 # headers are reachable, and falls back to Boost.Move's pdqsort (which has no
-# branchless variant) otherwise. Only its headers are used, and its CMake
-# target would require Boost.Range and that library's dependency tree, so it
-# is fetched without being added as a project and only its include directory
-# is published (see target_include_directories below).
-CPMAddPackage( URI "gh:boostorg/sort#${boost_ver}" DOWNLOAD_ONLY YES )
+# branchless variant) otherwise; sort_keys_radix.hpp takes spreadsort from it,
+# whose header reaches into Boost.Range (and through it Boost.MPL and
+# Boost.Iterator). Only their headers are used, and their CMake targets would
+# require the rest of Boost.Range's dependency tree, so they are fetched
+# without being added as projects and only their include directories are
+# published (see target_include_directories below).
+CPMAddPackage( URI "gh:boostorg/sort#${boost_ver}"     DOWNLOAD_ONLY YES )
+CPMAddPackage( URI "gh:boostorg/range#${boost_ver}"    DOWNLOAD_ONLY YES )
+CPMAddPackage( URI "gh:boostorg/mpl#${boost_ver}"      DOWNLOAD_ONLY YES ) # Boost.Range dependency
+CPMAddPackage( URI "gh:boostorg/iterator#${boost_ver}" DOWNLOAD_ONLY YES ) # Boost.Range dependency
 
 CPMAddPackage( "gh:psiha/config_ex#master" )
 CPMAddPackage( "gh:psiha/std_fix#master"   )
@@ -154,6 +159,9 @@ target_include_directories( psi_vm PUBLIC
 # above) are system headers, as the ones such targets publish are.
 target_include_directories( psi_vm SYSTEM PUBLIC
   "${sort_SOURCE_DIR}/include"
+  "${range_SOURCE_DIR}/include"
+  "${mpl_SOURCE_DIR}/include"
+  "${iterator_SOURCE_DIR}/include"
 )
 
 target_precompile_headers( psi_vm PUBLIC src/pch.hpp )
