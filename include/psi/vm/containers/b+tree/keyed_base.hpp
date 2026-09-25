@@ -590,6 +590,19 @@ protected: // 'other'
             return { slot_of( target_node ), static_cast<node_size_type>( target_node_pos + 1 ) };
         }
     }
+    // the lone root leaf lost its last value: the tree is now empty
+    void free_root_leaf( leaf_node & leaf ) noexcept
+    {
+        auto & hdr{ this->hdr() };
+        BOOST_ASSUME( hdr.depth_ == 1 );
+        BOOST_ASSUME( hdr.root_       == slot_of( leaf ) );
+        BOOST_ASSUME( hdr.first_leaf_ == hdr.root_ );
+        BOOST_ASSUME( hdr.last_leaf_  == hdr.root_ );
+        hdr.root_ = hdr.first_leaf_ = hdr.last_leaf_ = {};
+        bptree_base::free( leaf );
+        --hdr.depth_;
+    }
+
     [[ gnu::sysv_abi, gnu::noinline ]]
     iter_pos erase( leaf_node & leaf, node_size_type const leaf_key_offset ) noexcept
     {
@@ -611,11 +624,7 @@ protected: // 'other'
             BOOST_ASSUME( !leaf.right );
             if ( leaf.num_vals == 0 )
             {
-                BOOST_ASSUME( hdr.first_leaf_ == root_ );
-                BOOST_ASSUME( hdr.last_leaf_  == root_ );
-                root_ = hdr.first_leaf_ = hdr.last_leaf_ = {};
-                bptree_base::free( leaf );
-                --depth_;
+                free_root_leaf( leaf );
                 BOOST_ASSUME( depth_ == 0 );
                 BOOST_ASSUME( hdr.size_ == 1 );
                 next_pos = {}; // empty end_pos

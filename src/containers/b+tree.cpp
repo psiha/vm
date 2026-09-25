@@ -299,6 +299,18 @@ void bptree_base::unlink_and_free_leaf( node_header & leaf, node_header & cached
     }
 #endif
 }
+void bptree_base::unlink_and_free_leaf( node_header & leaf ) noexcept
+{
+    if ( leaf.left ) [[ likely ]]
+        return unlink_and_free_leaf( leaf, left( leaf ) );
+    // the leftmost leaf: there is no left sibling to relink, the right one
+    // becomes the leftmost leaf
+    auto const right_slot{ leaf.right };
+    BOOST_ASSUME( !!right_slot ); // a lone root leaf is freed by emptying the tree
+    unlink_right( leaf );
+    set_first_leaf( hdr(), right_slot );
+    free( leaf );
+}
 
 
 void bptree_base::unlink_left( node_header & nd ) noexcept
