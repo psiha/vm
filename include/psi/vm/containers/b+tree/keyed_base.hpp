@@ -496,7 +496,7 @@ protected: // split_to_insert and its helpers
             move_entries( node, 0, to_move, left_sibling, left_prior_num );
             drop_front  ( node, to_move ); // what the node keeps simply begins further in
             left_sibling.num_vals = static_cast<node_size_type>( left_prior_num + to_move );
-            node        .num_vals = static_cast<node_size_type>( max            - to_move );
+            BOOST_ASSUME( node.num_vals == max - to_move );
             this->mark_dirty( left_sibling, node.left );
             this->mark_dirty( node         , this_slot );
             // this node's first key moved, so its separator has to follow
@@ -1355,9 +1355,9 @@ protected: // 'other'
                 insrt_child( node, node.num_chldrn() - 1, p_right_sibling->children().front(), this_slot );
                 lshift_entries( *p_right_sibling );
                 lshift_chldrn ( *p_right_sibling );
+                p_right_sibling->num_vals--; // a leaf's drop_front above counts its entry out itself
             }
 
-            p_right_sibling->num_vals--;
             this->mark_dirty( node            , this_slot   );
             this->mark_dirty( parent          , node.parent );
             this->mark_dirty( *p_right_sibling, node.right  );
@@ -1919,7 +1919,6 @@ bptree_base_wkey<Key, leaf_gap>::erase( const_iterator const first, const_iterat
             if ( ( pos.node == end_pos.node ) && ( end_pos.value_offset < node.num_vals ) ) {
                 // the values before the end become gap (when it can hold them)
                 drop_front( node, end_pos.value_offset );
-                node.num_vals -= end_pos.value_offset;
                 this->mark_dirty( node );
                 erased_count += end_pos.value_offset;
                 p_end           = &node;
