@@ -11,6 +11,7 @@
 
 #include <psi/vm/sort_keys.hpp>
 #include <psi/vm/sort_keys_radix.hpp>
+#include <psi/vm/containers/heap_vector.hpp>
 
 #include <gtest/gtest.h>
 
@@ -117,6 +118,7 @@ namespace
     // states that an allocation cannot fail.
     static_assert( noexcept( sort_keys( std::span<std::uint32_t>{} ) ) );
     static_assert( noexcept( sort_keys( std::span<strong_u32   >{} ) ) );
+    static_assert( noexcept( sort_unique_keys( std::span<std::uint64_t>{} ) ) );
 #if PSI_VM_HAS_INTEGER_SORT
     static_assert( noexcept( sort_keys<key_sort_algo::radix>( std::span<std::uint64_t>{} ) ) == key_sort_detail::allocation_nothrow );
 #endif
@@ -183,6 +185,9 @@ namespace
 
     constexpr std::size_t sizes[]{ 0, 1, 2, 63, 64, 999, 1000, 1001, 100'000 };
 
+    template <typename T>
+    bool equivalent( T const & l, T const & r ) noexcept { return !( l < r ) && !( r < l ); }
+
     template <std::ranges::contiguous_range A, std::ranges::contiguous_range B>
     requires std::same_as<std::ranges::range_value_t<A>, std::ranges::range_value_t<B>>
     bool same_bytes( A const & a, B const & b ) noexcept
@@ -227,6 +232,54 @@ TYPED_TEST( sort_keys_typed, radix_agrees_with_std_stable_sort )
 }
 #endif
 
+template <key_sort_algo Algo, typename T>
+void check_sort_unique_keys()
+{
+    std::uint64_t seed{ 1'000 };
+    for ( auto const s : all_shapes )
+    for ( auto const n : sizes )
+    {
+        auto const input{ make_input<T>( s, n, ++seed ) };
+
+        auto expected{ input };
+        std::sort( expected.begin(), expected.end() );
+        expected.erase( std::unique( expected.begin(), expected.end(), equivalent<T> ), expected.end() );
+        if ( s == shape::all_equal )
+        {
+            EXPECT_EQ( expected.size(), std::min<std::size_t>( n, 1 ) );
+        }
+
+        auto actual{ input };
+        auto const kept{ sort_unique_keys<Algo>( std::span{ actual } ) };
+        EXPECT_EQ( kept, expected.size() ) << "shape " << static_cast<int>( s ) << ", n " << n;
+        actual.resize( kept );
+        EXPECT_TRUE( same_bytes( actual, expected ) ) << "shape " << static_cast<int>( s ) << ", n " << n;
+
+        auto truncated{ input };
+        sort_unique_keys<Algo>( truncated );
+        EXPECT_TRUE( same_bytes( truncated, expected ) ) << "std::vector, shape " << static_cast<int>( s ) << ", n " << n;
+
+        heap_vector<T, std::uint32_t> heap_truncated;
+        heap_truncated.append_range( input );
+        sort_unique_keys<Algo>( heap_truncated );
+        EXPECT_TRUE( std::ranges::equal( heap_truncated, expected, equivalent<T> ) ) << "heap_vector, shape " << static_cast<int>( s ) << ", n " << n;
+    }
+}
+
+TYPED_TEST( sort_keys_typed, pdq_unique_agrees_with_std_sort_and_unique )
+{
+    if constexpr ( sort_key<TypeParam> )
+        check_sort_unique_keys<key_sort_algo::pdq, TypeParam>();
+}
+
+#if PSI_VM_HAS_INTEGER_SORT
+TYPED_TEST( sort_keys_typed, radix_unique_agrees_with_std_sort_and_unique )
+{
+    if constexpr ( sort_key<TypeParam> )
+        check_sort_unique_keys<key_sort_algo::radix, TypeParam>();
+}
+#endif
+
 // Sorting part of an array leaves the keys on either side of it as they were.
 template <key_sort_algo Algo, typename T>
 void check_subspan()
@@ -245,6 +298,18 @@ void check_subspan()
         auto actual{ input };
         sort_keys<Algo>( middle( actual ) );
         EXPECT_TRUE( same_bytes( actual, expected ) ) << "shape " << static_cast<int>( s ) << ", n " << n;
+
+        auto unique_expected{ input };
+        auto const expected_middle{ middle( unique_expected ) };
+        std::sort( expected_middle.begin(), expected_middle.end() );
+        auto const expected_kept{ static_cast<std::size_t>( std::unique( expected_middle.begin(), expected_middle.end(), equivalent<T> ) - expected_middle.begin() ) };
+        auto unique_actual{ input };
+        auto const actual_middle{ middle( unique_actual ) };
+        auto const kept{ sort_unique_keys<Algo>( actual_middle ) };
+        EXPECT_EQ( kept, expected_kept ) << "unique, shape " << static_cast<int>( s ) << ", n " << n;
+        EXPECT_TRUE( same_bytes( actual_middle.first( kept ), expected_middle.first( expected_kept ) ) ) << "unique, shape " << static_cast<int>( s ) << ", n " << n;
+        EXPECT_TRUE( same_bytes( std::span{ unique_actual }.first( margin ), std::span{ input }.first( margin ) ) ) << "unique, shape " << static_cast<int>( s ) << ", n " << n;
+        EXPECT_TRUE( same_bytes( std::span{ unique_actual }.last ( margin ), std::span{ input }.last ( margin ) ) ) << "unique, shape " << static_cast<int>( s ) << ", n " << n;
     }
 }
 
