@@ -7,7 +7,10 @@
 /// the unsigned integer their bytes spell does not depend on the type that
 /// spells them, so here every such key type of a width is sorted by one worker
 /// over that width's unsigned integer: a program gets at most one worker per
-/// (algorithm, width) pair, whatever key types it sorts.
+/// (algorithm, width) pair, whatever key types it sorts. argsort_keys and
+/// argsort_by_key reuse the 64-bit workers for 4-byte keys with 32-bit
+/// indices, and add one pdqsort worker per (key width, index width) pair for
+/// the keys that leave no room to pack their index beside them.
 ///
 /// The radix algorithm lives in psi/vm/sort_keys_radix.hpp, so that only a
 /// program that asks for it includes spreadsort.
@@ -26,20 +29,25 @@
 #pragma once
 
 #include "sort.hpp" // PSI_VM_PDQSORT_BRANCHLESS
+#include "containers/small_vector.hpp"
 
+#include <psi/build/attributes.hpp>
 #include <psi/build/disable_warnings.hpp>
 
 #include <boost/assert.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <ranges>
 #include <span>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 //------------------------------------------------------------------------------
@@ -224,6 +232,68 @@ namespace key_sort_detail
             return kept;
         }
     }
+
+    // A key that leaves no room to pack its index beside it, and that index.
+    template <std::unsigned_integral Key, std::unsigned_integral Index>
+    struct key_index
+    {
+        Key   key;
+        Index index;
+    };
+
+    // The argsort worker for such keys: sorts ( key, index ) pairs by key and
+    // then by index, and writes out the indices.
+    template <std::unsigned_integral Key, std::unsigned_integral Index>
+    [[ gnu::noinline, gnu::sysv_abi ]]
+    void argsort_pairs( std::span<key_index<Key, Index>> const pairs, std::span<Index> const perm ) noexcept
+    {
+        BOOST_ASSERT( perm.size() == pairs.size() );
+        PSI_VM_PDQSORT_BRANCHLESS
+        (
+            pairs.data(), pairs.data() + pairs.size(),
+            []( key_index<Key, Index> const & left, key_index<Key, Index> const & right ) noexcept -> bool
+            {
+                return ( left.key < right.key ) | ( ( left.key == right.key ) & ( left.index < right.index ) );
+            }
+        );
+        for ( std::size_t i{ 0 }; i < pairs.size(); ++i )
+            perm[ i ] = pairs[ i ].index;
+    }
+
+    // The size type of the scratch storage: wide enough for any count of
+    // Index, and never narrower than 32 bits, the inline capacity's.
+    template <typename Index>
+    using scratch_size_t = std::common_type_t<Index, std::uint32_t>;
+
+    // Whether a range can hold more keys than an index of type Index counts.
+    template <typename Keys, typename Index>
+    bool constexpr may_exceed_index{ std::numeric_limits<std::ranges::range_size_t<Keys>>::max() > std::numeric_limits<Index>::max() };
+
+    // Whether such a count is a condition to report rather than a programming
+    // error to assert on - the rule heap_storage::length_error_is_reportable
+    // applies to its byte counter: below 64 bits an ordinary count of keys
+    // reaches the limit, at 64 bits none plausibly does.
+    template <typename Keys, typename Index>
+    bool constexpr index_overflow_is_reportable{ may_exceed_index<Keys, Index> && sizeof( Index ) < sizeof( std::uint64_t ) };
+
+    // Reports such a count as detail::length_error reports a size a container
+    // cannot hold: by std::length_error where it is reportable, by an
+    // assertion where it is not. It is detail::length_error itself once
+    // psi::vm::detail names a single namespace again (see the note on
+    // key_sort_detail above).
+    template <bool Reportable>
+    [[ noreturn, gnu::noinline ]] PSI_COLD void length_error() noexcept( !Reportable )
+    {
+        if constexpr ( Reportable )
+        {
+            throw std::length_error{ "psi::vm::argsort_keys: more keys than the index type counts" };
+        }
+        else
+        {
+            BOOST_ASSERT_MSG( false, "more keys than the index type counts" );
+            std::unreachable();
+        }
+    }
 } // namespace key_sort_detail
 
 /// Sorts the keys ascending (in the order of their unsigned reading), by
@@ -258,6 +328,76 @@ void sort_unique_keys( Keys & keys ) noexcept( key_sort_detail::key_sort_nothrow
 {
     auto const kept{ sort_unique_keys<Algo>( std::span<std::ranges::range_value_t<Keys>>{ keys } ) };
     keys.resize( static_cast<std::ranges::range_size_t<Keys>>( kept ) );
+}
+
+/// Writes to perm the permutation that sorts the n keys key_of( 0 ), ...,
+/// key_of( n - 1 ): perm[ k ] is the index of the k-th smallest key. The
+/// index breaks ties, so equal keys keep the order of their indices - the
+/// result is that of a stable sort. Index is the type of the indices (and of
+/// n), 32 bits unless a wider one is asked for.
+///  * a 4-byte key with an index of at most 32 bits is packed with it into one
+///    64-bit integer, key << 32 | index, which the sort_keys worker sorts -
+///    with Algo;
+///  * any other key is sorted as a ( key, index ) pair by pdqsort, the only
+///    algorithm offered for them.
+/// The keys are gathered, with their indices, into scratch storage whose
+/// first 4 KiB are on the stack - every call takes that much stack, whatever
+/// n is - and the rest on the heap, so the call is noexcept only where
+/// allocation cannot fail (and key_of does not throw).
+template <key_sort_algo Algo = key_sort_algo::pdq, std::unsigned_integral Index = std::uint32_t, typename KeyOf>
+requires sort_key<std::remove_cvref_t<std::invoke_result_t<KeyOf &, Index>>>
+void argsort_by_key( std::type_identity_t<Index> const n, KeyOf && key_of, std::span<std::type_identity_t<Index>> const perm )
+    noexcept( key_sort_detail::allocation_nothrow && std::is_nothrow_invocable_v<KeyOf &, Index> )
+{
+    using key_t = std::remove_cvref_t<std::invoke_result_t<KeyOf &, Index>>;
+    BOOST_ASSERT( perm.size() == n );
+    if constexpr ( sizeof( key_t ) == sizeof( std::uint32_t ) && sizeof( Index ) <= sizeof( std::uint32_t ) )
+    {
+        small_vector<std::uint64_t, 512, key_sort_detail::scratch_size_t<Index>> packed( n, no_init );
+        for ( Index i{ 0 }; i < n; ++i )
+            packed[ i ] = ( std::uint64_t{ std::bit_cast<std::uint32_t>( key_t{ key_of( i ) } ) } << 32 ) | i;
+        std::ignore = key_sort_detail::sort_uints<Algo>( std::span<std::uint64_t>{ packed }, false );
+        for ( Index i{ 0 }; i < n; ++i )
+            perm[ i ] = static_cast<Index>( packed[ i ] );
+    }
+    else
+    {
+        static_assert( Algo == key_sort_algo::pdq, "keys that leave no room for their index are argsorted by pdqsort only" );
+        using key_uint = key_sort_detail::key_uint_t<key_t>;
+        using pair     = key_sort_detail::key_index<key_uint, Index>;
+        small_vector<pair, 4096 / sizeof( pair ), key_sort_detail::scratch_size_t<Index>> pairs( n, no_init );
+        for ( Index i{ 0 }; i < n; ++i )
+            pairs[ i ] = { std::bit_cast<key_uint>( key_t{ key_of( i ) } ), i };
+        key_sort_detail::argsort_pairs<key_uint, Index>( pairs, perm );
+    }
+}
+
+/// The permutation that sorts a contiguous range of keys (see argsort_by_key).
+/// A range of more keys than an Index counts is refused with
+/// std::length_error, in every build - counting it in an Index would sort only
+/// some of the keys and leave the rest of perm unwritten - by the rule the
+/// containers apply to a size they cannot hold: reported where an ordinary
+/// count of keys can reach it (Index below 64 bits), asserted on where none
+/// plausibly can. A range whose size type an Index covers needs no check, so
+/// with a 64-bit Index the call is noexcept wherever allocation cannot fail.
+template <key_sort_algo Algo = key_sort_algo::pdq, std::unsigned_integral Index = std::uint32_t, std::ranges::contiguous_range Keys>
+requires sort_key<std::ranges::range_value_t<Keys>>
+void argsort_keys( Keys const & keys, std::span<std::type_identity_t<Index>> const perm )
+    noexcept( key_sort_detail::allocation_nothrow && !key_sort_detail::index_overflow_is_reportable<Keys const, Index> )
+{
+    auto const size{ std::ranges::size( keys ) };
+    if constexpr ( key_sort_detail::may_exceed_index<Keys const, Index> )
+    {
+        if ( size > std::numeric_limits<Index>::max() ) [[ unlikely ]]
+            key_sort_detail::length_error<key_sort_detail::index_overflow_is_reportable<Keys const, Index>>();
+    }
+    auto const * const data{ std::ranges::data( keys ) };
+    argsort_by_key<Algo, Index>
+    (
+        static_cast<Index>( size ),
+        [ data ]( Index const i ) noexcept { return data[ i ]; },
+        perm
+    );
 }
 
 PSI_WARNING_DISABLE_POP()

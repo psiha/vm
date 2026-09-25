@@ -22,9 +22,12 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <numeric>
 #include <random>
 #include <ranges>
 #include <span>
+#include <stdexcept>
+#include <utility>
 #include <vector>
 
 //------------------------------------------------------------------------------
@@ -119,6 +122,12 @@ namespace
     static_assert( noexcept( sort_keys( std::span<std::uint32_t>{} ) ) );
     static_assert( noexcept( sort_keys( std::span<strong_u32   >{} ) ) );
     static_assert( noexcept( sort_unique_keys( std::span<std::uint64_t>{} ) ) );
+    // argsort_keys gathers into scratch storage that spills to the heap, and
+    // refuses a range of more keys than its index type counts, which only a
+    // range with a wider size type can hold.
+    static_assert( noexcept( argsort_keys( std::declval<heap_vector<std::uint32_t, std::uint32_t> const &>(), std::span<std::uint32_t>{} ) ) == key_sort_detail::allocation_nothrow );
+    static_assert( noexcept( argsort_keys( std::span<std::uint32_t const>{}, std::span<std::uint32_t>{} ) ) == ( key_sort_detail::allocation_nothrow && sizeof( std::size_t ) == sizeof( std::uint32_t ) ) );
+    static_assert( noexcept( argsort_keys<key_sort_algo::pdq, std::uint64_t>( std::span<std::uint32_t const>{}, std::span<std::uint64_t>{} ) ) == key_sort_detail::allocation_nothrow );
 #if PSI_VM_HAS_INTEGER_SORT
     static_assert( noexcept( sort_keys<key_sort_algo::radix>( std::span<std::uint64_t>{} ) ) == key_sort_detail::allocation_nothrow );
 #endif
@@ -326,6 +335,82 @@ TYPED_TEST( sort_keys_typed, radix_of_a_subspan_leaves_its_neighbours_untouched 
         check_subspan<key_sort_algo::radix, TypeParam>();
 }
 #endif
+
+template <key_sort_algo Algo, typename T>
+void check_argsort()
+{
+    std::uint64_t seed{ 2'000 };
+    for ( auto const s : all_shapes )
+    for ( auto const n : sizes )
+    {
+        auto const keys{ make_input<T>( s, n, ++seed ) };
+
+        std::vector<std::uint32_t> expected( n );
+        std::iota( expected.begin(), expected.end(), 0U );
+        std::stable_sort( expected.begin(), expected.end(), [ &keys ]( std::uint32_t const l, std::uint32_t const r ) { return keys[ l ] < keys[ r ]; } );
+
+        std::vector<std::uint32_t> perm( n, ~0U );
+        argsort_keys<Algo>( keys, perm );
+        EXPECT_EQ( perm, expected ) << "shape " << static_cast<int>( s ) << ", n " << n;
+
+        std::vector<std::uint32_t> perm_of( n, ~0U );
+        argsort_by_key<Algo>( static_cast<std::uint32_t>( n ), [ &keys ]( std::uint32_t const i ) { return keys[ i ]; }, perm_of );
+        EXPECT_EQ( perm_of, expected ) << "key accessor, shape " << static_cast<int>( s ) << ", n " << n;
+
+        std::vector<std::uint32_t> perm_of_ref( n, ~0U );
+        argsort_by_key<Algo>( static_cast<std::uint32_t>( n ), [ &keys ]( std::uint32_t const i ) -> T const & { return keys[ i ]; }, perm_of_ref );
+        EXPECT_EQ( perm_of_ref, expected ) << "key accessor returning a reference, shape " << static_cast<int>( s ) << ", n " << n;
+
+        // a 64-bit index leaves no room to pack a key beside it, so every key
+        // then takes the pair worker, which is pdq's
+        if constexpr ( Algo == key_sort_algo::pdq )
+        {
+            std::vector<std::uint64_t> const expected_64( expected.begin(), expected.end() );
+            std::vector<std::uint64_t>       perm_64    ( n, ~0ULL );
+            argsort_keys<Algo, std::uint64_t>( keys, perm_64 );
+            EXPECT_EQ( perm_64, expected_64 ) << "64-bit index, shape " << static_cast<int>( s ) << ", n " << n;
+        }
+    }
+}
+
+// std::stable_sort of the indices by key is the reference, so equal keys -
+// frequent in the few-distinct shape - must come out in index order.
+TYPED_TEST( sort_keys_typed, pdq_argsort_agrees_with_std_stable_sort_of_indices )
+{
+    if constexpr ( sort_key<TypeParam> )
+        check_argsort<key_sort_algo::pdq, TypeParam>();
+}
+
+#if PSI_VM_HAS_INTEGER_SORT
+TYPED_TEST( sort_keys_typed, radix_argsort_agrees_with_std_stable_sort_of_indices )
+{
+    if constexpr ( sort_key<TypeParam> && sizeof( TypeParam ) == sizeof( std::uint32_t ) )
+        check_argsort<key_sort_algo::radix, TypeParam>();
+}
+#endif
+
+namespace
+{
+    // A contiguous range that reports more keys than a 32-bit index addresses
+    // (while holding one): argsort_keys has to refuse it before reading any.
+    struct oversized_keys
+    {
+        std::uint32_t const * keys;
+
+        std::uint32_t const * begin() const noexcept { return keys; }
+        std::uint32_t const * end  () const noexcept { return keys + 1; }
+        static std::uint64_t  size ()       noexcept { return std::uint64_t{ std::numeric_limits<std::uint32_t>::max() } + 1; }
+    };
+    static_assert( std::ranges::contiguous_range<oversized_keys> && std::same_as<std::ranges::range_size_t<oversized_keys const>, std::uint64_t> );
+} // anonymous namespace
+
+TEST( argsort_keys, refuses_more_keys_than_an_index_addresses )
+{
+    std::uint32_t const key { 7 };
+    std::uint32_t       perm{ ~0U };
+    EXPECT_THROW( argsort_keys( oversized_keys{ &key }, std::span{ &perm, 1 } ), std::length_error );
+    EXPECT_EQ( perm, ~0U );
+}
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm
