@@ -38,6 +38,7 @@
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <ranges>
 #include <span>
 #include <type_traits>
 #include <utility>
@@ -164,51 +165,63 @@ namespace key_sort_detail
 #endif
     }
 
-    // The one out-of-line body per (algorithm, key width).
+    // The one out-of-line body per (algorithm, key width): sorts, and with
+    // unique also moves the first of each run of equal keys to the front,
+    // returning how many keys it keeps. Deduplication is a runtime argument
+    // rather than a template one so that it costs no second instantiation of
+    // the sort.
     template <key_sort_algo Algo, std::unsigned_integral U>
     [[ gnu::noinline, gnu::sysv_abi ]]
-    void sort_uints( std::span<U> const keys ) noexcept( key_sort_nothrow<Algo> )
+    std::size_t sort_uints( std::span<U> const keys, bool const unique ) noexcept( key_sort_nothrow<Algo> )
     {
         auto * const first{ keys.data() };
         auto * const last { keys.data() + keys.size() };
         algorithm<Algo>::sort( first, last );
+        if ( !unique )
+            return keys.size();
+        return static_cast<std::size_t>( std::unique( first, last ) - first );
     }
 
     template <key_sort_algo Algo, sort_key T>
-    void sort_as_uints( std::span<T> const keys ) noexcept( key_sort_nothrow<Algo> )
+    std::size_t sort_as_uints( std::span<T> const keys, bool const unique ) noexcept( key_sort_nothrow<Algo> )
     {
         using uint_t = key_uint_t<T>;
         if ( keys.size() < 2 )
-            return;
+            return keys.size();
         if constexpr ( std::is_same_v<T, uint_t> )
         {
-            sort_uints<Algo>( keys );
+            return sort_uints<Algo>( keys, unique );
         }
         else
         {
-            [ keys ]() noexcept( key_sort_nothrow<Algo> )
+            auto const kept
             {
-                // From here on the storage holds integers, and it has to hold
-                // the caller's keys again however the sort ends - radix can
-                // also end it by throwing, where allocation can fail - so a
-                // destructor hands it back. Where the sort cannot throw, that
-                // is the same code as a hand-back after the call.
-                struct keys_restorer
+                [ keys, unique ]() noexcept( key_sort_nothrow<Algo> )
                 {
-                    uint_t      * const uints;
-                    std::size_t   const size;
+                    // From here on the storage holds integers, and it has to
+                    // hold the caller's keys again however the sort ends -
+                    // radix can also end it by throwing, where allocation can
+                    // fail - so a destructor hands it back. Where the sort
+                    // cannot throw, that is the same code as a hand-back after
+                    // the call.
+                    struct keys_restorer
+                    {
+                        uint_t      * const uints;
+                        std::size_t   const size;
 
-                    ~keys_restorer() noexcept { std::ignore = reuse_storage_as<T>( uints, size ); }
-                } const restorer{ reuse_storage_as<uint_t>( keys.data(), keys.size() ), keys.size() };
-                sort_uints<Algo>( std::span<uint_t>{ restorer.uints, restorer.size } );
-            }();
+                        ~keys_restorer() noexcept { std::ignore = reuse_storage_as<T>( uints, size ); }
+                    } const restorer{ reuse_storage_as<uint_t>( keys.data(), keys.size() ), keys.size() };
+                    return sort_uints<Algo>( std::span<uint_t>{ restorer.uints, restorer.size }, unique );
+                }()
+            };
             // The key's promise to order as its unsigned reading (see
             // sort_key) is checked here, where it can be: a debug build
             // compares the result with the key's own ordering.
             if constexpr ( requires( T const & key ) { { key < key } -> std::convertible_to<bool>; } )
             {
-                BOOST_ASSERT_MSG( std::is_sorted( keys.data(), keys.data() + keys.size() ), "a key that states orders_as_unsigned does not order as its unsigned reading" );
+                BOOST_ASSERT_MSG( std::is_sorted( keys.data(), keys.data() + kept ), "a key that states orders_as_unsigned does not order as its unsigned reading" );
             }
+            return kept;
         }
     }
 } // namespace key_sort_detail
@@ -221,7 +234,30 @@ namespace key_sort_detail
 template <key_sort_algo Algo = key_sort_algo::pdq, sort_key T>
 void sort_keys( std::span<T> const keys ) noexcept( key_sort_detail::key_sort_nothrow<Algo> )
 {
-    key_sort_detail::sort_as_uints<Algo>( keys );
+    std::ignore = key_sort_detail::sort_as_uints<Algo>( keys, false );
+}
+
+/// Sorts the keys as sort_keys does and moves the first of each run of equal
+/// keys to the front, in order, as std::unique does; returns how many keys
+/// that is. The keys past that count are left with unspecified values.
+template <key_sort_algo Algo = key_sort_algo::pdq, sort_key T>
+[[ nodiscard ]] std::size_t sort_unique_keys( std::span<T> const keys ) noexcept( key_sort_detail::key_sort_nothrow<Algo> )
+{
+    return key_sort_detail::sort_as_uints<Algo>( keys, true );
+}
+
+/// Sorts and deduplicates a contiguous container of keys and truncates it to
+/// the unique keys. noexcept on the same terms as the span overload, which
+/// takes it that resize() to a smaller size does not throw: true of the
+/// standard and psi::vm containers, whose shrinking resize neither allocates
+/// nor constructs, but a property of the container rather than one checked
+/// here - resize() is noexcept for none of them, as growing allocates.
+template <key_sort_algo Algo = key_sort_algo::pdq, std::ranges::contiguous_range Keys>
+requires( sort_key<std::ranges::range_value_t<Keys>> && requires( Keys & keys ) { keys.resize( std::ranges::size( keys ) ); } )
+void sort_unique_keys( Keys & keys ) noexcept( key_sort_detail::key_sort_nothrow<Algo> )
+{
+    auto const kept{ sort_unique_keys<Algo>( std::span<std::ranges::range_value_t<Keys>>{ keys } ) };
+    keys.resize( static_cast<std::ranges::range_size_t<Keys>>( kept ) );
 }
 
 PSI_WARNING_DISABLE_POP()
