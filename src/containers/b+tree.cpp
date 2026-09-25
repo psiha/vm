@@ -769,14 +769,13 @@ bptree_base::bptree_base( bptree_base const & source )
 // into the target.  In debug builds a memcmp cross-check validates the set
 // (catches missing mark_dirty() calls).
 //
-// For memory-backed targets: if the clone grew (new_node() called
-// emplace_back), the target's node pool is extended first so the new dirty
-// nodes have room.  (Cannot swap storage — MAP_PRIVATE mutations are not
-// written back to the underlying memfd, so future COW copies of a swapped
-// target would see stale content and report the pre-commit element count.)
-//
-// For file-backed targets: growth is not handled here; callers must ensure
-// the target has sufficient capacity.
+// If the clone grew (new_node() called emplace_back), the target's node pool
+// is extended first so the new dirty nodes have room - for memory- and
+// file-backed targets alike, since the copied header (root, leaf links, free
+// list) refers to those nodes either way.  (Cannot swap storage — MAP_PRIVATE
+// mutations are not written back to the underlying file/memfd, so future COW
+// copies of a swapped target would see stale content and report the
+// pre-commit element count.)
 ////////////////////////////////////////////////////////////////////////////////
 
 PSI_COLD
@@ -785,9 +784,9 @@ void bptree_base::commit_to( bptree_base & target ) const noexcept
     if ( !nodes_.has_attached_storage() || !target.nodes_.has_attached_storage() )
         return;
 
-    // For memory-backed targets: extend the target's node pool if the clone
-    // grew past it (new dirty nodes at positions >= original tgt size need room).
-    if ( !target.nodes_.file_backed() && nodes_.size() > target.nodes_.size() )
+    // Extend the target's node pool if the clone grew past it (new dirty nodes
+    // at positions >= original tgt size need room).
+    if ( nodes_.size() > target.nodes_.size() )
     {
         target.nodes_.storage_grow_to( nodes_.size() );
         target.dirty_.grow( target.nodes_.size() );

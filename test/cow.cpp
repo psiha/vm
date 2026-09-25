@@ -512,6 +512,52 @@ TEST( bptree_cow, commit_to_file_backed )
     }
 }
 
+TEST( bptree_cow, commit_to_file_backed_clone_grows_beyond_target )
+{
+    // A clone of a file-backed tree that allocates far more nodes than its
+    // target holds: commit_to() must grow the target's pool (and so its file)
+    // before copying, or the committed header would point at nodes the target
+    // never received.
+    auto const test_bpt{ "test_cow_commit_grow.bpt" };
+    auto constexpr N{ 50 };
+    auto constexpr M{ 20000 };
+
+    {
+        bptree_set<int> src;
+        src.map_file( test_bpt, flags::named_object_construction_policy::create_new_or_truncate_existing );
+        for ( int i{ 0 }; i < N; ++i )
+            src.insert( i );
+
+        bptree_set<int> clone{ src };
+        for ( int i{ N }; i < M; ++i )
+            clone.insert( i );
+
+        // Growing a private view must neither drop the clone's own writes nor
+        // leak them into the target it was cloned from.
+        EXPECT_EQ( clone.size(), static_cast<std::size_t>( M ) );
+        EXPECT_TRUE( std::ranges::equal( clone, std::ranges::iota_view{ 0, M } ) );
+        EXPECT_EQ( src.size(), static_cast<std::size_t>( N ) );
+        EXPECT_TRUE( std::ranges::equal( src, std::ranges::iota_view{ 0, N } ) );
+
+        clone.commit_to( src );
+
+        EXPECT_EQ( src.size(), static_cast<std::size_t>( M ) );
+        EXPECT_TRUE( std::ranges::equal( src, std::ranges::iota_view{ 0, M } ) );
+        EXPECT_TRUE( has( src, 0     ) );
+        EXPECT_TRUE( has( src, N     ) );
+        EXPECT_TRUE( has( src, M - 1 ) );
+        EXPECT_FALSE( has( src, M ) );
+    }
+
+    {
+        bptree_set<int> reopened;
+        reopened.map_file( test_bpt, flags::named_object_construction_policy::open_existing );
+        EXPECT_EQ( reopened.size(), static_cast<std::size_t>( M ) );
+        EXPECT_TRUE( std::ranges::equal( reopened, std::ranges::iota_view{ 0, M } ) );
+        EXPECT_TRUE( has( reopened, M - 1 ) );
+    }
+}
+
 TEST( bptree_cow, empty_tree_clone )
 {
     bptree_set<int> src;
