@@ -47,19 +47,22 @@ PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
 template <typename Key, typename Comparator = std::less<>>
 class bp_tree_impl
     :
-    public  bptree_base_wkey<Key>,
+    public  bptree_base_wkey<Key, bptree_base::leaf_front_gap<Key, Comparator>>,
 #if 0 // reexamining...
     public  boost::stl_interfaces::sequence_container_interface<bp_tree_impl<Key, Comparator>, boost::stl_interfaces::element_layout::discontiguous>,
 #endif
     protected Komparator<Comparator>
 {
 protected:
-    using base = bptree_base_wkey<Key>;
+    using base = bptree_base_wkey<Key, bptree_base::leaf_front_gap<Key, Comparator>>;
 
     using Komp = Komparator<Comparator>;
 
     using depth_t        = base::depth_t;
-    using node_size_type = base::node_size_type;
+    // named where it is defined, not through base: spelled through base, MSVC
+    // rejects every explicit capacity argument of the node-local searches
+    // (lower_bound<N>/upper_bound<N>) for a leaf
+    using node_size_type = bptree_base::node_size_type;
     using key_const_arg  = base::key_const_arg;
     using node_slot      = base::node_slot;
     using node_header    = base::node_header;
@@ -291,6 +294,19 @@ private:
     {
         use_linear_search_for_sorted_array<Comparator, Key, capacity> ? capacity : std::numeric_limits<node_size_type>::max()
     };
+
+#if !defined( PSI_VM_BT_FRONT_GAP )
+    // a leaf has a front gap exactly when its search is binary (and its node
+    // large enough) - see bptree_base::front_gap_min_node_size
+    static_assert
+    (
+        leaf_node::front_gap ==
+        (
+            ( base::node_byte_size() >= bptree_base::front_gap_min_node_size ) &&
+            ( search_capacity<leaf_node::max_values> == std::numeric_limits<node_size_type>::max() )
+        )
+    );
+#endif
 
     // lower_bound find >limited to/within a node<
     // maximum_values is search_capacity of the searched node - its own, not the

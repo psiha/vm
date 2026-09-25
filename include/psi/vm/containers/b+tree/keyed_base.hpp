@@ -46,7 +46,7 @@ PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
 // \class bptree_base_wkey
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename Key>
+template <typename Key, bool leaf_gap>
 class bptree_base_wkey : public bptree_base
 {
 private:
@@ -192,13 +192,17 @@ protected: // node types
         static node_size_type constexpr min_values  { min_children - 1 };
     }; // struct root_node
 
-    struct alignas( node_size ) leaf_node : node_header
+    // A leaf carries a front gap or reads start as a compile-time 0, as the
+    // tree's leaf_front_gap<Key, Comparator> decides (see bptree_base).
+    struct alignas( node_size ) leaf_node : std::conditional_t<leaf_gap, node_header, gapless_node_header>
     {
         // TODO support for maps (i.e. keys+values)
         using value_type = Key;
 
+        static bool constexpr front_gap{ leaf_gap };
+
         static node_size_type constexpr storage_space{ static_cast<node_size_type>( node_size - align_up( sizeof( node_header ), alignof( Key ) ) ) };
-        static node_size_type constexpr max_values   { storage_space / sizeof( Key ) };
+        static node_size_type constexpr max_values   { leaf_capacity<Key> };
         static node_size_type constexpr min_values   { ihalf_ceil<max_values> };
 
         // The tree's central inequality, and the reason a minimum fill of half
@@ -226,6 +230,8 @@ public: // the node geometry, for callers that measure or report it
     // numbers and the linear-vs-binary intra-node search dispatch are keyed on.
     [[ nodiscard ]] static constexpr node_size_type max_values_per_leaf () noexcept { return  leaf_node::max_values; }
     [[ nodiscard ]] static constexpr node_size_type max_values_per_inner() noexcept { return inner_node::max_values; }
+    // whether a leaf carries a front gap (bptree_base::leaf_front_gap)
+    [[ nodiscard ]] static constexpr bool           has_leaf_front_gap  () noexcept { return  leaf_node::front_gap; }
 
 protected: // split_to_insert and its helpers
     root_node & new_root( node_slot const left_child, node_slot const right_child, key_rv_arg separator_key )
@@ -1442,8 +1448,8 @@ private:
 // \class bptree_base_wkey::fwd_iterator
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename Key>
-class [[ clang::trivial_abi, gsl::Pointer ]] bptree_base_wkey<Key>::fwd_iterator
+template <typename Key, bool leaf_gap>
+class [[ clang::trivial_abi, gsl::Pointer ]] bptree_base_wkey<Key, leaf_gap>::fwd_iterator
     :
     public base_iterator,
     public iter_impl<fwd_iterator, std::bidirectional_iterator_tag>
@@ -1486,13 +1492,13 @@ public:
 // \class bptree_base_wkey::ra_iterator
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename Key>
-class [[ clang::trivial_abi, gsl::Pointer ]] bptree_base_wkey<Key>::ra_iterator
+template <typename Key, bool leaf_gap>
+class [[ clang::trivial_abi, gsl::Pointer ]] bptree_base_wkey<Key, leaf_gap>::ra_iterator
     :
     public base_random_access_iterator,
     public iter_impl<ra_iterator, std::random_access_iterator_tag>
 {
-private: friend class bptree_base_wkey<Key>;
+private: friend class bptree_base_wkey<Key, leaf_gap>;
     using base = base_random_access_iterator;
     using base::base;
 
@@ -1537,8 +1543,8 @@ public:
 }; // class ra_iterator
 
 
-template <typename Key>
-class [[ clang::trivial_abi ]] bptree_base_wkey<Key>::ra_full_node_iterator
+template <typename Key, bool leaf_gap>
+class [[ clang::trivial_abi ]] bptree_base_wkey<Key, leaf_gap>::ra_full_node_iterator
     // Not using stl_interfaces because Clang 19.1.6 under OSX keeps using the
     // stl_interfaces implementations/wrappers for equality operators (even
     // though proper class specific ones are provided - as members, friends,
@@ -1664,8 +1670,8 @@ private:
 // Bidirectional iterator over the doubly-linked list of leaf nodes: dereferences
 // to std::span<Key const> of the leaf's keys.  Enables two-level loops that
 // skip the per-step pos_ bookkeeping inside fwd_iterator.
-template <typename Key>
-class [[ clang::trivial_abi, gsl::Pointer ]] bptree_base_wkey<Key>::leaf_iterator
+template <typename Key, bool leaf_gap>
+class [[ clang::trivial_abi, gsl::Pointer ]] bptree_base_wkey<Key, leaf_gap>::leaf_iterator
 {
 public:
     using iterator_category = std::bidirectional_iterator_tag;
@@ -1732,25 +1738,25 @@ private:
     bptree_base_wkey const * __restrict p_tree_{};
 }; // class leaf_iterator
 
-template <typename Key>
-typename bptree_base_wkey<Key>::leaf_iterator
-bptree_base_wkey<Key>::node_begin() const noexcept
+template <typename Key, bool leaf_gap>
+typename bptree_base_wkey<Key, leaf_gap>::leaf_iterator
+bptree_base_wkey<Key, leaf_gap>::node_begin() const noexcept
 {
     return { *this, empty() ? nullptr : &leaf( first_leaf() ) };
 }
 
-template <typename Key>
-typename bptree_base_wkey<Key>::leaf_iterator
-bptree_base_wkey<Key>::node_end() const noexcept
+template <typename Key, bool leaf_gap>
+typename bptree_base_wkey<Key, leaf_gap>::leaf_iterator
+bptree_base_wkey<Key, leaf_gap>::node_end() const noexcept
 {
     return { *this, nullptr };
 }
 
 
-template <typename Key>
+template <typename Key, bool leaf_gap>
 typename
-bptree_base_wkey<Key>::const_iterator
-bptree_base_wkey<Key>::erase( const_iterator const iter ) noexcept
+bptree_base_wkey<Key, leaf_gap>::const_iterator
+bptree_base_wkey<Key, leaf_gap>::erase( const_iterator const iter ) noexcept
 {
     auto const [node, key_offset]{ iter.base().pos() };
     auto & lf{ leaf( node ) };
@@ -1761,10 +1767,10 @@ bptree_base_wkey<Key>::erase( const_iterator const iter ) noexcept
     return make_iter( erase( lf, key_offset ) );
 }
 
-template <typename Key>
+template <typename Key, bool leaf_gap>
 typename
-bptree_base_wkey<Key>::const_iterator
-bptree_base_wkey<Key>::erase( const_iterator const first, const_iterator const last ) noexcept
+bptree_base_wkey<Key, leaf_gap>::const_iterator
+bptree_base_wkey<Key, leaf_gap>::erase( const_iterator const first, const_iterator const last ) noexcept
 {
     auto const end_pos{ last.base().pos() };
     auto pos{ first.base().pos() };
@@ -1829,9 +1835,9 @@ bptree_base_wkey<Key>::erase( const_iterator const first, const_iterator const l
     return make_iter( pos );
 }
 
-template <typename Key>
+template <typename Key, bool leaf_gap>
 template <typename Proj>
-auto bptree_base_wkey<Key>::flatten( node_slot const begin_node, node_slot const end_node, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, Proj proj ) const noexcept( std::is_nothrow_invocable_v<Proj &, Key const &> ) {
+auto bptree_base_wkey<Key, leaf_gap>::flatten( node_slot const begin_node, node_slot const end_node, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, Proj proj ) const noexcept( std::is_nothrow_invocable_v<Proj &, Key const &> ) {
     auto node{ begin_node };
     do {
         auto const & lf{ leaf( node ) };
@@ -1841,9 +1847,9 @@ auto bptree_base_wkey<Key>::flatten( node_slot const begin_node, node_slot const
     return output;
 }
 
-template <typename Key>
+template <typename Key, bool leaf_gap>
 template <typename Proj>
-auto bptree_base_wkey<Key>::flatten( std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto const output, size_type const available_space, Proj proj ) const noexcept( std::is_nothrow_invocable_v<Proj &, Key const &> ) {
+auto bptree_base_wkey<Key, leaf_gap>::flatten( std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto const output, size_type const available_space, Proj proj ) const noexcept( std::is_nothrow_invocable_v<Proj &, Key const &> ) {
     BOOST_VERIFY( available_space >= this->size() );
     if ( empty() ) [[ unlikely ]]
         return output;
@@ -1851,9 +1857,9 @@ auto bptree_base_wkey<Key>::flatten( std::output_iterator<std::invoke_result_t<P
     return flatten( first_leaf(), {}, output, std::move( proj ) );
 }
 
-template <typename Key>
+template <typename Key, bool leaf_gap>
 template <typename Proj>
-auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator const end, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, size_type available_space, Proj proj ) const noexcept( std::is_nothrow_invocable_v<Proj &, Key const &> ) {
+auto bptree_base_wkey<Key, leaf_gap>::flatten( const_iterator const begin, const_iterator const end, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, size_type available_space, Proj proj ) const noexcept( std::is_nothrow_invocable_v<Proj &, Key const &> ) {
     BOOST_ASSERT( available_space >= static_cast<std::size_t>( std::distance( begin, end ) ) );
     auto const   end_pos{   end.base().pos() };
     auto       start_pos{ begin.base().pos() };
@@ -1895,9 +1901,9 @@ auto bptree_base_wkey<Key>::flatten( const_iterator const begin, const_iterator 
     return output;
 }
 
-template <typename Key>
+template <typename Key, bool leaf_gap>
 template <typename N> [[ gnu::sysv_abi ]]
-void bptree_base_wkey<Key>::move_entries
+void bptree_base_wkey<Key, leaf_gap>::move_entries
 (
     N const & source, node_size_type const src_begin, node_size_type const src_end,
     N       & target, node_size_type const tgt_begin
@@ -1911,8 +1917,8 @@ void bptree_base_wkey<Key>::move_entries
     if constexpr ( has_mapped_values<N> )
         std::uninitialized_move( &source.values[ source.start + src_begin ], &source.values[ source.start + src_end ], &target.values[ target.start + tgt_begin ] );
 }
-template <typename Key> [[ gnu::noinline, gnu::sysv_abi ]]
-void bptree_base_wkey<Key>::move_chldrn
+template <typename Key, bool leaf_gap> [[ gnu::noinline, gnu::sysv_abi ]]
+void bptree_base_wkey<Key, leaf_gap>::move_chldrn
 (
     inner_node const & source, node_size_type const src_begin, node_size_type const src_end,
     inner_node       & target, node_size_type const tgt_begin
