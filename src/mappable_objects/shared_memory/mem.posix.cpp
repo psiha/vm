@@ -34,7 +34,7 @@ namespace posix
 {
 //------------------------------------------------------------------------------
 
-namespace detail
+namespace impl
 {
     // http://man7.org/linux/man-pages/man2/memfd_create.2.html
     // http://stackoverflow.com/questions/13377982/remove-posix-shared-memory-when-not-in-use
@@ -253,7 +253,7 @@ namespace detail
         }
         return true;
     }
-} // namespace detail
+} // namespace impl
 
 //------------------------------------------------------------------------------
 } // posix

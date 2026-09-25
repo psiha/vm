@@ -62,7 +62,7 @@ namespace posix
 template <class Handle> struct is_resizable;
 
 #ifndef __ANDROID__
-namespace detail
+namespace impl
 {
     // http://lists.apple.com/archives/darwin-development/2003/Mar/msg00242.html
     // http://insanecoding.blogspot.hr/2007/11/pathmax-simply-isnt.html
@@ -126,7 +126,7 @@ namespace detail
         preslash_name( name, slashed_name, length );
         return shm_open_slashed( slashed_name, size, flags );
     }
-} // namespace detail
+} // namespace impl
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -151,7 +151,7 @@ public:
         mflags              const flags,
         std::nothrow_t
     ) noexcept
-        : base_t{ detail::shm_open( name, size, flags ), flags, size }
+        : base_t{ impl::shm_open( name, size, flags ), flags, size }
     {}
 
     native_named_memory
@@ -181,7 +181,7 @@ public:
     {
         auto const length{ static_cast<std::uint8_t>( std::strlen( name ) ) };
         char slashed_name[ 1 + length + 1 ];
-        detail::preslash_name( name, slashed_name, length );
+        impl::preslash_name( name, slashed_name, length );
         auto const result( ::shm_unlink( slashed_name ) );
         if ( result != error::no_error )
         {
@@ -195,7 +195,7 @@ public:
 }; // class native_named_memory
 
 
-namespace detail
+namespace impl
 {
     // http://charette.no-ip.com:81/programming/2010-01-13_PosixSemaphores
     // http://heldercorreia.com/blog/semaphores-in-mac-os-x
@@ -314,31 +314,31 @@ namespace detail
         using base_t::operator bool;
 
     private:
-        detail::shm_name_t conditional_make_slashed_name( char const * const name ) const __restrict
+        impl::shm_name_t conditional_make_slashed_name( char const * const name ) const __restrict
         {
             if ( !named_memory_guard::operator bool() ) [[ unlikely ]]
                 return nullptr;
             auto const length{ static_cast<std::uint8_t>( std::strlen( name ) ) };
             auto const slashed_name{ new ( std::nothrow ) char[ 1 + length + 1 ] };
             if ( BOOST_LIKELY( slashed_name != nullptr ) )
-                detail::preslash_name( name, slashed_name, length );
+                impl::preslash_name( name, slashed_name, length );
             else
                 error::set( ENOMEM );
-            return detail::shm_name_t( slashed_name );
+            return impl::shm_name_t( slashed_name );
         }
 
         file_handle::reference conditional_make_shm_fd( std::size_t const length, flags::shared_memory const & flags ) const noexcept
         {
             auto const name{ shm_name_t::get() };
             if ( BOOST_LIKELY( name != nullptr ) )
-                return detail::shm_open( name, length, flags );
+                return impl::shm_open( name, length, flags );
             return { file_handle::traits::invalid_value };
         }
     }; // class scoped_named_memory
-} // namespace detail
+} // namespace impl
 
 
-namespace detail
+namespace impl
 {
     template <typename T> using identity = std::remove_reference<T>;
 
@@ -346,8 +346,8 @@ namespace detail
     struct named_memory_impl : identity<posix::native_named_memory> {};
 
     template <resizing_policy resizability>
-    struct named_memory_impl<lifetime_policy::scoped, resizability> : identity<posix::detail::scoped_named_memory> {};
-} // namespace detail
+    struct named_memory_impl<lifetime_policy::scoped, resizability> : identity<posix::impl::scoped_named_memory> {};
+} // namespace impl
 #endif // __ANDROID__
 
 

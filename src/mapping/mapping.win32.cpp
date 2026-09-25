@@ -41,7 +41,7 @@ std::uint64_t get_size( mapping::const_handle const mapping_handle ) noexcept
     return info.SectionSize.QuadPart;
 }
 
-namespace detail::create_mapping_impl
+namespace impl::create_mapping_impl
 {
     HANDLE map_file( file_handle::reference file, flags::mapping::access_rights::object, flags::flags_t, std::uint64_t size ) noexcept;
     extern std::size_t const max_anonymous_pf_mapping_size;
@@ -69,7 +69,7 @@ err::fallible_result<void, nt::error> set_size( mapping & the_mapping, std::uint
             auto const file_resize_result{ set_size( underlying_file, new_size )() };
             if ( !file_resize_result )
                 return nt::error/*...mrmlj...*/( file_resize_result.error().get() ); // TODO fully move to NativeNT API https://cpp.hotexamples.com/examples/-/-/NtSetInformationFile/cpp-ntsetinformationfile-function-examples.html
-            auto const new_mapping_handle{ detail::create_mapping_impl::map_file( underlying_file, the_mapping.ap, the_mapping.view_mapping_flags.page_protection, new_size ) };
+            auto const new_mapping_handle{ impl::create_mapping_impl::map_file( underlying_file, the_mapping.ap, the_mapping.view_mapping_flags.page_protection, new_size ) };
             mapping_handle.reset( new_mapping_handle );
             if ( !the_mapping )
                 return nt::error/*...mrmlj...*/( err::last_win32_error::get() );
@@ -77,8 +77,8 @@ err::fallible_result<void, nt::error> set_size( mapping & the_mapping, std::uint
     }
     else
     {
-        BOOST_ASSERT( get_size( the_mapping ) == detail::create_mapping_impl::max_anonymous_pf_mapping_size );
-        if ( new_size > detail::create_mapping_impl::max_anonymous_pf_mapping_size ) [[ unlikely ]]
+        BOOST_ASSERT( get_size( the_mapping ) == impl::create_mapping_impl::max_anonymous_pf_mapping_size );
+        if ( new_size > impl::create_mapping_impl::max_anonymous_pf_mapping_size ) [[ unlikely ]]
             return nt::STATUS_SECTION_NOT_EXTENDED;
     }
     return err::success;

@@ -39,7 +39,7 @@ inline namespace win32
 {
 //------------------------------------------------------------------------------
 
-namespace detail
+namespace impl
 {
     class shm_path
     {
@@ -65,10 +65,10 @@ namespace detail
         std::array<char, MAX_PATH> buffer_;
         std::uint8_t               name_offset_;
     }; // class shm_path
-} // namespace detail
+} // namespace impl
 
 
-namespace detail
+namespace impl
 {
     ////////////////////////////////////////////////////////////////////////////
     // named_memory_base
@@ -251,7 +251,7 @@ namespace detail
         #endif
 
             static_cast<handle &>( this_mapping ) =
-                handle( detail::create_mapping_impl::call_create( p_name, file_.get(), &sa, mapping_flags, 0, 0 ) );
+                handle( impl::create_mapping_impl::call_create( p_name, file_.get(), &sa, mapping_flags, 0, 0 ) );
             BOOST_VERIFY( ::LocalFree( sa.lpSecurityDescriptor ) == nullptr );
 
             if ( BOOST_LIKELY( file_resize_success && this_mapping ) )
@@ -263,7 +263,7 @@ namespace detail
             // (a resized shared-memory mapping that silently reverted to default security would
             // be a real access-control regression for anything relying on the original ACL) -
             // this requires the create-time flags this class does not currently retain (save_flags()
-            // below is a no-op) and a completion path (detail::create_mapping_impl::call_create,
+            // below is a no-op) and a completion path (impl::create_mapping_impl::call_create,
             // referenced above) that does not exist anywhere in this codebase. Left as an explicit,
             // loud "not supported" rather than a silent downgrade to default security or invented
             // completion logic for a security-sensitive, untested path.
@@ -304,15 +304,15 @@ namespace detail
         resizable_named_memory_base,
         named_memory_base
     >;
-} // namespace detail
+} // namespace impl
 
 template <lifetime_policy lifetime_policy_param, resizing_policy resizing_policy_param>
 class file_backed_named_memory
     :
-    public detail::named_memory_base_t<lifetime_policy_param, resizing_policy_param>
+    public impl::named_memory_base_t<lifetime_policy_param, resizing_policy_param>
 {
 private:
-    using base_t = detail::named_memory_base_t<lifetime_policy_param, resizing_policy_param>;
+    using base_t = impl::named_memory_base_t<lifetime_policy_param, resizing_policy_param>;
     using mflags = flags::shared_memory;
 
 public:
@@ -324,11 +324,11 @@ public:
         mflags              const flags
     ) noexcept
     {
-        detail::shm_path const shm_name   ( name );
+        impl::shm_path const shm_name   ( name );
         DWORD            const extra_flags( lifetime_policy_param == lifetime_policy::scoped ? FILE_FLAG_DELETE_ON_CLOSE : 0 );
         base_t result
         (
-            named_memory_base::create( shm_name, size, flags, extra_flags )
+            impl::named_memory_base::create( shm_name, size, flags, extra_flags )
         );
 
         if ( lifetime_policy_param == lifetime_policy::persistent )
@@ -385,14 +385,14 @@ private:
 }; // class named_memory<lifetime_policy::scoped, resizing_policy::fixed, win32>
 
 
-namespace detail
+namespace impl
 {
     template <lifetime_policy lifetime, resizing_policy resizability>
     struct named_memory_impl : std::type_identity<win32::file_backed_named_memory<lifetime, resizability>> {};
 
     template <>
     struct named_memory_impl<lifetime_policy::scoped, resizing_policy::fixed> : std::type_identity<win32::native_named_memory> {};
-} // namespace detail
+} // namespace impl
 
 //------------------------------------------------------------------------------
 } // namespace win32

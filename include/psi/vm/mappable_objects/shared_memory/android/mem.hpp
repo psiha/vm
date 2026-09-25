@@ -45,7 +45,7 @@ namespace posix
 {
 //------------------------------------------------------------------------------
 
-namespace detail
+namespace impl
 {
     /// \note Android has no support for POSIX or SysV shared memory but a
     /// custom solution - 'native_named_memory'.
@@ -96,7 +96,7 @@ namespace detail
         }
         return { file_descriptor };
     }
-} // namespace detail
+} // namespace impl
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -121,7 +121,7 @@ public:
         mflags              const flags,
         std::nothrow_t
     ) noexcept( true )
-        : base_t{ detail::shm_open( name, size, flags ), flags, size }
+        : base_t{ impl::shm_open( name, size, flags ), flags, size }
     {}
 
     native_named_memory
@@ -187,8 +187,8 @@ public:
     ) noexcept
     {
         auto const length( std::strlen( name ) );
-        char adjusted_name[ detail::shm_emulated_path.size() + length + 1 ];
-        detail::prefix_shm_name( name, adjusted_name, length, detail::shm_emulated_path );
+        char adjusted_name[ impl::shm_emulated_path.size() + length + 1 ];
+        impl::prefix_shm_name( name, adjusted_name, length, impl::shm_emulated_path );
         using hints = flags::access_pattern_optimisation_hints;
         auto file
         (
@@ -211,14 +211,14 @@ public:
             return error();
         }
         return file_backed_named_memory //no variadic constructors in fallible_result yet so we have to explicitly construct here
-            { detail::shm_open( name, size, flags ), flags, size, std::move( file ) };
+            { impl::shm_open( name, size, flags ), flags, size, std::move( file ) };
     }
 
     static bool cleanup( char const * const name ) noexcept
     {
         auto const length( std::strlen( name ) );
-        char adjusted_name[ detail::shm_emulated_path.size() + length + 1 ];
-        detail::prefix_shm_name( name, adjusted_name, length, detail::shm_emulated_path );
+        char adjusted_name[ impl::shm_emulated_path.size() + length + 1 ];
+        impl::prefix_shm_name( name, adjusted_name, length, impl::shm_emulated_path );
         return delete_file( adjusted_name );
     }
 
@@ -236,7 +236,7 @@ private:
     file_handle file_;
 }; // class file_backed_named_memory
 
-namespace detail
+namespace impl
 {
     template <typename T> using identity = std::remove_reference<T>;
 
@@ -245,7 +245,7 @@ namespace detail
 
     template <resizing_policy resizability>
     struct named_memory_impl<lifetime_policy::scoped, resizability> : identity<posix::native_named_memory> {};
-} // namespace detail
+} // namespace impl
 
 //------------------------------------------------------------------------------
 } // namespace posix
