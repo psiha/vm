@@ -258,6 +258,7 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
         };
         if ( initial_address ) [[ likely ]]
         {
+            initial_address = detail::place_file_view_at_offset_phase( initial_address, target_size, original_mapping.get(), 0 );
             static_cast<span &>( *this ) = { static_cast<typename span::pointer>( initial_address ), target_size };
             return err::success;
         }

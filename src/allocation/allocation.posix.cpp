@@ -77,11 +77,18 @@ bool commit( void * const address, std::size_t const size ) noexcept
     BOOST_ASSUME( is_aligned( address, commit_granularity ) );
     BOOST_ASSUME( is_aligned( size   , commit_granularity ) );
     auto const success{ ::mprotect( address, size, PROT_READ | PROT_WRITE ) == 0 };
-    BOOST_VERIFY( ::madvise( address, size, MADV_SEQUENTIAL | MADV_WILLNEED // TODO rethink: are these resonable default expectations for a freshly and explicitly commited range?
-    #if defined( __linux__ ) && !defined( __ANDROID__ )
-        | MADV_HUGEPAGE
-    #endif // server Linux
-    ) == 0 );
+    // madvise() takes ONE advice per call: the MADV_* values are an
+    // enumeration, not flags, so OR-ing them names some other advice entirely
+    // (SEQUENTIAL | WILLNEED | HUGEPAGE = 2 | 3 | 14 = 15 = MADV_NOHUGEPAGE,
+    // the exact opposite of the intent).
+    // TODO rethink: are these resonable default expectations for a freshly and explicitly commited range?
+    BOOST_VERIFY( ::madvise( address, size, MADV_SEQUENTIAL ) == 0 );
+    BOOST_VERIFY( ::madvise( address, size, MADV_WILLNEED   ) == 0 );
+#if defined( __linux__ ) && !defined( __ANDROID__ ) // server Linux
+    // Only a hint, so its result is not verified: a kernel built without
+    // transparent huge page support rejects it with EINVAL.
+    (void)::madvise( address, size, MADV_HUGEPAGE );
+#endif
     return success;
 }
 PSI_COLD [[ gnu::nothrow, clang::nouwtable ]]
