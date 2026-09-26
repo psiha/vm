@@ -298,12 +298,30 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
         new_address = nullptr;
     }
 
+    if ( new_address ) [[ likely ]]
+    {
+        if ( current_address != nullptr ) [[ likely ]]
+        {
+            BOOST_ASSUME( new_address == current_address + kernel_current_size );
+            static_cast<span &>( *this ) = { current_address, target_size };
+        }
+        else
+        {
+            static_cast<span &>( *this ) = { static_cast<std::byte *>( new_address ), target_size };
+        }
+        return err::success;
+    }
+
     // Step 2b: plain fallback — no over-reservation.
     auto remapped_span{ this->map( original_mapping, 0, target_size )() };
     if ( !remapped_span )
         return remapped_span.error();
 
-    if ( !original_mapping.is_file_based() )
+    // The fresh view shows what the mapped object holds, which is this view's
+    // content only for a shared view of a file. Anonymous memory maps fresh
+    // zero pages, and a private (COW) view keeps its writes in private copies
+    // the object never received - both must carry the old pages over.
+    if ( !original_mapping.is_file_based() || original_mapping.view_mapping_flags.is_cow() )
     {
         // mach_vm_remap: zero-copy page transfer from old to new mapping.
         auto new_addr{ reinterpret_cast<mach_vm_address_t>( const_cast<std::byte *>( remapped_span->data() ) ) };
