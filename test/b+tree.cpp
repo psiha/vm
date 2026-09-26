@@ -23,6 +23,7 @@
 #include <print>
 #include <random>
 #include <ranges>
+#include <set>
 #include <utility>
 #include <vector>
 //------------------------------------------------------------------------------
@@ -2736,6 +2737,288 @@ TEST( bp_tree, hinted_insert_boundaries )
     tree.insert( past_the_end_hint, 30U );
     EXPECT_EQ( tree.size(), 3U );
     EXPECT_NE( tree.find( 30U ), tree.end() );
+}
+
+namespace
+{
+    // A lookup that stands for a whole run of keys: every key whose quotient by
+    // the width is the bucket's value is equivalent to it.  Keys themselves
+    // keep their plain order, so the tree is still unique.
+    struct bucket { int value; };
+
+    struct bucketing_comparator
+    {
+        using is_transparent = std::true_type;
+
+        int width;
+
+        bool operator()( int    const a, int    const b ) const noexcept { return a < b; }
+        bool operator()( int    const a, bucket const b ) const noexcept { return a / width < b.value; }
+        bool operator()( bucket const a, int    const b ) const noexcept { return a.value < b / width; }
+    };
+} // anonymous namespace
+
+// A heterogeneous lookup through a transparent comparator can be equivalent to
+// several keys of a unique tree.  lower_bound and equal_range have to land on
+// the first of them, find and contains on any one.  Each bucket here starts a
+// leaf and spans three, so the keys of most
+// buckets are among the separators of one inner node - the layout in which a
+// descent that passes every equivalent separator lands on the bucket's last
+// leaf instead of its first.  Buckets can also straddle two inner nodes, and
+// the tree is three levels deep, so the separators above that level are
+// covered too.
+TEST( bp_tree, heterogeneous_lookup_lands_on_the_first_equivalent_key )
+{
+    using tree_t = bptree_set<int, bucketing_comparator>;
+    auto constexpr leaf_values{ tree_t::max_values_per_leaf() };
+    auto constexpr leaf_count { 3 * ( tree_t::max_values_per_inner() + 1 ) };
+    auto const width{ static_cast<int>( 3 * leaf_values ) };
+    auto const n    { static_cast<int>( leaf_count * leaf_values ) };
+
+    bucketing_comparator const comparator{ width };
+    tree_t bpt{ comparator };
+    bpt.map_memory( static_cast<std::size_t>( n ) );
+
+    std::vector<int> vals( static_cast<std::size_t>( n ) );
+    std::iota( vals.begin(), vals.end(), 0 );
+    bpt.insert_presorted( vals );
+
+    // every leaf is full, i.e. every bucket starts a leaf
+    for ( auto it{ bpt.node_begin() }; it != bpt.node_end(); ++it )
+        ASSERT_EQ( ( *it ).size(), leaf_values );
+
+    // one bucket below and one past all the keys
+    for ( int b{ -1 }; b <= n / width + 1; ++b )
+    {
+        bucket const key{ b };
+        auto   const expected{ std::lower_bound( vals.begin(), vals.end(), key, comparator ) };
+        bool   const present { expected != vals.end() && !comparator( key, *expected ) };
+
+        auto const lb{ bpt.lower_bound( key ) };
+        if ( expected == vals.end() ) {
+            EXPECT_EQ( lb, bpt.end() ) << "bucket " << b;
+        } else {
+            ASSERT_NE( lb, bpt.end() ) << "bucket " << b;
+            EXPECT_EQ( *lb, *expected ) << "bucket " << b;
+        }
+
+        auto const found{ bpt.find( key ) };
+        auto const range{ bpt.equal_range( key ) };
+        EXPECT_EQ( bpt.contains( key ), present ) << "bucket " << b;
+        if ( present ) {
+            ASSERT_NE( found, bpt.end() ) << "bucket " << b;
+            EXPECT_TRUE( !comparator( key, *found ) && !comparator( *found, key ) ) << "bucket " << b << ", found " << *found;
+            ASSERT_FALSE( range.empty() ) << "bucket " << b;
+            EXPECT_EQ( *range.begin(), *expected ) << "bucket " << b;
+        } else {
+            EXPECT_EQ( found, bpt.end() ) << "bucket " << b;
+            EXPECT_TRUE( range.empty() ) << "bucket " << b;
+            EXPECT_EQ( range.begin(), bpt.end() ) << "bucket " << b;
+        }
+    }
+}
+
+// find and contains take any key equivalent to the lookup, so they descend by
+// upper bound even for a heterogeneous lookup that is equivalent to several
+// keys: to the last leaf that could hold one of them.  That leaf holds one
+// whenever the tree does only because the separator in front of every leaf is
+// that leaf's first key - a separator left over from an erased key would pass
+// the descent on to a leaf that begins with a greater bucket.  The first key of
+// every leaf is erased (the key its separator was copied from: in the parent,
+// or, for the leftmost child of an inner node, further up), and then, wherever
+// a bucket straddles a leaf boundary, its keys right of that boundary - leaving
+// the bucket in the left leaf only, with a leaf right of it that starts past
+// the bucket.  In the first layout every bucket spans a leaf boundary by a few
+// keys, so no leaf underflows and nothing but the erase itself can put the
+// separators right; in the second buckets are one and a half leaves wide, and
+// the erases make leaves borrow and merge.
+TEST( bp_tree, heterogeneous_find_after_erasing_separator_keys )
+{
+    using tree_t = inspectable<bptree_set<int, bucketing_comparator>>;
+    auto constexpr leaf_values{ static_cast<int>( tree_t::max_values_per_leaf() ) };
+    auto constexpr leaf_count { static_cast<int>( 3 * ( tree_t::max_values_per_inner() + 1 ) ) };
+    auto constexpr straddle   { 4 };
+
+    auto const run{ [ & ]( int const width, int const first_key )
+    {
+        auto const n{ leaf_count * leaf_values };
+
+        bucketing_comparator const comparator{ width };
+        tree_t bpt{ comparator };
+        bpt.map_memory( static_cast<std::size_t>( n ) );
+
+        std::vector<int> vals( static_cast<std::size_t>( n ) );
+        std::iota( vals.begin(), vals.end(), first_key );
+        bpt.insert_presorted( vals );
+        std::vector<std::uint32_t> nodes_per_level;
+        ASSERT_TRUE( bpt.structure_is_sound( &nodes_per_level ) );
+        ASSERT_GE( nodes_per_level.size(), 3U );
+
+        std::vector<int> separator_sources;
+        std::vector<int> straddling_tails;
+        std::optional<int> previous_back;
+        for ( auto const leaf : bpt.leaves() )
+        {
+            if ( previous_back )
+            {
+                separator_sources.push_back( leaf.front() );
+                for ( auto const key : leaf.subspan( 1 ) )
+                    if ( key / width == *previous_back / width )
+                        straddling_tails.push_back( key );
+            }
+            previous_back = leaf.back();
+        }
+        ASSERT_FALSE( straddling_tails.empty() );
+
+        std::set<int> model( vals.begin(), vals.end() );
+        auto const check{ [ & ]( std::string_view const stage )
+        {
+            EXPECT_TRUE( bpt.structure_is_sound() ) << stage;
+            for ( int b{ first_key / width - 1 }; b <= ( first_key + n ) / width + 1; ++b )
+            {
+                bucket const key{ b };
+                auto   const expected{ std::lower_bound( model.begin(), model.end(), key, comparator ) };
+                bool   const present { expected != model.end() && !comparator( key, *expected ) };
+
+                EXPECT_EQ( bpt.contains( key ), present ) << stage << ", bucket " << b;
+                auto const found{ bpt.find( key ) };
+                if ( present ) {
+                    ASSERT_NE( found, bpt.end() ) << stage << ", bucket " << b;
+                    EXPECT_TRUE( !comparator( key, *found ) && !comparator( *found, key ) ) << stage << ", bucket " << b << ", found " << *found;
+                } else {
+                    EXPECT_EQ( found, bpt.end() ) << stage << ", bucket " << b;
+                }
+                auto const lb{ bpt.lower_bound( key ) };
+                if ( expected == model.end() ) {
+                    EXPECT_EQ( lb, bpt.end() ) << stage << ", bucket " << b;
+                } else {
+                    ASSERT_NE( lb, bpt.end() ) << stage << ", bucket " << b;
+                    EXPECT_EQ( *lb, *expected ) << stage << ", bucket " << b;
+                }
+            }
+        } };
+
+        check( "built" );
+        for ( auto const key : separator_sources ) {
+            EXPECT_TRUE( bpt.erase( key ) ) << key;
+            model.erase( key );
+        }
+        check( "separator sources erased" );
+        for ( auto const key : straddling_tails ) {
+            EXPECT_TRUE( bpt.erase( key ) ) << key;
+            model.erase( key );
+        }
+        check( "straddling tails erased" );
+        EXPECT_EQ( bpt.size(), model.size() );
+    } };
+
+    {
+        SCOPED_TRACE( "buckets straddle leaf boundaries by a few keys" );
+        run( leaf_values, leaf_values - straddle );
+    }
+    {
+        SCOPED_TRACE( "buckets one and a half leaves wide" );
+        run( leaf_values + leaf_values / 2, 0 );
+    }
+}
+
+namespace
+{
+    // A lookup that is another spelling of one key: the comparator can
+    // declare that no heterogeneous lookup matches more than one key.
+    struct boxed { int value; };
+
+    struct boxed_comparator
+    {
+        using is_transparent = std::true_type;
+        static constexpr bool strictly_unique_heterogeneous_lookup{ true };
+
+        bool operator()( int   const a, int   const b ) const noexcept { return a < b;       }
+        bool operator()( int   const a, boxed const b ) const noexcept { return a < b.value; }
+        bool operator()( boxed const a, int   const b ) const noexcept { return a.value < b; }
+    };
+    static_assert(  detail::strictly_unique_heterogeneous_lookup<boxed_comparator> );
+    static_assert(  detail::strictly_unique_heterogeneous_lookup<erasure_opt_in<boxed_comparator>> );
+    static_assert( !detail::strictly_unique_heterogeneous_lookup<bucketing_comparator> );
+    static_assert( !detail::strictly_unique_heterogeneous_lookup<std::less<>> );
+} // anonymous namespace
+
+// With the comparator's strictly_unique_heterogeneous_lookup declaration,
+// heterogeneous lookups take the upper bound descent in every operation, like
+// lookups by the key type do. lower_bound, find, contains and equal_range of a
+// present key, of a missing one (the odd values), and past both ends, before
+// and after erasing, through iterators found by a heterogeneous find, the
+// first key of every leaf - the keys the separators were copied from.
+TEST( bp_tree, strictly_unique_heterogeneous_lookup )
+{
+    using tree_t = inspectable<bptree_set<int, boxed_comparator>>;
+    auto constexpr leaf_values{ static_cast<int>( tree_t::max_values_per_leaf() ) };
+    auto constexpr leaf_count { static_cast<int>( 3 * ( tree_t::max_values_per_inner() + 1 ) ) };
+    auto constexpr n          { leaf_count * leaf_values };
+
+    tree_t bpt;
+    bpt.map_memory( static_cast<std::size_t>( n ) );
+    std::vector<int> vals( static_cast<std::size_t>( n ) );
+    for ( int i{ 0 }; i < n; ++i )
+        vals[ static_cast<std::size_t>( i ) ] = 2 * i;
+    bpt.insert_presorted( vals );
+    std::vector<std::uint32_t> nodes_per_level;
+    ASSERT_TRUE( bpt.structure_is_sound( &nodes_per_level ) );
+    ASSERT_GE( nodes_per_level.size(), 3U );
+
+    std::set<int> model( vals.begin(), vals.end() );
+    auto const check{ [ & ]( std::string_view const stage )
+    {
+        EXPECT_TRUE( bpt.structure_is_sound() ) << stage;
+        for ( int v{ -1 }; v <= 2 * n; ++v )
+        {
+            boxed const key{ v };
+            auto  const expected{ model.lower_bound( v ) };
+            bool  const present { expected != model.end() && *expected == v };
+
+            auto const lb{ bpt.lower_bound( key ) };
+            if ( expected == model.end() ) {
+                EXPECT_EQ( lb, bpt.end() ) << stage << ", " << v;
+            } else {
+                ASSERT_NE( lb, bpt.end() ) << stage << ", " << v;
+                EXPECT_EQ( *lb, *expected ) << stage << ", " << v;
+            }
+            EXPECT_EQ( bpt.contains( key ), present ) << stage << ", " << v;
+            auto const found{ bpt.find( key ) };
+            auto const range{ bpt.equal_range( key ) };
+            if ( present ) {
+                ASSERT_NE( found, bpt.end() ) << stage << ", " << v;
+                EXPECT_EQ( *found, v ) << stage << ", " << v;
+                ASSERT_EQ( std::ranges::distance( range ), 1 ) << stage << ", " << v;
+                EXPECT_EQ( *range.begin(), v ) << stage << ", " << v;
+            } else {
+                EXPECT_EQ( found, bpt.end() ) << stage << ", " << v;
+                EXPECT_TRUE( range.empty() ) << stage << ", " << v;
+            }
+        }
+    } };
+
+    check( "built" );
+    std::vector<int> separator_sources;
+    for ( auto const leaf : bpt.leaves() )
+        separator_sources.push_back( leaf.front() );
+    separator_sources.erase( separator_sources.begin() ); // the first leaf has no separator
+    for ( auto const v : separator_sources )
+    {
+        auto const found{ bpt.find( boxed{ v } ) };
+        ASSERT_NE( found, bpt.end() ) << v;
+        auto const next{ bpt.erase( found ) };
+        model.erase( v );
+        auto const expected_next{ model.upper_bound( v ) };
+        if ( expected_next == model.end() ) {
+            EXPECT_EQ( next, bpt.end() ) << v;
+        } else {
+            ASSERT_NE( next, bpt.end() ) << v;
+            EXPECT_EQ( *next, *expected_next ) << v;
+        }
+    }
+    check( "separator sources erased" );
+    EXPECT_EQ( bpt.size(), model.size() );
 }
 
 TEST( bp_tree, lower_bound_from )

@@ -102,6 +102,27 @@ namespace detail
     constexpr bool key_orders_directly<Key>{ Key::orders_directly };
 } // namespace detail
 
+/// Is a heterogeneous lookup through this comparator equivalent to at most one
+/// key of a unique container?
+///
+/// A transparent comparator may compare a lookup type to several keys as
+/// equivalent, even in a unique container (the standard gives the
+/// heterogeneous equal_range and count for that case). A container that
+/// cannot assume otherwise searches such lookups for the first equivalent
+/// key. When no lookup type ever matches more than one key, e.g. the lookup is
+/// another spelling of a single key, the comparator can say so with a member
+///     static constexpr bool strictly_unique_heterogeneous_lookup{ true };
+/// and heterogeneous lookups are then searched the way lookups by the key type
+/// itself are. It is a claim: a lookup that is equivalent to several keys then
+/// finds one of them, not necessarily the first, and lower_bound and erase may
+/// land past the start of the run.
+namespace detail
+{
+    template <typename Comparator> constexpr bool strictly_unique_heterogeneous_lookup{ false };
+    template <typename Comparator> requires requires { { Comparator::strictly_unique_heterogeneous_lookup } -> std::convertible_to<bool>; }
+    constexpr bool strictly_unique_heterogeneous_lookup<Comparator>{ Comparator::strictly_unique_heterogeneous_lookup };
+} // namespace detail
+
 template <typename Comparator, typename Key = void> constexpr bool is_direct_comparator{ false };
 template <typename T, typename Key> constexpr bool is_direct_comparator<std::less   <T>, Key>{ true };
 template <typename T, typename Key> constexpr bool is_direct_comparator<std::greater<T>, Key>{ true };
