@@ -943,6 +943,49 @@ TEST( bp_tree, insert_presorted_merge_at_node_boundary )
         EXPECT_NE( bpt.find( v ), bpt.end() );
 }
 
+TEST( bp_tree, insert_presorted_duplicates_into_multiset_across_leaves )
+{
+    // Presorted input with duplicate runs merged amid existing keys: a merge
+    // step can fill a leaf right up to a key the next input key equals.
+    bptree_multiset<unsigned> bpt;
+    bpt.map_memory();
+
+    auto constexpr max_per_node{ decltype(bpt)::leaf_node::max_values };
+    auto constexpr n{ max_per_node * 8 };
+
+    std::vector<unsigned> existing;
+    for ( auto i{ 0U }; i < n; ++i ) existing.push_back( i * 2 + 1 );
+    EXPECT_EQ( bpt.insert_presorted( existing ), existing.size() );
+
+    std::vector<unsigned> input;
+    for ( auto i{ 0U }; i < n; ++i ) input.insert( input.end(), 3, i * 2 );
+    EXPECT_EQ( bpt.insert_presorted( input ), input.size() );
+
+    std::vector<unsigned> expected;
+    std::ranges::merge( existing, input, std::back_inserter( expected ) );
+    EXPECT_EQ( bpt.size(), expected.size() );
+    EXPECT_TRUE( std::ranges::equal( bpt, expected ) );
+
+    // runs of one key spanning whole leaves, in the tree and in the input:
+    // the insertion point search climbs out of a leaf whose first key equals
+    // the separator to its right
+    bptree_multiset<unsigned> runs;
+    runs.map_memory();
+    auto constexpr m{ max_per_node * 32 };
+    std::vector<unsigned> more;
+    for ( auto i{ 0U }; i < m; ++i ) more.insert( more.end(), 3, i * 2 );
+    more.insert( more.end(), m * 2 + 5, m * 2 );
+    for ( auto i{ m + 1 }; i < m * 2; ++i ) more.insert( more.end(), 2, i * 2 );
+    std::vector<unsigned> some;
+    for ( auto i{ 0U }; i < more.size(); i += 3 ) some.push_back( more[ i ] );
+    EXPECT_EQ( runs.insert_presorted( some ), some.size() );
+    EXPECT_EQ( runs.insert_presorted( more ), more.size() );
+    expected.clear();
+    std::ranges::merge( some, more, std::back_inserter( expected ) );
+    EXPECT_EQ( runs.size(), expected.size() );
+    EXPECT_TRUE( std::ranges::equal( runs, expected ) );
+}
+
 TEST( bp_tree, insert_triggers_multiple_splits )
 {
     // Test that exercises repeated splits during bulk insert,

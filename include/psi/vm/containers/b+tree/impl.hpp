@@ -522,7 +522,8 @@ protected:
 
 private:
     // Shared tree-climbing middle used by find_from and find_from_nonunique.
-    // Precondition: key > starting_leaf.back() AND starting_leaf.right != null.
+    // Precondition: key > starting_leaf.back() (>= for find_from_nonunique)
+    // AND starting_leaf.right != null.
     // Climbs the parent chain until a node whose key range contains key, then
     // descends back to the containing leaf. Returns that leaf for the caller to
     // apply its own lower_bound / upper_bound epilogue.
@@ -535,7 +536,7 @@ private:
         // element) - those which have a key on the same/corresponding index
         // should have a strictily less-than starting key value than the parent
         // (separator key).
-        BOOST_ASSUME( ( parent_offset == prnt->num_vals ) || lt( starting_leaf.key( 0 ), prnt->key( parent_offset ) ) );
+        BOOST_ASSUME( ( parent_offset == prnt->num_vals ) || le( starting_leaf.key( 0 ), prnt->key( parent_offset ) ) ); // == possible in non-unique trees
         auto const depth{ this->hdr().depth_ }; BOOST_ASSUME( depth >= 1 );
         auto       level{ depth - 1 };
         while ( lt( prnt->keys().back(), key ) )
@@ -637,16 +638,15 @@ private:
     // Forward-only insertion-point search for non-unique trees (upper_bound semantics).
     // Inserts after all equal keys; exact_find is always false.
     // starting_leaf_offset must be <= num_vals. When == num_vals (past-the-end,
-    // e.g. after merge fills a leaf), the caller guarantees key > back() so the
-    // in-leaf fast path is never taken and no OOB access occurs.
+    // e.g. after merge fills a leaf) key >= back(): unlike for unique trees,
+    // duplicate input keys are not skipped, so key == back() is possible and
+    // is resolved by the climb (the keys after back() may be in the right
+    // sibling(s)).
     insertion_point_t find_from_nonunique( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, Reg auto const key ) const noexcept
     {
         BOOST_ASSUME( starting_leaf_offset <= starting_leaf.num_vals );
-        if ( le( key, starting_leaf.keys().back() ) )
+        if ( ( starting_leaf_offset != starting_leaf.num_vals ) && le( key, starting_leaf.keys().back() ) )
         {
-            // When offset == num_vals the le() guard above must be false (caller
-            // guarantees key > back()), so we never reach here with an OOB offset.
-            BOOST_ASSUME( starting_leaf_offset < starting_leaf.num_vals );
             auto const leaf_keys{ starting_leaf.keys() };
             // Quick-probe: if key < keys[offset], upper_bound stops here — no search needed.
             if ( lt( key, leaf_keys[ starting_leaf_offset ] ) )
