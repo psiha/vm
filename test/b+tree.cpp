@@ -2922,6 +2922,105 @@ TEST( bp_tree, heterogeneous_find_after_erasing_separator_keys )
     }
 }
 
+namespace
+{
+    // A lookup that is another spelling of one key: the comparator can
+    // declare that no heterogeneous lookup matches more than one key.
+    struct boxed { int value; };
+
+    struct boxed_comparator
+    {
+        using is_transparent = std::true_type;
+        static constexpr bool strictly_unique_heterogeneous_lookup{ true };
+
+        bool operator()( int   const a, int   const b ) const noexcept { return a < b;       }
+        bool operator()( int   const a, boxed const b ) const noexcept { return a < b.value; }
+        bool operator()( boxed const a, int   const b ) const noexcept { return a.value < b; }
+    };
+    static_assert(  detail::strictly_unique_heterogeneous_lookup<boxed_comparator> );
+    static_assert(  detail::strictly_unique_heterogeneous_lookup<erasure_opt_in<boxed_comparator>> );
+    static_assert( !detail::strictly_unique_heterogeneous_lookup<bucketing_comparator> );
+    static_assert( !detail::strictly_unique_heterogeneous_lookup<std::less<>> );
+} // anonymous namespace
+
+// With the comparator's strictly_unique_heterogeneous_lookup declaration,
+// heterogeneous lookups take the upper bound descent in every operation, like
+// lookups by the key type do. lower_bound, find, contains and equal_range of a
+// present key, of a missing one (the odd values), and past both ends, before
+// and after erasing, through iterators found by a heterogeneous find, the
+// first key of every leaf - the keys the separators were copied from.
+TEST( bp_tree, strictly_unique_heterogeneous_lookup )
+{
+    using tree_t = inspectable<bptree_set<int, boxed_comparator>>;
+    auto constexpr leaf_values{ static_cast<int>( tree_t::max_values_per_leaf() ) };
+    auto constexpr leaf_count { static_cast<int>( 3 * ( tree_t::max_values_per_inner() + 1 ) ) };
+    auto constexpr n          { leaf_count * leaf_values };
+
+    tree_t bpt;
+    bpt.map_memory( static_cast<std::size_t>( n ) );
+    std::vector<int> vals( static_cast<std::size_t>( n ) );
+    for ( int i{ 0 }; i < n; ++i )
+        vals[ static_cast<std::size_t>( i ) ] = 2 * i;
+    bpt.insert_presorted( vals );
+    std::vector<std::uint32_t> nodes_per_level;
+    ASSERT_TRUE( bpt.structure_is_sound( &nodes_per_level ) );
+    ASSERT_GE( nodes_per_level.size(), 3U );
+
+    std::set<int> model( vals.begin(), vals.end() );
+    auto const check{ [ & ]( std::string_view const stage )
+    {
+        EXPECT_TRUE( bpt.structure_is_sound() ) << stage;
+        for ( int v{ -1 }; v <= 2 * n; ++v )
+        {
+            boxed const key{ v };
+            auto  const expected{ model.lower_bound( v ) };
+            bool  const present { expected != model.end() && *expected == v };
+
+            auto const lb{ bpt.lower_bound( key ) };
+            if ( expected == model.end() ) {
+                EXPECT_EQ( lb, bpt.end() ) << stage << ", " << v;
+            } else {
+                ASSERT_NE( lb, bpt.end() ) << stage << ", " << v;
+                EXPECT_EQ( *lb, *expected ) << stage << ", " << v;
+            }
+            EXPECT_EQ( bpt.contains( key ), present ) << stage << ", " << v;
+            auto const found{ bpt.find( key ) };
+            auto const range{ bpt.equal_range( key ) };
+            if ( present ) {
+                ASSERT_NE( found, bpt.end() ) << stage << ", " << v;
+                EXPECT_EQ( *found, v ) << stage << ", " << v;
+                ASSERT_EQ( std::ranges::distance( range ), 1 ) << stage << ", " << v;
+                EXPECT_EQ( *range.begin(), v ) << stage << ", " << v;
+            } else {
+                EXPECT_EQ( found, bpt.end() ) << stage << ", " << v;
+                EXPECT_TRUE( range.empty() ) << stage << ", " << v;
+            }
+        }
+    } };
+
+    check( "built" );
+    std::vector<int> separator_sources;
+    for ( auto const leaf : bpt.leaves() )
+        separator_sources.push_back( leaf.front() );
+    separator_sources.erase( separator_sources.begin() ); // the first leaf has no separator
+    for ( auto const v : separator_sources )
+    {
+        auto const found{ bpt.find( boxed{ v } ) };
+        ASSERT_NE( found, bpt.end() ) << v;
+        auto const next{ bpt.erase( found ) };
+        model.erase( v );
+        auto const expected_next{ model.upper_bound( v ) };
+        if ( expected_next == model.end() ) {
+            EXPECT_EQ( next, bpt.end() ) << v;
+        } else {
+            ASSERT_NE( next, bpt.end() ) << v;
+            EXPECT_EQ( *next, *expected_next ) << v;
+        }
+    }
+    check( "separator sources erased" );
+    EXPECT_EQ( bpt.size(), model.size() );
+}
+
 TEST( bp_tree, lower_bound_from )
 {
     // Test lower_bound_from edge cases:
