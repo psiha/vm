@@ -10,6 +10,7 @@
 
 #include <psi/vm/containers/komparator.hpp>
 #include <psi/vm/containers/lookup.hpp>
+#include <psi/vm/containers/noninitialized_array.hpp>
 
 #include <psi/build/disable_warnings.hpp>
 
@@ -23,6 +24,7 @@
 #include <functional>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <ranges>
 #include <span>
 #include <tuple>
@@ -510,6 +512,71 @@ protected:
         return insert_presorted_impl<false>( input, unique );
     }
 
+    // Presorted input that is not a contiguous array of Key (a merge of sorted
+    // sequences, a transform/filter view, a list, a single-pass generator...).
+    // Contiguous ranges of Key go straight to the span path; everything else is
+    // gathered into a bounded stack buffer and fed to the span path one chunk
+    // at a time, so the input is never materialised as a whole.
+    static constexpr size_type presorted_range_chunk_size
+    {
+        std::max<size_type>( ( 16 * 1024 / sizeof( Key ) ) / leaf_node::max_values, 1 ) * leaf_node::max_values
+    };
+
+    template <bool dedup_source, std::ranges::input_range R>
+    size_type insert_presorted_range( R && input, bool const unique )
+    {
+        using value_t = std::remove_cv_t<std::ranges::range_value_t<R>>;
+        auto const span_path{ [this, unique]( std::span<Key const> const chunk ) {
+            if constexpr ( dedup_source ) return insert_presorted       ( chunk, unique );
+            else                          return insert_presorted_unique( chunk, unique );
+        } };
+
+        if constexpr ( std::ranges::contiguous_range<R> && std::ranges::sized_range<R> && std::is_same_v<value_t, Key> )
+        {
+            return span_path( std::span<Key const>{ std::ranges::data( input ), static_cast<std::size_t>( std::ranges::size( input ) ) } );
+        }
+        else
+        {
+            auto constexpr chunk_capacity{ presorted_range_chunk_size };
+            auto constexpr chunk_headroom{ chunk_capacity * 4 / 3 }; // what the span path reserves per call
+
+            // The span path reserves (exact fit) per call: grow up front when the
+            // total is known, else geometrically whenever a chunk would not fit.
+            [[ maybe_unused ]] typename node_slot::value_type chunk_nodes{ 0 };
+            if constexpr ( std::ranges::sized_range<R> )
+                this->reserve_additional( static_cast<size_type>( std::ranges::size( input ) ) * 4 / 3 );
+            else
+                chunk_nodes = base::node_count_required_for_values( chunk_headroom );
+
+            noninitialized_array<Key, chunk_capacity> chunk;
+            [[ maybe_unused ]] Key  prev_chunk_back{};
+            [[ maybe_unused ]] bool first_chunk{ true };
+            size_type inserted{ 0 };
+            auto       p_input{ std::ranges::begin( input ) };
+            auto const input_end{ std::ranges::end( input ) };
+            while ( p_input != input_end )
+            {
+                size_type count{ 0 };
+                do {
+                    std::construct_at( &chunk.data[ count++ ], *p_input );
+                    ++p_input;
+                } while ( count < chunk_capacity && p_input != input_end );
+
+                // cross-chunk half of the precondition (the span path checks within the chunk)
+                BOOST_ASSERT( first_chunk || ( dedup_source ? !this->lt( chunk.data[ 0 ], prev_chunk_back ) : this->lt( prev_chunk_back, chunk.data[ 0 ] ) ) );
+                prev_chunk_back = chunk.data[ count - 1 ];
+                first_chunk     = false;
+                if constexpr ( !std::ranges::sized_range<R> )
+                {
+                    if ( this->hdr().free_node_count_ < chunk_nodes ) [[ unlikely ]]
+                        this->reserve_additional( std::max( chunk_headroom, this->size() / 2 ) );
+                }
+                inserted += span_path( std::span<Key const>{ chunk.data, count } );
+            }
+            return inserted;
+        }
+    }
+
 #if !( defined( _MSC_VER ) && !defined( __clang__ ) )
     // ambiguous call w/ VS 17.11, 17.12
     void verify( auto const & node ) const noexcept
@@ -522,7 +589,8 @@ protected:
 
 private:
     // Shared tree-climbing middle used by find_from and find_from_nonunique.
-    // Precondition: key > starting_leaf.back() AND starting_leaf.right != null.
+    // Precondition: key > starting_leaf.back() (>= for find_from_nonunique)
+    // AND starting_leaf.right != null.
     // Climbs the parent chain until a node whose key range contains key, then
     // descends back to the containing leaf. Returns that leaf for the caller to
     // apply its own lower_bound / upper_bound epilogue.
@@ -535,7 +603,7 @@ private:
         // element) - those which have a key on the same/corresponding index
         // should have a strictily less-than starting key value than the parent
         // (separator key).
-        BOOST_ASSUME( ( parent_offset == prnt->num_vals ) || lt( starting_leaf.key( 0 ), prnt->key( parent_offset ) ) );
+        BOOST_ASSUME( ( parent_offset == prnt->num_vals ) || le( starting_leaf.key( 0 ), prnt->key( parent_offset ) ) ); // == possible in non-unique trees
         auto const depth{ this->hdr().depth_ }; BOOST_ASSUME( depth >= 1 );
         auto       level{ depth - 1 };
         while ( lt( prnt->keys().back(), key ) )
@@ -637,16 +705,15 @@ private:
     // Forward-only insertion-point search for non-unique trees (upper_bound semantics).
     // Inserts after all equal keys; exact_find is always false.
     // starting_leaf_offset must be <= num_vals. When == num_vals (past-the-end,
-    // e.g. after merge fills a leaf), the caller guarantees key > back() so the
-    // in-leaf fast path is never taken and no OOB access occurs.
+    // e.g. after merge fills a leaf) key >= back(): unlike for unique trees,
+    // duplicate input keys are not skipped, so key == back() is possible and
+    // is resolved by the climb (the keys after back() may be in the right
+    // sibling(s)).
     insertion_point_t find_from_nonunique( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, Reg auto const key ) const noexcept
     {
         BOOST_ASSUME( starting_leaf_offset <= starting_leaf.num_vals );
-        if ( le( key, starting_leaf.keys().back() ) )
+        if ( ( starting_leaf_offset != starting_leaf.num_vals ) && le( key, starting_leaf.keys().back() ) )
         {
-            // When offset == num_vals the le() guard above must be false (caller
-            // guarantees key > back()), so we never reach here with an OOB offset.
-            BOOST_ASSUME( starting_leaf_offset < starting_leaf.num_vals );
             auto const leaf_keys{ starting_leaf.keys() };
             // Quick-probe: if key < keys[offset], upper_bound stops here — no search needed.
             if ( lt( key, leaf_keys[ starting_leaf_offset ] ) )

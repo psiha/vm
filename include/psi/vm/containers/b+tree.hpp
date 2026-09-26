@@ -50,6 +50,8 @@ public:
     using impl_base::impl_base; // inherit constructors (default, Comparator, COW)
 
     static constexpr auto transparent_comparator{ impl_base::transparent_comparator };
+    // non-contiguous insert_presorted* input is gathered and inserted in chunks of this many keys
+    static constexpr auto presorted_range_chunk_size{ impl_base::presorted_range_chunk_size };
 
     using const_iterator  = impl_base::const_iterator;
     using const_iter_pair = impl_base::const_iter_pair;
@@ -101,6 +103,12 @@ public:
 
     size_type insert_presorted       ( std::span<Key const> const presorted_input ) { return impl_base::insert_presorted       ( presorted_input, unique ); }
     size_type insert_presorted_unique( std::span<Key const> const presorted_input ) { return impl_base::insert_presorted_unique( presorted_input, unique ); }
+    // Any sorted input range (unique: also duplicate-free) - e.g. a merge of
+    // sorted sequences or a view - inserted without materialising it first.
+    template <std::ranges::input_range R> requires std::convertible_to<std::ranges::range_reference_t<R>, Key>
+    size_type insert_presorted       ( R && presorted_input ) { return impl_base::template insert_presorted_range<true >( std::forward<R>( presorted_input ), unique ); }
+    template <std::ranges::input_range R> requires std::convertible_to<std::ranges::range_reference_t<R>, Key>
+    size_type insert_presorted_unique( R && presorted_input ) { return impl_base::template insert_presorted_range<false>( std::forward<R>( presorted_input ), unique ); }
 
     size_type merge( bp_tree       && other ) { return impl_base::merge( std::move( other ), unique ); }
     size_type merge( bp_tree const &  other ) { return impl_base::merge(            other  , unique ); }

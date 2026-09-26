@@ -1383,7 +1383,7 @@ protected: // 'other'
         bptree_base::verify( node );
     }
 
-private:
+protected:
     [[ gnu::const, gnu::noinline ]]
     static node_slot::value_type node_count_required_for_values( size_type const number_of_values ) noexcept
     {
@@ -1410,6 +1410,7 @@ private:
         return total_count;
     }
 
+private:
     template <typename Proj = std::identity>
     auto flatten( node_slot begin_node, node_slot end_node, std::output_iterator<std::invoke_result_t<Proj &, Key const &>> auto output, Proj proj = {} ) const noexcept( std::is_nothrow_invocable_v<Proj &, Key const &> );
 }; // class bptree_base_wkey

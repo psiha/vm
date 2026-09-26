@@ -16,6 +16,7 @@
 
 #include <chrono>
 #include <format>
+#include <forward_list>
 #include <numeric>
 #include <print>
 #include <random>
@@ -747,6 +748,166 @@ TEST( bp_tree, insert_presorted )
     }
 }
 
+namespace
+{
+    template <typename Tree> constexpr bool is_unique_tree{ false };
+    template <typename Key, bool unique, typename Comparator> constexpr bool is_unique_tree<bp_tree<Key, unique, Comparator>>{ unique };
+
+    // A genuinely single-pass range: the merge of two sorted vectors (keys
+    // present in both are produced twice), read through an input iterator.
+    class sorted_merge
+    {
+    public:
+        sorted_merge( std::vector<unsigned> const & a, std::vector<unsigned> const & b ) noexcept : a_{ &a }, b_{ &b } {}
+
+        class iterator
+        {
+        public:
+            using value_type      = unsigned;
+            using difference_type = std::ptrdiff_t;
+
+            explicit iterator( sorted_merge & m ) noexcept : m_{ &m } {}
+            iterator( iterator && ) = default;
+            iterator & operator=( iterator && ) = default;
+
+            unsigned operator*() const noexcept { return take_a() ? ( *m_->a_ )[ m_->i_ ] : ( *m_->b_ )[ m_->j_ ]; }
+            iterator & operator++() noexcept { if ( take_a() ) ++m_->i_; else ++m_->j_; return *this; }
+            void       operator++( int ) noexcept { ++*this; }
+            bool operator==( std::default_sentinel_t ) const noexcept { return m_->i_ == m_->a_->size() && m_->j_ == m_->b_->size(); }
+
+        private:
+            bool take_a() const noexcept { return m_->j_ == m_->b_->size() || ( m_->i_ != m_->a_->size() && ( *m_->a_ )[ m_->i_ ] <= ( *m_->b_ )[ m_->j_ ] ); }
+
+            sorted_merge * m_;
+        };
+
+        iterator                begin()       noexcept { return iterator{ *this }; }
+        std::default_sentinel_t end  () const noexcept { return {}; }
+
+    private:
+        std::vector<unsigned> const * a_;
+        std::vector<unsigned> const * b_;
+        std::size_t i_{ 0 };
+        std::size_t j_{ 0 };
+    }; // class sorted_merge
+    static_assert(  std::ranges::input_range  <sorted_merge> );
+    static_assert( !std::ranges::forward_range<sorted_merge> );
+
+    // Feeds `input` to insert_presorted[_unique] in several range shapes and
+    // checks each against the span path fed the same keys and against an
+    // independently computed expected content.
+    template <typename Tree, bool unique_input>
+    void check_presorted_range( std::vector<unsigned> const & existing, std::vector<unsigned> const & input )
+    {
+        auto const insert{ []( Tree & tree, auto && keys ) {
+            if constexpr ( unique_input ) return tree.insert_presorted_unique( std::forward<decltype( keys )>( keys ) );
+            else                          return tree.insert_presorted       ( std::forward<decltype( keys )>( keys ) );
+        } };
+        auto const prefill{ [&]( Tree & tree ) {
+            tree.map_memory();
+            tree.insert_presorted( std::span<unsigned const>{ existing } );
+        } };
+
+        std::vector<unsigned> expected;
+        if constexpr ( is_unique_tree<Tree> ) std::ranges::set_union( existing, input, std::back_inserter( expected ) );
+        else                          std::ranges::merge    ( existing, input, std::back_inserter( expected ) );
+        if constexpr ( is_unique_tree<Tree> ) expected.erase( std::ranges::unique( expected ).begin(), expected.end() );
+
+        Tree reference;
+        prefill( reference );
+        auto const existing_size{ reference.size() }; // `existing` may hold duplicates
+        auto const reference_inserted{ insert( reference, std::span<unsigned const>{ input } ) };
+        EXPECT_EQ( reference_inserted, expected.size() - existing_size );
+        EXPECT_TRUE( std::ranges::equal( reference, expected ) );
+
+        auto const check{ [&]( auto && keys, char const * const shape ) {
+            SCOPED_TRACE( shape );
+            Tree tree;
+            prefill( tree );
+            EXPECT_EQ( insert( tree, std::forward<decltype( keys )>( keys ) ), reference_inserted );
+            EXPECT_EQ( tree.size(), reference.size() );
+            EXPECT_TRUE( std::ranges::equal( tree, reference ) );
+        } };
+
+        check( std::views::all( input ), "all" );
+        check( input | std::views::transform( []( unsigned const k ) { return static_cast<std::uint64_t>( k ); } ), "transform" );
+        check( input | std::views::filter( []( unsigned ) { return true; } ), "filter" );
+        check( std::forward_list<unsigned>( input.begin(), input.end() ), "forward_list" );
+        std::vector<unsigned> const none;
+        check( sorted_merge{ input, none }, "single-pass" );
+    }
+
+    template <typename Tree, bool unique_input>
+    void check_presorted_range_placements( std::vector<unsigned> const & input )
+    {
+        auto const lo{ input.empty() ? 0U : input.front() };
+        auto const hi{ input.empty() ? 0U : input.back () };
+        auto const n { static_cast<unsigned>( input.size() ) };
+        std::vector<unsigned> after, before, interleaved, overlapping;
+        for ( auto i{ 0U }; i < n; ++i ) after.push_back( hi + 1 + i );
+        for ( auto i{ 0U }; i < std::min( n, lo ); ++i ) before.push_back( i );
+        for ( auto i{ 0U }; i < n; ++i ) interleaved.push_back( lo + i * 2 + 1 ); // between the (even) input keys
+        for ( auto i{ 0U }; i < n; i += 3 ) overlapping.push_back( input[ i ] );
+
+        { SCOPED_TRACE( "empty"       ); check_presorted_range<Tree, unique_input>( {}         , input ); }
+        { SCOPED_TRACE( "after"       ); check_presorted_range<Tree, unique_input>( after      , input ); }
+        { SCOPED_TRACE( "before"      ); check_presorted_range<Tree, unique_input>( before     , input ); }
+        { SCOPED_TRACE( "interleaved" ); check_presorted_range<Tree, unique_input>( interleaved, input ); }
+        { SCOPED_TRACE( "overlapping" ); check_presorted_range<Tree, unique_input>( overlapping, input ); }
+    }
+} // anonymous namespace
+
+TEST( bp_tree, insert_presorted_range )
+{
+    auto constexpr chunk{ static_cast<unsigned>( bptree_set<unsigned>::presorted_range_chunk_size ) };
+    static_assert( chunk == bptree_multiset<unsigned>::presorted_range_chunk_size );
+
+    // strictly increasing (even) keys: sizes around and well beyond one chunk
+    for ( auto const n : { 0U, 1U, chunk - 1, chunk, chunk + 1, chunk * 5 + 7 } )
+    {
+        SCOPED_TRACE( n );
+        std::vector<unsigned> input( n );
+        for ( auto i{ 0U }; i < n; ++i ) input[ i ] = 1000 + i * 2;
+        check_presorted_range_placements<bptree_set     <unsigned>, true >( input );
+        check_presorted_range_placements<bptree_multiset<unsigned>, true >( input );
+        check_presorted_range_placements<bptree_set     <unsigned>, false>( input );
+        check_presorted_range_placements<bptree_multiset<unsigned>, false>( input );
+    }
+
+    // sorted keys with duplicate runs (insert_presorted only): short runs
+    // crossing chunk boundaries and one run spanning several whole chunks
+    {
+        std::vector<unsigned> input;
+        for ( auto i{ 0U }; i < chunk; ++i ) input.insert( input.end(), 3, 1000 + i * 2 );
+        input.insert( input.end(), chunk * 2 + 5, 1000 + chunk * 2 );
+        for ( auto i{ chunk + 1 }; i < chunk * 2; ++i ) input.insert( input.end(), 2, 1000 + i * 2 );
+        check_presorted_range_placements<bptree_set     <unsigned>, false>( input );
+        check_presorted_range_placements<bptree_multiset<unsigned>, false>( input );
+    }
+    // a single key repeated across several chunks, into an empty tree
+    {
+        std::vector<unsigned> const input( chunk * 3 + 1, 42U );
+        check_presorted_range<bptree_set     <unsigned>, false>( {}, input );
+        check_presorted_range<bptree_multiset<unsigned>, false>( {}, input );
+    }
+
+    // the merge of two sorted sequences, consumed in a single pass
+    {
+        std::vector<unsigned> evens, odds;
+        for ( auto i{ 0U }; i < chunk * 3; ++i ) ( i % 2 ? odds : evens ).push_back( i );
+        bptree_set<unsigned> bpt;
+        bpt.map_memory();
+        EXPECT_EQ( bpt.insert_presorted_unique( sorted_merge{ evens, odds } ), chunk * 3 );
+        EXPECT_TRUE( std::ranges::equal( bpt, std::views::iota( 0U, chunk * 3 ) ) );
+        // overlapping sequences: the common keys are produced twice
+        EXPECT_EQ( bpt.insert_presorted( sorted_merge{ evens, evens } ), 0 );
+        bptree_multiset<unsigned> multi;
+        multi.map_memory();
+        EXPECT_EQ( multi.insert_presorted( sorted_merge{ evens, evens } ), evens.size() * 2 );
+        EXPECT_EQ( multi.size(), evens.size() * 2 );
+    }
+}
+
 // these generated tests below need more work (do not actually test what they purport to)
 
 TEST( bp_tree, insert_merge_at_node_boundary )
@@ -941,6 +1102,49 @@ TEST( bp_tree, insert_presorted_merge_at_node_boundary )
         EXPECT_NE( bpt.find( v ), bpt.end() );
     for ( auto v : interleaved_data )
         EXPECT_NE( bpt.find( v ), bpt.end() );
+}
+
+TEST( bp_tree, insert_presorted_duplicates_into_multiset_across_leaves )
+{
+    // Presorted input with duplicate runs merged amid existing keys: a merge
+    // step can fill a leaf right up to a key the next input key equals.
+    bptree_multiset<unsigned> bpt;
+    bpt.map_memory();
+
+    auto constexpr max_per_node{ decltype(bpt)::leaf_node::max_values };
+    auto constexpr n{ max_per_node * 8 };
+
+    std::vector<unsigned> existing;
+    for ( auto i{ 0U }; i < n; ++i ) existing.push_back( i * 2 + 1 );
+    EXPECT_EQ( bpt.insert_presorted( existing ), existing.size() );
+
+    std::vector<unsigned> input;
+    for ( auto i{ 0U }; i < n; ++i ) input.insert( input.end(), 3, i * 2 );
+    EXPECT_EQ( bpt.insert_presorted( input ), input.size() );
+
+    std::vector<unsigned> expected;
+    std::ranges::merge( existing, input, std::back_inserter( expected ) );
+    EXPECT_EQ( bpt.size(), expected.size() );
+    EXPECT_TRUE( std::ranges::equal( bpt, expected ) );
+
+    // runs of one key spanning whole leaves, in the tree and in the input:
+    // the insertion point search climbs out of a leaf whose first key equals
+    // the separator to its right
+    bptree_multiset<unsigned> runs;
+    runs.map_memory();
+    auto constexpr m{ max_per_node * 32 };
+    std::vector<unsigned> more;
+    for ( auto i{ 0U }; i < m; ++i ) more.insert( more.end(), 3, i * 2 );
+    more.insert( more.end(), m * 2 + 5, m * 2 );
+    for ( auto i{ m + 1 }; i < m * 2; ++i ) more.insert( more.end(), 2, i * 2 );
+    std::vector<unsigned> some;
+    for ( auto i{ 0U }; i < more.size(); i += 3 ) some.push_back( more[ i ] );
+    EXPECT_EQ( runs.insert_presorted( some ), some.size() );
+    EXPECT_EQ( runs.insert_presorted( more ), more.size() );
+    expected.clear();
+    std::ranges::merge( some, more, std::back_inserter( expected ) );
+    EXPECT_EQ( runs.size(), expected.size() );
+    EXPECT_TRUE( std::ranges::equal( runs, expected ) );
 }
 
 TEST( bp_tree, insert_triggers_multiple_splits )
