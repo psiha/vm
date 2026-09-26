@@ -43,19 +43,23 @@ struct mremap_result
 inline std::size_t constexpr pmd_span{ std::size_t{ page_size } * ( page_size / sizeof( std::uint64_t ) ) };
 
 /// Relocates [address, address + current_size) to a fresh range of
-/// target_size bytes which starts at the same offset within a pmd_span as the
-/// source does.
+/// target_size bytes which starts at the given offset (phase) within a
+/// pmd_span, cut from a reservation one pmd_span larger than needed (which
+/// can always match any phase). Leaves the source untouched on failure.
 ///
-/// The kernel can move a huge page (PMD) mapping only as a whole entry, which
-/// requires the source and the destination to sit at the same offset within a
-/// pmd_span - at any other offset it first splits every one of them into small
-/// page (PTE) mappings (move_page_tables()). Left to choose the destination
-/// itself, mremap( MREMAP_MAYMOVE ) keeps no such phase, so a THP backed range
-/// that grows by relocation would lose its huge pages on every move: only what
-/// is faulted in after the last one would stay huge. A destination cut from a
-/// reservation one pmd_span larger than needed can always match the phase.
+/// Callers pick the phase by what the kernel needs to map (or keep) huge
+/// pages there:
+///  - a growing mapping keeps the phase it has (linux_mremap()): the kernel
+///    moves a huge page (PMD) mapping only as a whole entry, which requires
+///    the source and the destination to sit at the same offset within a
+///    pmd_span - at any other offset it first splits every one of them into
+///    small page (PTE) mappings (move_page_tables()), and mremap(
+///    MREMAP_MAYMOVE ) left to choose the destination itself keeps no such
+///    phase;
+///  - a file view takes the phase of its file offset
+///    (place_file_view_at_offset_phase()).
 [[ nodiscard ]] PSI_COLD
-inline mremap_result mremap_keeping_pmd_phase( void * const address, std::size_t const current_size, std::size_t const target_size ) noexcept
+inline mremap_result mremap_to_pmd_phase( void * const address, std::size_t const current_size, std::size_t const target_size, std::uintptr_t const phase ) noexcept
 {
     auto const target_span     { align_up( target_size, std::size_t{ page_size } ) };
     auto const reservation_size{ target_span + pmd_span };
@@ -64,10 +68,10 @@ inline mremap_result mremap_keeping_pmd_phase( void * const address, std::size_t
         return { MAP_FAILED };
     // Computed modulo 2^N first, which pmd_span divides: a negative
     // difference wraps around to the same residue.
-    auto const   phase      { ( reinterpret_cast<std::uintptr_t>( address ) - reinterpret_cast<std::uintptr_t>( reservation ) ) % pmd_span };
-    auto * const destination{ reservation + phase };
+    auto const   head       { ( phase - reinterpret_cast<std::uintptr_t>( reservation ) ) % pmd_span };
+    auto * const destination{ reservation + head };
     auto * const tail       { destination + target_span };
-    auto const   tail_size  { pmd_span - phase }; // never 0: both addresses are page aligned
+    auto const   tail_size  { pmd_span - head }; // never 0: both addresses are page aligned
     // MREMAP_FIXED replaces what is mapped at the destination - here nothing
     // but the reservation's own placeholder pages.
     auto const moved{ ::mremap( address, current_size, target_size, MREMAP_MAYMOVE | MREMAP_FIXED, destination ) };
@@ -76,12 +80,43 @@ inline mremap_result mremap_keeping_pmd_phase( void * const address, std::size_t
     // kernel may already have unmapped it, at which point it is no longer
     // ours to unmap - leaking a PROT_NONE placeholder on an ENOMEM path beats
     // unmapping whatever another thread might have mapped there since.
-    if ( phase )
+    if ( head )
     {
-        BOOST_VERIFY( ::munmap( reservation, phase ) == 0 );
+        BOOST_VERIFY( ::munmap( reservation, head ) == 0 );
     }
     BOOST_VERIFY( ::munmap( tail, tail_size ) == 0 );
     return { moved };
+}
+
+/// Moves a file (incl. memfd/shmem) view that the kernel has just placed
+/// [address, address + size), mapping the file from offset on, to an address
+/// congruent to that offset modulo pmd_span, and returns where the view now
+/// is: address itself if it already is congruent, if the view is not a file
+/// view (file_handle -1) or if the move fails (the view stays valid there).
+///
+/// The kernel maps a large folio of a file (page cache or shmem) only where
+/// the virtual address and the file offset agree modulo the folio size
+/// (thp_vma_suitable_order()), and it aligns a file mapping so on its own
+/// only when the mapping is at least a pmd_span long when created. A view
+/// that starts smaller and then grows - in place, or by a relocation that
+/// keeps its phase (linux_mremap()) - would therefore never get a huge
+/// folio. The view is mapped at a place of the kernel's choosing first and
+/// only then moved, so that a failing mmap (e.g. a protection the file
+/// descriptor does not permit) never leaves a reservation behind.
+[[ nodiscard ]] PSI_COLD
+inline void * place_file_view_at_offset_phase( void * const address, std::size_t const size, int const file_handle, std::uint64_t const offset ) noexcept
+{
+#ifndef __ANDROID__ // server Linux
+    auto const phase{ static_cast<std::uintptr_t>( offset % pmd_span ) };
+    if ( ( file_handle != -1 ) && ( reinterpret_cast<std::uintptr_t>( address ) % pmd_span != phase ) )
+    {
+        if ( auto const moved{ mremap_to_pmd_phase( address, size, size, phase ) } ) [[ likely ]]
+            return moved.address;
+    }
+#else
+    (void)size; (void)file_handle; (void)offset;
+#endif
+    return address;
 }
 
 /// Linux mremap: atomic in-place or relocating expansion.
@@ -89,7 +124,7 @@ inline mremap_result mremap_keeping_pmd_phase( void * const address, std::size_t
 ///
 /// \param realloc_type  moveable → MREMAP_MAYMOVE (may relocate, preferably
 ///                                 keeping the PMD phase - see
-///                                 mremap_keeping_pmd_phase());
+///                                 mremap_to_pmd_phase());
 ///                      fixed    → in-place only (fails if not possible)
 [[ nodiscard ]] PSI_COLD
 inline mremap_result linux_mremap(
@@ -106,7 +141,7 @@ inline mremap_result linux_mremap(
         if ( auto const in_place{ ::mremap( address, current_size, target_size, 0 ) }; in_place != MAP_FAILED )
             return { in_place };
         BOOST_ASSERT_MSG( errno == ENOMEM, "Unexpected mremap failure" );
-        if ( auto const moved{ mremap_keeping_pmd_phase( address, current_size, target_size ) } ) [[ likely ]]
+        if ( auto const moved{ mremap_to_pmd_phase( address, current_size, target_size, reinterpret_cast<std::uintptr_t>( address ) % pmd_span ) } ) [[ likely ]]
             return moved;
         // no room for the reservation (or the move into it failed): let the kernel place it
     }

@@ -11,6 +11,8 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
+#include "../allocation/expand_linux.hpp" // place_file_view_at_offset_phase
+
 #include <psi/vm/align.hpp>
 #include <psi/vm/detail/posix.hpp>
 #include <psi/vm/mapped_view/mapped_view.hpp>
@@ -92,7 +94,7 @@ map
     /// http://man7.org/linux/man-pages/man2/mmap.2.html
     ///                               (30.09.2015.) (Domagoj Saric)
 
-    auto const view_start
+    auto * view_start
     {
         static_cast<mapped_span::value_type *>
         (
@@ -107,6 +109,10 @@ map
             )
         )
     };
+#ifdef __linux__
+    if ( view_start )
+        view_start = static_cast<mapped_span::value_type *>( detail::place_file_view_at_offset_phase( view_start, desired_size, source_mapping, offset ) );
+#endif
 
     return mapped_span{ view_start, view_start ? desired_size : 0 };
 }

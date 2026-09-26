@@ -152,6 +152,37 @@ TEST( reserving_mapped_view, exhaustion_is_a_clean_failure )
     ASSERT_EQ( view->data(), base );
 }
 
+#if defined( __linux__ ) && !defined( __ANDROID__ )
+// A plain (non-reserving) file view is placed where its address and its file
+// offset agree modulo a PMD span (2 MiB with 4 KiB pages) - the kernel maps a
+// huge folio of a file only there - whatever the view's size and offset, and
+// moving it there keeps what it maps.
+TEST( mapped_view, file_view_address_is_pmd_congruent_to_its_offset )
+{
+    std::size_t constexpr pmd_span { std::size_t{ page_size } * ( page_size / sizeof( std::uint64_t ) ) };
+    std::size_t constexpr view_size{ 16 * page_size };
+    auto        constexpr file_name{ "pmd_phase_view.bin" };
+    test_file cleanup{ file_name };
+
+    auto mapping{ make_rw_mapping( file_name, 2 * pmd_span ) };
+    ASSERT_TRUE( mapping );
+
+    auto whole{ mapped_view::map( mapping, 0, 2 * pmd_span )() };
+    ASSERT_TRUE( whole );
+    EXPECT_EQ( reinterpret_cast<std::uintptr_t>( whole->data() ) % pmd_span, 0U );
+
+    for ( std::size_t const offset : { std::size_t{ 0 }, std::size_t{ 16 * page_size }, pmd_span + page_size } )
+    {
+        auto view{ mapped_view::map( mapping, offset, view_size )() };
+        ASSERT_TRUE( view ) << "offset " << offset;
+        EXPECT_EQ( reinterpret_cast<std::uintptr_t>( view->data() ) % pmd_span, offset % pmd_span ) << "offset " << offset;
+        // Both views map the same file bytes.
+        view->data()[ 1 ] = std::byte( 0x5a + offset / page_size );
+        EXPECT_EQ( whole->data()[ offset + 1 ], view->data()[ 1 ] ) << "offset " << offset;
+    }
+}
+#endif // server Linux
+
 //------------------------------------------------------------------------------
 } // namespace psi::vm
 //------------------------------------------------------------------------------
