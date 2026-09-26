@@ -276,6 +276,42 @@ TEST( vm_vector, memfd_and_file_views_start_pmd_aligned )
     std::filesystem::remove( test_vec, ec );
 }
 
+// The kernel faults a huge page in only where a whole aligned PMD span lies
+// inside the mapping, and the small pages a view ending mid-span gets there
+// stay small when a later growth covers the rest of that span. So a memory
+// backed view (anonymous or memfd) that reaches a PMD span grows to end on a
+// PMD boundary - checked here across one-element-at-a-time growth, the way a
+// b+tree node pool built by random insertion grows.
+TEST( vm_vector, memory_backed_growth_past_a_pmd_ends_on_a_pmd_boundary )
+{
+    auto const check{ []( auto & vec ) {
+        std::size_t expansions{ 0 };
+        auto        capacity  { vec.capacity() };
+        while ( vec.mapped_size() < 5 * pmd_span )
+        {
+            vec.emplace_back( static_cast<std::uint8_t>( vec.size() ) );
+            if ( vec.capacity() == capacity )
+                continue;
+            capacity = vec.capacity();
+            ++expansions;
+            if ( vec.mapped_size() >= pmd_span )
+                ASSERT_EQ( ( view_begin( vec ) + vec.mapped_size() ) % pmd_span, 0U ) << "mapped size " << vec.mapped_size();
+        }
+        EXPECT_GT( expansions, 3U );
+        for ( std::size_t i{ 0 }; i < vec.size(); ++i )
+            ASSERT_EQ( vec[ i ], static_cast<std::uint8_t>( i ) ) << "contents corrupted by growth at " << i;
+    } };
+    {
+        psi::vm::vm_vector<std::uint8_t, std::size_t> vec;
+        vec.map_memory();
+        check( vec );
+    }
+    {
+        psi::vm::vm_vector<std::uint8_t, std::size_t> vec;
+        vec.map_cow_memory();
+        check( vec );
+    }
+}
 #endif // server Linux
 
 //------------------------------------------------------------------------------

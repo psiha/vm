@@ -21,6 +21,7 @@
 #include <boost/assert.hpp>
 
 #ifdef __linux__
+#   include "../allocation/expand_linux.hpp" // pmd_span
 #   include <sys/mman.h>
 #   if __has_include( <sys/memfd.h> )
 #       include <sys/memfd.h>
@@ -135,9 +136,23 @@ namespace
 } // anonymous namespace
 
 [[ gnu::noinline ]]
-void * mem_mapping::expand_capacity( std::size_t const target_capacity )
+void * mem_mapping::expand_capacity( std::size_t target_capacity )
 {
     BOOST_ASSUME( target_capacity > mapped_size() );
+#if defined( __linux__ ) && !defined( __ANDROID__ ) // server Linux
+    // A memory backed view that spans at least one PMD grows to end on a PMD
+    // boundary: the kernel faults a huge page in only where the whole aligned
+    // pmd_span lies inside the mapping, so a view ending mid-span backs that
+    // last span with small pages - which stay small once the next growth
+    // covers the rest of it (only khugepaged would collapse them). The extra
+    // tail is untouched address space (and, for a memfd, a sparse length).
+    // File backed views are left exact: their length is the file's.
+    if ( !mapping_.is_file_based() && ( target_capacity >= detail::pmd_span ) )
+    {
+        auto const base{ reinterpret_cast<std::uintptr_t>( view_.data() ) };
+        target_capacity = align_up( base + target_capacity, detail::pmd_span ) - base;
+    }
+#endif
     // Exact-size expansion only. Geometric growth is the vector's responsibility.
     auto const current_fc_capacity{ storage_size() };
     if ( current_fc_capacity < target_capacity ) [[ unlikely ]]
