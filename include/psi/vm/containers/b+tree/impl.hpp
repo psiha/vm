@@ -594,7 +594,13 @@ private:
     // Climbs the parent chain until a node whose key range contains key, then
     // descends back to the containing leaf. Returns that leaf for the caller to
     // apply its own lower_bound / upper_bound epilogue.
-    leaf_node & find_from_climb( leaf_node const & starting_leaf, Reg auto const key ) const noexcept
+    // after_equal_keys selects the upper_bound semantics of a non-unique tree,
+    // where keys equal to key can continue past a separator equal to it, even
+    // across whole leaves and into another subtree: the climb then goes on
+    // past such a separator and the descent takes the rightmost child whose
+    // separator is not greater than key - the same choice the root-to-leaf
+    // descent of find_insertion_point makes for a non-unique tree.
+    leaf_node & find_from_climb( leaf_node const & starting_leaf, Reg auto const key, bool const after_equal_keys ) const noexcept
     {
         // Key in tree but not in starting leaf - go up the tree:
         auto const * prnt{ &parent( starting_leaf ) };
@@ -606,7 +612,7 @@ private:
         BOOST_ASSUME( ( parent_offset == prnt->num_vals ) || le( starting_leaf.key( 0 ), prnt->key( parent_offset ) ) ); // == possible in non-unique trees
         auto const depth{ this->hdr().depth_ }; BOOST_ASSUME( depth >= 1 );
         auto       level{ depth - 1 };
-        while ( lt( prnt->keys().back(), key ) )
+        while ( after_equal_keys ? le( prnt->keys().back(), key ) : lt( prnt->keys().back(), key ) )
         {
             if ( level == 1 ) [[ unlikely ]]
             {
@@ -631,13 +637,21 @@ private:
         // descend to the leaf containing the key
         for ( ; level < depth; ++level )
         {
-            auto [pos, exact_find]{ lower_bound( *prnt, parent_offset, key ) };
-            // prior to Dec 11th 2025 the assumption below always held
-            // (inexplicably so) and then after the addition of the
-            // insert_presorted method it started failing (when this function
-            // was called from within it) - TODO investigate
-            //BOOST_ASSUME( !exact_find );
-            pos += exact_find; // traverse to the right child for separator keys
+            node_size_type pos;
+            if ( after_equal_keys )
+            {
+                pos = upper_bound( *prnt, parent_offset, key );
+            }
+            else
+            {
+                auto const [lb_pos, exact_find]{ lower_bound( *prnt, parent_offset, key ) };
+                // prior to Dec 11th 2025 the assumption below always held
+                // (inexplicably so) and then after the addition of the
+                // insert_presorted method it started failing (when this function
+                // was called from within it) - TODO investigate
+                //BOOST_ASSUME( !exact_find );
+                pos = lb_pos + exact_find; // traverse to the right child for separator keys
+            }
             prnt = &base::inner( prnt->children()[ pos ] );
             parent_offset = 0;
         }
@@ -690,7 +704,7 @@ private:
         }
 #   endif
 
-        auto const & containing_leaf{ find_from_climb( starting_leaf, key ) };
+        auto const & containing_leaf{ find_from_climb( starting_leaf, key, false ) };
         auto const pos{ lower_bound( containing_leaf, key ) };
         BOOST_ASSUME
         (
@@ -725,7 +739,7 @@ private:
         if ( !starting_leaf.right ) [[ unlikely ]] // we are at the end of the tree/leaf level
             return { const_cast<leaf_node *>( &starting_leaf ), find_pos{ starting_leaf.num_vals, false } };
 
-        auto const & containing_leaf{ find_from_climb( starting_leaf, key ) };
+        auto const & containing_leaf{ find_from_climb( starting_leaf, key, true ) };
         auto const pos{ upper_bound( containing_leaf, key ) };
         BOOST_ASSUME
         (
