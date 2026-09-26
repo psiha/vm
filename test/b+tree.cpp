@@ -219,6 +219,38 @@ template <> inline constexpr bool is_simple_comparator<indirect_less>{ true };
 #endif
 template <typename Key> inline constexpr bool is_direct_comparator<indirect_less, Key>{ PSI_VM_BENCH_INDIRECT_LINEAR };
 
+// Which binary search a node too large to scan uses (base.hpp,
+// use_prefetching_binary_search): the prefetching one only when the comparison
+// reads nothing but the probed key.  The indirect comparator's operand lives
+// outside the node, so it keeps the plain one, and so does a class key whose
+// ordering says nothing about what it reads, even under std::less.
+#if PSI_VM_BT_PREFETCHING_BINARY_SEARCH && !PSI_VM_BENCH_INDIRECT_LINEAR
+namespace binary_search_selection
+{
+    struct opaque_key { // its operator< could read anything
+        std::uint32_t value;
+        constexpr auto operator<=>( opaque_key const & ) const noexcept = default;
+    };
+    struct direct_key {
+        std::uint32_t value;
+        constexpr auto operator<=>( direct_key const & ) const noexcept = default;
+        static constexpr bool orders_directly{ true };
+    };
+
+    // a capacity that no node of these keys scans
+    constexpr auto binary_capacity{ static_cast<std::uint32_t>( linear_search_max_values<std::uint32_t> + 1 ) };
+    static_assert( !use_linear_search_for_sorted_array<std::less<int>, int          , binary_capacity> );
+    static_assert( !use_linear_search_for_sorted_array<indirect_less , std::uint32_t, binary_capacity> );
+
+    static_assert(  use_prefetching_binary_search<std::less<int>         , int          > );
+    static_assert(  use_prefetching_binary_search<std::less<>            , std::uint32_t> );
+    static_assert(  use_prefetching_binary_search<std::less<direct_key>  , direct_key   > );
+    static_assert( !use_prefetching_binary_search<indirect_less          , std::uint32_t> );
+    static_assert( !use_prefetching_binary_search<std::less<opaque_key>  , opaque_key   > );
+    static_assert( !use_prefetching_binary_search<std::less<>            , opaque_key   > );
+} // namespace binary_search_selection
+#endif
+
 TEST( bp_tree, benchmark_indirect_comparator )
 {
     auto const   test_size{ 7654321 };
