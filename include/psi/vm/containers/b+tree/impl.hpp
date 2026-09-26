@@ -439,7 +439,9 @@ protected:
         // key equivalent to the searched one.  In a unique tree that is the
         // only such key for a lookup of the tree's own Key type, and for any
         // lookup through a comparator that is not transparent (it compares the
-        // lookup as a Key).  A heterogeneous lookup through a transparent
+        // lookup as a Key), or one that declares that its heterogeneous
+        // lookups match at most one key (strictly_unique_heterogeneous_lookup).
+        // Any other heterogeneous lookup through a transparent
         // comparator may be equivalent to several keys (which is what the
         // heterogeneous equal_range is for), and the upper bound descent
         // still finds one of them: the leaf it lands on starts with its own
@@ -448,7 +450,12 @@ protected:
         // operation that has to land on the first equivalent key takes the
         // lower bound descent instead, the one non-unique trees take for
         // their runs of copies.
-        constexpr bool single_equivalent{ !transparent_comparator || std::is_same_v<reg_value_t<decltype( key )>, Key> };
+        constexpr bool single_equivalent
+        {
+            !transparent_comparator ||
+            std::is_same_v<reg_value_t<decltype( key )>, Key> ||
+            detail::strictly_unique_heterogeneous_lookup<Comparator>
+        };
         constexpr bool upper_bound_descent{ single_equivalent || any_equivalent };
         if ( unique && upper_bound_descent ) [[ likely ]]
         {
