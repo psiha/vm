@@ -229,6 +229,14 @@ template <typename T>
 template <typename T> [[nodiscard]] constexpr decltype( auto ) unwrap( pass_in_reg<T> const obj ) noexcept { return obj.value; }
 template <typename T> [[nodiscard]] constexpr T &              unwrap( T &                  obj ) noexcept { return obj; }
 
+/// The type a Reg parameter stands for: T itself, or the value_type of the
+/// wrapper that carries it.  Not the type unwrap() returns - that is the
+/// wrapper's stored_type, e.g. a string_view for a std::string.
+template <typename T> struct reg_value                    { using type = T; };
+template <typename T> struct reg_value<pass_in_reg   <T>> { using type = T; };
+template <typename T> struct reg_value<pass_rv_in_reg<T>> { using type = T; };
+template <typename T> using  reg_value_t = typename reg_value<std::remove_cvref_t<T>>::type;
+
 
 // utility for passing non trivial predicates to algorithms which pass them around by-val
 template <typename Pred>
