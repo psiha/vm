@@ -298,12 +298,13 @@ private:
     };
 
 #if !defined( PSI_VM_BT_FRONT_GAP )
-    // a leaf with a front gap is searched binary (and its node is large
-    // enough) - see bptree_base::front_gap_min_node_size
+    // a leaf with a front gap was asked for one, is searched binary and its
+    // node is large enough - see bptree_base::front_gap_min_node_size
     static_assert
     (
         !leaf_node::front_gap ||
         (
+            detail::comparator_leaf_front_gap<Comparator> &&
             ( base::node_byte_size() >= bptree_base::front_gap_min_node_size ) &&
             !use_linear_search_for_sorted_array<Comparator, Key, leaf_node::max_values>
         )

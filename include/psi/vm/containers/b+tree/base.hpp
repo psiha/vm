@@ -26,6 +26,7 @@
 #include <bit>
 #include <array>
 #include <climits>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
@@ -168,6 +169,23 @@ private:
     heap_vector<word_t> words_;
 }; // class dirty_node_set
 
+/// Does a tree ordered by this comparator ask for a leaf front gap (see
+/// bptree_base::front_gap_min_node_size)?
+///
+/// A comparator asks with a member
+///     static constexpr bool leaf_front_gap{ true };
+/// and one that says nothing gets no gap.  It is stated on the comparator
+/// rather than by specialising a trait for the same reason key directness is
+/// stated on the key (komparator.hpp): every translation unit that names the
+/// tree sees the same answer, so the leaf layout cannot differ between them.
+/// A wrapper that derives from the comparator (erasure_opt_in/out) inherits it.
+namespace detail
+{
+    template <typename Comparator> constexpr bool comparator_leaf_front_gap{ false };
+    template <typename Comparator> requires requires { { Comparator::leaf_front_gap } -> std::convertible_to<bool>; }
+    constexpr bool comparator_leaf_front_gap<Comparator>{ Comparator::leaf_front_gap };
+} // namespace detail
+
 ////////////////////////////////////////////////////////////////////////////////
 // \class bptree_base
 ////////////////////////////////////////////////////////////////////////////////
@@ -185,38 +203,41 @@ public:
     // past the front of its arrays, so entries are handed over at its front -
     // to or from a sibling, or on erasure - without moving the rest.
     //
-    // Decided per leaf type (leaf_front_gap<Key, Comparator>).  A leaf has a
-    // gap iff
-    //  * its in-node search is binary - use_linear_search_for_sorted_array is
-    //    false for its capacity, which folds in the ISA, the key type and the
-    //    comparator - and
-    //  * its node is at least front_gap_min_node_size bytes.
+    // Off by default, for every leaf type.  A tree opts in
+    //  * per comparator, with a static constexpr bool leaf_front_gap{ true }
+    //    member (detail::comparator_leaf_front_gap), and then a leaf has a gap
+    //    iff
+    //     * its in-node search is binary - use_linear_search_for_sorted_array
+    //       is false for its capacity, which folds in the ISA, the key type and
+    //       the comparator - and
+    //     * its node is at least front_gap_min_node_size bytes;
+    //  * or globally, with -DPSI_VM_BT_FRONT_GAP=1, which gives every leaf type
+    //    a gap whatever its search or size.  -DPSI_VM_BT_FRONT_GAP=0 forces it
+    //    off, comparators that ask for it included.
     //
     // The cost is a runtime start on the address path of every key load in the
     // leaf, which cannot be issued until the leaf's header has arrived.  A
     // linear scan issues its loads back to back and overlaps their misses, and
     // waiting on start first costs it that overlap: with 512-byte nodes and
-    // 4-byte keys on x86-64 (a scan) +6% on lookup, +11% on random insertion
-    // and +3.5% on bulk insertion.  A binary search waits on its first probe
-    // anyway and start hides behind it: lookup within noise with 4096-byte
-    // nodes on x86-64, +1-4% with 512-byte nodes on AArch64.
-    // The benefit grows with the number of entries a front handover would
-    // otherwise move: with 4096-byte nodes random insertion is 12% and bulk
-    // erasure 26% faster, while with 512-byte nodes no measured workload gains.
-    // The size threshold lies between those two measured geometries and is the
-    // number to tune.  PSI_VM_BT_RUNTIME_DISPATCH=1 lets an under-filled leaf
-    // scan whatever its capacity; the rule still keys on the capacity.
+    // 4-byte keys (a scan) the gap is 8-10% slower in every measured operation.
+    // A binary search waits on its first probe anyway and start hides behind
+    // it, while the benefit grows with the number of entries a front handover
+    // would otherwise move: with 4096-byte nodes and 4-byte keys insertion is
+    // 4.5% and erasure 1.9% faster, lookup 5.9% slower, and with an indirect
+    // (row-index) comparator at 4096 bytes it is about neutral.  An
+    // application-level workload measured no difference either way.  Hence off
+    // unless asked for, and where asked for only where those measurements say
+    // it can pay; the size threshold lies between the two measured geometries.
+    // PSI_VM_BT_RUNTIME_DISPATCH=1 lets an under-filled leaf scan whatever its
+    // capacity; the rule still keys on the capacity.
     //
     // Only a leaf with a gap stores start: in the header's spare byte where
     // the header's fields leave one (node_header::spare_byte), and otherwise in
     // a byte right behind the header.  A leaf without a gap, and an inner node
     // (which never has one), read start as a compile-time 0
-    // (node_header::live_start): every index into them compiles to what a plain
-    // array's would, their keys begin right behind the header, and every
-    // handover moves the entries it displaces.
-    //
-    // -DPSI_VM_BT_FRONT_GAP=0|1 forces the gap off or on for every leaf type;
-    // unset, the rule decides.
+    // (node_header::live_start): no storage, every index into them compiles to
+    // what a plain array's would, their keys begin right behind the header,
+    // and every handover moves the entries it displaces.
     static constexpr std::uint16_t front_gap_min_node_size{ 2048 };
 
     bptree_base(                      ) noexcept;
@@ -477,6 +498,7 @@ public: // the leaf geometry and the front gap policy, which follow from Key
 #   if defined( PSI_VM_BT_FRONT_GAP )
         PSI_VM_BT_FRONT_GAP != 0
 #   else
+        detail::comparator_leaf_front_gap<Comparator> &&
         ( node_size >= front_gap_min_node_size ) &&
         !use_linear_search_for_sorted_array<Comparator, Key, leaf_capacity( sizeof( Key ), alignof( Key ), true )>
 #   endif

@@ -3473,51 +3473,98 @@ TEST( bp_tree, leaf_iterator_ordering_by_first_key )
     EXPECT_TRUE( prev < end );
 }
 
-// The leaf front gap policy (bptree_base::front_gap_min_node_size): a leaf has a
-// gap iff its in-node search is binary and its node is at least that large.
-// node_size is fixed per build, so each build checks the rows of its own size.
-#if !defined( PSI_VM_BT_FRONT_GAP ) && !defined( PSI_VM_LINEAR_SEARCH_MAX_VALUES )
 namespace
 {
-    template <typename Key> constexpr bool leaf_gap{ bptree_set<Key>::has_leaf_front_gap() };
-    template <typename... Keys> constexpr bool all_gap { (  leaf_gap<Keys> && ... ) };
-    template <typename... Keys> constexpr bool none_gap{ ( !leaf_gap<Keys> && ... ) };
+    // A comparator that orders exactly like std::less<> - same directness, so
+    // the same in-node search - and asks for a leaf front gap.
+    struct gap_less : std::less<>
+    {
+        static constexpr bool leaf_front_gap{ true };
+    };
+
+    // An indirect (row-index) comparator, which is never scanned, as it is and
+    // asking for the gap.
+    struct row_less
+    {
+        std::uint32_t const * values;
+        [[ gnu::pure ]] bool operator()( std::uint32_t const left, std::uint32_t const right ) const noexcept { return values[ left ] < values[ right ]; }
+    };
+    struct gap_row_less : row_less
+    {
+        static constexpr bool leaf_front_gap{ true };
+    };
+} // anonymous namespace
+template <>             inline constexpr bool is_simple_comparator<gap_less     >{ true };
+template <typename Key> inline constexpr bool is_direct_comparator<gap_less, Key>{ is_direct_comparator<std::less<>, Key> };
+
+// The leaf front gap policy (bptree_base::front_gap_min_node_size): off unless
+// the comparator asks for it, and then a leaf has a gap iff its in-node search
+// is binary and its node is at least that large; -DPSI_VM_BT_FRONT_GAP forces
+// it either way.  node_size is fixed per build, so each build checks the rows
+// of its own size.
+namespace
+{
+    template <typename Key, typename Comparator = std::less<>> constexpr bool leaf_gap{ bptree_set<Key, Comparator>::has_leaf_front_gap() };
+    template <typename Comparator, typename... Keys> constexpr bool all_gap { (  leaf_gap<Keys, Comparator> && ... ) };
+    template <typename Comparator, typename... Keys> constexpr bool none_gap{ ( !leaf_gap<Keys, Comparator> && ... ) };
     constexpr auto node_bytes{ bptree_base::node_byte_size() };
 
-    static_assert( ( node_bytes >= bptree_base::front_gap_min_node_size ) || none_gap<int, std::uint64_t, float, double> );
+    static_assert(  detail::comparator_leaf_front_gap<gap_less> && detail::comparator_leaf_front_gap<erasure_opt_in<gap_less>> );
+    static_assert( !detail::comparator_leaf_front_gap<std::less<>> && !detail::comparator_leaf_front_gap<row_less> );
+
+#if defined( PSI_VM_BT_FRONT_GAP )
+    // the macro overrides every comparator, one that asks for a gap included
+    static_assert( ( PSI_VM_BT_FRONT_GAP == 0 ) || all_gap <std::less<>, int, std::uint64_t, float, double> );
+    static_assert( ( PSI_VM_BT_FRONT_GAP == 0 ) || all_gap <gap_less   , int, std::uint64_t, float, double> );
+    static_assert( ( PSI_VM_BT_FRONT_GAP != 0 ) || none_gap<std::less<>, int, std::uint64_t, float, double> );
+    static_assert( ( PSI_VM_BT_FRONT_GAP != 0 ) || none_gap<gap_less   , int, std::uint64_t, float, double> );
+    static_assert( ( PSI_VM_BT_FRONT_GAP != 0 ) || none_gap<gap_row_less, std::uint32_t> );
+#else
+    // off by default, whatever the key type, the search or the node size
+    static_assert( none_gap<std::less<>  , int, std::uint64_t, float, double> );
+    static_assert( none_gap<row_less, std::uint32_t> );
+    static_assert( !leaf_gap<std::uint32_t, erasure_opt_in<std::less<>>> );
+
+    // asked for: an indirect comparator is searched binary, so the size alone decides
+    static_assert( leaf_gap<std::uint32_t, gap_row_less> == ( node_bytes >= bptree_base::front_gap_min_node_size ) );
+    static_assert( leaf_gap<std::uint32_t, erasure_opt_in<gap_row_less>> == leaf_gap<std::uint32_t, gap_row_less> );
+
+    static_assert( ( node_bytes >= bptree_base::front_gap_min_node_size ) || none_gap<gap_less, int, std::uint64_t, float, double> );
+#   if !defined( PSI_VM_LINEAR_SEARCH_MAX_VALUES )
 #   if defined( __aarch64__ ) || defined( _M_ARM64 )
     // every in-node search is binary, so the node size alone decides
-    static_assert( ( node_bytes < bptree_base::front_gap_min_node_size ) || all_gap<int, std::uint64_t, float, double> );
+    static_assert( ( node_bytes < bptree_base::front_gap_min_node_size ) || all_gap<gap_less, int, std::uint64_t, float, double> );
 #   elif defined( __x86_64__ ) || defined( _M_X64 )
     // 512-byte leaves scan (124 4-byte keys), and are below the size threshold anyway
-    static_assert( ( node_bytes != 512 ) || none_gap<int, std::uint64_t, float, double> );
+    static_assert( ( node_bytes != 512 ) || none_gap<gap_less, int, std::uint64_t, float, double> );
     // 254 8-byte integers still scan (limit 256); 507 4-byte keys and 253
     // doubles (limit 128) are searched binary
-    static_assert( ( node_bytes != 2048 ) || ( all_gap<int, float, double> && none_gap<std::uint64_t> ) );
+    static_assert( ( node_bytes != 2048 ) || ( all_gap<gap_less, int, float, double> && none_gap<gap_less, std::uint64_t> ) );
     // ...as is every key type at 4096 bytes
-    static_assert( ( node_bytes != 4096 ) || all_gap<int, std::uint64_t, float, double> );
+    static_assert( ( node_bytes != 4096 ) || all_gap<gap_less, int, std::uint64_t, float, double> );
 #   endif
-} // anonymous namespace
+#   endif
 #endif
+} // anonymous namespace
 
 namespace
 {
     // Every path that hands entries over at a leaf's front - single insertion
     // relieving into a sibling, bulk insertion, erasure of single keys and of a
     // sorted run with the underflow borrows it triggers - checked against the
-    // set it must equal.  Instantiated per key type, which is what decides
-    // whether the leaves have a gap (see the policy checks above), so builds
-    // where the two kinds of leaf coexist run both.
-    template <typename Key>
+    // set it must equal.  Instantiated per key type and comparator, which is
+    // what decides whether the leaves have a gap (see the policy checks above),
+    // so builds where the two kinds of leaf coexist run both.
+    template <typename Key, typename Comparator = std::less<>>
     void front_handover_roundtrip()
     {
         std::mt19937 rng{ 20260925 };
-        auto const n{ static_cast<std::uint32_t>( bptree_set<Key>::max_values_per_leaf() ) * 64U };
+        auto const n{ static_cast<std::uint32_t>( bptree_set<Key, Comparator>::max_values_per_leaf() ) * 64U };
         std::vector<Key> keys( n );
         for ( auto i{ 0U }; i < n; ++i ) { keys[ i ] = static_cast<Key>( 2 * i ); }
         std::ranges::shuffle( keys, rng );
 
-        bptree_set<Key> bpt;
+        bptree_set<Key, Comparator> bpt;
         bpt.map_memory();
         std::span const all{ keys };
         for ( auto const k : all.first( n / 2 ) ) { EXPECT_TRUE( bpt.insert( k ).second ); }
@@ -3547,6 +3594,11 @@ namespace
 TEST( bp_tree, front_handover_int    ) { front_handover_roundtrip<int          >(); }
 TEST( bp_tree, front_handover_uint64 ) { front_handover_roundtrip<std::uint64_t>(); }
 TEST( bp_tree, front_handover_double ) { front_handover_roundtrip<double       >(); }
+// the same with a comparator that asks for the gap: the leaves carry one
+// wherever the policy grants it (see above)
+TEST( bp_tree, front_handover_opt_in_int    ) { front_handover_roundtrip<int          , gap_less>(); }
+TEST( bp_tree, front_handover_opt_in_uint64 ) { front_handover_roundtrip<std::uint64_t, gap_less>(); }
+TEST( bp_tree, front_handover_opt_in_double ) { front_handover_roundtrip<double       , gap_less>(); }
 
 namespace
 {
@@ -3556,11 +3608,11 @@ namespace
     // from that leaf by its underflowing left neighbour then takes an entry off
     // the front - which must never, even transiently, leave start + num_vals
     // past the array (keys() asserts it).
-    template <typename Key>
+    template <typename Key, typename Comparator = std::less<>>
     void borrow_from_a_relieved_leaf()
     {
-        auto const leaf{ static_cast<int>( bptree_set<Key>::max_values_per_leaf() ) };
-        bptree_set<Key> bpt;
+        auto const leaf{ static_cast<int>( bptree_set<Key, Comparator>::max_values_per_leaf() ) };
+        bptree_set<Key, Comparator> bpt;
         bpt.map_memory();
         std::set<Key> expected;
         auto const add{ [&]( int const k ) { EXPECT_TRUE( bpt.insert( static_cast<Key>( k ) ).second ); expected.insert( static_cast<Key>( k ) ); } };
@@ -3584,6 +3636,9 @@ namespace
 TEST( bp_tree, borrow_from_a_relieved_leaf_int    ) { borrow_from_a_relieved_leaf<int          >(); }
 TEST( bp_tree, borrow_from_a_relieved_leaf_uint64 ) { borrow_from_a_relieved_leaf<std::uint64_t>(); }
 TEST( bp_tree, borrow_from_a_relieved_leaf_double ) { borrow_from_a_relieved_leaf<double       >(); }
+TEST( bp_tree, borrow_from_a_relieved_leaf_opt_in_int    ) { borrow_from_a_relieved_leaf<int          , gap_less>(); }
+TEST( bp_tree, borrow_from_a_relieved_leaf_opt_in_uint64 ) { borrow_from_a_relieved_leaf<std::uint64_t, gap_less>(); }
+TEST( bp_tree, borrow_from_a_relieved_leaf_opt_in_double ) { borrow_from_a_relieved_leaf<double       , gap_less>(); }
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm
