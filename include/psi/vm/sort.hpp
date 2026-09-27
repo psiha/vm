@@ -1,6 +1,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 /// psi::vm::sort -- reusable pdqsort front end with OPT-IN comparator/iterator
-/// type erasure.
+/// type erasure, and sort_unique, the sort followed by deduplication.
 ///
 /// The erasure trades a perfectly-predicted indirect comparator call for
 /// collapsing the per-(iterator, comparator) pdqsort instantiation family to
@@ -43,8 +43,11 @@
 #define PSI_VM_PDQSORT_BRANCHLESS( first, last, comp ) boost::movelib::pdqsort( first, last, comp )
 #endif
 
+#include <algorithm>
+#include <functional>
 #include <iterator>
 #include <memory>
+#include <ranges>
 #include <type_traits>
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -239,6 +242,45 @@ constexpr void sort( It const first, It const last, Comparator const & __restric
         // partitioning either (see branchless_by_default)
         PSI_VM_PDQSORT( first, last, make_trivially_copyable_predicate( comp ) );
     }
+}
+
+/// Sorts the range by comp, as sort() does, and moves the first of each run of
+/// equivalent elements to the front, in order, as std::unique does; returns
+/// the end of those elements. The elements past it are left valid but with
+/// unspecified values.
+/// Any strict weak ordering serves, e.g. std::ranges::lexicographical_compare
+/// for a range of ranges, or a comparator that orders by one member only. Two
+/// elements are equivalent when neither orders before the other. Once the
+/// range is sorted no element orders before the one ahead of it, so two
+/// neighbours are equivalent exactly when the first does not order before the
+/// second: one comparison per element, and no equality operator needed. The
+/// sort is not stable, so of a run of equivalent elements that are not
+/// identical which one is kept is unspecified. noexcept as sort() is: a
+/// comparator or an element move that throws terminates.
+template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::random_access_iterator It, typename Comparator = std::ranges::less>
+[[ nodiscard ]] constexpr It sort_unique( It const first, It const last, Comparator const & comp = {} ) noexcept
+{
+    vm::sort<Erasure, Partitioning>( first, last, comp );
+    return std::unique
+    (
+        first, last,
+        [ &comp ]( auto const & kept, auto const & next ) noexcept { return !comp( kept, next ); }
+    );
+}
+
+/// Sorts and deduplicates a container as the iterator overload does and
+/// truncates it to the kept elements. noexcept on the same terms, and on the
+/// assumption that resize() to a smaller size does not throw: true of the
+/// standard and psi::vm containers, whose shrinking resize neither allocates
+/// nor constructs, but a property of the container rather than one checked
+/// here - resize() is noexcept for none of them, as growing allocates.
+template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::ranges::random_access_range Container, typename Comparator = std::ranges::less>
+requires requires( Container & container ) { container.resize( std::ranges::size( container ) ); }
+constexpr void sort_unique( Container & container, Comparator const & comp = {} ) noexcept
+{
+    auto const first{ std::ranges::begin( container ) };
+    auto const kept { vm::sort_unique<Erasure, Partitioning>( first, std::ranges::end( container ), comp ) };
+    container.resize( static_cast<std::ranges::range_size_t<Container>>( kept - first ) );
 }
 
 //------------------------------------------------------------------------------
