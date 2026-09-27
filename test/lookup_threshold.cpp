@@ -342,10 +342,11 @@ TEST( lookup, threshold_sweep_cold )
 #endif // release build
 
 ////////////////////////////////////////////////////////////////////////////////
-// branchless_{lower,upper}_bound have to agree with std:: EXACTLY, including
-// where duplicates put the boundary and where the key falls outside the range -
-// a binary search that is merely nearly right is worse than a slow one, and the
-// off-by-one in the "go right" step is exactly the mistake to make.
+// branchless_{lower,upper}_bound and prefetching_{lower,upper}_bound have to
+// agree with std:: EXACTLY, including where duplicates put the boundary and
+// where the key falls outside the range - a binary search that is merely nearly
+// right is worse than a slow one, and the off-by-one in the "go right" step is
+// exactly the mistake to make.
 ////////////////////////////////////////////////////////////////////////////////
 
 template <typename Key>
@@ -355,7 +356,8 @@ void check_branchless_agrees_with_std()
     // Duplicates are the interesting case: lower_bound must find the FIRST of a
     // run and upper_bound the one past the LAST, so keep the value range far
     // narrower than the length.
-    for ( auto const length : { 0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 33, 63, 64, 65, 127, 255, 256, 511, 1000 } )
+    // The tail covers the fills a 4096-byte node reaches with 4-byte keys.
+    for ( auto const length : { 0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 33, 63, 64, 65, 127, 255, 256, 510, 511, 1000, 1019, 1024 } )
     {
         std::vector<Key> v( static_cast<std::size_t>( length ) );
         std::uniform_int_distribution<int> dist{ 0, std::max( 1, length / 4 ) };
@@ -366,16 +368,12 @@ void check_branchless_agrees_with_std()
         for ( int probe{ -2 }; probe <= std::max( 1, length / 4 ) + 2; ++probe )
         {
             auto const key{ static_cast<Key>( probe ) };
-            EXPECT_EQ
-            (
-                branchless_lower_bound( v.begin(), v.end(), key, std::less<>{} ) - v.begin(),
-                        std::lower_bound( v.begin(), v.end(), key )             - v.begin()
-            ) << "lower_bound disagreed at length " << length << ", key " << probe;
-            EXPECT_EQ
-            (
-                branchless_upper_bound( v.begin(), v.end(), key, std::less<>{} ) - v.begin(),
-                        std::upper_bound( v.begin(), v.end(), key )             - v.begin()
-            ) << "upper_bound disagreed at length " << length << ", key " << probe;
+            auto const lower{ std::lower_bound( v.begin(), v.end(), key ) - v.begin() };
+            auto const upper{ std::upper_bound( v.begin(), v.end(), key ) - v.begin() };
+            EXPECT_EQ(  branchless_lower_bound( v.begin(), v.end(), key, std::less<>{} ) - v.begin(), lower ) << "branchless lower_bound disagreed at length "  << length << ", key " << probe;
+            EXPECT_EQ(  branchless_upper_bound( v.begin(), v.end(), key, std::less<>{} ) - v.begin(), upper ) << "branchless upper_bound disagreed at length "  << length << ", key " << probe;
+            EXPECT_EQ( prefetching_lower_bound( v.begin(), v.end(), key, std::less<>{} ) - v.begin(), lower ) << "prefetching lower_bound disagreed at length " << length << ", key " << probe;
+            EXPECT_EQ( prefetching_upper_bound( v.begin(), v.end(), key, std::less<>{} ) - v.begin(), upper ) << "prefetching upper_bound disagreed at length " << length << ", key " << probe;
         }
     }
 }
@@ -383,6 +381,20 @@ void check_branchless_agrees_with_std()
 TEST( lookup, branchless_agrees_with_std_uint32 ) { check_branchless_agrees_with_std<std::uint32_t>(); }
 TEST( lookup, branchless_agrees_with_std_uint64 ) { check_branchless_agrees_with_std<std::uint64_t>(); }
 TEST( lookup, branchless_agrees_with_std_float  ) { check_branchless_agrees_with_std<float       >(); }
+
+// The prefetch is a runtime-only hint: the search itself stays usable in a
+// constant expression.
+static_assert
+(
+    [] {
+        constexpr int v[]{ 1, 3, 3, 3, 5, 8 };
+        return
+            ( prefetching_lower_bound( std::begin( v ), std::end( v ), 3 ) == &v[ 1 ] ) &&
+            ( prefetching_upper_bound( std::begin( v ), std::end( v ), 3 ) == &v[ 4 ] ) &&
+            ( prefetching_lower_bound( std::begin( v ), std::end( v ), 9 ) == std::end( v ) ) &&
+            ( prefetching_upper_bound( std::begin( v ), std::end( v ), 0 ) == &v[ 0 ] );
+    }()
+);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Which keys the transparent comparators may scan: any scalar, and a class type

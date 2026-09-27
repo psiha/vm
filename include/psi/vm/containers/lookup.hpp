@@ -29,6 +29,8 @@
 #include <algorithm>
 #include <concepts>
 #include <cstddef>
+#include <iterator>
+#include <memory>
 #include <optional>
 #include <type_traits>
 
@@ -246,6 +248,87 @@ void prefetch_for_read( void const * const address ) noexcept
         __prefetch( address );
 #   endif
     }
+}
+
+// `condition ? if_true : if_false` for a condition the branch predictor cannot
+// learn, which is to stay a conditional move.  Without the hint clang's x86
+// cmov-to-branch conversion turns a select inside a loop back into a branch
+// whenever the select sits on the loop-carried dependency - a good trade for a
+// predictable condition and the wrong one for a binary search's comparison,
+// which goes either way at random.  It reaches the select of a scalar T - a
+// pointer, which is what the b+tree searches with; a class-type select (a
+// std::vector iterator) is emitted as a branch before the hint can apply.  The
+// hint is not usable in a constant expression, where it means nothing anyway.
+template <typename T>
+[[ nodiscard, gnu::always_inline ]] constexpr
+T unpredictable_select( bool const condition, T const if_true, T const if_false ) noexcept
+{
+#if defined( __has_builtin )
+#   if __has_builtin( __builtin_unpredictable )
+    if !consteval { return __builtin_unpredictable( condition ) ? if_true : if_false; }
+#   endif
+#endif
+    return condition ? if_true : if_false;
+}
+
+// Branchless binary search that prefetches both of the next step's candidate
+// probes (Khuong & Morin, "Array Layouts for Comparison-Based Searching").
+//
+// Over a COLD range every step of a binary search is a dependent miss: the
+// next probe's address is not known until the current comparison resolves.
+// It is, however, always one of exactly two addresses - the midpoint of the
+// lower or of the upper half - and both are known before the comparison is.
+// Requesting both lines while the current probe is still in flight makes the
+// next step's miss overlap this one, so roughly every other step finds its
+// line already arriving instead of starting a miss of its own.  The price is
+// one line per step that the search then does not take, and, once the range
+// has narrowed to a line or two, prefetches of lines that are already there.
+//
+// The halving differs from branchless_lower_bound's on purpose: here the kept
+// range is `length - half` whichever way the comparison falls (the probed
+// element stays in it rather than being excluded), so the step count and both
+// candidate addresses depend on the length alone and the comparison feeds
+// nothing but one conditional move of `first`.  The last element left is
+// resolved by one final comparison.  The result is std::lower_bound's exactly.
+template <typename It, typename Comp = std::less<>>
+[[ nodiscard, gnu::pure ]] constexpr
+It prefetching_lower_bound( It first, It const last, auto const & key, Comp const & comp = {} ) noexcept
+{
+    using difference_type = std::iter_difference_t<It>;
+    // Unsigned, so that halving is a shift: a signed `rest / 2` costs a sign
+    // fix-up the compiler cannot prove away.
+    auto length{ static_cast<std::make_unsigned_t<difference_type>>( last - first ) };
+    if ( length == 0 ) { return first; }
+    while ( length > 1 )
+    {
+        auto const half{ length / 2    };
+        auto const rest{ length - half }; // the next step's length, whichever way this one goes
+        prefetch_for_read( std::addressof( first[ static_cast<difference_type>(        rest / 2 ) ] ) ); // its probe if this one stays left
+        prefetch_for_read( std::addressof( first[ static_cast<difference_type>( half + rest / 2 ) ] ) ); // its probe if this one goes right
+        auto const middle{ first + static_cast<difference_type>( half ) };
+        first  = unpredictable_select( comp( *middle, key ), middle, first );
+        length = rest;
+    }
+    return comp( *first, key ) ? std::next( first ) : first;
+}
+template <typename It, typename Comp = std::less<>>
+[[ nodiscard, gnu::pure ]] constexpr
+It prefetching_upper_bound( It first, It const last, auto const & key, Comp const & comp = {} ) noexcept
+{
+    using difference_type = std::iter_difference_t<It>; // see prefetching_lower_bound
+    auto length{ static_cast<std::make_unsigned_t<difference_type>>( last - first ) };
+    if ( length == 0 ) { return first; }
+    while ( length > 1 )
+    {
+        auto const half{ length / 2    };
+        auto const rest{ length - half };
+        prefetch_for_read( std::addressof( first[ static_cast<difference_type>(        rest / 2 ) ] ) );
+        prefetch_for_read( std::addressof( first[ static_cast<difference_type>( half + rest / 2 ) ] ) );
+        auto const middle{ first + static_cast<difference_type>( half ) };
+        first  = unpredictable_select( !comp( key, *middle ), middle, first );
+        length = rest;
+    }
+    return !comp( key, *first ) ? std::next( first ) : first;
 }
 
 // Which binary search the dispatched functions below fall back to.  Off by
