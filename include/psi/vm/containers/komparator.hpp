@@ -99,25 +99,32 @@ struct Komparator : Comparator
     /// instantiation through the comparator's allow_comparator_erasure member.
     static constexpr comparator_erasure erasure{ comparator_erasure_of<Comparator> };
 
-    /// Sort a range using the best available algorithm:
-    ///   1. Comparator's own sort() if provided (e.g. radix sort)
-    ///   2. pdqsort_branchless if Comparator::is_branchless
-    ///   3. pdqsort (default fallback)
-    /// (2) and (3) route through psi::vm::sort. The erasure policy defaults
-    /// to the comparator-trait-derived one above and can be overridden PER
-    /// CALL — the sort/merge family is where the per-comparator instantiation
-    /// bloat lives, so a caller can erase its bulk-write paths while every
-    /// other member (lookups, iteration) stays monomorphic and the container
-    /// TYPE stays the same across differently-policied call sites.
+    /// Comparator-trait-derived partitioning (see psi/vm/sort.hpp): what the
+    /// comparator states through is_branchless, sort_partitioning::automatic
+    /// where it states nothing.
+    static constexpr sort_partitioning partitioning{ comparator_partitioning_of<Comparator> };
+
+    /// Sort a range:
+    ///   1. with the Comparator's own sort() if it provides one (e.g. a radix
+    ///      sort);
+    ///   2. otherwise with psi::vm::sort, partitioned as the comparator states
+    ///      (see partitioning above): branchless for is_branchless true,
+    ///      branching for false, and without a statement as sort() picks by
+    ///      default - branchless for a standard comparator over a scalar key,
+    ///      branching otherwise.
+    /// The erasure policy defaults to the comparator-trait-derived one above
+    /// and can be overridden PER CALL — the sort/merge family is where the
+    /// per-comparator instantiation bloat lives, so a caller can erase its
+    /// bulk-write paths while every other member (lookups, iteration) stays
+    /// monomorphic and the container TYPE stays the same across
+    /// differently-policied call sites.
     template <comparator_erasure Erasure = erasure, std::random_access_iterator It>
     constexpr void sort( It const first, It const last ) const noexcept
     {
         if constexpr ( requires{ comp().sort( first, last ); } )
             comp().sort( first, last );
-        else if constexpr ( requires{ Comparator::is_branchless; requires( Comparator::is_branchless ); } )
-            vm::sort<Erasure, true >( first, last, comp() );
         else
-            vm::sort<Erasure, false>( first, last, comp() );
+            vm::sort<Erasure, partitioning>( first, last, comp() );
     }
 }; // struct Komparator
 
