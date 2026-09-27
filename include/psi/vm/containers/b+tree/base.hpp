@@ -7,6 +7,7 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 
+#include <psi/vm/containers/comparator_traits.hpp>
 #include <psi/vm/containers/heap_vector.hpp>
 #include <psi/vm/containers/vm_vector.hpp>
 #include <psi/vm/align.hpp>
@@ -177,26 +178,6 @@ private:
     // that is the operation it expands in place instead of reallocating.
     heap_vector<word_t> words_;
 }; // class dirty_node_set
-
-/// Does a tree ordered by this comparator ask for a leaf front gap (see
-/// bptree_base::front_gap_min_node_size)?
-///
-/// A comparator asks with a member
-///     static constexpr bool leaf_front_gap{ true };
-/// and one that says nothing gets no gap.  It is stated on the comparator
-/// rather than by specialising a trait for the same reason key directness is
-/// stated on the key (komparator.hpp): every translation unit that names the
-/// tree sees the same answer, so the leaf layout cannot differ between them.
-/// A wrapper that derives from the comparator (erasure_opt_in/out) inherits it.
-/// Without the gap in the build (PSI_VM_BT_FRONT_GAP=0) the request is not read.
-#if PSI_VM_BT_FRONT_GAP_COMPILED
-namespace detail
-{
-    template <typename Comparator> constexpr bool comparator_leaf_front_gap{ false };
-    template <typename Comparator> requires requires { { Comparator::leaf_front_gap } -> std::convertible_to<bool>; }
-    constexpr bool comparator_leaf_front_gap<Comparator>{ Comparator::leaf_front_gap };
-} // namespace detail
-#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 // \class bptree_base
