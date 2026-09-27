@@ -1388,8 +1388,8 @@ namespace
             auto const & inner{ this->template node<inner_node>( slot ) };
             if ( auto const result{ check_fill( inner, is_root ) }; !result )
                 return failure() << result.message();
-            if ( inner.start )
-                return failure() << "an inner node with a front gap of " << +inner.start;
+            if ( inner.live_start() )
+                return failure() << "an inner node with a front gap of " << +inner.live_start();
             for ( std::size_t child{ 0 }; child <= inner.num_vals; ++child )
             {
                 auto const child_slot{ inner.children()[ child ] };
@@ -1409,8 +1409,8 @@ namespace
         static testing::AssertionResult check_fill( Node const & node, bool const is_root )
         {
             std::size_t const minimum{ is_root ? 1U : Node::min_values };
-            if ( node.num_vals < minimum || std::size_t{ node.start } + node.num_vals > Node::max_values )
-                return testing::AssertionFailure() << node.num_vals << " entries from offset " << +node.start << ", where from " << minimum << " to " << Node::max_values << " fit";
+            if ( node.num_vals < minimum || std::size_t{ node.live_start() } + node.num_vals > Node::max_values )
+                return testing::AssertionFailure() << node.num_vals << " entries from offset " << +node.live_start() << ", where from " << minimum << " to " << Node::max_values << " fit";
             return testing::AssertionSuccess();
         }
 
