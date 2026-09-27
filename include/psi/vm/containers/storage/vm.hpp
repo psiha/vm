@@ -322,6 +322,23 @@ public:
     // identical to map_memory.
     err::result_or_error<void, error> map_cow_memory( size_type data_size, header_info ) noexcept;
 
+    // Ask for the current view to be backed by transparent huge pages (Linux
+    // MADV_HUGEPAGE; a no-op on every other platform). A hint the kernel
+    // weighs per backing: private anonymous (map_memory) storage follows
+    // transparent_hugepage/enabled, memfd (map_cow_memory) storage follows
+    // transparent_hugepage/shmem_enabled - honoured under "advise" and
+    // "within_size" - and a regular file follows its filesystem's large folio
+    // support (e.g. xfs). On a writable file mapping that also makes the 2 MiB
+    // folio the unit of dirtying and writeback: a single store dirties, and
+    // the next flush writes, the whole folio.
+    // One call covers the life of the mapping: the advice is a property of
+    // the kernel's VMA, which growth (mremap, in place or moved) and shrinking
+    // (a tail munmap) keep, and the view is never mapped afresh - it always
+    // spans at least the sizes header, so expand() never takes its from-empty
+    // path. It is also the only advice such storage gets: it is mapped by
+    // mmap and resized by mremap/munmap, never through vm::commit().
+    void advise_huge_pages() noexcept;
+
     explicit operator bool() const noexcept { return has_attached_storage(); }
 
 protected:
