@@ -15,6 +15,7 @@
 #include <psi/vm/containers/flat_set.hpp>
 #include <psi/vm/containers/heap_vector.hpp>
 #include <psi/vm/containers/komparator.hpp>
+#include <psi/vm/containers/small_vector.hpp>
 
 #include <gtest/gtest.h>
 
@@ -597,6 +598,106 @@ TEST( flat_set, bulk_insert_of_enumeration_keys_agrees_with_std_sort_and_unique 
         flat_set<ticket> set;
         set.insert( input.begin(), input.end() );
         EXPECT_TRUE( std::ranges::equal( set, expected ) ) << "n " << n;
+    }
+}
+
+namespace
+{
+    // Up to three words of a four-letter alphabet, so that equal sequences,
+    // and sequences that are prefixes of one another, are frequent.
+    template <typename Sequences>
+    Sequences make_sequences( std::size_t const n )
+    {
+        std::mt19937 rng{ 11 };
+        Sequences sequences( n );
+        for ( auto & sequence : sequences )
+        {
+            auto const length{ rng() % 4 };
+            for ( std::uint32_t i{ 0 }; i < length; ++i )
+                sequence.push_back( static_cast<std::uint32_t>( rng() % 4 ) );
+        }
+        return sequences;
+    }
+
+    template <typename Sequences>
+    std::vector<std::vector<std::uint32_t>> as_vectors( Sequences const & sequences )
+    {
+        std::vector<std::vector<std::uint32_t>> vectors;
+        for ( auto const & sequence : sequences )
+            vectors.emplace_back( sequence.begin(), sequence.end() );
+        return vectors;
+    }
+
+    std::vector<std::vector<std::uint32_t>> std_sort_unique( std::vector<std::vector<std::uint32_t>> sequences )
+    {
+        std::sort( sequences.begin(), sequences.end() );
+        sequences.erase( std::unique( sequences.begin(), sequences.end() ), sequences.end() );
+        return sequences;
+    }
+} // anonymous namespace
+
+// The sort swaps the elements, which for a small_vector with inline storage
+// moves them; sort_unique's noexcept holds only while those moves cannot throw.
+static_assert( std::is_nothrow_move_constructible_v<small_vector<std::uint32_t, 4>> && std::is_nothrow_move_assignable_v<small_vector<std::uint32_t, 4>> );
+
+TEST( sort_unique, a_range_of_ranges_agrees_with_std_sort_and_unique )
+{
+    for ( auto const n : sizes )
+    {
+        // heap vectors, through the iterator overload
+        auto actual{ make_sequences<std::vector<std::vector<std::uint32_t>>>( n ) };
+        auto const expected{ std_sort_unique( actual ) };
+        auto const kept{ sort_unique( actual.begin(), actual.end(), std::ranges::lexicographical_compare ) };
+        actual.erase( kept, actual.end() );
+        EXPECT_EQ( actual, expected ) << "n " << n;
+
+        // small vectors with inline storage, through the container overload
+        auto inline_actual{ make_sequences<small_vector<small_vector<std::uint32_t, 4>, 8>>( n ) };
+        auto const inline_expected{ std_sort_unique( as_vectors( inline_actual ) ) };
+        sort_unique( inline_actual, std::ranges::lexicographical_compare );
+        EXPECT_EQ( as_vectors( inline_actual ), inline_expected ) << "n " << n;
+    }
+}
+
+TEST( sort_unique, a_descending_order_agrees_with_std_sort_and_unique )
+{
+    for ( auto const n : sizes )
+    {
+        auto actual  { make_sort_input<std::uint32_t>( n, as_is ) };
+        auto expected{ actual };
+        std::sort( expected.begin(), expected.end(), std::greater<>{} );
+        expected.erase( std::unique( expected.begin(), expected.end() ), expected.end() );
+        sort_unique( actual, std::ranges::greater{} );
+        EXPECT_EQ( actual, expected ) << "n " << n;
+    }
+}
+
+// Elements that are equivalent without being equal: one of each run is kept,
+// which one is unspecified.
+TEST( sort_unique, keeps_one_element_of_each_run_of_equivalent_ones )
+{
+    using element = std::pair<std::uint32_t, std::uint32_t>;
+    auto const by_first{ []( element const & left, element const & right ) noexcept { return left.first < right.first; } };
+    for ( auto const n : sizes )
+    {
+        auto const input{ make_sort_input<element>( n, []( std::uint32_t const v ) noexcept { return element{ v / 4, v }; } ) };
+        auto actual{ input };
+        sort_unique( actual, by_first );
+
+        std::vector<std::uint32_t> expected_firsts;
+        for ( auto const & e : input )
+            expected_firsts.push_back( e.first );
+        std::sort( expected_firsts.begin(), expected_firsts.end() );
+        expected_firsts.erase( std::unique( expected_firsts.begin(), expected_firsts.end() ), expected_firsts.end() );
+
+        std::vector<std::uint32_t> actual_firsts;
+        for ( auto const & e : actual )
+            actual_firsts.push_back( e.first );
+        EXPECT_EQ( actual_firsts, expected_firsts ) << "n " << n;
+
+        auto sorted_input{ input };
+        std::sort( sorted_input.begin(), sorted_input.end() );
+        EXPECT_TRUE( std::ranges::all_of( actual, [ & ]( element const & e ) { return std::binary_search( sorted_input.begin(), sorted_input.end(), e ); } ) ) << "n " << n;
     }
 }
 
