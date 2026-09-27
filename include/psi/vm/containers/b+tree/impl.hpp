@@ -1037,7 +1037,7 @@ bp_tree_impl<Key, Comparator>::merge
     verify( target );
     // the room and the move that opens the merge point below are both reckoned
     // from num_vals, so a front gap has to be closed first
-    this->recentre( target );
+    if constexpr ( leaf_node::front_gap ) this->recentre( target );
     node_size_type const available_space( target.max_values - target.num_vals ); // recheck: do we need a different value for roots here?
     auto * const tgt_keys{ &target.key( 0 ) }; // indexed past num_vals: it writes into the spare capacity
     BOOST_ASSERT
@@ -1376,8 +1376,10 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
                 BOOST_ASSUME( tgt_leaf->is_root() );
                 node_size_type const missing_keys( tgt_leaf->min_values - tgt_leaf->num_vals );
                 BOOST_ASSUME( tgt_leaf->num_vals + src_leaf->num_vals >= leaf_node::min_values * 2 );
-                if ( base::tail_room( *tgt_leaf ) < missing_keys )
-                    this->recentre( *tgt_leaf );
+                if constexpr ( leaf_node::front_gap ) {
+                    if ( base::tail_room( *tgt_leaf ) < missing_keys )
+                        this->recentre( *tgt_leaf );
+                }
                 this->move_entries( *src_leaf, 0, missing_keys, *tgt_leaf, tgt_leaf->num_vals );
                 shift_entries_left( *src_leaf, 0, src_leaf->num_vals, missing_keys );
                 tgt_leaf->num_vals += missing_keys;
@@ -1564,7 +1566,7 @@ bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const
 
             // First, fill up the current target leaf if there's space - all of
             // it, so a front gap is closed first
-            this->recentre( *tgt_leaf );
+            if constexpr ( leaf_node::front_gap ) this->recentre( *tgt_leaf );
             if ( auto const missing{ static_cast<node_size_type>( tgt_leaf->max_values - tgt_leaf->num_vals ) } )
             {
                 if ( do_dedup )
@@ -1789,7 +1791,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
         {
             // first fill up tgt_leaf (and handle when that's all that's left of
             // the input) - all of it, so a front gap is closed first
-            this->recentre( *tgt_leaf );
+            if constexpr ( leaf_node::front_gap ) this->recentre( *tgt_leaf );
             if ( auto const remaining_tgt_node_space{ node_size_type( tgt_leaf->max_values - tgt_leaf->num_vals ) } )
             {
                 node_size_type const remaining_src_node_data( src_leaf->num_vals - source_slot_offset );

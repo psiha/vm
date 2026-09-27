@@ -3509,8 +3509,10 @@ namespace
     template <typename Comparator, typename... Keys> constexpr bool none_gap{ ( !leaf_gap<Keys, Comparator> && ... ) };
     constexpr auto node_bytes{ bptree_base::node_byte_size() };
 
+#if PSI_VM_BT_FRONT_GAP_COMPILED // =0 leaves the comparator's request unread
     static_assert(  detail::comparator_leaf_front_gap<gap_less> && detail::comparator_leaf_front_gap<erasure_opt_in<gap_less>> );
     static_assert( !detail::comparator_leaf_front_gap<std::less<>> && !detail::comparator_leaf_front_gap<row_less> );
+#endif
 
 #if defined( PSI_VM_BT_FRONT_GAP )
     // the macro overrides every comparator, one that asks for a gap included

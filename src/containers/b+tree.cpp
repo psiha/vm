@@ -653,7 +653,8 @@ bptree_base::new_node()
         auto & cached_node{ node<free_node>( free_list ) };
         BOOST_ASSUME( !cached_node.num_vals );
         BOOST_ASSUME( !cached_node.left     );
-        BOOST_ASSUME( !front_gap_start_of( cached_node ) ); // free() reset it with the header: a recycled node inherits no gap
+        if constexpr ( PSI_VM_BT_FRONT_GAP_COMPILED )
+            BOOST_ASSUME( !front_gap_start_of( cached_node ) ); // free() reset it with the header: a recycled node inherits no gap
         free_list = cached_node.right;
         unlink_right( cached_node );
         BOOST_ASSUME( hdr.free_node_count_ );
@@ -699,7 +700,8 @@ void bptree_base::free( node_header & node ) noexcept
     // behind the header: whatever type the node was, it enters service as a
     // leaf without a gap (or as a node type that stores no start, and
     // overwrites the byte or leaves the spare one 0)
-    front_gap_start_of( freed_node ) = 0;
+    if constexpr ( PSI_VM_BT_FRONT_GAP_COMPILED )
+        front_gap_start_of( freed_node ) = 0;
     mark_dirty( freed_node ); // node content changed (was reset to zero)
     // update the right link
     if ( free_list ) { BOOST_ASSUME(  hdr.free_node_count_ ); link( freed_node, this->node( free_list ) ); }
