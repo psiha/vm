@@ -62,9 +62,9 @@ expand_result expand
     BOOST_ASSUME( address != MAP_FAILED );
 #endif
 
-    BOOST_ASSUME( current_size >  0                               ); // otherwise we should have never gotten here
-    BOOST_ASSUME( current_size <  required_size_for_end_expansion );
-    BOOST_ASSUME( current_size >= used_capacity                   );
+    BOOST_ASSUME( current_size >  0                                                                                ); // otherwise we should have never gotten here
+    BOOST_ASSUME( ( current_size < required_size_for_end_expansion ) || ( current_size < required_size_for_front_expansion ) );
+    BOOST_ASSUME( current_size >= used_capacity                                                                    );
 
     BOOST_ASSUME( is_aligned( address                          , reserve_granularity ) );
     BOOST_ASSUME( is_aligned( current_size                     , reserve_granularity ) );
@@ -144,14 +144,18 @@ expand_result expand
 #   endif // _WIN32 placeholder over-reserve
 
         // Generic fallback: allocate new->copy->free old dance.
-        auto       requested_size{ required_size_for_end_expansion }; //...mrmlj...TODO respect front-expand-only requests
-        auto const new_location  { allocate( requested_size )      };
+        // A front-only request keeps the layout of an in-place front
+        // expansion: the old block becomes the tail of the new one.
+        auto const target_size   { required_size_for_end_expansion ? required_size_for_end_expansion : required_size_for_front_expansion };
+        auto const target_offset { required_size_for_end_expansion ? 0 : target_size - current_size };
+        auto       requested_size{ target_size };
+        auto const new_location  { static_cast< std::byte * >( allocate( requested_size ) ) };
         if ( new_location )
         {
-            BOOST_ASSUME( requested_size == required_size_for_end_expansion );
-            std::memcpy( new_location, address, used_capacity );
+            BOOST_ASSUME( requested_size == target_size );
+            std::memcpy( new_location + target_offset, address, used_capacity );
             free( address, current_size );
-            return { { static_cast< std::byte * >( new_location ), required_size_for_end_expansion }, expand_result::method::moved };
+            return { { new_location, target_size }, expand_result::method::moved };
         }
     }
 

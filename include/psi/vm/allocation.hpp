@@ -120,6 +120,8 @@ expand_result expand_back
     reallocation_type
 ) noexcept;
 
+/// Grows the block at its front: the old block ends up as the tail of the
+/// new one, whether it was extended in place (front_extended) or moved.
 expand_result expand_front
 (
     mapped_span span,

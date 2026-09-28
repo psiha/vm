@@ -79,7 +79,8 @@ bool commit( void * const address, std::size_t const size ) noexcept
 {
     BOOST_ASSUME( is_aligned( address, commit_granularity ) );
     BOOST_ASSUME( is_aligned( size   , commit_granularity ) );
-    auto const success{ ::mprotect( address, size, PROT_READ | PROT_WRITE ) == 0 };
+    if ( ::mprotect( address, size, PROT_READ | PROT_WRITE ) != 0 ) [[ unlikely ]]
+        return false;
     // madvise() takes ONE advice per call: the MADV_* values are an
     // enumeration, not flags, so OR-ing them names some other advice entirely
     // (SEQUENTIAL | WILLNEED | HUGEPAGE = 2 | 3 | 14 = 15 = MADV_NOHUGEPAGE,
@@ -92,21 +93,19 @@ bool commit( void * const address, std::size_t const size ) noexcept
     // transparent huge page support rejects it with EINVAL.
     (void)::madvise( address, size, MADV_HUGEPAGE );
 #endif
-    return success;
+    return true;
 }
 PSI_COLD [[ gnu::nothrow, clang::nouwtable ]]
 void decommit( void * const address, std::size_t const size ) noexcept
 {
     BOOST_ASSUME( is_aligned( address, reserve_granularity ) );
     BOOST_ASSUME( is_aligned( size   , reserve_granularity ) );
-    BOOST_VERIFY( ::mprotect( address, size, PROT_NONE ) == 0 );
-#if 0 // should not be neccessary?
-    BOOST_VERIFY
-    (
-        ::madvise( actual_address, size, MADV_FREE     ) == 0 ||
-        ::madvise( actual_address, size, MADV_DONTNEED ) == 0
-    );
-#endif
+    // Same contract as MEM_DECOMMIT: the pages are released and the range
+    // stays reserved (inaccessible until committed again, and then zeroed).
+    // Replacing it with a fresh PROT_NONE mapping does all of that on both
+    // Linux and Darwin - mprotect() alone keeps the pages and their contents,
+    // and Darwin's MADV_DONTNEED/MADV_FREE do not guarantee zeroed pages.
+    BOOST_VERIFY( mmap( address, size, PROT_NONE, MAP_FIXED | MAP_NORESERVE ) == address );
 }
 PSI_COLD [[ gnu::nothrow, clang::nouwtable ]]
 void free( void * const address, std::size_t const size ) noexcept
@@ -121,8 +120,10 @@ bool allocate_fixed( void * const address, std::size_t const size, allocation_ty
 {
     // Cannot use MAP_FIXED as it silently overwrites existing mappings
     // https://stackoverflow.com/questions/14943990/overlapping-pages-with-mmap-map-fixed
-    // Linux 4.7 has MAP_FIXED_NOREPLACE
+    // Linux 4.17 has MAP_FIXED_NOREPLACE
     // https://github.com/torvalds/linux/commit/a4ff8e8620d3f4f50ac4b41e8067b7d395056843
+    // but older kernels ignore the flag and take the address as a hint, as
+    // does every other POSIX system: a mapping placed elsewhere is undone.
 #ifdef MAP_FIXED_NOREPLACE
     auto const noreplace_fixed_flag{ MAP_FIXED_NOREPLACE };
 #else
@@ -134,9 +135,6 @@ bool allocate_fixed( void * const address, std::size_t const size, allocation_ty
 
     if ( adjusted_address )
     {
-#   if !defined( __ANDROID__ ) // API level and kernel version chaos
-        BOOST_ASSUME( !noreplace_fixed_flag );
-#   endif
         BOOST_VERIFY( ::munmap( adjusted_address, size ) == 0 );
     }
     return false;

@@ -4,7 +4,8 @@
 /// --------------------
 ///
 /// Tests of the POSIX anonymous memory primitives (reserve(), allocate(),
-/// allocate_fixed()) and of in-place growth through expand_back().
+/// allocate_fixed(), commit(), decommit()) and of growth through expand_back()
+/// and expand_front().
 ///
 /// The Win32 backend is built on NtAllocateVirtualMemory and is exercised
 /// indirectly by every container test; these tests pin the mmap()-based
@@ -23,6 +24,7 @@
 #include <cstddef>
 #include <csignal>
 #include <cstring>
+#include <vector>
 
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -155,6 +157,102 @@ TEST( allocation, expand_back_grows_in_place_into_free_address_space )
     std::memset( p + granule, 0x24, 3 * granule );
     EXPECT_EQ( p[ 4 * granule - 1 ], std::byte{ 0x24 } );
     free( p, 4 * granule );
+}
+
+TEST( allocation, expand_front_grows_in_place_into_free_address_space )
+{
+    // Map the final extent, then give its head back, so that free address
+    // space is known to precede the block to be grown.
+    auto * const head{ raw_map( 4 * granule, PROT_READ | PROT_WRITE ) };
+    ASSERT_NE( head, nullptr );
+    auto * const p{ head + 3 * granule };
+    ASSERT_EQ( ::munmap( head, 3 * granule ), 0 );
+    std::memset( p, 0x42, granule );
+
+    auto const result{ expand_front( { p, granule }, 4 * granule, granule, allocation_type::commit, reallocation_type::fixed ) };
+    ASSERT_TRUE( result );
+    EXPECT_EQ( result.method, expand_result::front_extended );
+    EXPECT_EQ( result.new_span.data(), head );
+    EXPECT_EQ( result.new_span.size(), 4 * granule );
+
+    // The original contents stay where they were, at the tail of the grown
+    // block, and the prepended part is usable and zeroed.
+    EXPECT_EQ( p[ 0           ], std::byte{ 0x42 } );
+    EXPECT_EQ( p[ granule - 1 ], std::byte{ 0x42 } );
+    EXPECT_TRUE( all_zero( head, 3 * granule ) );
+    std::memset( head, 0x24, 3 * granule );
+    EXPECT_EQ( head[ 0 ], std::byte{ 0x24 } );
+    free( head, 4 * granule );
+}
+
+TEST( allocation, expand_front_moves_when_the_space_before_is_taken )
+{
+    // An occupied granule right before the block leaves no room to prepend.
+    auto * const guard{ raw_map( 2 * granule, PROT_READ | PROT_WRITE ) };
+    ASSERT_NE( guard, nullptr );
+    auto * const p{ guard + granule };
+    std::memset( p, 0x42, granule );
+
+    auto const result{ expand_front( { p, granule }, 4 * granule, granule, allocation_type::commit, reallocation_type::moveable ) };
+    ASSERT_TRUE( result );
+    EXPECT_EQ( result.method, expand_result::moved );
+    ASSERT_EQ( result.new_span.size(), 4 * granule );
+
+    // Same layout as an in-place front expansion: the old block becomes the
+    // tail of the new one.
+    auto * const moved{ result.new_span.data() };
+    EXPECT_TRUE( all_zero( moved, 3 * granule ) );
+    EXPECT_EQ( moved[ 3 * granule     ], std::byte{ 0x42 } );
+    EXPECT_EQ( moved[ 4 * granule - 1 ], std::byte{ 0x42 } );
+    free( moved, 4 * granule );
+    free( guard, granule ); // the old block was released by the move
+}
+
+namespace
+{
+    // How many pages of [p, p + size) are resident in physical memory.
+    std::size_t resident_pages( std::byte * const p, std::size_t const size )
+    {
+        auto const system_page{ static_cast<std::size_t>( ::sysconf( _SC_PAGESIZE ) ) };
+        auto const pages      { ( size + system_page - 1 ) / system_page };
+#   ifdef __APPLE__
+        std::vector<char> residency( pages );
+#   else
+        std::vector<unsigned char> residency( pages );
+#   endif
+        if ( ::mincore( p, size, residency.data() ) != 0 )
+            return static_cast<std::size_t>( -1 );
+        // Only the lowest bit means "resident" (Darwin sets further flags).
+        return static_cast<std::size_t>( std::count_if( residency.begin(), residency.end(), []( auto const r ) { return ( r & 1 ) != 0; } ) );
+    }
+} // anonymous namespace
+
+TEST( allocation, decommit_releases_the_pages_and_keeps_the_range_reserved )
+{
+    // Same contract as the Win32 backend (MEM_DECOMMIT): the physical pages
+    // are released, and committing the range again yields fresh zeroed ones.
+    std::size_t size{ 16 * granule };
+    auto * const p{ static_cast<std::byte *>( allocate( size ) ) };
+    ASSERT_NE( p, nullptr );
+    std::memset( p, 0x5A, size );
+    ASSERT_EQ( resident_pages( p, size ), size / static_cast<std::size_t>( ::sysconf( _SC_PAGESIZE ) ) );
+
+    decommit( p, size );
+    EXPECT_EQ( resident_pages( p, size ), 0U );
+    // The range stays reserved: nothing else can be mapped over it.
+    EXPECT_FALSE( allocate_fixed( p, granule, allocation_type::commit ) );
+
+    ASSERT_TRUE( commit( p, size ) );
+    EXPECT_TRUE( all_zero( p, size ) );
+    free( p, size );
+}
+
+TEST( allocation, commit_of_an_unmapped_range_fails )
+{
+    auto * const p{ raw_map( granule, PROT_NONE ) };
+    ASSERT_NE( p, nullptr );
+    ASSERT_EQ( ::munmap( p, granule ), 0 );
+    EXPECT_FALSE( commit( p, granule ) );
 }
 
 //------------------------------------------------------------------------------
