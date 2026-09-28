@@ -4,7 +4,7 @@
 /// --------------------
 ///
 /// Tests of the POSIX anonymous memory primitives (reserve(), allocate(),
-/// allocate_fixed()) and of in-place growth through expand_back().
+/// allocate_fixed()) and of growth through expand_back() and expand_front().
 ///
 /// The Win32 backend is built on NtAllocateVirtualMemory and is exercised
 /// indirectly by every container test; these tests pin the mmap()-based
@@ -155,6 +155,55 @@ TEST( allocation, expand_back_grows_in_place_into_free_address_space )
     std::memset( p + granule, 0x24, 3 * granule );
     EXPECT_EQ( p[ 4 * granule - 1 ], std::byte{ 0x24 } );
     free( p, 4 * granule );
+}
+
+TEST( allocation, expand_front_grows_in_place_into_free_address_space )
+{
+    // Map the final extent, then give its head back, so that free address
+    // space is known to precede the block to be grown.
+    auto * const head{ raw_map( 4 * granule, PROT_READ | PROT_WRITE ) };
+    ASSERT_NE( head, nullptr );
+    auto * const p{ head + 3 * granule };
+    ASSERT_EQ( ::munmap( head, 3 * granule ), 0 );
+    std::memset( p, 0x42, granule );
+
+    auto const result{ expand_front( { p, granule }, 4 * granule, granule, allocation_type::commit, reallocation_type::fixed ) };
+    ASSERT_TRUE( result );
+    EXPECT_EQ( result.method, expand_result::front_extended );
+    EXPECT_EQ( result.new_span.data(), head );
+    EXPECT_EQ( result.new_span.size(), 4 * granule );
+
+    // The original contents stay where they were, at the tail of the grown
+    // block, and the prepended part is usable and zeroed.
+    EXPECT_EQ( p[ 0           ], std::byte{ 0x42 } );
+    EXPECT_EQ( p[ granule - 1 ], std::byte{ 0x42 } );
+    EXPECT_TRUE( all_zero( head, 3 * granule ) );
+    std::memset( head, 0x24, 3 * granule );
+    EXPECT_EQ( head[ 0 ], std::byte{ 0x24 } );
+    free( head, 4 * granule );
+}
+
+TEST( allocation, expand_front_moves_when_the_space_before_is_taken )
+{
+    // An occupied granule right before the block leaves no room to prepend.
+    auto * const guard{ raw_map( 2 * granule, PROT_READ | PROT_WRITE ) };
+    ASSERT_NE( guard, nullptr );
+    auto * const p{ guard + granule };
+    std::memset( p, 0x42, granule );
+
+    auto const result{ expand_front( { p, granule }, 4 * granule, granule, allocation_type::commit, reallocation_type::moveable ) };
+    ASSERT_TRUE( result );
+    EXPECT_EQ( result.method, expand_result::moved );
+    ASSERT_EQ( result.new_span.size(), 4 * granule );
+
+    // Same layout as an in-place front expansion: the old block becomes the
+    // tail of the new one.
+    auto * const moved{ result.new_span.data() };
+    EXPECT_TRUE( all_zero( moved, 3 * granule ) );
+    EXPECT_EQ( moved[ 3 * granule     ], std::byte{ 0x42 } );
+    EXPECT_EQ( moved[ 4 * granule - 1 ], std::byte{ 0x42 } );
+    free( moved, 4 * granule );
+    free( guard, granule ); // the old block was released by the move
 }
 
 //------------------------------------------------------------------------------
