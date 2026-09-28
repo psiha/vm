@@ -4340,9 +4340,10 @@ TEST( bp_tree, release_free_nodes_memory     ) { release_roundtrip<false>(); }
 TEST( bp_tree, release_free_nodes_cow_memory ) { release_roundtrip<true >(); }
 
 // While a COW clone lives, shared storage must not be released from under
-// it - the clone reads those pages - and once the clone is gone it can be.
-// The clone itself may drop what it holds privately wherever that frees
-// nothing the source reads (a Linux private view).
+// it - the clone reads those pages - and once the clone is gone it can be,
+// wherever the clone went (moved, swapped) in between.  The clone itself may
+// drop what it holds privately wherever that frees nothing the source reads
+// (a Linux private view).
 TEST( bp_tree, release_free_nodes_spares_a_live_clone )
 {
     using tree_t = inspectable<bptree_set<int>>;
@@ -4353,7 +4354,11 @@ TEST( bp_tree, release_free_nodes_spares_a_live_clone )
     source.erase( std::ranges::find( source, size / 4 ), std::ranges::find( source, 3 * size / 4 ) );
     auto kept{ std::views::iota( 0, size ) | std::views::filter( [ = ]( int const k ) { return k < size / 4 || k >= 3 * size / 4; } ) };
     {
-        tree_t clone{ source };
+        tree_t first_clone{ source };
+        tree_t clone{ std::move( first_clone ) };
+        tree_t other;
+        other.swap( clone );
+        clone.swap( other );
         auto const resident_before{ resident_pages( source.node_pool_bytes() ) };
         EXPECT_EQ( source.release_free_nodes(), 0U ) << "shared with a live clone";
         EXPECT_EQ( source.nodes_released(), 0U );

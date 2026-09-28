@@ -100,7 +100,7 @@ void bptree_base::init_fresh_pool( std::uint32_t const initial_capacity_as_numbe
     update_cached_pointers();
     hdr() = {};
     released_.clear();
-    cow_group_.reset(); // fresh storage: no clone maps it
+    cow_group_.leave(); // fresh storage: no clone maps it
     if ( initial_capacity_as_number_of_nodes ) {
         dirty_.reset( nodes_.size() ); // sized before anything can mark
         assign_nodes_to_free_pool( 0 );
@@ -597,7 +597,7 @@ void bptree_base::swap( bptree_base & other ) noexcept
     swap( this->p_hdr_ , other.p_hdr_  );
     swap( this->dirty_ , other.dirty_  ); // indexed by the pool it describes, so it goes with it
     swap( this->released_ , other.released_  ); // ditto
-    swap( this->cow_group_, other.cow_group_ );
+    this->cow_group_.swap( other.cow_group_ );
 #ifndef NDEBUG
     swap( this->nodes__, other.nodes__ );
 #endif
@@ -686,7 +686,7 @@ bptree_base::new_node()
     }
     if ( !released_.empty() )
     {
-        auto const slot{ node_slot{ released_.back() } };
+        auto const slot{ released_.back() };
         released_.pop_back();
         reinitialise_released( slot );
         mark_dirty( slot );
@@ -754,7 +754,7 @@ void bptree_base::reclaim_released( node_slot::value_type count ) noexcept
 {
     for ( ; count && !released_.empty(); --count )
     {
-        auto const slot{ node_slot{ released_.back() } };
+        auto const slot{ released_.back() };
         released_.pop_back();
         free( reinitialise_released( slot ) );
     }
@@ -781,8 +781,8 @@ std::uint32_t bptree_base::release_free_nodes()
     for ( auto slot{ hdr().free_list_ }; slot; slot = node( slot ).right )
         on_free_list.set( *slot );
     for ( auto const slot : released_ )
-        released.set( slot );
-    heap_vector<node_slot::value_type> newly_released;
+        released.set( *slot );
+    heap_vector<node_slot> newly_released;
     for ( auto first{ first_whole }; first + nodes_per_page <= node_count; first += nodes_per_page )
     {
         bool whole_page_free{ true }, any_on_list{ false };
@@ -795,7 +795,7 @@ std::uint32_t bptree_base::release_free_nodes()
         if ( whole_page_free && any_on_list )
             for ( auto n{ first }; n != first + nodes_per_page; ++n )
                 if ( on_free_list.test( n ) )
-                    newly_released.push_back( n );
+                    newly_released.push_back( node_slot{ n } );
     }
     if ( newly_released.empty() )
         return 0;
@@ -805,9 +805,9 @@ std::uint32_t bptree_base::release_free_nodes()
     // unlink them from the free list: it is doubly linked (see free())...
     for ( auto const n : newly_released )
     {
-        auto & freed{ node( node_slot{ n } ) };
+        auto & freed{ node( n ) };
         if ( freed.left ) { node( freed.left ).right = freed.right; mark_dirty( freed.left ); }
-        else              { BOOST_ASSERT( hdr.free_list_.index == n ); hdr.free_list_ = freed.right; }
+        else              { BOOST_ASSERT( hdr.free_list_ == n ); hdr.free_list_ = freed.right; }
         if ( freed.right ) { node( freed.right ).left = freed.left; mark_dirty( freed.right ); }
         --hdr.free_node_count_;
     }
@@ -823,7 +823,7 @@ std::uint32_t bptree_base::release_free_nodes()
     } };
     for ( auto const n : newly_released )
     {
-        auto const page_begin{ align_down( std::size_t{ n } * node_size + pool_begin, page_bytes ) - pool_begin };
+        auto const page_begin{ align_down( std::size_t{ *n } * node_size + pool_begin, page_bytes ) - pool_begin };
         if ( page_begin < run_end ) // another node on a page already in the run
             continue;
         if ( page_begin != run_end ) { flush_run(); run_begin = page_begin; }
@@ -835,7 +835,7 @@ std::uint32_t bptree_base::release_free_nodes()
     auto const old_size{ released_.size() };
     for ( auto const n : newly_released )
         released_.push_back( n );
-    std::ranges::inplace_merge( released_, released_.begin() + static_cast<std::ptrdiff_t>( old_size ) );
+    std::ranges::inplace_merge( released_, released_.begin() + static_cast<std::ptrdiff_t>( old_size ), {}, &node_slot::index );
     return pages_released ? static_cast<std::uint32_t>( newly_released.size() ) : 0;
 }
 
@@ -884,6 +884,29 @@ void bptree_base::update_dbg_helpers() noexcept {
 // - Old generation reclaimed when readers drain
 ////////////////////////////////////////////////////////////////////////////////
 
+void bptree_base::cow_group::join( cow_group const & source )
+{
+    auto * members{ source.members_.load( std::memory_order_acquire ) };
+    if ( !members )
+    {
+        auto * const fresh{ new std::atomic<std::uint32_t>{ 1 } }; // the source itself
+        if ( source.members_.compare_exchange_strong( members, fresh, std::memory_order_acq_rel, std::memory_order_acquire ) )
+            members = fresh;
+        else
+            delete fresh; // a concurrent clone of the same source got there first
+    }
+    members->fetch_add( 1, std::memory_order_relaxed );
+    leave();
+    members_.store( members, std::memory_order_release );
+}
+
+void bptree_base::cow_group::leave() noexcept
+{
+    if ( auto * const members{ members_.exchange( nullptr, std::memory_order_acq_rel ) } )
+        if ( members->fetch_sub( 1, std::memory_order_acq_rel ) == 1 )
+            delete members;
+}
+
 PSI_COLD
 bptree_base::bptree_base( bptree_base const & source )
     :
@@ -893,9 +916,7 @@ bptree_base::bptree_base( bptree_base const & source )
 {
     if ( nodes_.has_attached_storage() )
     {
-        if ( !source.cow_group_ )
-            source.cow_group_ = std::make_shared<std::byte>();
-        cow_group_ = source.cow_group_;
+        cow_group_.join( source.cow_group_ );
         update_cached_pointers();
         // A clone starts owing its target nothing: what it must commit is what
         // IT writes from here on, not what the source wrote before the clone.
@@ -981,13 +1002,13 @@ void bptree_base::commit_to( bptree_base & target ) const noexcept
     auto       p_kept  { kept.begin() };
     for ( auto const slot : released_ )
     {
-        while ( ( p_kept != kept.end() ) && ( *p_kept < slot ) )
+        while ( ( p_kept != kept.end() ) && ( p_kept->index < slot.index ) )
             ++p_kept; // released by the target, since reused here: live now
         if ( ( p_kept != kept.end() ) && ( *p_kept == slot ) ) {
             *kept_end++ = slot;
             ++p_kept;
         } else {
-            target.free( target.reinitialise_released( node_slot{ slot } ) );
+            target.free( target.reinitialise_released( slot ) );
         }
     }
     kept.shrink_by( static_cast<decltype( kept.size() )>( kept.end() - kept_end ) );

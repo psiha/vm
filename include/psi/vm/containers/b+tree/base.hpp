@@ -29,10 +29,10 @@
 #include <climits>
 #include <concepts>
 #include <cstddef>
+#include <atomic>
 #include <cstdint>
 #include <iterator>
 #include <limits>
-#include <memory>
 #include <span>
 #include <type_traits>
 #include <utility>
@@ -983,8 +983,8 @@ private:
     // A released node as a freshly freed one would be: its dropped page reads
     // back as zeros (or unspecified bytes), which are not a null link.
     node_header & reinitialise_released( node_slot ) noexcept;
-    // Whether another tree may be reading this one's pages (see cow_group_).
-    [[ gnu::pure ]] bool shares_pages() const noexcept { return cow_group_ && ( cow_group_.use_count() > 1 ); }
+    // Whether another tree may be reading this one's pages (see cow_group).
+    [[ gnu::pure ]] bool shares_pages() const noexcept { return cow_group_.shared(); }
 
     void init_fresh_pool( std::uint32_t initial_capacity_as_number_of_nodes ) noexcept;
 
@@ -1014,10 +1014,40 @@ protected:
     // Free nodes whose pages release_free_nodes() handed back, ascending (so
     // the one new_node() takes, the back, is the highest).  Not persisted:
     // file backed storage never releases.
-    heap_vector<node_slot::value_type> released_;
-    // Shared by a tree and every COW clone made of it (and of those): its use
-    // count says whether anything else may still be mapping this pool's pages.
-    mutable std::shared_ptr<void> cow_group_;
+    heap_vector<node_slot> released_;
+
+    // How many trees map one pool's pages: a tree and every COW clone made of
+    // it (and of those) share one count, allocated by the first clone.  It
+    // cannot live in the pool's own header, which a clone maps copy-on-write
+    // (its increment would land in its private copy) and which the source may
+    // unmap before its clones.
+    class cow_group
+    {
+    public:
+        constexpr cow_group() noexcept = default;
+        cow_group( cow_group && other ) noexcept : members_{ other.members_.exchange( nullptr, std::memory_order_relaxed ) } {}
+        cow_group & operator=( cow_group && other ) noexcept { swap( other ); other.leave(); return *this; }
+        ~cow_group() noexcept { leave(); }
+
+        // Join the group of 'source' (a const tree being cloned, possibly by
+        // several threads at once), creating it on the first clone.
+        void join( cow_group const & source );
+        void leave() noexcept;
+        [[ gnu::pure ]] bool shared() const noexcept
+        {
+            auto const members{ members_.load( std::memory_order_acquire ) };
+            return members && ( members->load( std::memory_order_acquire ) > 1 );
+        }
+        void swap( cow_group & other ) noexcept
+        {
+            auto const mine{ members_.load( std::memory_order_relaxed ) };
+            members_.store( other.members_.exchange( mine, std::memory_order_relaxed ), std::memory_order_relaxed );
+        }
+
+    private:
+        mutable std::atomic<std::atomic<std::uint32_t> *> members_{ nullptr };
+    }; // class cow_group
+    cow_group cow_group_;
 #ifndef NDEBUG // debugging helpers (undoing type erasure done by contiguous_container_storage_base)
     std::span<node_placeholder const> nodes__{};
 #endif
@@ -1036,7 +1066,7 @@ bptree_base::map_file( auto const file, flags::named_object_construction_policy 
     {
         update_cached_pointers();
         released_.clear();
-        cow_group_.reset();
+        cow_group_.leave();
         if ( nodes_.empty() )
             hdr() = {};
     }
