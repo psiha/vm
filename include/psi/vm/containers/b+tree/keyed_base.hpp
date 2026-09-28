@@ -11,6 +11,7 @@
 
 #include <psi/vm/align.hpp>
 #include <psi/vm/containers/heap_vector.hpp>
+#include <psi/vm/containers/noninitialized_array.hpp>
 
 #include <psi/build/disable_warnings.hpp>
 #include <psi/build/no_unique_address.hpp>
@@ -169,7 +170,7 @@ public:
     //
     // A group that does not merge is not written, which keeps what a COW
     // clone's commit_to() has to copy to what moved.  Invalidates every
-    // iterator; allocates only scratch space, before changing anything.
+    // iterator; the merging itself allocates nothing.
     std::uint32_t compact();
     static constexpr std::uint8_t compact_group_size{ 8 }; // X up to 8: covers a fill of up to 87.5%
 
@@ -1487,10 +1488,14 @@ protected: // 'other'
     } // handle_underflow()
 
 protected: // compact() and its helpers
+    // A group's entries gathered in one sequence, then dealt back out: at most
+    // compact_group_size nodes' worth, so a fixed buffer on the stack (about
+    // 12 nodes: 48 kB with 4 kB nodes).
     struct compact_scratch
     {
-        heap_vector<Key      , std::uint32_t> keys;
-        heap_vector<node_slot, std::uint32_t> children;
+        static std::uint32_t constexpr widest_node{ std::max<std::uint32_t>( leaf_node::max_values, inner_node::max_children ) };
+        noninitialized_array<Key      , compact_group_size * widest_node             > keys;
+        noninitialized_array<node_slot, compact_group_size * inner_node::max_children> children;
     };
 
     // What a merge moves, and what a node holds of it: a leaf's entries, an
@@ -1556,10 +1561,10 @@ protected: // compact() and its helpers
 
         if constexpr ( std::is_same_v<N, leaf_node> )
         {
-            auto * gathered{ scratch.keys.data() };
+            auto * gathered{ scratch.keys.data };
             for ( node_size_type g{ 0 }; g < group; ++g )
                 gathered = std::ranges::copy( leaf( slots[ g ] ).keys(), gathered ).out;
-            Key const * source{ scratch.keys.data() };
+            Key const * source{ scratch.keys.data };
             for ( node_size_type k{ 0 }; k < kept; ++k )
             {
                 auto &     lf   { leaf( slots[ k ] ) };
@@ -1580,8 +1585,8 @@ protected: // compact() and its helpers
         {
             // one sequence of children, and of keys - each node's own, with
             // the parent's separator between two neighbours in between
-            auto * keys  { scratch.keys    .data() };
-            auto * chldrn{ scratch.children.data() };
+            auto * keys  { scratch.keys    .data };
+            auto * chldrn{ scratch.children.data };
             for ( node_size_type g{ 0 }; g < group; ++g )
             {
                 auto const & nd{ inner( slots[ g ] ) };
@@ -1590,17 +1595,17 @@ protected: // compact() and its helpers
                 keys   = std::ranges::copy( nd.keys    (), keys   ).out;
                 chldrn = std::ranges::copy( nd.children(), chldrn ).out;
             }
-            BOOST_ASSUME( static_cast<std::uint32_t>( chldrn - scratch.children.data() ) == total );
+            BOOST_ASSUME( static_cast<std::uint32_t>( chldrn - scratch.children.data ) == total );
             std::uint32_t offset{ 0 };
             for ( node_size_type k{ 0 }; k < kept; ++k )
             {
                 auto &     nd   { inner( slots[ k ] ) };
                 auto const count{ share( k ) };
                 nd.num_vals = static_cast<node_size_type>( count - 1 );
-                std::copy_n( &scratch.keys[ offset ], count - 1, &nd.keys_[ 0 ] );
+                std::copy_n( &scratch.keys.data[ offset ], count - 1, &nd.keys_[ 0 ] );
                 for ( node_size_type ch{ 0 }; ch < count; ++ch )
                 {
-                    auto const ch_slot{ scratch.children[ offset + ch ] };
+                    auto const ch_slot{ scratch.children.data[ offset + ch ] };
                     nd.children_[ ch ] = ch_slot;
                     // a child that stays where it was is not written
                     auto & child{ node( ch_slot ) };
@@ -1612,7 +1617,7 @@ protected: // compact() and its helpers
                 }
                 this->mark_dirty( nd, slots[ k ] );
                 if ( k + 1 < kept )
-                    parent.key( first + k ) = scratch.keys[ offset + count - 1 ];
+                    parent.key( first + k ) = scratch.keys.data[ offset + count - 1 ];
                 offset += count;
             }
         }
@@ -2329,9 +2334,6 @@ std::uint32_t bptree_base_wkey<Key, leaf_gap>::compact()
     if ( has_attached_storage() && ( hdr().depth_ > 1 ) )
     {
         compact_scratch scratch;
-        auto constexpr widest_node{ std::max<std::uint32_t>( leaf_node::max_values, inner_node::max_children ) };
-        scratch.keys    .grow_to( compact_group_size * widest_node         , default_init );
-        scratch.children.grow_to( compact_group_size * inner_node::max_children, default_init );
         for ( ;; )
         {
             auto const swept{ compact_sweep( scratch ) };
