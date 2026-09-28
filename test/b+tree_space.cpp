@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <numeric>
 #include <optional>
 #include <print>
@@ -275,30 +276,40 @@ TEST( bp_tree, lookup_throughput )
     }
 }
 
-// What compact() buys and costs on a tree that erasure has thinned out: a
-// random build of n keys, a random share of them erased one at a time, then
-// the same tree twice - one left as erasure left it, the other compacted.
-// Reported: the leaf fill, the nodes in use and the pool's resident pages of
-// both; what releasing the free nodes erasure alone left costs (on the plain
-// one, which leaves its keys where they are); what compact() costs per node
-// it visits and per node it frees (its own release included); and random
-// lookups of every remaining key in both, alternating which goes first
-// block by block, best block per arm.
+// What compact() buys and costs, on trees built by different mixes of
+// insertion and erasure (insertion relieves a full leaf into a sibling before
+// it splits, so an insert-only or churned tree already sits well above the
+// fill erasure leaves): each tree built twice, one left as built, the other
+// compacted.  Reported: the leaf fill, the nodes in use (inner ones apart)
+// and the pool's resident pages of both; what releasing the free nodes the
+// build alone left costs (on the plain one, which leaves its keys where they
+// are); what compact() costs per node it visits and per node it frees (its
+// own release included); and random lookups of every remaining key in both,
+// alternating which goes first block by block, best block per arm.
 TEST( bp_tree, benchmark_compact )
 {
     std::uint32_t const n{ 4'000'000 };
     auto const keys{ shuffled( n, 42 ) };
+    auto const fresh_keys{ [ & ] { auto more{ shuffled( n, 7 ) }; for ( auto & k : more ) k += n; return more; }() }; // disjoint from keys
     auto const ns{ []( timer::duration const d ) { return double( std::chrono::duration_cast<std::chrono::nanoseconds>( d ).count() ); } };
     std::println( "compact(): {} keys, {}-byte nodes, {} values per leaf", n, tree_t::node_byte_size(), tree_t::leaf_node::max_values );
-    for ( double const erased_share : { 0.3, 0.5, 0.7 } )
+    auto const random_build{ [ & ]( tree_t & tree ) { for ( auto const key : keys ) tree.insert( key ); } };
+    auto const erase_share { [ & ]( tree_t & tree, double const share ) { for ( auto const key : std::span{ keys }.first( static_cast<std::size_t>( n * share ) ) ) EXPECT_TRUE( tree.erase( key ) ); } };
+    struct scenario { std::string_view name; std::function<void( tree_t & )> build; };
+    scenario const scenarios[]
     {
-        auto const erased{ static_cast<std::uint32_t>( n * erased_share ) };
-        auto const build{ [ & ] {
-            auto tree{ make_tree() };
-            for ( auto const key : keys ) tree.insert( key );
-            for ( auto const key : std::span{ keys }.first( erased ) ) EXPECT_TRUE( tree.erase( key ) );
-            return tree;
-        } };
+        { "random inserts"              , [ & ]( tree_t & t ) { random_build( t ); } },
+        { "random, then 30% erased"     , [ & ]( tree_t & t ) { random_build( t ); erase_share( t, 0.3 ); } },
+        { "random, then 50% erased"     , [ & ]( tree_t & t ) { random_build( t ); erase_share( t, 0.5 ); } },
+        { "random, then 70% erased"     , [ & ]( tree_t & t ) { random_build( t ); erase_share( t, 0.7 ); } },
+        { "sorted bulk, then 30% erased", [ & ]( tree_t & t ) { t.insert( std::views::iota( std::uint32_t{ 0 }, n ) ); erase_share( t, 0.3 ); } },
+        { "sorted bulk, then 50% erased", [ & ]( tree_t & t ) { t.insert( std::views::iota( std::uint32_t{ 0 }, n ) ); erase_share( t, 0.5 ); } },
+        { "50% erased, 25% re-inserted" , [ & ]( tree_t & t ) { random_build( t ); erase_share( t, 0.5 ); for ( auto const key : std::span{ fresh_keys }.first( n / 4 ) ) t.insert( key ); } },
+        { "churn: n erase+insert pairs" , [ & ]( tree_t & t ) { random_build( t ); for ( std::uint32_t i{ 0 }; i < n; ++i ) { EXPECT_TRUE( t.erase( keys[ i ] ) ); t.insert( fresh_keys[ i ] ); } } },
+    };
+    for ( auto const & [ name, build_with ] : scenarios )
+    {
+        auto const build{ [ & ] { auto tree{ make_tree() }; build_with( tree ); return tree; } };
         auto plain    { build() };
         auto compacted{ build() };
         auto const resident{ []( tree_t const & tree ) { return resident_pages( tree.node_pool_bytes() ).value_or( 0 ); } };
@@ -316,7 +327,7 @@ TEST( bp_tree, benchmark_compact )
         auto const compacted_fill{ measure_fill( compacted ) };
         EXPECT_TRUE( std::ranges::equal( plain, compacted ) );
 
-        auto probes{ std::vector<std::uint32_t>( keys.begin() + erased, keys.end() ) };
+        auto probes{ std::ranges::to<std::vector>( plain ) };
         std::ranges::shuffle( probes, std::mt19937{ 13 } );
         auto const lookups{ [ & ]( tree_t const & tree ) {
             std::uint64_t found{ 0 };
@@ -334,9 +345,9 @@ TEST( bp_tree, benchmark_compact )
             else             { compacted_ns = std::min( compacted_ns, lookups( compacted ) ); plain_ns = std::min( plain_ns, lookups( plain ) ); }
         }
 
-        std::println( "erase {:>2.0f}%: fill {:5.1f}% -> {:5.1f}%  nodes {:>7} -> {:>7}  resident pages {:>7} -> {:>7} (plain, free nodes released: {:>7})",
-            erased_share * 100, plain_fill.fill * 100, compacted_fill.fill * 100, plain_fill.nodes_used, compacted_fill.nodes_used, plain_resident, resident( compacted ), resident( plain ) );
-        std::println( "           release_free_nodes() of erasure's {:>6} free nodes: {:>6} released, {:8.1f} us, {:6.1f} ns/node",
+        std::println( "{:<29}: fill {:5.1f}% -> {:5.1f}%  nodes {:>7} -> {:>7} (inner {:>5} -> {:>5})  resident pages {:>7} -> {:>7} (plain, free nodes released: {:>7})",
+            name, plain_fill.fill * 100, compacted_fill.fill * 100, plain_fill.nodes_used, compacted_fill.nodes_used, plain_fill.nodes_used - plain_fill.leaves, compacted_fill.nodes_used - compacted_fill.leaves, plain_resident, resident( compacted ), resident( plain ) );
+        std::println( "           release_free_nodes() of the build's {:>6} free nodes: {:>6} released, {:8.1f} us, {:6.1f} ns/node",
             plain.nodes_reserved() - plain.nodes_used(), released, ns( release_time ) / 1000, released ? ns( release_time ) / released : 0. );
         std::println( "           compact(): {:>6} freed, {:>6} released, {:8.1f} us, {:6.1f} ns/node visited, {:7.1f} ns/node freed",
             freed, compacted.nodes_released(), ns( compact_time ) / 1000, ns( compact_time ) / visited, freed ? ns( compact_time ) / freed : 0. );
