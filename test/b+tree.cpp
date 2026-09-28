@@ -4106,8 +4106,190 @@ TEST( bp_tree, memfd_node_pool_is_backed_by_huge_pages_on_request )
 #endif // server Linux
 
 //------------------------------------------------------------------------------
-// release_free_nodes()
+// compact() and release_free_nodes()
 //------------------------------------------------------------------------------
+namespace
+{
+    template <typename Tree>
+    double leaf_fill( Tree const & bpt )
+    {
+        std::size_t leaves{ 0 }, keys{ 0 };
+        for ( auto const leaf_keys : bpt.leaves() ) { ++leaves; keys += leaf_keys.size(); }
+        return leaves ? double( keys ) / double( leaves * Tree::max_values_per_leaf() ) : 0;
+    }
+
+    // Fill a tree one key at a time in random order, erase a share of it -
+    // at random, or every second key, or one contiguous range - and compact
+    // it: every key must remain, in order, reachable by lookups, in a tree
+    // that is still sound and at least as full as before, down to the nodes
+    // the compaction reports to have freed.  Then the compacted tree has to
+    // take the erased keys back (into the full leaves, and the released
+    // nodes) and lose them again.  A multiset holds every value three times.
+    enum struct erasure { random, alternate, range };
+    template <typename Tree>
+    void compact_roundtrip( erasure const pattern, double const erased_share )
+    {
+        using key_t = typename Tree::key_type;
+        bool constexpr multiset{ !requires( Tree & t, key_t k ) { t.erase( k ); } };
+        auto const runs  { multiset ? 3 : 1 };
+        auto const values{ static_cast<int>( Tree::max_values_per_leaf() ) * 160 };
+        std::vector<key_t> keys;
+        for ( auto v{ 0 }; v < values; ++v )
+            for ( auto r{ 0 }; r < runs; ++r )
+                keys.push_back( key_t{ 2 * v } );
+        std::mt19937 rng{ 20260928 };
+        std::ranges::shuffle( keys, rng );
+
+        Tree bpt;
+        bpt.map_memory();
+        for ( auto const & k : keys ) bpt.insert( k );
+
+        std::vector<key_t> erased, kept;
+        {
+            auto sorted{ keys };
+            std::ranges::sort( sorted );
+            auto const erase_count{ static_cast<std::size_t>( double( sorted.size() ) * erased_share ) };
+            std::vector<bool> erase( sorted.size() );
+            switch ( pattern )
+            {
+                case erasure::random:
+                {
+                    std::vector<std::size_t> at( sorted.size() );
+                    std::iota( at.begin(), at.end(), std::size_t{ 0 } );
+                    std::ranges::shuffle( at, rng );
+                    for ( std::size_t i{ 0 }; i < erase_count; ++i ) erase[ at[ i ] ] = true;
+                    break;
+                }
+                case erasure::alternate: for ( std::size_t i{ 0 }; i < sorted.size(); ++i ) erase[ i ] = ( i % 2 == 0 ); break;
+                case erasure::range    : for ( std::size_t i{ 0 }; i < erase_count; ++i ) erase[ ( sorted.size() - erase_count ) / 2 + i ] = true; break;
+            }
+            for ( std::size_t i{ 0 }; i < sorted.size(); ++i ) ( erase[ i ] ? erased : kept ).push_back( sorted[ i ] );
+        }
+        auto shuffled_erased{ erased };
+        std::ranges::shuffle( shuffled_erased, rng );
+        for ( auto const & k : shuffled_erased ) {
+            if constexpr ( multiset ) bpt.erase( bpt.find( k ) );
+            else                      ASSERT_TRUE( bpt.erase( k ) );
+        }
+        ASSERT_TRUE( bpt.structure_is_sound() ) << "before compact()";
+        ASSERT_TRUE( std::ranges::equal( bpt, kept ) );
+
+        auto const fill_before{ leaf_fill( bpt ) };
+        auto const used_before{ bpt.nodes_used() };
+        auto const freed      { bpt.compact() };
+        auto const fill_after { leaf_fill( bpt ) };
+        ASSERT_TRUE( bpt.structure_is_sound() ) << "after compact()";
+        ASSERT_TRUE( std::ranges::equal( bpt, kept ) );
+        EXPECT_EQ( bpt.size(), kept.size() );
+        EXPECT_TRUE( lookups_are_sound( bpt, !multiset ) );
+        EXPECT_EQ( bpt.nodes_used(), used_before - freed );
+        EXPECT_GE( fill_after, fill_before );
+        // what the group size can reach: at a fill of 1 - 1 / compact_group_size
+        // every group is a node short of qualifying
+        EXPECT_GT( fill_after, 0.80 ) << "from " << fill_before;
+        if ( fill_before < 0.75 )
+            EXPECT_GT( freed, 0U );
+        std::println( "compact(): {:>6} keys, leaf fill {:5.1f}% -> {:5.1f}%, {} of {} nodes freed, {} released", bpt.size(), fill_before * 100, fill_after * 100, freed, used_before, bpt.nodes_released() );
+        // nothing left to merge
+        EXPECT_EQ( bpt.compact(), 0U );
+
+        // the compacted tree takes the keys back, and loses them again
+        auto const reserved{ bpt.nodes_reserved() };
+        for ( auto const & k : shuffled_erased ) bpt.insert( k );
+        ASSERT_TRUE( bpt.structure_is_sound() ) << "reinserted";
+        auto all{ keys };
+        std::ranges::sort( all );
+        ASSERT_TRUE( std::ranges::equal( bpt, all ) );
+        if ( bpt.nodes_released() )
+            EXPECT_EQ( bpt.nodes_reserved(), reserved ) << "the released nodes are taken before the pool grows";
+        for ( auto const & k : shuffled_erased ) {
+            if constexpr ( multiset ) bpt.erase( bpt.find( k ) );
+            else                      ASSERT_TRUE( bpt.erase( k ) );
+        }
+        ASSERT_TRUE( bpt.structure_is_sound() ) << "erased again";
+        ASSERT_TRUE( std::ranges::equal( bpt, kept ) );
+    }
+
+    template <typename Tree>
+    void compact_roundtrips()
+    {
+        for ( auto const share : { 0.3, 0.5, 0.7 } ) {
+            compact_roundtrip<Tree>( erasure::random, share );
+            ASSERT_FALSE( testing::Test::HasFatalFailure() ) << "random, " << share;
+        }
+        compact_roundtrip<Tree>( erasure::alternate, 0.5 );
+        ASSERT_FALSE( testing::Test::HasFatalFailure() ) << "alternate";
+        compact_roundtrip<Tree>( erasure::range, 0.6 );
+        ASSERT_FALSE( testing::Test::HasFatalFailure() ) << "range";
+    }
+} // anonymous namespace
+
+TEST( bp_tree, compact_set_int         ) { compact_roundtrips<inspectable<bptree_set     <int>>>(); }
+TEST( bp_tree, compact_multiset_int    ) { compact_roundtrips<inspectable<bptree_multiset<int>>>(); }
+TEST( bp_tree, compact_set_opt_in_gap  ) { compact_roundtrips<inspectable<bptree_set     <int          , gap_less>>>(); }
+// small fanouts, so a deep tree, whose parents' minimum holds merges back
+TEST( bp_tree, compact_set_padded      ) { compact_roundtrips<inspectable<bptree_set     <padded_key<64>>>>(); }
+TEST( bp_tree, compact_multiset_padded ) { compact_roundtrips<inspectable<bptree_multiset<padded_key<64>>>>(); }
+
+// A tree with nothing to merge is left as it is: not a node written, which is
+// what a COW clone would otherwise have to copy back.
+TEST( bp_tree, compact_leaves_a_full_tree_unwritten )
+{
+    using tree_t = inspectable<bptree_set<int>>;
+    tree_t empty;
+    empty.map_memory();
+    EXPECT_EQ( empty.compact(), 0U );
+    EXPECT_TRUE( empty.insert( 42 ).second );
+    EXPECT_EQ( empty.compact(), 0U ) << "a lone root leaf";
+
+    tree_t source;
+    source.map_cow_memory();
+    auto const size{ static_cast<int>( tree_t::max_values_per_leaf() ) * 300 };
+    ASSERT_EQ( source.insert( std::views::iota( 0, size ) ), static_cast<std::size_t>( size ) );
+    // compared with what releasing the free nodes alone writes (on a Linux
+    // clone, whose view is private, it relinks the free list around them)
+    auto const released_only{ [ & ] { tree_t other{ source }; other.release_free_nodes(); return other.nodes_dirty(); }() };
+    tree_t clone{ source };
+    EXPECT_EQ( clone.compact(), 0U );
+    EXPECT_EQ( clone.nodes_dirty(), released_only );
+    EXPECT_TRUE( std::ranges::equal( clone, std::views::iota( 0, size ) ) );
+}
+
+// compact() on a COW clone, carried back by commit_to(): the source ends up
+// with what the clone did, released nodes included, and stays sound.
+TEST( bp_tree, compact_a_cow_clone_and_commit )
+{
+    using tree_t = inspectable<bptree_set<int>>;
+    auto const size{ static_cast<int>( tree_t::max_values_per_leaf() ) * 300 };
+    auto const even{ []( int const k ) { return k % 2 == 0; } };
+    auto const odd { []( int const k ) { return k % 2 != 0; } };
+    tree_t source;
+    source.map_cow_memory();
+    std::vector<int> keys( static_cast<std::size_t>( size ) );
+    std::iota( keys.begin(), keys.end(), 0 );
+    std::ranges::shuffle( keys, std::mt19937{ 20260928 } );
+    for ( auto const k : keys ) source.insert( k );
+    {
+        tree_t clone{ source };
+        for ( auto const k : std::views::iota( 0, size ) | std::views::filter( even ) )
+            ASSERT_TRUE( clone.erase( k ) );
+        EXPECT_GT( clone.compact(), 0U );
+        ASSERT_TRUE( clone.structure_is_sound() );
+        // the source is untouched by whatever the clone released
+        ASSERT_TRUE( source.structure_is_sound() ) << "source, with a live clone";
+        EXPECT_TRUE( std::ranges::equal( source, std::views::iota( 0, size ) ) );
+        clone.commit_to( source );
+    }
+    ASSERT_TRUE( source.structure_is_sound() ) << "committed";
+    EXPECT_TRUE( std::ranges::equal( source, std::views::iota( 0, size ) | std::views::filter( odd ) ) );
+    EXPECT_TRUE( lookups_are_sound( source ) );
+    // and grows back through whatever it was left
+    for ( auto const k : std::views::iota( 0, size ) | std::views::filter( even ) )
+        ASSERT_TRUE( source.insert( k ).second );
+    ASSERT_TRUE( source.structure_is_sound() ) << "refilled";
+    EXPECT_TRUE( std::ranges::equal( source, std::views::iota( 0, size ) ) );
+}
+
 namespace
 {
     // A sequentially built tree whose middle half is then erased leaves runs

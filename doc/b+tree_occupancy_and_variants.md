@@ -232,7 +232,7 @@ takes is **whole pages**:
   node;
 - with smaller ones only a page whose nodes are *all* free: runs of
   neighbouring free nodes, such as a range erase of a sequentially built
-  tree leaves, but hardly ever what scattered frees leave.
+  tree leaves, but hardly ever what scattered merges leave (§5.2).
 
 A released node leaves the free list. The list is threaded through the free
 nodes themselves, and a dropped page reads back as zeros - which is node 0,
@@ -275,6 +275,73 @@ The cost is the system call (one per run of neighbouring pages) plus the
 page's zeroing on its next fault. With 512-byte nodes a page holds eight, and
 erasure leaves them free in ones and twos.
 
+### 5.2 `compact()`: XMerge
+
+Freeing a node out of a group of X siblings at fill *f* needs
+
+```
+X >= 1 / ( 1 - f )
+```
+
+The classic pairwise merge is X = 2, and needs both siblings at or below
+half full. At the 60–90 % a modified tree sits at that almost never happens,
+which is why the tree stays there however much of it has been erased.
+XMerge (Alhomssi & Leis, CIDR 2021, from LeanStore) merges X neighbouring
+siblings into X − 1 as soon as their summed free space is a whole node, and
+with fixed size entries that test is the entry counts alone: a group that
+does not qualify costs the reads of its headers.
+
+`compact()` applies it to the whole tree, on request:
+
+- **Groups of up to 8 siblings under one parent** (X ≤ 8, so a node is freed
+  wherever the fill is under 87.5 %), each merged group's entries spread
+  evenly over the X − 1 nodes that remain. The first node of a group keeps
+  its first entry, so the separator above it - which can be in any ancestor
+  - stays valid; every other separator involved is in the parent.
+- **Bottom-up**, the leaves' parents first, then each level above.
+- **A parent never drops below its minimum.** LeanStore's nodes have no
+  minimum fill; here the underflow half of the tree depends on one (§3.2), so
+  a parent may only lose the children it can spare, and the root all but one
+  (after which it hands over to that one). A parent at its minimum therefore
+  blocks the merges below it until its own level has been merged, which
+  refills it - so the levels are swept again until a sweep frees nothing.
+  Every step of a sweep leaves a valid tree; nothing is repaired afterwards.
+- **A group that does not merge is not written.** A COW clone's
+  `commit_to()` copies what was written, so a compaction that finds little
+  to do costs a commit little.
+- Then `release_free_nodes()` (§5.1).
+
+Differences from LeanStore: the trigger (there, a node is merged when the
+buffer manager evicts it; this container has no buffer manager, so the call
+is explicit), the group size, the minimum fill it keeps, and the repeated
+sweeps. An amortised scan on the erase path was not built: erasure is
+`noexcept` and on the hot path, a scan there reads up to eight siblings'
+headers per erasure to free a node rarely, and a single explicit pass sees
+the whole tree - where it is worth doing (after bulk erasure, before a
+snapshot) is the caller's knowledge, not the container's.
+
+Same benchmark as §5.1, the other copy of the tree compacted instead:
+
+| erased | node size | leaf fill | nodes in use | resident pages | `compact()` | `find()` |
+|---|---|---|---|---|---|---|
+| 30 % | 4096 | 63.1 → 92.9 % | 4364 → 2963 | 4386 → 2963 | 4.4 ms, 1.0 µs/node | −35 % |
+| 50 % | 4096 | 69.0 → 93.7 % | 2852 → 2099 | 4386 → 2099 | 3.1 ms, 1.1 µs/node | −14 % |
+| 70 % | 4096 | 63.3 → 94.6 % | 1866 → 1247 | 4386 → 1247 | 3.3 ms, 1.8 µs/node | −13 % |
+| 30 % | 512 | 62.3 → 94.5 % | 37251 → 24320 | 4752 → 4751 | 7.1 ms, 0.19 µs/node | −11 % |
+| 50 % | 512 | 65.1 → 94.3 % | 25451 → 17393 | 4752 → 4713 | 5.9 ms, 0.23 µs/node | −10 % |
+| 70 % | 512 | 62.5 → 94.8 % | 15889 → 10389 | 4752 → 4401 | 5.5 ms, 0.35 µs/node | −1 % |
+
+(cost per node in use before the call, its release included; `find()` is a
+random lookup of every remaining key, best of three blocks per arm with the
+order alternated.) With page sized nodes the resident pool follows the nodes
+in use down. With 512-byte nodes the tree shrinks by a third to a half and is
+faster to search, but hardly any page is left with all eight of its nodes
+free, so resident memory barely moves: getting it back there would take
+moving nodes, which §5.1 rules out.
+
+On Windows `DiscardVirtualMemory` costs 10–20 µs a page, an order of
+magnitude more than `madvise`, and dominates `compact()` there.
+
 ## 6. Open
 
 - **Devector nodes.** `node_header` carries `start`, where a node's live
@@ -293,5 +360,5 @@ erasure leaves them free in ones and twos.
 
 - D. Comer, *The Ubiquitous B-Tree*, ACM Computing Surveys 11(2), 1979.
 - D. Knuth, *TAOCP* Vol. 3, §6.2.4 (B\* definition; cited via Comer).
-- A. Alhomssi, V. Leis, *Contention and Space Management in B-Trees*, CIDR 2021.
+- A. Alhomssi, V. Leis, *Contention and Space Management in B-Trees*, CIDR 2021 (XMerge).
 - A. C. Yao, *On random 2-3 trees*, Acta Informatica 9, 1978 (the ln 2 result).

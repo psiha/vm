@@ -11,6 +11,8 @@
 
 #include <psi/vm/containers/b+tree.hpp>
 
+#include "resident_pages.hpp"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -270,6 +272,75 @@ TEST( bp_tree, lookup_throughput )
             "find/random", n,
             double( std::chrono::duration_cast<std::chrono::nanoseconds>( elapsed ).count() ) / double( n )
         );
+    }
+}
+
+// What compact() buys and costs on a tree that erasure has thinned out: a
+// random build of n keys, a random share of them erased one at a time, then
+// the same tree twice - one left as erasure left it, the other compacted.
+// Reported: the leaf fill, the nodes in use and the pool's resident pages of
+// both; what releasing the free nodes erasure alone left costs (on the plain
+// one, which leaves its keys where they are); what compact() costs per node
+// it visits and per node it frees (its own release included); and random
+// lookups of every remaining key in both, alternating which goes first
+// block by block, best block per arm.
+TEST( bp_tree, benchmark_compact )
+{
+    std::uint32_t const n{ 4'000'000 };
+    auto const keys{ shuffled( n, 42 ) };
+    auto const ns{ []( timer::duration const d ) { return double( std::chrono::duration_cast<std::chrono::nanoseconds>( d ).count() ); } };
+    std::println( "compact(): {} keys, {}-byte nodes, {} values per leaf", n, tree_t::node_byte_size(), tree_t::leaf_node::max_values );
+    for ( double const erased_share : { 0.3, 0.5, 0.7 } )
+    {
+        auto const erased{ static_cast<std::uint32_t>( n * erased_share ) };
+        auto const build{ [ & ] {
+            auto tree{ make_tree() };
+            for ( auto const key : keys ) tree.insert( key );
+            for ( auto const key : std::span{ keys }.first( erased ) ) EXPECT_TRUE( tree.erase( key ) );
+            return tree;
+        } };
+        auto plain    { build() };
+        auto compacted{ build() };
+        auto const resident{ []( tree_t const & tree ) { return resident_pages( tree.node_pool_bytes() ).value_or( 0 ); } };
+
+        auto const plain_fill{ measure_fill( plain ) };
+        auto const plain_resident{ resident( plain ) };
+        auto const release_start{ timer::now() };
+        auto const released{ plain.release_free_nodes() };
+        auto const release_time{ timer::now() - release_start };
+
+        auto const visited{ compacted.nodes_used() };
+        auto const compact_start{ timer::now() };
+        auto const freed{ compacted.compact() };
+        auto const compact_time{ timer::now() - compact_start };
+        auto const compacted_fill{ measure_fill( compacted ) };
+        EXPECT_TRUE( std::ranges::equal( plain, compacted ) );
+
+        auto probes{ std::vector<std::uint32_t>( keys.begin() + erased, keys.end() ) };
+        std::ranges::shuffle( probes, std::mt19937{ 13 } );
+        auto const lookups{ [ & ]( tree_t const & tree ) {
+            std::uint64_t found{ 0 };
+            auto const start{ timer::now() };
+            for ( auto const key : probes )
+                found += ( tree.find( key ) != tree.end() );
+            auto const elapsed{ timer::now() - start };
+            EXPECT_EQ( found, probes.size() );
+            return ns( elapsed ) / double( probes.size() );
+        } };
+        double plain_ns{ 1e9 }, compacted_ns{ 1e9 };
+        for ( auto block{ 0 }; block < 6; ++block )
+        {
+            if ( block % 2 ) { plain_ns = std::min( plain_ns, lookups( plain ) ); compacted_ns = std::min( compacted_ns, lookups( compacted ) ); }
+            else             { compacted_ns = std::min( compacted_ns, lookups( compacted ) ); plain_ns = std::min( plain_ns, lookups( plain ) ); }
+        }
+
+        std::println( "erase {:>2.0f}%: fill {:5.1f}% -> {:5.1f}%  nodes {:>7} -> {:>7}  resident pages {:>7} -> {:>7} (plain, free nodes released: {:>7})",
+            erased_share * 100, plain_fill.fill * 100, compacted_fill.fill * 100, plain_fill.nodes_used, compacted_fill.nodes_used, plain_resident, resident( compacted ), resident( plain ) );
+        std::println( "           release_free_nodes() of erasure's {:>6} free nodes: {:>6} released, {:8.1f} us, {:6.1f} ns/node",
+            plain.nodes_reserved() - plain.nodes_used(), released, ns( release_time ) / 1000, released ? ns( release_time ) / released : 0. );
+        std::println( "           compact(): {:>6} freed, {:>6} released, {:8.1f} us, {:6.1f} ns/node visited, {:7.1f} ns/node freed",
+            freed, compacted.nodes_released(), ns( compact_time ) / 1000, ns( compact_time ) / visited, freed ? ns( compact_time ) / freed : 0. );
+        std::println( "           find(): {:6.1f} ns plain, {:6.1f} ns compacted ({:+.1f}%)", plain_ns, compacted_ns, ( compacted_ns / plain_ns - 1 ) * 100 );
     }
 }
 

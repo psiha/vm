@@ -147,6 +147,32 @@ public:
     // solely a debugging helper (include b+tree_print.hpp)
     void print() const;
 
+    // Merge under-filled neighbours into fewer nodes, then hand the freed
+    // nodes' pages back to the OS (release_free_nodes()).  Returns how many
+    // nodes it freed.
+    //
+    // Erasure merges two siblings only once both are at half capacity, so a
+    // tree that has been modified settles well above that - and stays there
+    // however much of it is empty.  compact() takes XMerge from LeanStore
+    // (Alhomssi & Leis, CIDR 2021; see doc/b+tree_occupancy_and_variants.md):
+    // X neighbouring siblings are merged into X - 1 as soon as their summed
+    // free space is a whole node, which frees a node out of a group at fill f
+    // once X >= 1 / ( 1 - f ).
+    // With fixed size entries the test is the entry counts alone, so a group
+    // that does not qualify costs a read of its headers.  Groups are up to
+    // compact_group_size siblings under one parent, their entries spread
+    // evenly over the nodes that remain, bottom-up from the leaves, and a
+    // parent is never left below its minimum (unlike LeanStore, whose nodes
+    // have none): it may only lose children it can spare, so a parent at its
+    // minimum blocks the merges below it until the level above has been
+    // merged too.  So the levels are swept again, until a sweep frees nothing.
+    //
+    // A group that does not merge is not written, which keeps what a COW
+    // clone's commit_to() has to copy to what moved.  Invalidates every
+    // iterator; allocates only scratch space, before changing anything.
+    std::uint32_t compact();
+    static constexpr std::uint8_t compact_group_size{ 8 }; // X up to 8: covers a fill of up to 87.5%
+
 protected: // node types
     struct alignas( node_size ) parent_node : node_header
     {
@@ -1460,6 +1486,147 @@ protected: // 'other'
         return { final_node, final_node_original_keys_offset };
     } // handle_underflow()
 
+protected: // compact() and its helpers
+    struct compact_scratch
+    {
+        heap_vector<Key      , std::uint32_t> keys;
+        heap_vector<node_slot, std::uint32_t> children;
+    };
+
+    // What a merge moves, and what a node holds of it: a leaf's entries, an
+    // inner node's children (its keys follow from those).
+    template <typename N> static std::uint32_t compact_count( N const & node ) noexcept
+    {
+        if constexpr ( std::is_same_v<N, leaf_node> ) return node.num_vals;
+        else                                          return node.num_chldrn();
+    }
+    template <typename N> static constexpr std::uint32_t compact_capacity{ std::is_same_v<N, leaf_node> ? leaf_node::max_values : inner_node::max_children };
+
+    std::uint32_t compact_sweep( compact_scratch & ) noexcept;
+
+    // Scan a parent's children for groups of neighbours that fit in one node
+    // fewer, and merge each group found.
+    template <typename N>
+    std::uint32_t compact_children( inner_node & parent, compact_scratch & scratch ) noexcept
+    {
+        std::uint32_t  freed{ 0 };
+        node_size_type first{ 0 };
+        // not num_chldrn(): the root may be down to a single child, and no key
+        auto const children{ [ & ] { return static_cast<node_size_type>( parent.num_vals + 1 ); } };
+        while ( first + 1 < children() )
+        {
+            // what the parent can spare (the root: all but one, as it then
+            // hands over to that one - see compact_sweep)
+            if ( children() <= ( parent.is_root() ? 1U : inner_node::min_children ) )
+                break;
+            auto           total{ compact_count( node<N>( parent.children()[ first ] ) ) };
+            node_size_type group{ 1 };
+            bool           fits { false };
+            while ( !fits && ( group < compact_group_size ) && ( first + group < children() ) )
+            {
+                total += compact_count( node<N>( parent.children()[ first + group ] ) );
+                ++group;
+                fits = ( total <= ( group - 1U ) * compact_capacity<N> );
+            }
+            if ( fits ) {
+                compact_group<N>( parent, first, group, total, scratch );
+                ++freed;
+                first += group - 1; // past the merged nodes: a later sweep may merge them further
+            } else {
+                ++first;
+            }
+        }
+        return freed;
+    }
+
+    // Merge the 'group' children of 'parent' from 'first' on, which together
+    // hold 'total', into all but the last of them, spread evenly, and free the
+    // last.  The first keeps its first entry, so its separator - which may lie
+    // in any ancestor - holds; every other separator involved is in 'parent'.
+    template <typename N>
+    void compact_group( inner_node & parent, node_size_type const first, node_size_type const group, std::uint32_t const total, compact_scratch & scratch ) noexcept
+    {
+        BOOST_ASSUME( group >= 2 && group <= compact_group_size );
+        auto const kept{ static_cast<node_size_type>( group - 1 ) };
+        BOOST_ASSUME( total <= kept * compact_capacity<N> );
+        auto const parent_slot{ slot_of( parent ) };
+        std::array<node_slot, compact_group_size> slots;
+        std::ranges::copy( parent.children().subspan( first, group ), slots.begin() );
+        auto const share{ [ & ]( node_size_type const k ) { return static_cast<node_size_type>( total / kept + ( k < total % kept ) ); } };
+
+        if constexpr ( std::is_same_v<N, leaf_node> )
+        {
+            auto * gathered{ scratch.keys.data() };
+            for ( node_size_type g{ 0 }; g < group; ++g )
+                gathered = std::ranges::copy( leaf( slots[ g ] ).keys(), gathered ).out;
+            Key const * source{ scratch.keys.data() };
+            for ( node_size_type k{ 0 }; k < kept; ++k )
+            {
+                auto &     lf   { leaf( slots[ k ] ) };
+                auto const count{ share( k ) };
+#           if PSI_VM_BT_FRONT_GAP_COMPILED
+                if constexpr ( leaf_node::front_gap )
+                    set_start( lf, 0 );
+#           endif
+                lf.num_vals = count;
+                std::copy_n( source, count, &lf.key( 0 ) );
+                source += count;
+                this->mark_dirty( lf, slots[ k ] );
+                if ( k )
+                    parent.key( first + k - 1 ) = lf.key( 0 );
+            }
+        }
+        else
+        {
+            // one sequence of children, and of keys - each node's own, with
+            // the parent's separator between two neighbours in between
+            auto * keys  { scratch.keys    .data() };
+            auto * chldrn{ scratch.children.data() };
+            for ( node_size_type g{ 0 }; g < group; ++g )
+            {
+                auto const & nd{ inner( slots[ g ] ) };
+                if ( g )
+                    *keys++ = parent.key( first + g - 1 );
+                keys   = std::ranges::copy( nd.keys    (), keys   ).out;
+                chldrn = std::ranges::copy( nd.children(), chldrn ).out;
+            }
+            BOOST_ASSUME( static_cast<std::uint32_t>( chldrn - scratch.children.data() ) == total );
+            std::uint32_t offset{ 0 };
+            for ( node_size_type k{ 0 }; k < kept; ++k )
+            {
+                auto &     nd   { inner( slots[ k ] ) };
+                auto const count{ share( k ) };
+                nd.num_vals = static_cast<node_size_type>( count - 1 );
+                std::copy_n( &scratch.keys[ offset ], count - 1, &nd.keys_[ 0 ] );
+                for ( node_size_type ch{ 0 }; ch < count; ++ch )
+                {
+                    auto const ch_slot{ scratch.children[ offset + ch ] };
+                    nd.children_[ ch ] = ch_slot;
+                    // a child that stays where it was is not written
+                    auto & child{ node( ch_slot ) };
+                    if ( !( child.parent == slots[ k ] ) || ( child.parent_child_idx != ch ) ) {
+                        child.parent           = slots[ k ];
+                        child.parent_child_idx = static_cast<node_header::child_index_type>( ch );
+                        this->mark_dirty( child, ch_slot );
+                    }
+                }
+                this->mark_dirty( nd, slots[ k ] );
+                if ( k + 1 < kept )
+                    parent.key( first + k ) = scratch.keys[ offset + count - 1 ];
+                offset += count;
+            }
+        }
+
+        // the last of the group is empty now: out of the parent, off its level
+        // and back to the free list
+        auto const emptied{ static_cast<node_size_type>( first + kept ) };
+        lshift_entries( parent, static_cast<node_size_type>( emptied - 1 ) );
+        lshift_chldrn ( parent, emptied );
+        --parent.num_vals;
+        this->mark_dirty( parent, parent_slot );
+        unlink_and_free_node( node<N>( slots[ kept ] ), node<N>( slots[ kept - 1 ] ) );
+    }
+
     root_node       & root()       noexcept { return as<root_node>( bptree_base::root() ); }
     root_node const & root() const noexcept { return const_cast<bptree_base_wkey &>( *this ).root(); }
 
@@ -2153,6 +2320,66 @@ void bptree_base_wkey<Key, leaf_gap>::move_chldrn
         child.parent_child_idx           = tgt_begin + ch_idx;
         this->mark_dirty( child );
     }
+}
+
+template <typename Key, bool leaf_gap>
+std::uint32_t bptree_base_wkey<Key, leaf_gap>::compact()
+{
+    std::uint32_t freed{ 0 };
+    if ( has_attached_storage() && ( hdr().depth_ > 1 ) )
+    {
+        compact_scratch scratch;
+        auto constexpr widest_node{ std::max<std::uint32_t>( leaf_node::max_values, inner_node::max_children ) };
+        scratch.keys    .grow_to( compact_group_size * widest_node         , default_init );
+        scratch.children.grow_to( compact_group_size * inner_node::max_children, default_init );
+        for ( ;; )
+        {
+            auto const swept{ compact_sweep( scratch ) };
+            if ( !swept )
+                break;
+            freed += swept;
+        }
+    }
+    release_free_nodes();
+    return freed;
+}
+
+// One pass over every level, bottom-up: the children of each node of a level
+// are merged before those of the level above, whose children they are.
+template <typename Key, bool leaf_gap>
+std::uint32_t bptree_base_wkey<Key, leaf_gap>::compact_sweep( compact_scratch & scratch ) noexcept
+{
+    std::uint32_t freed{ 0 };
+    int const depth{ hdr().depth_ };
+    for ( auto level{ depth - 2 }; level >= 0; --level ) // the level of the parents
+    {
+        auto parent_slot{ hdr().root_ };
+        for ( auto l{ 0 }; l < level; ++l )
+            parent_slot = inner( parent_slot ).children().front();
+        auto const children_are_leaves{ level == depth - 2 };
+        for ( ; parent_slot; parent_slot = inner( parent_slot ).right )
+        {
+            auto & parent{ inner( parent_slot ) };
+            freed += children_are_leaves
+                ? compact_children< leaf_node>( parent, scratch )
+                : compact_children<inner_node>( parent, scratch );
+        }
+    }
+    // a root left with a single child hands over to it
+    while ( ( hdr().depth_ > 1 ) && ( root().num_vals == 0 ) )
+    {
+        auto & hdr     { this->hdr() };
+        auto & old_root{ root() };
+        hdr.root_ = old_root.children_[ 0 ];
+        auto & new_root{ bptree_base::node<node_header>( hdr.root_ ) };
+        new_root.parent           = {};
+        new_root.parent_child_idx = 0;
+        this->mark_dirty( new_root, hdr.root_ );
+        --hdr.depth_;
+        bptree_base::free( old_root );
+        ++freed;
+    }
+    return freed;
 }
 
 PSI_WARNING_DISABLE_POP()
