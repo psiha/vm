@@ -40,9 +40,12 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
+// Anonymous private memory: every caller maps fresh zeroed pages backed by no
+// file (hence no descriptor and no offset - without MAP_ANONYMOUS the -1 below
+// is taken as a descriptor and the call fails with EBADF).
 void * mmap( void * const target_address, std::size_t const size, int const protection, int const flags ) noexcept
 {
-    auto const actual_address{ posix::mmap( target_address, size, protection, flags,
+    auto const actual_address{ posix::mmap( target_address, size, protection, MAP_PRIVATE | MAP_ANONYMOUS | flags,
 #   if defined( __APPLE__ ) && 0 // always wired
         VM_FLAGS_SUPERPAGE_SIZE_2MB,
 #   else
