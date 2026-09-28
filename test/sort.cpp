@@ -25,6 +25,7 @@
 #include <concepts>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <numeric>
 #include <random>
@@ -82,6 +83,35 @@ namespace
         friend constexpr std::strong_ordering operator<=>( biased_i32 const l, biased_i32 const r ) noexcept { return l.value() <=> r.value(); }
     };
 
+    // An IEEE floating-point value held biased as the sort_key recipe says -
+    // every bit flipped when negative, only the sign bit when not - so that
+    // its unsigned reading orders the values as std::strong_order does. It is
+    // made from, and read back as, the value's bits: the tests build with
+    // -ffast-math on some targets, where spelling an infinity, a NaN or -0.0
+    // as a floating-point expression is not reliable.
+    template <std::floating_point F, std::unsigned_integral U>
+    struct alignas( U ) biased_float
+    {
+        static_assert( sizeof( F ) == sizeof( U ) && std::numeric_limits<F>::is_iec559 );
+        static U constexpr sign    { U{ 1 } << ( sizeof( U ) * 8 - 1 ) };
+        static U constexpr mantissa{ ( U{ 1 } << ( std::numeric_limits<F>::digits - 1 ) ) - 1 };
+        static U constexpr infinity{ static_cast<U>( ~sign & ~mantissa ) };
+        static U constexpr quiet   { infinity | ( ( mantissa + 1 ) >> 1 ) };
+
+        U bits;
+
+        static constexpr bool orders_as_unsigned{ true };
+
+        static constexpr biased_float of( U const raw ) noexcept { return { static_cast<U>( ( raw & sign ) ? ~raw : ( raw ^ sign ) ) }; }
+        constexpr U raw  () const noexcept { return static_cast<U>( ( bits & sign ) ? ( bits ^ sign ) : ~bits ); }
+        constexpr F value() const noexcept { return std::bit_cast<F>( raw() ); }
+
+        friend constexpr std::strong_ordering operator<=>( biased_float const l, biased_float const r ) noexcept { return std::strong_order( l.value(), r.value() ); }
+        friend constexpr bool                 operator== ( biased_float const l, biased_float const r ) noexcept { return l.bits == r.bits; }
+    };
+    using biased_f32 = biased_float<float , std::uint32_t>;
+    using biased_f64 = biased_float<double, std::uint64_t>;
+
     // An unsigned integral type of a key's width that is not the worker's own
     // integer type (unsigned long long where std::uint64_t is unsigned long,
     // unsigned long otherwise), so that it takes the storage-reuse path.
@@ -111,6 +141,15 @@ namespace
     static_assert( !sort_key<padded       > );              // padding bits carry no order
     static_assert( !sort_key<std::uint32_t const> );
     static_assert(  sort_key<other_unsigned> && !std::is_same_v<other_unsigned, key_sort_detail::key_uint_t<other_unsigned>> );
+    static_assert(  sort_key<biased_f32> && sort_key<biased_f64> );
+
+    // The order is one of the two that an unsigned reading describes, named as
+    // std::sort's comparator is.
+    static_assert(  key_order<std::less<>> && key_order<std::ranges::less> );
+    static_assert(  key_order<std::greater<>> && key_order<std::ranges::greater> );
+    static_assert( !key_order<std::greater<std::uint32_t>> );
+    static_assert( !key_order<std::greater_equal<>> );
+    static_assert( !key_order<decltype( []( std::uint32_t const l, std::uint32_t const r ) { return l > r; } )> );
 
     // The sort creates 64-bit integers in the storage of 8-byte keys, so a key
     // of narrower fields is one only once it declares their alignment.
@@ -135,6 +174,10 @@ namespace
 #if PSI_VM_HAS_INTEGER_SORT
     static_assert( noexcept( sort_keys<key_sort_algo::radix>( std::span<std::uint64_t>{} ) ) == key_sort_detail::allocation_nothrow );
 #endif
+    // and descending on the same terms
+    static_assert( noexcept( sort_keys( std::span<strong_u32>{}, std::greater{} ) ) );
+    static_assert( noexcept( sort_unique_keys( std::span<std::uint64_t>{}, std::ranges::greater{} ) ) );
+    static_assert( noexcept( argsort_keys<key_sort_algo::pdq, std::uint64_t>( std::span<std::uint32_t const>{}, std::span<std::uint64_t>{}, std::greater{} ) ) == key_sort_detail::allocation_nothrow );
 
     template <typename T>
     T make_key( std::uint64_t const bits ) noexcept
@@ -201,6 +244,18 @@ namespace
     template <typename T>
     bool equivalent( T const & l, T const & r ) noexcept { return !( l < r ) && !( r < l ); }
 
+    // The reference comparator of an order, over the key's own operator<: its
+    // reverse for std::greater - for the floats the reverse of std::strong_order.
+    template <key_order Order>
+    auto constexpr reference_order
+    {
+        []<typename T>( T const & l, T const & r ) noexcept -> bool
+        {
+            if constexpr ( key_sort_detail::is_descending<Order> ) return r < l;
+            else                                                  return l < r;
+        }
+    };
+
     template <std::ranges::contiguous_range A, std::ranges::contiguous_range B>
     requires std::same_as<std::ranges::range_value_t<A>, std::ranges::range_value_t<B>>
     bool same_bytes( A const & a, B const & b ) noexcept
@@ -213,10 +268,10 @@ namespace
 template <typename T>
 class sort_keys_typed : public ::testing::Test {};
 
-using key_types = ::testing::Types<std::uint32_t, std::uint64_t, other_unsigned, strong_u32, high_low_pair, biased_i32>;
+using key_types = ::testing::Types<std::uint32_t, std::uint64_t, other_unsigned, strong_u32, high_low_pair, biased_i32, biased_f32, biased_f64>;
 TYPED_TEST_SUITE( sort_keys_typed, key_types );
 
-template <key_sort_algo Algo, typename T>
+template <key_sort_algo Algo, typename T, key_order Order = std::less<>>
 void check_sort_keys()
 {
     std::uint64_t seed{ 1 };
@@ -225,8 +280,8 @@ void check_sort_keys()
     {
         auto       actual  { make_input<T>( s, n, ++seed ) };
         auto       expected{ actual };
-        std::stable_sort( expected.begin(), expected.end() );
-        sort_keys<Algo>( std::span{ actual } );
+        std::stable_sort( expected.begin(), expected.end(), reference_order<Order> );
+        sort_keys<Algo>( std::span{ actual }, Order{} );
         EXPECT_TRUE( same_bytes( actual, expected ) ) << "shape " << static_cast<int>( s ) << ", n " << n;
     }
 }
@@ -245,7 +300,21 @@ TYPED_TEST( sort_keys_typed, radix_agrees_with_std_stable_sort )
 }
 #endif
 
-template <key_sort_algo Algo, typename T>
+TYPED_TEST( sort_keys_typed, pdq_descending_agrees_with_std_stable_sort_reversed )
+{
+    if constexpr ( sort_key<TypeParam> )
+        check_sort_keys<key_sort_algo::pdq, TypeParam, std::greater<>>();
+}
+
+#if PSI_VM_HAS_INTEGER_SORT
+TYPED_TEST( sort_keys_typed, radix_descending_agrees_with_std_stable_sort_reversed )
+{
+    if constexpr ( sort_key<TypeParam> )
+        check_sort_keys<key_sort_algo::radix, TypeParam, std::greater<>>();
+}
+#endif
+
+template <key_sort_algo Algo, typename T, key_order Order = std::less<>>
 void check_sort_unique_keys()
 {
     std::uint64_t seed{ 1'000 };
@@ -255,7 +324,7 @@ void check_sort_unique_keys()
         auto const input{ make_input<T>( s, n, ++seed ) };
 
         auto expected{ input };
-        std::sort( expected.begin(), expected.end() );
+        std::sort( expected.begin(), expected.end(), reference_order<Order> );
         expected.erase( std::unique( expected.begin(), expected.end(), equivalent<T> ), expected.end() );
         if ( s == shape::all_equal )
         {
@@ -263,18 +332,18 @@ void check_sort_unique_keys()
         }
 
         auto actual{ input };
-        auto const kept{ sort_unique_keys<Algo>( std::span{ actual } ) };
+        auto const kept{ sort_unique_keys<Algo>( std::span{ actual }, Order{} ) };
         EXPECT_EQ( kept, expected.size() ) << "shape " << static_cast<int>( s ) << ", n " << n;
         actual.resize( kept );
         EXPECT_TRUE( same_bytes( actual, expected ) ) << "shape " << static_cast<int>( s ) << ", n " << n;
 
         auto truncated{ input };
-        sort_unique_keys<Algo>( truncated );
+        sort_unique_keys<Algo>( truncated, Order{} );
         EXPECT_TRUE( same_bytes( truncated, expected ) ) << "std::vector, shape " << static_cast<int>( s ) << ", n " << n;
 
         heap_vector<T, std::uint32_t> heap_truncated;
         heap_truncated.append_range( input );
-        sort_unique_keys<Algo>( heap_truncated );
+        sort_unique_keys<Algo>( heap_truncated, Order{} );
         EXPECT_TRUE( std::ranges::equal( heap_truncated, expected, equivalent<T> ) ) << "heap_vector, shape " << static_cast<int>( s ) << ", n " << n;
     }
 }
@@ -293,8 +362,22 @@ TYPED_TEST( sort_keys_typed, radix_unique_agrees_with_std_sort_and_unique )
 }
 #endif
 
+TYPED_TEST( sort_keys_typed, pdq_unique_descending_agrees_with_std_sort_reversed_and_unique )
+{
+    if constexpr ( sort_key<TypeParam> )
+        check_sort_unique_keys<key_sort_algo::pdq, TypeParam, std::greater<>>();
+}
+
+#if PSI_VM_HAS_INTEGER_SORT
+TYPED_TEST( sort_keys_typed, radix_unique_descending_agrees_with_std_sort_reversed_and_unique )
+{
+    if constexpr ( sort_key<TypeParam> )
+        check_sort_unique_keys<key_sort_algo::radix, TypeParam, std::greater<>>();
+}
+#endif
+
 // Sorting part of an array leaves the keys on either side of it as they were.
-template <key_sort_algo Algo, typename T>
+template <key_sort_algo Algo, typename T, key_order Order = std::less<>>
 void check_subspan()
 {
     std::size_t constexpr margin{ 3 };
@@ -307,18 +390,18 @@ void check_subspan()
 
         auto expected{ input };
         auto const sorted_middle{ middle( expected ) };
-        std::stable_sort( sorted_middle.begin(), sorted_middle.end() );
+        std::stable_sort( sorted_middle.begin(), sorted_middle.end(), reference_order<Order> );
         auto actual{ input };
-        sort_keys<Algo>( middle( actual ) );
+        sort_keys<Algo>( middle( actual ), Order{} );
         EXPECT_TRUE( same_bytes( actual, expected ) ) << "shape " << static_cast<int>( s ) << ", n " << n;
 
         auto unique_expected{ input };
         auto const expected_middle{ middle( unique_expected ) };
-        std::sort( expected_middle.begin(), expected_middle.end() );
+        std::sort( expected_middle.begin(), expected_middle.end(), reference_order<Order> );
         auto const expected_kept{ static_cast<std::size_t>( std::unique( expected_middle.begin(), expected_middle.end(), equivalent<T> ) - expected_middle.begin() ) };
         auto unique_actual{ input };
         auto const actual_middle{ middle( unique_actual ) };
-        auto const kept{ sort_unique_keys<Algo>( actual_middle ) };
+        auto const kept{ sort_unique_keys<Algo>( actual_middle, Order{} ) };
         EXPECT_EQ( kept, expected_kept ) << "unique, shape " << static_cast<int>( s ) << ", n " << n;
         EXPECT_TRUE( same_bytes( actual_middle.first( kept ), expected_middle.first( expected_kept ) ) ) << "unique, shape " << static_cast<int>( s ) << ", n " << n;
         EXPECT_TRUE( same_bytes( std::span{ unique_actual }.first( margin ), std::span{ input }.first( margin ) ) ) << "unique, shape " << static_cast<int>( s ) << ", n " << n;
@@ -340,7 +423,21 @@ TYPED_TEST( sort_keys_typed, radix_of_a_subspan_leaves_its_neighbours_untouched 
 }
 #endif
 
-template <key_sort_algo Algo, typename T>
+TYPED_TEST( sort_keys_typed, pdq_descending_of_a_subspan_leaves_its_neighbours_untouched )
+{
+    if constexpr ( sort_key<TypeParam> )
+        check_subspan<key_sort_algo::pdq, TypeParam, std::greater<>>();
+}
+
+#if PSI_VM_HAS_INTEGER_SORT
+TYPED_TEST( sort_keys_typed, radix_descending_of_a_subspan_leaves_its_neighbours_untouched )
+{
+    if constexpr ( sort_key<TypeParam> )
+        check_subspan<key_sort_algo::radix, TypeParam, std::greater<>>();
+}
+#endif
+
+template <key_sort_algo Algo, typename T, key_order Order = std::less<>>
 void check_argsort()
 {
     std::uint64_t seed{ 2'000 };
@@ -351,18 +448,18 @@ void check_argsort()
 
         std::vector<std::uint32_t> expected( n );
         std::iota( expected.begin(), expected.end(), 0U );
-        std::stable_sort( expected.begin(), expected.end(), [ &keys ]( std::uint32_t const l, std::uint32_t const r ) { return keys[ l ] < keys[ r ]; } );
+        std::stable_sort( expected.begin(), expected.end(), [ &keys ]( std::uint32_t const l, std::uint32_t const r ) { return reference_order<Order>( keys[ l ], keys[ r ] ); } );
 
         std::vector<std::uint32_t> perm( n, ~0U );
-        argsort_keys<Algo>( keys, perm );
+        argsort_keys<Algo>( keys, perm, Order{} );
         EXPECT_EQ( perm, expected ) << "shape " << static_cast<int>( s ) << ", n " << n;
 
         std::vector<std::uint32_t> perm_of( n, ~0U );
-        argsort_by_key<Algo>( static_cast<std::uint32_t>( n ), [ &keys ]( std::uint32_t const i ) { return keys[ i ]; }, perm_of );
+        argsort_by_key<Algo>( static_cast<std::uint32_t>( n ), [ &keys ]( std::uint32_t const i ) { return keys[ i ]; }, perm_of, Order{} );
         EXPECT_EQ( perm_of, expected ) << "key accessor, shape " << static_cast<int>( s ) << ", n " << n;
 
         std::vector<std::uint32_t> perm_of_ref( n, ~0U );
-        argsort_by_key<Algo>( static_cast<std::uint32_t>( n ), [ &keys ]( std::uint32_t const i ) -> T const & { return keys[ i ]; }, perm_of_ref );
+        argsort_by_key<Algo>( static_cast<std::uint32_t>( n ), [ &keys ]( std::uint32_t const i ) -> T const & { return keys[ i ]; }, perm_of_ref, Order{} );
         EXPECT_EQ( perm_of_ref, expected ) << "key accessor returning a reference, shape " << static_cast<int>( s ) << ", n " << n;
 
         // a 64-bit index leaves no room to pack a key beside it, so every key
@@ -371,7 +468,7 @@ void check_argsort()
         {
             std::vector<std::uint64_t> const expected_64( expected.begin(), expected.end() );
             std::vector<std::uint64_t>       perm_64    ( n, ~0ULL );
-            argsort_keys<Algo, std::uint64_t>( keys, perm_64 );
+            argsort_keys<Algo, std::uint64_t>( keys, perm_64, Order{} );
             EXPECT_EQ( perm_64, expected_64 ) << "64-bit index, shape " << static_cast<int>( s ) << ", n " << n;
         }
     }
@@ -392,6 +489,132 @@ TYPED_TEST( sort_keys_typed, radix_argsort_agrees_with_std_stable_sort_of_indice
         check_argsort<key_sort_algo::radix, TypeParam>();
 }
 #endif
+
+// Descending, equal keys still come out in ascending index order, as
+// std::stable_sort with std::greater leaves them.
+TYPED_TEST( sort_keys_typed, pdq_argsort_descending_agrees_with_std_stable_sort_of_indices_reversed )
+{
+    if constexpr ( sort_key<TypeParam> )
+        check_argsort<key_sort_algo::pdq, TypeParam, std::greater<>>();
+}
+
+#if PSI_VM_HAS_INTEGER_SORT
+TYPED_TEST( sort_keys_typed, radix_argsort_descending_agrees_with_std_stable_sort_of_indices_reversed )
+{
+    if constexpr ( sort_key<TypeParam> && sizeof( TypeParam ) == sizeof( std::uint32_t ) )
+        check_argsort<key_sort_algo::radix, TypeParam, std::greater<>>();
+}
+#endif
+
+// The index breaks ties ascending in a descending argsort on every path: the
+// packed one (4-byte keys, either algorithm) and the pair one (8-byte keys,
+// and 4-byte keys with a 64-bit index).
+TEST( argsort_keys, descending_keeps_equal_keys_in_index_order )
+{
+    std::uint32_t const expected   [ 6 ]{ 0, 2, 5, 1, 4, 3 };
+    std::uint64_t const expected_64[ 6 ]{ 0, 2, 5, 1, 4, 3 };
+    std::uint32_t const keys_32    [ 6 ]{ 5, 3, 5, 1, 3, 5 };
+    std::uint64_t const keys_64    [ 6 ]{ 5, 3, 5, 1, 3, 5 };
+
+    std::uint32_t perm[ 6 ];
+    argsort_keys( keys_32, perm, std::greater{} );
+    EXPECT_TRUE( std::ranges::equal( perm, expected ) ) << "packed, pdq";
+#if PSI_VM_HAS_INTEGER_SORT
+    std::ranges::fill( perm, ~0U );
+    argsort_keys<key_sort_algo::radix>( keys_32, perm, std::greater{} );
+    EXPECT_TRUE( std::ranges::equal( perm, expected ) ) << "packed, radix";
+#endif
+    std::ranges::fill( perm, ~0U );
+    argsort_keys( keys_64, perm, std::ranges::greater{} );
+    EXPECT_TRUE( std::ranges::equal( perm, expected ) ) << "pair, 8-byte key";
+
+    std::uint64_t perm_64[ 6 ];
+    argsort_keys<key_sort_algo::pdq, std::uint64_t>( keys_32, perm_64, std::greater{} );
+    EXPECT_TRUE( std::ranges::equal( perm_64, expected_64 ) ) << "pair, 64-bit index";
+}
+
+namespace
+{
+    // The floats that random bits hardly ever spell - both zeros, both
+    // infinities, the extremes of either sign, denormals, and NaNs of either
+    // sign with more than one payload each - several times over, shuffled.
+    template <typename Key>
+    std::vector<Key> float_specials()
+    {
+        using U = decltype( Key{}.bits );
+        auto const one{ std::bit_cast<U>( decltype( Key{}.value() ){ 1 } ) };
+        // zero, the smallest denormal, the smallest normal, one, the largest
+        // finite value, infinity, and three NaNs: two quiet ones and a
+        // signalling one
+        U const magnitudes[]{ 0, 1, Key::mantissa + 1, one, Key::infinity - 1, Key::infinity, Key::quiet | 1, Key::quiet | 2, Key::infinity | 1 };
+        std::vector<Key> keys;
+        for ( int copy{ 0 }; copy < 3; ++copy )
+            for ( auto const magnitude : magnitudes )
+                for ( U const sign : { U{ 0 }, Key::sign } )
+                    keys.push_back( Key::of( static_cast<U>( magnitude | sign ) ) );
+        std::shuffle( keys.begin(), keys.end(), std::mt19937_64{ 42 } );
+        return keys;
+    }
+
+    template <key_sort_algo Algo, typename Key, typename Order>
+    void check_float_specials( Order const order )
+    {
+        auto const input{ float_specials<Key>() };
+        auto const by_value{ []( Key const l, Key const r ) noexcept { return std::is_lt( std::strong_order( l.value(), r.value() ) ); } };
+        auto const before  { [ by_value ]( Key const l, Key const r ) noexcept { return key_sort_detail::is_descending<Order> ? by_value( r, l ) : by_value( l, r ); } };
+
+        auto expected{ input };
+        std::stable_sort( expected.begin(), expected.end(), before );
+        auto actual{ input };
+        sort_keys<Algo>( std::span{ actual }, order );
+        EXPECT_TRUE( same_bytes( actual, expected ) ) << "sort_keys";
+
+        auto unique_expected{ expected };
+        unique_expected.erase( std::unique( unique_expected.begin(), unique_expected.end() ), unique_expected.end() );
+        auto unique_actual{ input };
+        sort_unique_keys<Algo>( unique_actual, order );
+        EXPECT_TRUE( same_bytes( unique_actual, unique_expected ) ) << "sort_unique_keys";
+
+        std::vector<std::uint32_t> perm_expected( input.size() );
+        std::iota( perm_expected.begin(), perm_expected.end(), 0U );
+        std::stable_sort( perm_expected.begin(), perm_expected.end(), [ & ]( std::uint32_t const l, std::uint32_t const r ) { return before( input[ l ], input[ r ] ); } );
+        std::vector<std::uint32_t> perm( input.size(), ~0U );
+        if constexpr ( Algo == key_sort_algo::pdq || sizeof( Key ) == sizeof( std::uint32_t ) )
+        {
+            argsort_keys<Algo>( input, perm, order );
+            EXPECT_EQ( perm, perm_expected ) << "argsort_keys";
+        }
+    }
+} // anonymous namespace
+
+// Ascending the floats come out as std::strong_order sorts them, and
+// descending in exactly the reverse: +NaNs, +inf, ..., +0, -0, ..., -inf, -NaNs.
+TEST( sort_keys, floats_order_as_std_strong_order_both_ways )
+{
+    check_float_specials<key_sort_algo::pdq, biased_f32>( std::less   <>{} );
+    check_float_specials<key_sort_algo::pdq, biased_f32>( std::greater<>{} );
+    check_float_specials<key_sort_algo::pdq, biased_f64>( std::less   <>{} );
+    check_float_specials<key_sort_algo::pdq, biased_f64>( std::greater<>{} );
+#if PSI_VM_HAS_INTEGER_SORT
+    check_float_specials<key_sort_algo::radix, biased_f32>( std::ranges::less   {} );
+    check_float_specials<key_sort_algo::radix, biased_f32>( std::ranges::greater{} );
+    check_float_specials<key_sort_algo::radix, biased_f64>( std::ranges::less   {} );
+    check_float_specials<key_sort_algo::radix, biased_f64>( std::ranges::greater{} );
+#endif
+}
+
+// A spot check of the descending order itself, independent of the reference
+// comparator: +0 and -0 in reverse strong order, NaNs at the ends.
+TEST( sort_keys, descending_float_order_by_hand )
+{
+    std::uint32_t constexpr nan{ 0x7FC0'0000 }, one{ 0x3F80'0000 }, negative_zero{ 0x8000'0000 }, negative_infinity{ 0xFF80'0000 };
+    std::vector keys{ biased_f32::of( negative_zero ), biased_f32::of( one ), biased_f32::of( nan | negative_zero ), biased_f32::of( 0 ), biased_f32::of( negative_infinity ), biased_f32::of( nan ) };
+    sort_keys( std::span{ keys }, std::greater{} );
+    std::uint32_t const expected[]{ nan, one, 0, negative_zero, negative_infinity, nan | negative_zero };
+    ASSERT_EQ( keys.size(), std::size( expected ) );
+    for ( std::size_t i{ 0 }; i < keys.size(); ++i )
+        EXPECT_EQ( keys[ i ].raw(), expected[ i ] ) << "position " << i;
+}
 
 namespace
 {

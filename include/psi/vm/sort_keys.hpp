@@ -101,7 +101,11 @@ namespace key_sort_detail
 /// with its sign bit flipped (x ^ 0x8000'0000 for 32 bits), an IEEE float with
 /// all of its bits flipped when its sign bit is set and only the sign bit
 /// flipped when it is not - which orders the values as std::strong_order does
-/// the floats, -0.0 before +0.0 and NaNs at either end. Nothing can check the
+/// the floats, -0.0 before +0.0 and NaNs at either end. Sorted descending
+/// (see key_order), such keys come out in exactly the reverse of that order:
+/// the NaNs with a clear sign bit first (the larger payload first), then +inf,
+/// the positive values, +0.0 before -0.0, the negative values, -inf, and the
+/// NaNs with a set sign bit last. Nothing can check the
 /// promise at compile time, so a debug build checks each sort's result
 /// against the key's own operator<, where it has one.
 template <typename T>
@@ -117,8 +121,35 @@ concept sort_key =
         )
     );
 
+/// The order to sort the keys in, passed as std::sort takes its comparator:
+/// std::less<> (or std::ranges::less) - ascending, the default - or
+/// std::greater<> (or std::ranges::greater) - descending, the exact reverse.
+/// No other comparator is accepted: the keys are sorted by their unsigned
+/// reading, and these two orderings are the ones it describes. The order is a
+/// trailing argument rather than a template parameter so that a call names it
+/// where it names the comparator of std::sort, without spelling out the
+/// algorithm (and argsort's index type) ahead of it.
+///
+/// Descending, the complement of each key's unsigned reading is sorted
+/// ascending: the keys are complemented on the way to the worker and back on
+/// the way out - one xor per key each way - so both orders share the one
+/// worker per (algorithm, key width), and a program that sorts only ascending
+/// carries no trace of the descending order.
+template <typename Order>
+concept key_order =
+    std::same_as<Order, std::less<>> || std::same_as<Order, std::ranges::less> ||
+    std::same_as<Order, std::greater<>> || std::same_as<Order, std::ranges::greater>;
+
 namespace key_sort_detail
 {
+    template <key_order Order>
+    bool constexpr is_descending{ std::same_as<Order, std::greater<>> || std::same_as<Order, std::ranges::greater> };
+
+    // What a key's unsigned reading is xor-ed with to sort it in the Order:
+    // nothing ascending, every bit descending.
+    template <key_order Order, std::unsigned_integral U>
+    U constexpr order_mask{ is_descending<Order> ? static_cast<U>( ~U{ 0 } ) : U{ 0 } };
+
     // radix allocates its bins, so a radix sort cannot fail only where an
     // allocation cannot, which is what PSI_NOEXCEPT_EXCEPT_BADALLOC states
     // for the build; the pdq path allocates nothing and is always noexcept.
@@ -142,6 +173,8 @@ namespace key_sort_detail
     template <>
     struct algorithm<key_sort_algo::pdq>
     {
+        // U is the order-preserving image of the key, so U's natural order is
+        // the key order (the complemented image, for a descending sort).
         template <std::unsigned_integral U>
         [[ gnu::always_inline ]] static void sort( U * const first, U * const last ) { PSI_VM_PDQSORT_BRANCHLESS( first, last, std::less<U>{} ); }
     };
@@ -190,7 +223,38 @@ namespace key_sort_detail
         return static_cast<std::size_t>( std::unique( first, last ) - first );
     }
 
-    template <key_sort_algo Algo, sort_key T>
+    // Complements the integers when it is made and again when it is
+    // destroyed: all of them, the ones past the kept count too, and however
+    // the sort ends (radix can end it by throwing).
+    template <std::unsigned_integral U>
+    struct complementer
+    {
+        std::span<U> const uints;
+
+        explicit complementer( std::span<U> const uints_ ) noexcept : uints{ uints_ } { complement(); }
+        ~complementer() noexcept { complement(); }
+        complementer( complementer const & ) = delete;
+
+        void complement() const noexcept { std::ranges::transform( uints, uints.begin(), std::bit_not<U>{} ); }
+    };
+
+    // The worker in the Order: descending, it sorts the complemented integers
+    // (see key_order).
+    template <key_sort_algo Algo, key_order Order, std::unsigned_integral U>
+    std::size_t sort_uints_in( std::span<U> const uints, bool const unique ) noexcept( key_sort_nothrow<Algo> )
+    {
+        if constexpr ( is_descending<Order> )
+        {
+            complementer<U> const complemented{ uints };
+            return sort_uints<Algo>( uints, unique );
+        }
+        else
+        {
+            return sort_uints<Algo>( uints, unique );
+        }
+    }
+
+    template <key_sort_algo Algo, key_order Order, sort_key T>
     std::size_t sort_as_uints( std::span<T> const keys, bool const unique ) noexcept( key_sort_nothrow<Algo> )
     {
         using uint_t = key_uint_t<T>;
@@ -198,7 +262,7 @@ namespace key_sort_detail
             return keys.size();
         if constexpr ( std::is_same_v<T, uint_t> )
         {
-            return sort_uints<Algo>( keys, unique );
+            return sort_uints_in<Algo, Order>( keys, unique );
         }
         else
         {
@@ -219,15 +283,20 @@ namespace key_sort_detail
 
                         ~keys_restorer() noexcept { std::ignore = reuse_storage_as<T>( uints, size ); }
                     } const restorer{ reuse_storage_as<uint_t>( keys.data(), keys.size() ), keys.size() };
-                    return sort_uints<Algo>( std::span<uint_t>{ restorer.uints, restorer.size }, unique );
+                    return sort_uints_in<Algo, Order>( std::span<uint_t>{ restorer.uints, restorer.size }, unique );
                 }()
             };
             // The key's promise to order as its unsigned reading (see
             // sort_key) is checked here, where it can be: a debug build
-            // compares the result with the key's own ordering.
+            // compares the result with the key's own ordering (its operator<,
+            // either way round).
             if constexpr ( requires( T const & key ) { { key < key } -> std::convertible_to<bool>; } )
             {
-                BOOST_ASSERT_MSG( std::is_sorted( keys.data(), keys.data() + kept ), "a key that states orders_as_unsigned does not order as its unsigned reading" );
+                BOOST_ASSERT_MSG
+                (
+                    std::is_sorted( keys.data(), keys.data() + kept, []( T const & left, T const & right ) { return is_descending<Order> ? bool( right < left ) : bool( left < right ); } ),
+                    "a key that states orders_as_unsigned does not order as its unsigned reading"
+                );
             }
             return kept;
         }
@@ -296,24 +365,26 @@ namespace key_sort_detail
     }
 } // namespace key_sort_detail
 
-/// Sorts the keys ascending (in the order of their unsigned reading), by
-/// pdqsort unless radix is asked for. Not stable - which is not observable:
-/// keys that compare equal have the same object representation.
+/// Sorts the keys in the order of their unsigned reading, ascending unless
+/// std::greater<> is passed (see key_order), by pdqsort unless radix is asked
+/// for. Not stable - which is not observable: keys that compare equal have
+/// the same object representation.
 /// noexcept for pdq; for radix only where allocation cannot fail
 /// (PSI_NOEXCEPT_EXCEPT_BADALLOC).
-template <key_sort_algo Algo = key_sort_algo::pdq, sort_key T>
-void sort_keys( std::span<T> const keys ) noexcept( key_sort_detail::key_sort_nothrow<Algo> )
+template <key_sort_algo Algo = key_sort_algo::pdq, sort_key T, key_order Order = std::less<>>
+void sort_keys( std::span<T> const keys, Order = {} ) noexcept( key_sort_detail::key_sort_nothrow<Algo> )
 {
-    std::ignore = key_sort_detail::sort_as_uints<Algo>( keys, false );
+    std::ignore = key_sort_detail::sort_as_uints<Algo, Order>( keys, false );
 }
 
-/// Sorts the keys as sort_keys does and moves the first of each run of equal
-/// keys to the front, in order, as std::unique does; returns how many keys
-/// that is. The keys past that count are left with unspecified values.
-template <key_sort_algo Algo = key_sort_algo::pdq, sort_key T>
-[[ nodiscard ]] std::size_t sort_unique_keys( std::span<T> const keys ) noexcept( key_sort_detail::key_sort_nothrow<Algo> )
+/// Sorts the keys as sort_keys does, in the given order, and moves the first
+/// of each run of equal keys to the front, in that order, as std::unique
+/// does; returns how many keys that is. The keys past that count are left
+/// with unspecified values.
+template <key_sort_algo Algo = key_sort_algo::pdq, sort_key T, key_order Order = std::less<>>
+[[ nodiscard ]] std::size_t sort_unique_keys( std::span<T> const keys, Order = {} ) noexcept( key_sort_detail::key_sort_nothrow<Algo> )
 {
-    return key_sort_detail::sort_as_uints<Algo>( keys, true );
+    return key_sort_detail::sort_as_uints<Algo, Order>( keys, true );
 }
 
 /// Sorts and deduplicates a contiguous container of keys and truncates it to
@@ -322,19 +393,22 @@ template <key_sort_algo Algo = key_sort_algo::pdq, sort_key T>
 /// standard and psi::vm containers, whose shrinking resize neither allocates
 /// nor constructs, but a property of the container rather than one checked
 /// here - resize() is noexcept for none of them, as growing allocates.
-template <key_sort_algo Algo = key_sort_algo::pdq, std::ranges::contiguous_range Keys>
+template <key_sort_algo Algo = key_sort_algo::pdq, std::ranges::contiguous_range Keys, key_order Order = std::less<>>
 requires( sort_key<std::ranges::range_value_t<Keys>> && requires( Keys & keys ) { keys.resize( std::ranges::size( keys ) ); } )
-void sort_unique_keys( Keys & keys ) noexcept( key_sort_detail::key_sort_nothrow<Algo> )
+void sort_unique_keys( Keys & keys, Order const order = {} ) noexcept( key_sort_detail::key_sort_nothrow<Algo> )
 {
-    auto const kept{ sort_unique_keys<Algo>( std::span<std::ranges::range_value_t<Keys>>{ keys } ) };
+    auto const kept{ sort_unique_keys<Algo>( std::span<std::ranges::range_value_t<Keys>>{ keys }, order ) };
     keys.resize( static_cast<std::ranges::range_size_t<Keys>>( kept ) );
 }
 
 /// Writes to perm the permutation that sorts the n keys key_of( 0 ), ...,
-/// key_of( n - 1 ): perm[ k ] is the index of the k-th smallest key. The
-/// index breaks ties, so equal keys keep the order of their indices - the
-/// result is that of a stable sort. Index is the type of the indices (and of
-/// n), 32 bits unless a wider one is asked for.
+/// key_of( n - 1 ) in the given order (see key_order): perm[ k ] is the index
+/// of the k-th smallest key, or of the k-th largest with std::greater<>. The
+/// index breaks ties, ascending in either order, so equal keys keep the order
+/// of their indices - the result is that of std::stable_sort of the indices
+/// by key in that order. (Descending, only the key is complemented, never the
+/// index beside it.) Index is the type of the indices (and of n), 32 bits
+/// unless a wider one is asked for.
 ///  * a 4-byte key with an index of at most 32 bits is packed with it into one
 ///    64-bit integer, key << 32 | index, which the sort_keys worker sorts -
 ///    with Algo;
@@ -344,9 +418,9 @@ void sort_unique_keys( Keys & keys ) noexcept( key_sort_detail::key_sort_nothrow
 /// first 4 KiB are on the stack - every call takes that much stack, whatever
 /// n is - and the rest on the heap, so the call is noexcept only where
 /// allocation cannot fail (and key_of does not throw).
-template <key_sort_algo Algo = key_sort_algo::pdq, std::unsigned_integral Index = std::uint32_t, typename KeyOf>
+template <key_sort_algo Algo = key_sort_algo::pdq, std::unsigned_integral Index = std::uint32_t, typename KeyOf, key_order Order = std::less<>>
 requires sort_key<std::remove_cvref_t<std::invoke_result_t<KeyOf &, Index>>>
-void argsort_by_key( std::type_identity_t<Index> const n, KeyOf && key_of, std::span<std::type_identity_t<Index>> const perm )
+void argsort_by_key( std::type_identity_t<Index> const n, KeyOf && key_of, std::span<std::type_identity_t<Index>> const perm, Order = {} )
     noexcept( key_sort_detail::allocation_nothrow && std::is_nothrow_invocable_v<KeyOf &, Index> )
 {
     using key_t = std::remove_cvref_t<std::invoke_result_t<KeyOf &, Index>>;
@@ -355,7 +429,7 @@ void argsort_by_key( std::type_identity_t<Index> const n, KeyOf && key_of, std::
     {
         small_vector<std::uint64_t, 512, key_sort_detail::scratch_size_t<Index>> packed( n, no_init );
         for ( Index i{ 0 }; i < n; ++i )
-            packed[ i ] = ( std::uint64_t{ std::bit_cast<std::uint32_t>( key_t{ key_of( i ) } ) } << 32 ) | i;
+            packed[ i ] = ( std::uint64_t{ std::bit_cast<std::uint32_t>( key_t{ key_of( i ) } ) ^ key_sort_detail::order_mask<Order, std::uint32_t> } << 32 ) | i;
         std::ignore = key_sort_detail::sort_uints<Algo>( std::span<std::uint64_t>{ packed }, false );
         for ( Index i{ 0 }; i < n; ++i )
             perm[ i ] = static_cast<Index>( packed[ i ] );
@@ -367,12 +441,13 @@ void argsort_by_key( std::type_identity_t<Index> const n, KeyOf && key_of, std::
         using pair     = key_sort_detail::key_index<key_uint, Index>;
         small_vector<pair, 4096 / sizeof( pair ), key_sort_detail::scratch_size_t<Index>> pairs( n, no_init );
         for ( Index i{ 0 }; i < n; ++i )
-            pairs[ i ] = { std::bit_cast<key_uint>( key_t{ key_of( i ) } ), i };
+            pairs[ i ] = { static_cast<key_uint>( std::bit_cast<key_uint>( key_t{ key_of( i ) } ) ^ key_sort_detail::order_mask<Order, key_uint> ), i };
         key_sort_detail::argsort_pairs<key_uint, Index>( pairs, perm );
     }
 }
 
-/// The permutation that sorts a contiguous range of keys (see argsort_by_key).
+/// The permutation that sorts a contiguous range of keys in the given order
+/// (see argsort_by_key).
 /// A range of more keys than an Index counts is refused with
 /// std::length_error, in every build - counting it in an Index would sort only
 /// some of the keys and leave the rest of perm unwritten - by the rule the
@@ -380,9 +455,9 @@ void argsort_by_key( std::type_identity_t<Index> const n, KeyOf && key_of, std::
 /// count of keys can reach it (Index below 64 bits), asserted on where none
 /// plausibly can. A range whose size type an Index covers needs no check, so
 /// with a 64-bit Index the call is noexcept wherever allocation cannot fail.
-template <key_sort_algo Algo = key_sort_algo::pdq, std::unsigned_integral Index = std::uint32_t, std::ranges::contiguous_range Keys>
+template <key_sort_algo Algo = key_sort_algo::pdq, std::unsigned_integral Index = std::uint32_t, std::ranges::contiguous_range Keys, key_order Order = std::less<>>
 requires sort_key<std::ranges::range_value_t<Keys>>
-void argsort_keys( Keys const & keys, std::span<std::type_identity_t<Index>> const perm )
+void argsort_keys( Keys const & keys, std::span<std::type_identity_t<Index>> const perm, Order const order = {} )
     noexcept( key_sort_detail::allocation_nothrow && !key_sort_detail::index_overflow_is_reportable<Keys const, Index> )
 {
     auto const size{ std::ranges::size( keys ) };
@@ -396,7 +471,8 @@ void argsort_keys( Keys const & keys, std::span<std::type_identity_t<Index>> con
     (
         static_cast<Index>( size ),
         [ data ]( Index const i ) noexcept { return data[ i ]; },
-        perm
+        perm,
+        order
     );
 }
 
