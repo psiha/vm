@@ -388,8 +388,8 @@ namespace
 
 namespace
 {
-    //! Whether the memory at address is (still) backed by a file or memfd,
-    //! rather than by anonymous memory - i.e. that it was not copied.
+    //! Whether the memory at address is (still) backed by a file, memfd or
+    //! section, rather than by private memory - i.e. that it was not copied.
     [[ maybe_unused ]] bool backed_by_an_object( void const * const address )
     {
 #   ifdef __linux__
@@ -404,6 +404,9 @@ namespace
                 return inode != 0;
         }
         return false;
+#   elif defined( _WIN32 )
+        MEMORY_BASIC_INFORMATION info;
+        return ( ::VirtualQuery( address, &info, sizeof( info ) ) == sizeof( info ) ) && ( info.Type == MEM_MAPPED );
 #   else
         (void)address;
         return true;
@@ -461,7 +464,11 @@ TEST( vm_vector_cow, clone_grows_where_it_has_no_room_to_grow_in_place )
             ASSERT_EQ( src[ i ], i );
         // Moved, not copied: what the clone never wrote is still mapped
         // from the object it shares with the source (a copy would be
-        // anonymous memory).
+        // anonymous memory) - on Windows but for a file whose length is not a
+        // multiple of the allocation granule, where a clone does copy.
+#   ifdef _WIN32
+        if ( kind != backing::file )
+#   endif
         EXPECT_TRUE( backed_by_an_object( &clone[ count / 2 ] ) );
         if ( kind == backing::file )
             EXPECT_TRUE( file_bytes( test_vec ) == file_before );
