@@ -230,12 +230,16 @@ public:
     // COW (copy-on-write) copy construction: creates a new storage sharing
     // physical pages with the source. Writes to the clone trigger private
     // page copies (kernel-managed COW).
-    // - File-backed (all platforms): MAP_PRIVATE / PAGE_WRITECOPY view. The
-    //   clone never resizes the file it shares with the source: its first
-    //   growth moves it into memory of its own.
+    // - File-backed (all platforms): MAP_PRIVATE / PAGE_WRITECOPY view
     // - Anonymous (Windows): WRITECOPY view of the same pagefile section
     // - Anonymous (macOS): mach_vm_remap(copy=TRUE) + deep-copy fallback
-    // - Anonymous (Linux): memfd_create + MAP_PRIVATE (true COW) or deep copy
+    // - Anonymous (Linux): a copy into a memfd of the clone's own, mapped as
+    //   map_cow_memory() maps one (so clones of the clone are true COW), or a
+    //   plain deep copy
+    // A clone never resizes the object it shares with the source (a file, a
+    // memfd or a section), nor maps more of it than it was created with: it
+    // grows past it with memory of its own, the untouched pages staying
+    // shared.
     explicit mem_mapping( mem_mapping const & );
 
     [[ gnu::pure ]] size_type header_size() const noexcept { return get_sizes().client_hdr_size(); }
@@ -441,9 +445,18 @@ private:
 
     void * expand_capacity( size_type target_storage_capacity );
 
-    //! Whether this is a private (copy-on-write) view of a file, i.e. a COW
-    //! clone of a file backed container: the file is not its to resize.
-    [[ nodiscard, gnu::pure ]] bool maps_a_file_privately() const noexcept;
+    //! Whether this is a private (copy-on-write) view of a mappable object
+    //! (file, memfd or section), i.e. a COW clone: the object is shared with
+    //! the source, so it is not the clone's to resize - nor does it hold the
+    //! clone's own writes.
+    [[ nodiscard, gnu::pure ]] bool views_privately() const noexcept;
+    //! Growth and shrinkage of a private view: the object part stays mapped
+    //! (and shared with the source) as it is, the view grows past it with
+    //! anonymous memory of the clone's own, and neither ever resizes the
+    //! object. grow_privately() returns false where it cannot (no address
+    //! space to grow or move into), leaving the view as it was.
+    [[ nodiscard ]] bool grow_privately  ( size_type target_size );
+    void                 shrink_privately( size_type target_size ) noexcept( mapping::views_downsizeable );
     void move_into_memory( size_type mapped_size );
 
     size_type client_to_storage_size( size_type sz ) const noexcept;
@@ -455,6 +468,10 @@ private:
     // is deliberately NOT updated by growth/shrinkage - see size() and
     // committed_size().
     size_type              live_size_{ 0 };
+    // Private views (COW clones) only: how much of the view's address range,
+    // from its start, the shared object backs - past it the view is
+    // anonymous memory of the clone's own.
+    size_type              object_extent_{ 0 };
 }; // mem_mapping
 
 

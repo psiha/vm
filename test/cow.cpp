@@ -18,6 +18,7 @@
 #   include <windows.h>
 #   include <psapi.h>
 #else
+#   include <sys/mman.h>
 #   include <sys/resource.h>
 #endif
 
@@ -25,6 +26,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -32,6 +34,7 @@
 #include <numeric>
 #include <random>
 #include <print>
+#include <string>
 #include <ranges>
 #include <vector>
 //------------------------------------------------------------------------------
@@ -250,6 +253,243 @@ TEST( vm_vector_cow, file_backed_clone_shrinks_without_touching_the_file )
             ASSERT_EQ( clone[ i ], 0xC0DE + i );
     }
     std::filesystem::remove( test_vec );
+}
+
+namespace
+{
+    enum struct backing { file, cow_memory, memory };
+
+    void map_source( vm_vector<std::uint32_t, std::uint32_t> & vec, backing const kind, char const * const file )
+    {
+        switch ( kind )
+        {
+            case backing::file      : vec.map_file( file, flags::named_object_construction_policy::create_new_or_truncate_existing ); break;
+            case backing::cow_memory: vec.map_cow_memory(); break;
+            case backing::memory    : vec.map_memory    (); break;
+        }
+    }
+} // anonymous namespace
+
+// A clone of memory backed storage shares the object behind it (on Linux the
+// memfd of map_cow_memory(), on Windows the pagefile section) with its source
+// just as a clone of a file shares the file: it must not resize it either.
+TEST( vm_vector_cow, memory_backed_clone_grows_without_resizing_its_source )
+{
+    for ( auto const kind : { backing::cow_memory, backing::memory } )
+    {
+        auto constexpr count      { 1000u };
+        auto constexpr grown_count{ 100 * count };
+        vm_vector<std::uint32_t, std::uint32_t> src;
+        map_source( src, kind, nullptr );
+        for ( std::uint32_t i{ 0 }; i < count; ++i )
+            src.push_back( 3 * i + 1 );
+        auto const storage_size{ src.storage_size() };
+        auto const capacity    { src.capacity    () };
+
+        auto clone{ src };
+        auto other{ src };
+        clone[ 0 ] = 0xDEAD;
+        clone.resize( grown_count );
+
+        EXPECT_EQ( src.storage_size(), storage_size );
+        EXPECT_EQ( src.capacity    (), capacity     );
+        ASSERT_EQ( src.size(), count );
+        for ( std::uint32_t i{ 0 }; i < count; ++i )
+            ASSERT_EQ( src[ i ], 3 * i + 1 );
+
+        ASSERT_EQ( clone.size(), grown_count );
+        EXPECT_EQ( clone[ 0 ], 0xDEADu );
+        for ( std::uint32_t i{ 1 }; i < count; ++i )
+            ASSERT_EQ( clone[ i ], 3 * i + 1 );
+        for ( std::uint32_t i{ count }; i < grown_count; ++i )
+            ASSERT_EQ( clone[ i ], 0u );
+
+        // What the source later writes past the clones' ends is no part of
+        // them: neither of a clone that grew before it, nor of one that grows
+        // after it.
+        src.resize( grown_count );
+        for ( std::uint32_t i{ count }; i < grown_count; ++i )
+            src[ i ] = 0xFFFF'FFFF;
+        for ( std::uint32_t i{ count }; i < grown_count; ++i )
+            ASSERT_EQ( clone[ i ], 0u );
+        other.resize( grown_count );
+        for ( std::uint32_t i{ 0 }; i < count; ++i )
+            ASSERT_EQ( other[ i ], 3 * i + 1 );
+        for ( std::uint32_t i{ count }; i < grown_count; ++i )
+            ASSERT_EQ( other[ i ], 0u );
+    }
+}
+
+TEST( vm_vector_cow, memory_backed_clone_shrinks_without_resizing_its_source )
+{
+    for ( auto const kind : { backing::cow_memory, backing::memory } )
+    {
+        auto constexpr count{ 100000u }; // many pages
+        vm_vector<std::uint32_t, std::uint32_t> src;
+        map_source( src, kind, nullptr );
+        for ( std::uint32_t i{ 0 }; i < count; ++i )
+            src.push_back( i );
+        auto const storage_size{ src.storage_size() };
+
+        auto clone{ src };
+        for ( std::uint32_t i{ 0 }; i < 10; ++i )
+            clone[ i ] = 0xC0DE + i;
+        clone.resize( 10 );
+        clone.shrink_to_fit();
+
+        EXPECT_EQ( src.storage_size(), storage_size );
+        ASSERT_EQ( src.size(), count );
+        for ( std::uint32_t i{ 0 }; i < count; ++i ) // the source still has every page it maps
+            ASSERT_EQ( src[ i ], i );
+
+        ASSERT_EQ( clone.size(), 10u );
+        for ( std::uint32_t i{ 0 }; i < 10; ++i )
+            ASSERT_EQ( clone[ i ], 0xC0DE + i );
+    }
+}
+
+namespace
+{
+    //! Occupies the address range right past a container's mapping for as
+    //! long as it lives, so that the container cannot grow in place.
+    class address_blocker
+    {
+    public:
+        explicit address_blocker( auto const & vec ) noexcept
+        {
+            auto const end{ reinterpret_cast<std::uintptr_t>( vec.data() + vec.capacity() ) };
+#       ifdef _WIN32
+            auto const at{ align_up( end, std::uintptr_t{ 64 * 1024 } ) };
+            address_ = ::VirtualAlloc( reinterpret_cast<void *>( at ), size, MEM_RESERVE, PAGE_NOACCESS );
+#       else
+            auto const at{ align_up( end, std::uintptr_t{ page_size } ) };
+            address_ = ::mmap( reinterpret_cast<void *>( at ), size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0 );
+            if ( address_ == MAP_FAILED )
+                address_ = nullptr;
+#       endif
+            placed_ = ( address_ == reinterpret_cast<void *>( at ) );
+        }
+        address_blocker( address_blocker const & ) = delete;
+       ~address_blocker() noexcept
+        {
+#       ifdef _WIN32
+            if ( address_ ) ::VirtualFree( address_, 0, MEM_RELEASE );
+#       else
+            if ( address_ ) ::munmap( address_, size );
+#       endif
+        }
+        bool placed() const noexcept { return placed_; }
+    private:
+        static std::size_t constexpr size{ 64 * 1024 };
+        void * address_{};
+        bool   placed_ {};
+    };
+} // anonymous namespace
+
+namespace
+{
+    //! Whether the memory at address is (still) backed by a file or memfd,
+    //! rather than by anonymous memory - i.e. that it was not copied.
+    [[ maybe_unused ]] bool backed_by_an_object( void const * const address )
+    {
+#   ifdef __linux__
+        std::ifstream maps( "/proc/self/maps" );
+        std::string   line;
+        auto const    a{ reinterpret_cast<std::uintptr_t>( address ) };
+        while ( std::getline( maps, line ) )
+        {
+            unsigned long lo, hi, offset, inode;
+            char perms[ 8 ], dev[ 16 ];
+            if ( std::sscanf( line.c_str(), "%lx-%lx %7s %lx %15s %lu", &lo, &hi, perms, &offset, dev, &inode ) == 6 && a >= lo && a < hi )
+                return inode != 0;
+        }
+        return false;
+#   else
+        (void)address;
+        return true;
+#   endif
+    }
+} // anonymous namespace
+
+// A clone that cannot grow where it is moves - its shared part still shared,
+// its own writes still its own.
+TEST( vm_vector_cow, clone_grows_where_it_has_no_room_to_grow_in_place )
+{
+    auto const test_vec{ "test_cow_no_room.vec" };
+    for ( auto const kind : { backing::file, backing::cow_memory, backing::memory } )
+    {
+        auto constexpr count      { 10000u };
+        auto constexpr grown_count{ 30 * count };
+        vm_vector<std::uint32_t, std::uint32_t> src;
+        map_source( src, kind, test_vec );
+        for ( std::uint32_t i{ 0 }; i < count; ++i )
+            src.push_back( i );
+        std::vector<char> file_before;
+        if ( kind == backing::file )
+        {
+            src.flush_blocking();
+            file_before = file_bytes( test_vec );
+        }
+
+        auto clone{ src };
+        clone[ 1 ] = 0xDEAD;
+        clone.resize( 2 * count ); // a part of the clone's own, which must move along
+        for ( std::uint32_t i{ count }; i < 2 * count; ++i )
+            clone[ i ] = ~i;
+        {
+            // (on Windows a clone keeps address space in reserve past its
+            // view, which a blocker cannot take)
+            address_blocker const blocker{ clone };
+#       ifndef _WIN32
+            ASSERT_TRUE( blocker.placed() );
+#       endif
+            clone.resize( grown_count );
+        }
+        EXPECT_EQ( clone[ 1 ], 0xDEADu );
+        for ( std::uint32_t i{ 0 }; i < count; ++i )
+            if ( i != 1 )
+                ASSERT_EQ( clone[ i ], i );
+        for ( std::uint32_t i{ count }; i < 2 * count; ++i )
+            ASSERT_EQ( clone[ i ], ~i );
+        for ( std::uint32_t i{ 2 * count }; i < grown_count; ++i )
+            ASSERT_EQ( clone[ i ], 0u );
+        ASSERT_EQ( src.size(), count );
+        for ( std::uint32_t i{ 0 }; i < count; ++i )
+            ASSERT_EQ( src[ i ], i );
+        // Moved, not copied: what the clone never wrote is still mapped
+        // from the object it shares with the source (a copy would be
+        // anonymous memory).
+        EXPECT_TRUE( backed_by_an_object( &clone[ count / 2 ] ) );
+        if ( kind == backing::file )
+            EXPECT_TRUE( file_bytes( test_vec ) == file_before );
+    }
+    std::filesystem::remove( test_vec );
+}
+
+// What a clone shrank away is not the source's to fill: growing back over it
+// never shows what the source has since written there.
+TEST( vm_vector_cow, clone_regrown_after_a_shrink_does_not_see_the_sources_writes )
+{
+    for ( auto const kind : { backing::cow_memory, backing::memory } )
+    {
+        auto constexpr count{ 100000u };
+        auto constexpr kept { count / 2 + 7 }; // mid page, in a page the clone never wrote
+        vm_vector<std::uint32_t, std::uint32_t> src;
+        map_source( src, kind, nullptr );
+        for ( std::uint32_t i{ 0 }; i < count; ++i )
+            src.push_back( i );
+
+        auto clone{ src };
+        clone.resize( kept );
+        clone.shrink_to_fit();
+        for ( std::uint32_t i{ kept }; i < count; ++i )
+            src[ i ] = 0xFFFF'FFFF;
+        clone.resize( count );
+        for ( std::uint32_t i{ 0 }; i < kept; ++i )
+            ASSERT_EQ( clone[ i ], i );
+        for ( std::uint32_t i{ kept }; i < count; ++i )
+            ASSERT_NE( clone[ i ], 0xFFFF'FFFFu );
+    }
 }
 
 TEST( vm_vector_cow, empty_clone )
