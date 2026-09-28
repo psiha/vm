@@ -42,6 +42,9 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
+namespace
+{
+
 PSI_COLD
 expand_result expand
 (
@@ -155,30 +158,43 @@ expand_result expand
     return {};
 }
 
+} // anonymous namespace
+
+expand_result expand
+(
+    mapped_span       const span,
+    std::size_t       const required_size_for_end_expansion,
+    std::size_t       const required_size_for_front_expansion,
+    std::size_t       const used_capacity,
+    allocation_type   const alloc_type,
+    reallocation_type const realloc_type
+) noexcept
+{
+    return expand( span.data(), span.size(), required_size_for_end_expansion, required_size_for_front_expansion, used_capacity, alloc_type, realloc_type );
+}
+
 expand_result expand_back
 (
-    std::byte *       const address,
-    std::size_t       const current_size,
+    mapped_span       const span,
     std::size_t       const required_size,
     std::size_t       const used_capacity,
     allocation_type   const alloc_type,
     reallocation_type const realloc_type
 ) noexcept
 {
-    return expand( address, current_size, required_size, 0, used_capacity, alloc_type, realloc_type );
+    return expand( span.data(), span.size(), required_size, 0, used_capacity, alloc_type, realloc_type );
 }
 
 expand_result expand_front
 (
-    std::byte *       const address,
-    std::size_t       const current_size,
+    mapped_span       const span,
     std::size_t       const required_size,
     std::size_t       const used_capacity,
     allocation_type   const alloc_type,
     reallocation_type const realloc_type
 ) noexcept
 {
-    return expand( address, current_size, 0, required_size, used_capacity, alloc_type, realloc_type );
+    return expand( span.data(), span.size(), 0, required_size, used_capacity, alloc_type, realloc_type );
 }
 
 //------------------------------------------------------------------------------
