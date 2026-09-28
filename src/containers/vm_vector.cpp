@@ -446,12 +446,8 @@ err::result_or_error<void, error> mem_mapping::map_cow_memory( size_type const d
 
 mem_mapping::size_type mem_mapping::memory_storage_size( size_type const storage_size, huge_pages const huge ) noexcept
 {
-#if defined( __linux__ ) && !defined( __ANDROID__ ) // server Linux
-    if ( ( huge == huge_pages::yes ) && ( storage_size >= detail::pmd_span ) )
-        return align_up( storage_size, detail::pmd_span );
-#else
+    // Experiment arm: no whole-PMD sizing at creation (advice only).
     (void)huge;
-#endif
     return storage_size;
 }
 
