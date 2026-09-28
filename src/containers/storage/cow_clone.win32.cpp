@@ -57,6 +57,17 @@ mem_mapping::mem_mapping( mem_mapping const & source )
     view_ = extendable_mapped_view::map( mapping_, cow_view_flags, 0, total_mapped ); // fallible_result throws on error
 }
 
+// A section view can neither grow nor shrink without mapping more of the
+// section or dropping the clone's writes: the clone moves into memory of its
+// own instead.
+bool mem_mapping::grow_privately( std::size_t ) { return false; }
+
+void mem_mapping::shrink_privately( std::size_t const target_size ) noexcept( mapping::views_downsizeable )
+{
+    if ( view_.size() != target_size )
+        move_into_memory( target_size );
+}
+
 //------------------------------------------------------------------------------
 } // namespace psi::vm
 //------------------------------------------------------------------------------
