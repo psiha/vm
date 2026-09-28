@@ -348,6 +348,53 @@ TEST( vm_vector_cow, memory_backed_clone_shrinks_without_resizing_its_source )
     }
 }
 
+// A clone snapshots what its source currently shows - which, for a source that
+// is itself a clone, includes that clone's own writes (which live in its
+// private pages, not in the object both map).
+TEST( vm_vector_cow, clone_of_a_clone_sees_the_first_clones_writes )
+{
+    auto const test_vec{ "test_cow_clone_of_clone.vec" };
+    for ( auto const kind : { backing::file, backing::cow_memory, backing::memory } )
+    {
+        auto constexpr count{ 10000u }; // several pages
+        vm_vector<std::uint32_t, std::uint32_t> src;
+        map_source( src, kind, test_vec );
+        for ( std::uint32_t i{ 0 }; i < count; ++i )
+            src.push_back( i );
+        std::vector<char> file_before;
+        if ( kind == backing::file )
+        {
+            src.flush_blocking();
+            file_before = file_bytes( test_vec );
+        }
+
+        auto first{ src };
+        if ( kind == backing::file )
+            EXPECT_TRUE( first.file_backed() ); // a clone of a non-clone still maps the source's file
+        first[ 0         ] = 0xDEAD;
+        first[ count / 2 ] = 0xBEEF;
+
+        auto second{ first };
+        ASSERT_EQ( second.size(), count );
+        EXPECT_EQ( second[ 0         ], 0xDEADu );
+        EXPECT_EQ( second[ count / 2 ], 0xBEEFu );
+        for ( std::uint32_t i{ 1 }; i < count; ++i )
+            if ( i != count / 2 )
+                ASSERT_EQ( second[ i ], i );
+
+        // The second clone's writes are its own.
+        second[ 1 ] = 0xCAFE;
+        EXPECT_EQ( first[ 1 ], 1u );
+        EXPECT_EQ( src  [ 1 ], 1u );
+        EXPECT_EQ( src  [ 0 ], 0u );
+        EXPECT_EQ( first[ 0 ], 0xDEADu );
+
+        if ( kind == backing::file )
+            EXPECT_TRUE( file_bytes( test_vec ) == file_before );
+    }
+    std::filesystem::remove( test_vec );
+}
+
 namespace
 {
     //! Occupies the address range right past a container's mapping for as
@@ -496,6 +543,37 @@ TEST( vm_vector_cow, clone_regrown_after_a_shrink_does_not_see_the_sources_write
             ASSERT_EQ( clone[ i ], i );
         for ( std::uint32_t i{ kept }; i < count; ++i )
             ASSERT_NE( clone[ i ], 0xFFFF'FFFFu );
+    }
+}
+
+// A clone of a clone that has grown copies both what it shares with its
+// source and what it grew by.
+TEST( vm_vector_cow, clone_of_a_grown_clone )
+{
+    for ( auto const kind : { backing::cow_memory, backing::memory } )
+    {
+        auto constexpr count{ 10000u };
+        vm_vector<std::uint32_t, std::uint32_t> src;
+        map_source( src, kind, nullptr );
+        for ( std::uint32_t i{ 0 }; i < count; ++i )
+            src.push_back( i );
+
+        auto first{ src };
+        first[ 2 ] = 0xDEAD;
+        first.resize( 3 * count );
+        for ( std::uint32_t i{ count }; i < 3 * count; ++i )
+            first[ i ] = ~i;
+
+        auto second{ first };
+        ASSERT_EQ( second.size(), 3 * count );
+        EXPECT_EQ( second[ 2 ], 0xDEADu );
+        for ( std::uint32_t i{ 0 }; i < count; ++i )
+            if ( i != 2 )
+                ASSERT_EQ( second[ i ], i );
+        for ( std::uint32_t i{ count }; i < 3 * count; ++i )
+            ASSERT_EQ( second[ i ], ~i );
+        second[ count ] = 0;
+        EXPECT_EQ( first[ count ], ~count );
     }
 }
 

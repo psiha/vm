@@ -9,6 +9,8 @@
 /// - Anonymous Linux: memfd_create + memcpy into a memfd of the clone's own,
 ///                    mapped shared as map_cow_memory() maps one (so clones
 ///                    of the clone are true COW), or plain memcpy fallback
+/// A source that is itself a clone (a private view) takes the anonymous path:
+/// its own writes are in no object the fd refers to.
 ///
 /// Copyright (c) Domagoj Saric 2026.
 ///
@@ -77,8 +79,11 @@ mem_mapping::mem_mapping( mem_mapping const & source )
     // ahead of the strategy branches below, so every success path gets it.
     live_size_ = source.live_size_;
 
-    // fd-backed (real file or memfd): dup + MAP_PRIVATE gives kernel COW.
-    if ( source.mapping_.has_fd() )
+    // fd-backed (real file or memfd): dup + MAP_PRIVATE gives kernel COW -
+    // provided the source's view shows what the fd holds. A source that is
+    // itself a clone keeps its own writes in private pages no second view of
+    // the fd could see, so it is copied like anonymous memory instead.
+    if ( source.mapping_.has_fd() && !source.views_privately() )
     {
         // handle_traits::copy returns fallible_result — auto-throws on error
         posix::handle_traits::native_t const cow_fd{ posix::handle_traits::copy( source.mapping_.get() ) };
@@ -104,7 +109,8 @@ mem_mapping::mem_mapping( mem_mapping const & source )
         return;
     }
 
-    // Anonymous (no fd): platform-specific strategies, each with a memcpy fallback.
+    // Anonymous (no fd), or a private view: platform-specific strategies, each
+    // with a memcpy fallback.
 
 #if defined( __APPLE__ )
     {

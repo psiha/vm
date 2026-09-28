@@ -240,6 +240,8 @@ public:
     // memfd or a section), nor maps more of it than it was created with: it
     // grows past it with memory of its own, the untouched pages staying
     // shared.
+    // A clone of a clone copies what the source clone shows: its private
+    // writes are in no object a second view could map.
     explicit mem_mapping( mem_mapping const & );
 
     [[ gnu::pure ]] size_type header_size() const noexcept { return get_sizes().client_hdr_size(); }

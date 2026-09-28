@@ -6,7 +6,7 @@
 /// Windows COW copy constructor for mem_mapping.
 /// Duplicates the section handle and maps a PAGE_WRITECOPY view — physical
 /// pages are shared until either side writes, at which point the kernel
-/// creates private copies.
+/// creates private copies. A source that is itself a clone is copied instead.
 ///
 /// Copyright (c) Domagoj Saric 2026.
 ///
@@ -57,6 +57,16 @@ mem_mapping::mem_mapping( mem_mapping const & source )
     // source's LIVE length (not the source's last committed one). Seeded here,
     // ahead of the strategy branches below, so every success path gets it.
     live_size_ = source.live_size_;
+
+    // A source that is itself a clone keeps its own writes in private pages
+    // that are in no section a second view could map: copy what it shows.
+    if ( source.views_privately() ) [[ unlikely ]]
+    {
+        if ( !map( {}, total_mapped ) ) [[ unlikely ]]
+            detail::throw_bad_alloc();
+        std::memcpy( view_.data(), source.view_.data(), total_mapped );
+        return;
+    }
 
     // Duplicate file handle if source is file-backed (for correct
     // is_file_based() reporting and allocation_type in view mapping)
