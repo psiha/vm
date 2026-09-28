@@ -149,8 +149,8 @@ void * mem_mapping::expand_capacity( std::size_t target_capacity )
     // File backed views are left exact: their length is the file's.
     if ( !mapping_.is_file_based() && ( target_capacity >= detail::pmd_span ) )
     {
-        auto const base{ reinterpret_cast<std::uintptr_t>( view_.data() ) };
-        target_capacity = align_up( base + target_capacity, detail::pmd_span ) - base;
+        auto const phase{ detail::pmd_phase_after_growth( view_.data(), mapped_size(), target_capacity, mapping_.get() ) };
+        target_capacity = align_up( phase + target_capacity, detail::pmd_span ) - phase;
     }
 #endif
     // Exact-size expansion only. Geometric growth is the vector's responsibility.

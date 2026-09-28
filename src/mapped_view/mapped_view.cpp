@@ -265,7 +265,14 @@ basic_mapped_view<read_only>::expand( std::size_t const target_size, mapping & o
         return error_t{};
     }
 
-    // mremap handles in-place extension, relocation, and COW preservation.
+    // A file view reaching its first PMD span moves to the phase its file
+    // offset (0) needs for huge folios, once; otherwise mremap handles
+    // in-place extension, relocation, and COW preservation.
+    if ( auto const moved{ detail::grow_file_view_into_pmd_phase( current_address, current_size, target_size, original_mapping.get() ) } )
+    {
+        static_cast<span &>( *this ) = { static_cast<typename span::pointer>( moved.address ), target_size };
+        return err::success;
+    }
     if ( auto const r{ detail::linux_mremap( current_address, current_size, target_size ) } ) [[ likely ]]
     {
         static_cast<span &>( *this ) = { static_cast<typename span::pointer>( r.address ), target_size };
