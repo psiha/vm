@@ -15,15 +15,20 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cctype>
 #include <chrono>
+#include <cinttypes>
+#include <cstdio>
 #include <format>
 #include <forward_list>
+#include <fstream>
 #include <numeric>
 #include <optional>
 #include <print>
 #include <random>
 #include <ranges>
 #include <set>
+#include <string>
 #include <utility>
 #include <set>
 #include <vector>
@@ -3924,6 +3929,134 @@ TEST( bp_tree, borrow_from_a_relieved_leaf_double ) { borrow_from_a_relieved_lea
 TEST( bp_tree, borrow_from_a_relieved_leaf_opt_in_int    ) { borrow_from_a_relieved_leaf<int          , gap_less>(); }
 TEST( bp_tree, borrow_from_a_relieved_leaf_opt_in_uint64 ) { borrow_from_a_relieved_leaf<std::uint64_t, gap_less>(); }
 TEST( bp_tree, borrow_from_a_relieved_leaf_opt_in_double ) { borrow_from_a_relieved_leaf<double       , gap_less>(); }
+
+#if defined( __linux__ ) && !defined( __ANDROID__ )
+namespace
+{
+    std::size_t constexpr pmd_span{ std::size_t{ page_size } * ( page_size / sizeof( std::uint64_t ) ) };
+
+    // The mapping (VMA) holding the given address, from /proc/self/smaps.
+    struct vma_info { std::size_t size{}, shmem_pmd_mapped{}; bool huge_advised{}; bool memfd{}; };
+    std::optional<vma_info> vma_of( void const * const address )
+    {
+        auto const a{ reinterpret_cast<std::uintptr_t>( address ) };
+        std::ifstream smaps{ "/proc/self/smaps" };
+        std::string   line;
+        bool          in{ false };
+        vma_info      vma;
+        while ( std::getline( smaps, line ) )
+        {
+            std::uintptr_t begin, end;
+            int            consumed{ 0 };
+            if ( std::isxdigit( static_cast<unsigned char>( line[ 0 ] ) ) && ( std::sscanf( line.c_str(), "%" SCNxPTR "-%" SCNxPTR "%n", &begin, &end, &consumed ) == 2 ) && ( consumed == static_cast<int>( line.find( ' ' ) ) ) )
+            {
+                if ( in )
+                    return vma;
+                in = ( begin <= a ) && ( a < end );
+                if ( in )
+                    vma = { .size = end - begin, .memfd = line.find( "/memfd:" ) != std::string::npos };
+                continue;
+            }
+            if ( !in )
+                continue;
+            std::size_t kb;
+            if ( std::sscanf( line.c_str(), "ShmemPmdMapped: %zu kB", &kb ) == 1 )
+                vma.shmem_pmd_mapped = kb * 1024;
+            else if ( line.starts_with( "VmFlags:" ) )
+                vma.huge_advised = ( line + ' ' ).find( " hg " ) != std::string::npos;
+        }
+        return in ? std::optional{ vma } : std::nullopt;
+    }
+
+    std::size_t thp_file_fallbacks()
+    {
+        std::ifstream vmstat{ "/proc/vmstat" };
+        std::string   key;
+        std::size_t   value;
+        while ( vmstat >> key >> value )
+            if ( key == "thp_file_fallback" )
+                return value;
+        return 0;
+    }
+
+    // Whether madvise( MADV_HUGEPAGE ) memfd (shmem) memory gets huge pages here.
+    bool shmem_huge_pages_on_advice()
+    {
+        std::ifstream enabled{ "/sys/kernel/mm/transparent_hugepage/shmem_enabled" };
+        std::string   setting;
+        std::getline( enabled, setting );
+        for ( auto const on : { "[always]", "[within_size]", "[advise]", "[force]" } )
+            if ( setting.find( on ) != std::string::npos )
+                return true;
+        return false;
+    }
+} // anonymous namespace
+
+// A downstream application builds each index with its node pool sized for the
+// table (map_cow_memory( rows )), fills it with one bulk insert and then grows
+// it row by row - and every node of a fresh pool is written (constructed and
+// threaded into the free list) before the first insert. The kernel decides a
+// page's size at its first touch and a small page keeps its whole PMD span
+// small, so the pool has to be advised before any of that, and span whole
+// PMDs: then every span of a pool of a PMD or more is huge. A pool that
+// reaches its first PMD by growing is advised then, and its already
+// populated first span collapsed. A smaller pool is not advised at all (a
+// huge page would cost it a whole span).
+TEST( bp_tree, memfd_node_pool_is_backed_by_huge_pages )
+{
+    if ( !shmem_huge_pages_on_advice() )
+        GTEST_SKIP() << "transparent_hugepage/shmem_enabled gives advised shmem no huge pages";
+
+    using tree_t = bptree_set<std::uint32_t>;
+    auto const pool_vma{ []( tree_t const & tree ) { return vma_of( &*tree.begin() ); } };
+    auto const fallbacks_before{ thp_file_fallbacks() };
+
+    std::uint32_t constexpr rows{ 1'500'000 }; // a pool of several PMD spans
+    std::vector<std::uint32_t> keys( rows );
+    std::iota( keys.begin(), keys.end(), 0U );
+    std::shuffle( keys.begin(), keys.end(), std::mt19937{ 42 } );
+
+    tree_t sized;
+    ASSERT_TRUE( static_cast<bool>( sized.map_cow_memory( rows ) ) );
+    sized.insert( std::span<std::uint32_t const>{ keys } );
+    for ( std::uint32_t row{ rows }; row < rows + rows / 4; ++row )
+        sized.insert( row );
+
+    tree_t grown;
+    ASSERT_TRUE( static_cast<bool>( grown.map_cow_memory( 1000 ) ) );
+    for ( std::uint32_t row{ 0 }; row < rows; ++row )
+        grown.insert( row );
+
+    tree_t small;
+    ASSERT_TRUE( static_cast<bool>( small.map_cow_memory( 1000 ) ) );
+    small.insert( std::span<std::uint32_t const>{ keys.data(), 1000 } );
+
+    if ( thp_file_fallbacks() != fallbacks_before )
+        GTEST_SKIP() << "the kernel could not allocate a huge page (fragmented memory)";
+
+    auto const s{ pool_vma( sized ) }, g{ pool_vma( grown ) }, t{ pool_vma( small ) };
+    ASSERT_TRUE( s && g && t );
+    if ( !s->memfd )
+        GTEST_SKIP() << "memfd_create is not available: the pool fell back to anonymous memory";
+
+    EXPECT_GE( s->size, 4 * pmd_span );
+    EXPECT_TRUE( s->huge_advised );
+    EXPECT_EQ( s->shmem_pmd_mapped, s->size ) << "a pool sized up front has a span in small pages";
+
+    EXPECT_GE( g->size, 4 * pmd_span );
+    EXPECT_TRUE( g->huge_advised );
+    // Its first span is collapsed synchronously (MADV_COLLAPSE, Linux 6.1),
+    // which the kernel may refuse (e.g. on an older kernel): the rest must be
+    // huge.
+    EXPECT_GE( g->shmem_pmd_mapped, g->size - pmd_span ) << "a grown pool has a span in small pages";
+
+    EXPECT_LT( t->size, pmd_span );
+    EXPECT_FALSE( t->huge_advised ) << "a pool smaller than a PMD asked for huge pages";
+
+    EXPECT_TRUE( std::ranges::equal( sized, std::views::iota( 0U, rows + rows / 4 ) ) );
+    EXPECT_TRUE( std::ranges::equal( grown, std::views::iota( 0U, rows              ) ) );
+}
+#endif // server Linux
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm

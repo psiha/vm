@@ -204,6 +204,10 @@ template <typename Header>
 }
 
 
+//! Whether memory backed storage asks for transparent huge pages (see
+//! mem_mapping::map_memory()).
+enum class huge_pages : bool { no, yes };
+
 PSI_WARNING_DISABLE_PUSH()
 PSI_WARNING_CLANGCL_DISABLE( -Wignored-attributes )
 
@@ -315,29 +319,31 @@ public:
         );
     }
 
-    err::result_or_error<void, error> map_memory    ( size_type data_size, header_info ) noexcept;
+    // With huge_pages::yes, storage of at least one PMD span (2 MiB with the
+    // 4 KiB granule) is backed by transparent huge pages (Linux MADV_HUGEPAGE;
+    // ignored on every other platform), and so is smaller storage from the
+    // growth that first makes it span a PMD. The kernel weighs the hint per
+    // backing: private anonymous (map_memory) storage follows
+    // transparent_hugepage/enabled, memfd (map_cow_memory) storage follows
+    // transparent_hugepage/shmem_enabled ("advise" or "within_size").
+    // The kernel decides a page's size when the page is first touched, and
+    // a small page, once there, keeps the whole PMD span around it in small
+    // pages - so the advice is given here, before this function (the sizes
+    // header) or the container (the initial elements) writes anything.
+    // Such storage is sized, and grows, in whole PMD spans: a huge page is
+    // only ever mapped where the whole span lies inside the mapping, and
+    // under shmem_enabled=advise the kernel may allocate one for a partly
+    // covered span anyway (mapping it with small pages). The cost is up to
+    // one PMD span of capacity per huge page backed storage that it may
+    // never use. Smaller storage is not advised at all: it would pay a whole
+    // huge page for a partly used span too.
+    err::result_or_error<void, error> map_memory    ( size_type data_size, header_info, huge_pages = huge_pages::no ) noexcept;
     // Like map_memory but on Linux creates a memfd-backed mapping so that
     // future COW copies (via copy constructor) are zero-copy dup+MAP_PRIVATE
     // instead of requiring an initial memcpy. On other platforms this is
-    // identical to map_memory.
-    err::result_or_error<void, error> map_cow_memory( size_type data_size, header_info ) noexcept;
-
-    // Ask for the current view to be backed by transparent huge pages (Linux
-    // MADV_HUGEPAGE; a no-op on every other platform). A hint the kernel
-    // weighs per backing: private anonymous (map_memory) storage follows
-    // transparent_hugepage/enabled, memfd (map_cow_memory) storage follows
-    // transparent_hugepage/shmem_enabled - honoured under "advise" and
-    // "within_size" - and a regular file follows its filesystem's large folio
-    // support (e.g. xfs). On a writable file mapping that also makes the 2 MiB
-    // folio the unit of dirtying and writeback: a single store dirties, and
-    // the next flush writes, the whole folio.
-    // One call covers the life of the mapping: the advice is a property of
-    // the kernel's VMA, which growth (mremap, in place or moved) and shrinking
-    // (a tail munmap) keep, and the view is never mapped afresh - it always
-    // spans at least the sizes header, so expand() never takes its from-empty
-    // path. It is also the only advice such storage gets: it is mapped by
-    // mmap and resized by mremap/munmap, never through vm::commit().
-    void advise_huge_pages() noexcept;
+    // identical to map_memory. COW copies are never advised: a copy's writes
+    // copy into small pages whatever the advice.
+    err::result_or_error<void, error> map_cow_memory( size_type data_size, header_info, huge_pages = huge_pages::no ) noexcept;
 
     explicit operator bool() const noexcept { return has_attached_storage(); }
 
@@ -439,6 +445,14 @@ private:
 
     void * expand_capacity( size_type target_storage_capacity );
 
+    //! Linux: the storage size to map for storage_size bytes (whole PMD spans
+    //! for huge page backed storage).
+    static size_type memory_storage_size( size_type storage_size, huge_pages ) noexcept;
+    //! Linux: advises the view MADV_HUGEPAGE if it is huge page backed storage
+    //! that spans a PMD, and collapses the whole PMD spans that already hold
+    //! the first populated_size bytes (in small pages).
+    void advise_huge_pages( size_type populated_size ) noexcept;
+
     size_type client_to_storage_size( size_type sz ) const noexcept;
 
 private:
@@ -448,6 +462,9 @@ private:
     // is deliberately NOT updated by growth/shrinkage - see size() and
     // committed_size().
     size_type              live_size_{ 0 };
+    // map_memory()/map_cow_memory() were asked for huge pages (the advice
+    // itself is a property of the kernel's VMA, which growth keeps).
+    bool                   huge_pages_{ false };
 }; // mem_mapping
 
 
@@ -517,21 +534,23 @@ public:
 
     template <typename InitPolicy = value_init_t>
     err::fallible_result<void, error>
-    map_memory( sz_t const initial_data_size = 0, header_info const hdr_info = {}, InitPolicy const init_policy = {} ) noexcept
+    map_memory( sz_t const initial_data_size = 0, header_info const hdr_info = {}, InitPolicy const init_policy = {}, huge_pages const huge = huge_pages::no ) noexcept
     {
         return construct_fresh( initial_data_size, init_policy, base::map_memory(
             to_byte_sz( initial_data_size ),
-            hdr_info.with_final_alignment_for<T>()
+            hdr_info.with_final_alignment_for<T>(),
+            huge
         ) );
     }
 
     template <typename InitPolicy = value_init_t>
     err::fallible_result<void, error>
-    map_cow_memory( sz_t const initial_data_size = 0, header_info const hdr_info = {}, InitPolicy const init_policy = {} ) noexcept
+    map_cow_memory( sz_t const initial_data_size = 0, header_info const hdr_info = {}, InitPolicy const init_policy = {}, huge_pages const huge = huge_pages::no ) noexcept
     {
         return construct_fresh( initial_data_size, init_policy, base::map_cow_memory(
             to_byte_sz( initial_data_size ),
-            hdr_info.with_final_alignment_for<T>()
+            hdr_info.with_final_alignment_for<T>(),
+            huge
         ) );
     }
 
