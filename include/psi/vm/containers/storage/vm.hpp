@@ -230,7 +230,9 @@ public:
     // COW (copy-on-write) copy construction: creates a new storage sharing
     // physical pages with the source. Writes to the clone trigger private
     // page copies (kernel-managed COW).
-    // - File-backed (all platforms): MAP_PRIVATE / PAGE_WRITECOPY view
+    // - File-backed (all platforms): MAP_PRIVATE / PAGE_WRITECOPY view. The
+    //   clone never resizes the file it shares with the source: its first
+    //   growth moves it into memory of its own.
     // - Anonymous (Windows): WRITECOPY view of the same pagefile section
     // - Anonymous (macOS): mach_vm_remap(copy=TRUE) + deep-copy fallback
     // - Anonymous (Linux): memfd_create + MAP_PRIVATE (true COW) or deep copy
@@ -438,6 +440,11 @@ private:
     [[ nodiscard, gnu::pure ]] size_type & persisted_size() noexcept { return get_sizes().data_size; }
 
     void * expand_capacity( size_type target_storage_capacity );
+
+    //! Whether this is a private (copy-on-write) view of a file, i.e. a COW
+    //! clone of a file backed container: the file is not its to resize.
+    [[ nodiscard, gnu::pure ]] bool maps_a_file_privately() const noexcept;
+    void move_into_memory( size_type mapped_size );
 
     size_type client_to_storage_size( size_type sz ) const noexcept;
 

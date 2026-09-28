@@ -26,6 +26,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <numeric>
 #include <random>
 #include <print>
@@ -142,6 +145,111 @@ TEST( vm_vector_cow, file_backed_basic_clone )
         EXPECT_EQ( reopened.size(), 4 );
         EXPECT_EQ( reopened[ 0 ], 3.14 );
     }
+}
+
+namespace
+{
+    std::vector<char> file_bytes( char const * const path )
+    {
+        std::ifstream file( path, std::ios::binary );
+        return { std::istreambuf_iterator<char>( file ), std::istreambuf_iterator<char>{} };
+    }
+} // anonymous namespace
+
+TEST( vm_vector_cow, file_backed_clone_grows_without_touching_the_file )
+{
+    // A clone maps the source's file privately: growing it past the file's
+    // length must leave the file - its length and its bytes - as it was.
+    auto const test_vec{ "test_cow_grow.vec" };
+    auto constexpr count      { 1000u };
+    auto constexpr grown_count{ 100 * count }; // many pages past the file's end
+    {
+        vm_vector<std::uint32_t, std::uint32_t> src;
+        src.map_file( test_vec, flags::named_object_construction_policy::create_new_or_truncate_existing );
+        for ( std::uint32_t i{ 0 }; i < count; ++i )
+            src.push_back( 3 * i + 1 );
+
+        auto const file_length{ std::filesystem::file_size( test_vec ) };
+        auto const file_before{ file_bytes( test_vec ) };
+        ASSERT_EQ( file_before.size(), file_length );
+
+        auto clone{ src };
+        clone[ 0         ] = 0xDEAD; // the clone's own writes, which the file never saw
+        clone[ count - 1 ] = 0xBEEF;
+        clone.resize( grown_count );
+
+        EXPECT_EQ( std::filesystem::file_size( test_vec ), file_length );
+        EXPECT_TRUE( file_bytes( test_vec ) == file_before );
+
+        // The clone keeps its own elements, and the grown part reads as zero
+        // and holds what is written to it.
+        ASSERT_EQ( clone.size(), grown_count );
+        EXPECT_EQ( clone[ 0         ], 0xDEADu );
+        EXPECT_EQ( clone[ count - 1 ], 0xBEEFu );
+        for ( std::uint32_t i{ 1 }; i < count - 1; ++i )
+            ASSERT_EQ( clone[ i ], 3 * i + 1 );
+        for ( std::uint32_t i{ count }; i < grown_count; ++i )
+            ASSERT_EQ( clone[ i ], 0u );
+        for ( std::uint32_t i{ count }; i < grown_count; ++i )
+            clone[ i ] = i;
+        for ( std::uint32_t i{ count }; i < grown_count; ++i )
+            ASSERT_EQ( clone[ i ], i );
+
+        // ...and so does the source.
+        ASSERT_EQ( src.size(), count );
+        for ( std::uint32_t i{ 0 }; i < count; ++i )
+            ASSERT_EQ( src[ i ], 3 * i + 1 );
+        EXPECT_EQ( std::filesystem::file_size( test_vec ), file_length );
+        EXPECT_TRUE( file_bytes( test_vec ) == file_before );
+    }
+    {
+        vm_vector<std::uint32_t, std::uint32_t> reopened;
+        reopened.map_file( test_vec, flags::named_object_construction_policy::open_existing );
+        ASSERT_EQ( reopened.size(), count );
+        for ( std::uint32_t i{ 0 }; i < count; ++i )
+            ASSERT_EQ( reopened[ i ], 3 * i + 1 );
+    }
+    std::filesystem::remove( test_vec );
+}
+
+TEST( vm_vector_cow, file_backed_clone_shrinks_without_touching_the_file )
+{
+    // Nor may a clone that shrinks cut the file short under its source.
+    auto const test_vec{ "test_cow_shrink.vec" };
+    auto constexpr count{ 100000u }; // many pages
+    {
+        vm_vector<std::uint32_t, std::uint32_t> src;
+        src.map_file( test_vec, flags::named_object_construction_policy::create_new_or_truncate_existing );
+        for ( std::uint32_t i{ 0 }; i < count; ++i )
+            src.push_back( i );
+
+        auto const file_length{ std::filesystem::file_size( test_vec ) };
+        auto const file_before{ file_bytes( test_vec ) };
+
+        auto clone{ src };
+        for ( std::uint32_t i{ 0 }; i < 10; ++i )
+            clone[ i ] = 0xC0DE + i; // the clone's own writes, which the file never saw
+        clone.resize( 10 );
+        clone.shrink_to_fit();
+
+        EXPECT_EQ( std::filesystem::file_size( test_vec ), file_length );
+        EXPECT_TRUE( file_bytes( test_vec ) == file_before );
+
+        ASSERT_EQ( clone.size(), 10u );
+        for ( std::uint32_t i{ 0 }; i < 10; ++i )
+            ASSERT_EQ( clone[ i ], 0xC0DE + i );
+        ASSERT_EQ( src.size(), count );
+        for ( std::uint32_t i{ 0 }; i < count; ++i )
+            ASSERT_EQ( src[ i ], i );
+
+        // Growing again after the shrink leaves the file alone too.
+        clone.resize( 2 * count );
+        EXPECT_EQ( std::filesystem::file_size( test_vec ), file_length );
+        EXPECT_TRUE( file_bytes( test_vec ) == file_before );
+        for ( std::uint32_t i{ 0 }; i < 10; ++i )
+            ASSERT_EQ( clone[ i ], 0xC0DE + i );
+    }
+    std::filesystem::remove( test_vec );
 }
 
 TEST( vm_vector_cow, empty_clone )
@@ -528,16 +636,21 @@ TEST( bptree_cow, commit_to_file_backed_clone_grows_beyond_target )
         for ( int i{ 0 }; i < N; ++i )
             src.insert( i );
 
+        auto const file_length{ std::filesystem::file_size( test_bpt ) };
+        auto const file_before{ file_bytes( test_bpt ) };
+
         bptree_set<int> clone{ src };
         for ( int i{ N }; i < M; ++i )
             clone.insert( i );
 
         // Growing a private view must neither drop the clone's own writes nor
-        // leak them into the target it was cloned from.
+        // leak them into the target it was cloned from - not even its length.
         EXPECT_EQ( clone.size(), static_cast<std::size_t>( M ) );
         EXPECT_TRUE( std::ranges::equal( clone, std::ranges::iota_view{ 0, M } ) );
         EXPECT_EQ( src.size(), static_cast<std::size_t>( N ) );
         EXPECT_TRUE( std::ranges::equal( src, std::ranges::iota_view{ 0, N } ) );
+        EXPECT_EQ( std::filesystem::file_size( test_bpt ), file_length );
+        EXPECT_TRUE( file_bytes( test_bpt ) == file_before );
 
         clone.commit_to( src );
 
