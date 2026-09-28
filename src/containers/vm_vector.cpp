@@ -535,13 +535,28 @@ bool mem_mapping::can_release_pages( [[ maybe_unused ]] bool const shared ) cons
 {
     if ( !has_attached_storage() || mapping_.is_file_based() )
         return false;
+    [[ maybe_unused ]] auto const clone_view{ mapping_.view_mapping_flags.is_cow() };
 #if defined( __linux__ )
-    // a private view drops only its own pages; a shared one (the memfd behind
-    // map_cow_memory) frees them for every view
-    return mapping_.view_mapping_flags.is_cow() || !shared;
-#elif defined( __APPLE__ ) || defined( _WIN32 )
-    // a Windows copy-on-write view rejects DiscardVirtualMemory outright
-    return !mapping_.view_mapping_flags.is_cow() && !shared;
+    // A private view (map_memory(), and every COW clone: a MAP_PRIVATE view of
+    // the source's memfd) drops only its own pages.  The shared memfd view of
+    // map_cow_memory() has to punch its pages out of the memfd itself (for it
+    // MADV_DONTNEED frees nothing: the pages stay in the memfd) - and a clone
+    // reads the pages it has not copied yet straight from the memfd, so they
+    // would read back as zeros: only while no clone is alive.
+    return clone_view || !shared;
+#elif defined( _WIN32 )
+    // The pool is a pagefile backed section.  A clone's copy-on-write view
+    // resets only the pages it has copied: the section's own pages stay dirty.
+    // The read-write view resets the section's pages, which a clone that has
+    // not copied them yet reads, and would then lose once the OS repurposes
+    // them: only while no clone is alive.
+    return clone_view || !shared;
+#elif defined( __APPLE__ )
+    // A clone is a mach_vm_remap() copy of the source's shared anonymous
+    // memory, and while the two share it the kernel takes MADV_FREE_REUSABLE
+    // from either side without freeing anything: not a hazard, just a
+    // wasted call.
+    return !clone_view && !shared;
 #else
     return false;
 #endif
@@ -559,9 +574,27 @@ bool mem_mapping::release_pages( std::byte * const first, size_type const size, 
 #elif defined( __APPLE__ )
     return ::madvise( first, size, MADV_FREE_REUSABLE ) == 0;
 #elif defined( _WIN32 )
-    return ::DiscardVirtualMemory( first, size ) == ERROR_SUCCESS;
+    // MEM_RESET marks the contents disposable and VirtualUnlock, on pages that
+    // were never locked, takes them out of the working set: they go to the
+    // standby list clean, for the OS to repurpose without writing them to the
+    // pagefile.  DiscardVirtualMemory does the same (to the free list) for
+    // ~15 us per call rather than ~1-2 us.
+    if ( !::VirtualAlloc( first, size, MEM_RESET, PAGE_READWRITE ) )
+        return false;
+    ::VirtualUnlock( first, size ); // 'fails' with ERROR_NOT_LOCKED, as documented for this use
+    return true;
 #else
     return false;
+#endif
+}
+
+void mem_mapping::reuse_pages( [[ maybe_unused ]] std::byte * const first, [[ maybe_unused ]] size_type const size ) noexcept
+{
+#if defined( __APPLE__ )
+    // Without it a page released with MADV_FREE_REUSABLE stays out of the
+    // task's footprint however much it is written again.
+    BOOST_ASSERT( is_aligned( first, page_size ) );
+    ::madvise( first, size, MADV_FREE_REUSE );
 #endif
 }
 

@@ -4343,7 +4343,7 @@ TEST( bp_tree, release_free_nodes_cow_memory ) { release_roundtrip<true >(); }
 // it - the clone reads those pages - and once the clone is gone it can be,
 // wherever the clone went (moved, swapped) in between.  The clone itself may
 // drop what it holds privately wherever that frees nothing the source reads
-// (a Linux private view).
+// (Linux, Windows).
 TEST( bp_tree, release_free_nodes_spares_a_live_clone )
 {
     using tree_t = inspectable<bptree_set<int>>;
@@ -4365,7 +4365,7 @@ TEST( bp_tree, release_free_nodes_spares_a_live_clone )
         auto const resident_after{ resident_pages( source.node_pool_bytes() ) };
         if ( resident_before && resident_after )
             EXPECT_EQ( *resident_after, *resident_before );
-#   if defined( __linux__ )
+#   if defined( __linux__ ) || defined( _WIN32 )
         EXPECT_GT( clone.release_free_nodes(), 0U ) << "the clone's own view is private";
 #   else
         EXPECT_EQ( clone.release_free_nodes(), 0U ) << "shared with its live source";

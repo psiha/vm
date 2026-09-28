@@ -980,8 +980,9 @@ private:
     // Put up to 'count' released nodes back on the free list (see
     // release_free_nodes()).
     void reclaim_released( node_slot::value_type count ) noexcept;
-    // A released node as a freshly freed one would be: its dropped page reads
-    // back as zeros (or unspecified bytes), which are not a null link.
+    // A released node as a freshly freed one would be: its released page
+    // reads back unspecified bytes (see mem_mapping::release_pages()), which
+    // are not a null link.
     node_header & reinitialise_released( node_slot ) noexcept;
     // Whether another tree may be reading this one's pages (see cow_group).
     [[ gnu::pure ]] bool shares_pages() const noexcept { return cow_group_.shared(); }

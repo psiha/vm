@@ -744,6 +744,8 @@ bptree_base::node_header &
 bptree_base::reinitialise_released( node_slot const slot ) noexcept
 {
     auto & released{ static_cast<node_header &>( node( slot ) ) };
+    auto * const page{ reinterpret_cast<std::byte *>( align_down( reinterpret_cast<std::uintptr_t>( &released ), std::size_t{ page_size } ) ) };
+    nodes_.reuse_pages( page, std::max<std::size_t>( page_size, node_size ) );
     released = {};
     if constexpr ( PSI_VM_BT_FRONT_GAP_COMPILED )
         front_gap_start_of( released ) = 0;

@@ -235,12 +235,14 @@ takes is **whole pages**:
   tree leaves, but hardly ever what scattered merges leave (§5.2).
 
 A released node leaves the free list. The list is threaded through the free
-nodes themselves, and a dropped page reads back as zeros - which is node 0,
-not a null link. So released nodes are kept in a sorted set beside the pool,
+nodes themselves, and a dropped page reads back as unspecified bytes - zeros
+(node 0, not a null link), a Linux clone's source's bytes, or stale ones. So released nodes are kept in a sorted set beside the pool,
 which `new_node()` takes from once the free list is empty (before the pool
 grows), and which `reserve_additional()` puts back on the list for the bulk
-paths that walk it; a node taken back is reinitialised, and its page faults in
-again on the first write. The set is not persisted.
+paths that walk it; a node taken back is reinitialised (on macOS after
+`MADV_FREE_REUSE`, without which the page stays out of the task's footprint
+however much it is written), and its page faults in again on the first write.
+The set is not persisted.
 
 How the pages are dropped depends on who else maps them:
 
@@ -249,11 +251,19 @@ How the pages are dropped depends on who else maps them:
 | file backed | — (a file's pages are its data) | always |
 | a private view: Linux `map_memory()`, any Linux COW clone | `MADV_DONTNEED` (drops this view's pages only) | never |
 | Linux `map_cow_memory()`: a shared memfd | `MADV_REMOVE` (punches the pages out of the memfd) | a COW clone of the tree is alive |
-| Windows: a pagefile backed section | `DiscardVirtualMemory` | a clone is alive; a copy-on-write view rejects it outright |
-| macOS: shared anonymous memory | `MADV_FREE_REUSABLE` | a clone is alive |
+| Windows: a pagefile backed section, read-write view | `MEM_RESET` + `VirtualUnlock` (the section's pages, clean, to the standby list) | a COW clone of the tree is alive |
+| Windows: a COW clone's copy-on-write view | the same (only the pages the view has copied) | never |
+| macOS: shared anonymous memory | `MADV_FREE_REUSABLE` | a COW clone of the tree is alive, and in the clone |
 
 A tree and every clone made of it share a reference count, which is how a
-shared view tells that dropping its pages would pull them from under a clone.
+shared view tells that dropping its pages would pull them from under a clone:
+a clone reads the pages it has not copied yet from the shared object, so
+after `MADV_REMOVE` (Linux) or a reset and repurposing (Windows) it reads
+zeros - lost data, not a fault. Unmapping the source would not do that: it
+drops a view, not the object's pages. On macOS the kernel ignores the advice
+from either side while the two share the memory, so there it only saves a
+call. `MADV_DONTNEED` on the shared memfd view frees nothing: the pages stay
+in the memfd.
 `commit_to()` carries a clone's released set over along with its header; a
 node the target still holds resident goes back on its free list instead.
 
@@ -339,8 +349,21 @@ faster to search, but hardly any page is left with all eight of its nodes
 free, so resident memory barely moves: getting it back there would take
 moving nodes, which §5.1 rules out.
 
-On Windows `DiscardVirtualMemory` costs 10–20 µs a page, an order of
-magnitude more than `madvise`, and dominates `compact()` there.
+On Windows, per call (x86-64, 4 kB pages, re-dirtied before each call):
+
+| | one scattered page | runs of 64–256 pages |
+|---|---|---|
+| `DiscardVirtualMemory` | 15–18 µs | 0.8–1.0 µs a page |
+| `OfferVirtualMemory` (+ `ReclaimVirtualMemory` on reuse) | 14–17 µs (+1.6–1.8) | 0.6–0.9 µs (+1.0–1.3) |
+| `MEM_RESET` + `VirtualUnlock` | 1.0 (private) – 2.0 (section) µs | 0.45–0.7 µs a page |
+| `MEM_DECOMMIT` (+ `MEM_COMMIT` on reuse; private memory only) | 0.6 µs (+0.24) | 0.23 µs |
+
+The cost of the first two is a fixed ~15 µs a call, so it is the scattered
+pages that paid it. `MEM_RESET` alone leaves the pages in the working set
+and `VirtualUnlock` alone sends them to the modified list, to be written to
+the pagefile; together they put them on the standby list clean, where
+`DiscardVirtualMemory` puts them on the free list. Either way they leave the
+working set and the OS can repurpose them without I/O.
 
 ## 6. Open
 
