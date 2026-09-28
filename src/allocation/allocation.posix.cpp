@@ -79,7 +79,8 @@ bool commit( void * const address, std::size_t const size ) noexcept
 {
     BOOST_ASSUME( is_aligned( address, commit_granularity ) );
     BOOST_ASSUME( is_aligned( size   , commit_granularity ) );
-    auto const success{ ::mprotect( address, size, PROT_READ | PROT_WRITE ) == 0 };
+    if ( ::mprotect( address, size, PROT_READ | PROT_WRITE ) != 0 ) [[ unlikely ]]
+        return false;
     // madvise() takes ONE advice per call: the MADV_* values are an
     // enumeration, not flags, so OR-ing them names some other advice entirely
     // (SEQUENTIAL | WILLNEED | HUGEPAGE = 2 | 3 | 14 = 15 = MADV_NOHUGEPAGE,
@@ -92,7 +93,7 @@ bool commit( void * const address, std::size_t const size ) noexcept
     // transparent huge page support rejects it with EINVAL.
     (void)::madvise( address, size, MADV_HUGEPAGE );
 #endif
-    return success;
+    return true;
 }
 PSI_COLD [[ gnu::nothrow, clang::nouwtable ]]
 void decommit( void * const address, std::size_t const size ) noexcept

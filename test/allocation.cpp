@@ -4,7 +4,8 @@
 /// --------------------
 ///
 /// Tests of the POSIX anonymous memory primitives (reserve(), allocate(),
-/// allocate_fixed()) and of growth through expand_back() and expand_front().
+/// allocate_fixed(), commit()) and of growth through expand_back() and
+/// expand_front().
 ///
 /// The Win32 backend is built on NtAllocateVirtualMemory and is exercised
 /// indirectly by every container test; these tests pin the mmap()-based
@@ -204,6 +205,14 @@ TEST( allocation, expand_front_moves_when_the_space_before_is_taken )
     EXPECT_EQ( moved[ 4 * granule - 1 ], std::byte{ 0x42 } );
     free( moved, 4 * granule );
     free( guard, granule ); // the old block was released by the move
+}
+
+TEST( allocation, commit_of_an_unmapped_range_fails )
+{
+    auto * const p{ raw_map( granule, PROT_NONE ) };
+    ASSERT_NE( p, nullptr );
+    ASSERT_EQ( ::munmap( p, granule ), 0 );
+    EXPECT_FALSE( commit( p, granule ) );
 }
 
 //------------------------------------------------------------------------------
