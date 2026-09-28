@@ -117,6 +117,13 @@ template <typename T> requires requires{ T{}.size(); } constexpr bool is_statica
 // holding n values is keys_[n/2] (keys_[start + n/2] with a front gap, where
 // the band moves with start), never above that line, so the band catches it
 // for any fill from full down to however far the band reaches.
+//
+// Such a partial band is only issued with a direct comparator (one that reads
+// nothing but the keys).  An indirect one bisects with data-dependent
+// branches, and a mispredicted step runs a wrong-path descent that issues the
+// band for a wrong child: most of the lines fetched are then never used, and
+// they only add fill-buffer and page-walk pressure to the search's own misses.
+// A whole node is prefetched for any comparator.
 #ifndef PSI_VM_BT_PREFETCH_LINES
 #   define PSI_VM_BT_PREFETCH_LINES 8
 #endif

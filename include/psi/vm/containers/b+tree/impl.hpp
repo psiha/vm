@@ -498,12 +498,15 @@ private:
     }
     // Start fetching the child a descent is about to search, from its slot
     // (PSI_VM_BT_PREFETCH_LINES).
-    [[ gnu::always_inline ]] void prefetch_child( node_slot const child, bool const child_is_inner ) const noexcept
+    [[ gnu::always_inline ]] void prefetch_child( [[ maybe_unused ]] node_slot const child, [[ maybe_unused ]] bool const child_is_inner ) const noexcept
     {
+        // A partial band only for a direct comparator (see PSI_VM_BT_PREFETCH_LINES).
+        constexpr bool whole_nodes{ ( prefetch_offsets<inner_node>.size() == sizeof( inner_node ) / 64 ) && ( prefetch_offsets<leaf_node>.size() == sizeof( leaf_node ) / 64 ) };
+        if constexpr ( !whole_nodes && !is_direct_comparator<Comparator, Key> ) {}
         // With the same lines for either kind of node (a whole 512-byte one, or
         // a front for both scans) there is nothing to choose, so no branch -
         // unless a leaf's lines follow its start, which an inner node lacks.
-        if constexpr ( ( prefetch_offsets<inner_node> == prefetch_offsets<leaf_node> ) && !prefetch_follows_start<leaf_node> ) { prefetch_lines<leaf_node>( child ); }
+        else if constexpr ( ( prefetch_offsets<inner_node> == prefetch_offsets<leaf_node> ) && !prefetch_follows_start<leaf_node> ) { prefetch_lines<leaf_node>( child ); }
         else if ( child_is_inner )                                                   { prefetch_lines<inner_node>( child ); }
         else                                                                         { prefetch_lines<leaf_node >( child ); }
     }
