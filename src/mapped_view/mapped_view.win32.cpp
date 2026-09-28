@@ -152,13 +152,23 @@ namespace
     {
         // emulate support for adjacent/concatenated regions (as supported by mmap)
         // (duplicated logic from free() in allocation.win32.cpp)
+        // A region is one view - or, past the view of a copy-on-write
+        // (private) view grown with memory of its own, one private allocation.
         void * tail{ nullptr };
         for ( ;; )
         {
-            auto const region_size{ mem_region_size( address ) };
+            // (MemoryRegionInformation reports a whole allocation, however
+            // many runs of differently protected pages it holds)
+            WIN32_MEMORY_REGION_INFORMATION info;
+            BOOST_VERIFY( nt::NtQueryVirtualMemory( nt::current_process, address, nt::MemoryRegionInformation, &info, sizeof( info ), nullptr ) == nt::STATUS_SUCCESS );
+            BOOST_ASSUME( info.AllocationBase == address );
+            auto const region_size{ static_cast<std::size_t>( info.RegionSize ) };
             BOOST_ASSUME( region_size <= align_up( size, reserve_granularity ) );
             tail = static_cast<std::byte *>( address ) + region_size;
-            BOOST_VERIFY( ::UnmapViewOfFile( address ) );
+            if ( detail::query_vm( address ).Type == MEM_PRIVATE )
+                BOOST_VERIFY( detail::free_vm( address, 0 ) );
+            else
+                BOOST_VERIFY( ::UnmapViewOfFile( address ) );
             if ( region_size >= size )
                 break;
             add( address, region_size );

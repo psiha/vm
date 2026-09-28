@@ -25,6 +25,7 @@
 
 #include <boost/assert.hpp>
 
+#include <algorithm> // min
 #include <cstddef>
 //------------------------------------------------------------------------------
 namespace psi::vm::detail
@@ -365,13 +366,17 @@ inline std::byte * overreserve_section_map(
 /// [aligned_view_size | rest] and the section's [0, aligned_view_size) range is
 /// mapped (and committed) into the head. On failure the whole reservation is
 /// released. Returns true on success.
+/// Pages below already_committed are known to be committed in the section
+/// already (e.g. they are what another view of it is using) and are not
+/// committed again: committing a range walks every page in it.
 [[ nodiscard ]] PSI_COLD
 inline bool reserved_section_map(
     HANDLE      const section_handle,
     std::byte * const base,
     std::size_t const reservation_size,
     std::size_t const aligned_view_size,
-    ULONG       const page_protection
+    ULONG       const page_protection,
+    std::size_t const already_committed = 0
 ) noexcept
 {
     BOOST_ASSUME( is_aligned( aligned_view_size, reserve_granularity ) );
@@ -410,7 +415,8 @@ inline bool reserved_section_map(
     }
 
     // NtMapViewOfSectionEx has no CommitSize — commit SEC_RESERVE pages explicitly.
-    if ( !commit_view_pages( base, aligned_view_size, page_protection ) )
+    auto const commit_from{ std::min( align_down( already_committed, std::size_t{ commit_granularity } ), aligned_view_size ) };
+    if ( ( commit_from != aligned_view_size ) && !commit_view_pages( base + commit_from, aligned_view_size - commit_from, page_protection ) )
     {
         BOOST_VERIFY
         (

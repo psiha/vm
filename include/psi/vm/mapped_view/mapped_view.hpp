@@ -331,6 +331,12 @@ public:
 
     fallible_result<void> expand( std::size_t target_size, mapping & source_mapping ) noexcept;
 
+    //! Grows a private (copy-on-write) view with private memory of its own,
+    //! committed into its trailing placeholder, never mapping more of the
+    //! object it views. Returns false (the view unchanged) where the
+    //! placeholder is too small.
+    [[ nodiscard ]] bool expand_privately( std::size_t target_size ) noexcept;
+
     explicit operator bool() const noexcept { return !this->empty(); }
 
     void swap( extendable_basic_mapped_view & other ) noexcept
@@ -372,6 +378,16 @@ public: // Factory methods.
     static auto map( mapping && source_mapping, auto const... args ) noexcept
     {
         return map( source_mapping, args... );
+    }
+
+    //! Takes over a view mapped at the head of a placeholder reservation, the
+    //! rest of which (trailing_placeholder_size bytes) it keeps for growth.
+    static extendable_basic_mapped_view adopt( span const view, std::size_t const trailing_placeholder_size ) noexcept
+    {
+        extendable_basic_mapped_view result;
+        static_cast<span &>( result ) = view;
+        result.trailing_placeholder_size_ = trailing_placeholder_size;
+        return result;
     }
 
 private:
