@@ -100,14 +100,12 @@ void decommit( void * const address, std::size_t const size ) noexcept
 {
     BOOST_ASSUME( is_aligned( address, reserve_granularity ) );
     BOOST_ASSUME( is_aligned( size   , reserve_granularity ) );
-    BOOST_VERIFY( ::mprotect( address, size, PROT_NONE ) == 0 );
-#if 0 // should not be neccessary?
-    BOOST_VERIFY
-    (
-        ::madvise( actual_address, size, MADV_FREE     ) == 0 ||
-        ::madvise( actual_address, size, MADV_DONTNEED ) == 0
-    );
-#endif
+    // Same contract as MEM_DECOMMIT: the pages are released and the range
+    // stays reserved (inaccessible until committed again, and then zeroed).
+    // Replacing it with a fresh PROT_NONE mapping does all of that on both
+    // Linux and Darwin - mprotect() alone keeps the pages and their contents,
+    // and Darwin's MADV_DONTNEED/MADV_FREE do not guarantee zeroed pages.
+    BOOST_VERIFY( mmap( address, size, PROT_NONE, MAP_FIXED | MAP_NORESERVE ) == address );
 }
 PSI_COLD [[ gnu::nothrow, clang::nouwtable ]]
 void free( void * const address, std::size_t const size ) noexcept

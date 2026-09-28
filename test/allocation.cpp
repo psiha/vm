@@ -4,8 +4,8 @@
 /// --------------------
 ///
 /// Tests of the POSIX anonymous memory primitives (reserve(), allocate(),
-/// allocate_fixed(), commit()) and of growth through expand_back() and
-/// expand_front().
+/// allocate_fixed(), commit(), decommit()) and of growth through expand_back()
+/// and expand_front().
 ///
 /// The Win32 backend is built on NtAllocateVirtualMemory and is exercised
 /// indirectly by every container test; these tests pin the mmap()-based
@@ -24,6 +24,7 @@
 #include <cstddef>
 #include <csignal>
 #include <cstring>
+#include <vector>
 
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -205,6 +206,45 @@ TEST( allocation, expand_front_moves_when_the_space_before_is_taken )
     EXPECT_EQ( moved[ 4 * granule - 1 ], std::byte{ 0x42 } );
     free( moved, 4 * granule );
     free( guard, granule ); // the old block was released by the move
+}
+
+namespace
+{
+    // How many pages of [p, p + size) are resident in physical memory.
+    std::size_t resident_pages( std::byte * const p, std::size_t const size )
+    {
+        auto const system_page{ static_cast<std::size_t>( ::sysconf( _SC_PAGESIZE ) ) };
+        auto const pages      { ( size + system_page - 1 ) / system_page };
+#   ifdef __APPLE__
+        std::vector<char> residency( pages );
+#   else
+        std::vector<unsigned char> residency( pages );
+#   endif
+        if ( ::mincore( p, size, residency.data() ) != 0 )
+            return static_cast<std::size_t>( -1 );
+        // Only the lowest bit means "resident" (Darwin sets further flags).
+        return static_cast<std::size_t>( std::count_if( residency.begin(), residency.end(), []( auto const r ) { return ( r & 1 ) != 0; } ) );
+    }
+} // anonymous namespace
+
+TEST( allocation, decommit_releases_the_pages_and_keeps_the_range_reserved )
+{
+    // Same contract as the Win32 backend (MEM_DECOMMIT): the physical pages
+    // are released, and committing the range again yields fresh zeroed ones.
+    std::size_t size{ 16 * granule };
+    auto * const p{ static_cast<std::byte *>( allocate( size ) ) };
+    ASSERT_NE( p, nullptr );
+    std::memset( p, 0x5A, size );
+    ASSERT_EQ( resident_pages( p, size ), size / static_cast<std::size_t>( ::sysconf( _SC_PAGESIZE ) ) );
+
+    decommit( p, size );
+    EXPECT_EQ( resident_pages( p, size ), 0U );
+    // The range stays reserved: nothing else can be mapped over it.
+    EXPECT_FALSE( allocate_fixed( p, granule, allocation_type::commit ) );
+
+    ASSERT_TRUE( commit( p, size ) );
+    EXPECT_TRUE( all_zero( p, size ) );
+    free( p, size );
 }
 
 TEST( allocation, commit_of_an_unmapped_range_fails )
