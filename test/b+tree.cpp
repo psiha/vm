@@ -2,6 +2,8 @@
 #include <psi/vm/containers/b+tree_print.hpp>
 #include <psi/vm/containers/heap_vector.hpp>
 
+#include "resident_pages.hpp"
+
 #include <boost/assert.hpp>
 #include <boost/container/flat_set.hpp>
 
@@ -4102,6 +4104,96 @@ TEST( bp_tree, memfd_node_pool_is_backed_by_huge_pages_on_request )
     EXPECT_TRUE( std::ranges::equal( grown, std::views::iota( 0U, rows              ) ) );
 }
 #endif // server Linux
+
+//------------------------------------------------------------------------------
+// release_free_nodes()
+//------------------------------------------------------------------------------
+namespace
+{
+    // A sequentially built tree whose middle half is then erased leaves runs
+    // of neighbouring free nodes - whole pages of them even where a node is a
+    // fraction of a page.  Releasing them has to take those pages out of
+    // residency, keep the tree intact, and hand the nodes back as it grows.
+    template <bool cow>
+    void release_roundtrip()
+    {
+        using tree_t = inspectable<bptree_set<int>>;
+        auto const size{ static_cast<int>( tree_t::max_values_per_leaf() ) * 512 };
+        tree_t bpt;
+        if constexpr ( cow ) bpt.map_cow_memory();
+        else                 bpt.map_memory();
+        ASSERT_EQ( bpt.insert( std::views::iota( 0, size ) ), static_cast<std::size_t>( size ) );
+        auto const reserved{ bpt.nodes_reserved() };
+        auto const last    { std::ranges::find( bpt, 3 * size / 4 ) };
+        bpt.erase( std::ranges::find( bpt, size / 4 ), last );
+        auto const free_nodes{ reserved - bpt.nodes_used() };
+        ASSERT_GT( free_nodes, 0U );
+
+        auto const resident_before{ resident_pages( bpt.node_pool_bytes() ) };
+        auto const released{ bpt.release_free_nodes() };
+        auto const resident_after { resident_pages( bpt.node_pool_bytes() ) };
+        EXPECT_GT( released, free_nodes / 2 ) << "whole pages of neighbouring free nodes";
+        EXPECT_EQ( bpt.nodes_released(), released );
+        EXPECT_EQ( bpt.nodes_used(), reserved - free_nodes );
+        if ( resident_before && resident_after ) {
+            auto const pages{ released * tree_t::node_byte_size() / page_size };
+            EXPECT_LE( *resident_after + pages, *resident_before ) << "released " << released << " nodes";
+            std::println( "release_free_nodes(): {} nodes, resident pages {} -> {}", released, *resident_before, *resident_after );
+        }
+        ASSERT_TRUE( bpt.structure_is_sound() );
+        auto kept{ std::views::iota( 0, size ) | std::views::filter( [ = ]( int const k ) { return k < size / 4 || k >= 3 * size / 4; } ) };
+        EXPECT_TRUE( std::ranges::equal( bpt, kept ) );
+        EXPECT_EQ( bpt.release_free_nodes(), 0U ) << "nothing more to release";
+
+        // growing again takes the released nodes before the pool grows
+        for ( auto k{ size / 4 }; k < 3 * size / 4; ++k )
+            ASSERT_TRUE( bpt.insert( k ).second );
+        ASSERT_TRUE( bpt.structure_is_sound() ) << "regrown";
+        EXPECT_TRUE( std::ranges::equal( bpt, std::views::iota( 0, size ) ) );
+        EXPECT_EQ( bpt.nodes_reserved(), reserved );
+    }
+} // anonymous namespace
+
+TEST( bp_tree, release_free_nodes_memory     ) { release_roundtrip<false>(); }
+TEST( bp_tree, release_free_nodes_cow_memory ) { release_roundtrip<true >(); }
+
+// While a COW clone lives, shared storage must not be released from under
+// it - the clone reads those pages - and once the clone is gone it can be.
+// The clone itself may drop what it holds privately wherever that frees
+// nothing the source reads (a Linux private view).
+TEST( bp_tree, release_free_nodes_spares_a_live_clone )
+{
+    using tree_t = inspectable<bptree_set<int>>;
+    auto const size{ static_cast<int>( tree_t::max_values_per_leaf() ) * 512 };
+    tree_t source;
+    source.map_cow_memory();
+    ASSERT_EQ( source.insert( std::views::iota( 0, size ) ), static_cast<std::size_t>( size ) );
+    source.erase( std::ranges::find( source, size / 4 ), std::ranges::find( source, 3 * size / 4 ) );
+    auto kept{ std::views::iota( 0, size ) | std::views::filter( [ = ]( int const k ) { return k < size / 4 || k >= 3 * size / 4; } ) };
+    {
+        tree_t clone{ source };
+        auto const resident_before{ resident_pages( source.node_pool_bytes() ) };
+        EXPECT_EQ( source.release_free_nodes(), 0U ) << "shared with a live clone";
+        EXPECT_EQ( source.nodes_released(), 0U );
+        auto const resident_after{ resident_pages( source.node_pool_bytes() ) };
+        if ( resident_before && resident_after )
+            EXPECT_EQ( *resident_after, *resident_before );
+#   if defined( __linux__ )
+        EXPECT_GT( clone.release_free_nodes(), 0U ) << "the clone's own view is private";
+#   else
+        EXPECT_EQ( clone.release_free_nodes(), 0U ) << "shared with its live source";
+#   endif
+        ASSERT_TRUE( clone.structure_is_sound() );
+        EXPECT_TRUE( std::ranges::equal( clone, kept ) );
+        for ( auto k{ size / 4 }; k < size / 2; ++k )
+            ASSERT_TRUE( clone.insert( k ).second );
+        ASSERT_TRUE( source.structure_is_sound() ) << "source, beside the clone";
+        EXPECT_TRUE( std::ranges::equal( source, kept ) );
+    }
+    EXPECT_GT( source.release_free_nodes(), 0U ) << "the clone is gone";
+    ASSERT_TRUE( source.structure_is_sound() );
+    EXPECT_TRUE( std::ranges::equal( source, kept ) );
+}
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm

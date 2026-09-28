@@ -32,6 +32,7 @@
 #include <cstdint>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <span>
 #include <type_traits>
 #include <utility>
@@ -360,10 +361,30 @@ public:
     bool has_attached_storage() const noexcept { return nodes_.has_attached_storage(); }
 
     // Footprint, in nodes: the ones the tree is actually using (all levels),
-    // and the ones the pool holds - which is what is resident, since the pool
-    // grows geometrically for bulk operations and is never handed back.
+    // and the ones the pool holds - which is what is resident, less the
+    // nodes_released(): the pool grows geometrically for bulk operations and
+    // never shrinks, and a freed node stays resident until
+    // release_free_nodes() hands its page back.
     [[ gnu::pure, nodiscard ]] std::uint32_t nodes_used    () const noexcept;
     [[ gnu::pure, nodiscard ]] std::uint32_t nodes_reserved() const noexcept;
+    [[ gnu::pure, nodiscard ]] std::uint32_t nodes_released() const noexcept { return static_cast<std::uint32_t>( released_.size() ); }
+
+    // Return the memory of free nodes to the OS, without renumbering a single
+    // node: a node is a fixed slot of a contiguous pool, so the pages of free
+    // nodes can be dropped from under them in place (see
+    // doc/b+tree_occupancy_and_variants.md).  Takes whole pages only - every
+    // node on the page free - which with page sized nodes is every free node,
+    // and with smaller ones only runs of free neighbours.  A released node
+    // leaves the free list (a dropped page would lose its links) for a set
+    // beside the pool, which new_node() and reserve_additional() draw on once
+    // the free list runs dry, reinitialising the node; the next write faults
+    // its page back in.  Nothing is released from file backed storage, nor
+    // from shared storage while a COW clone of this tree (or the tree this is
+    // a clone of) is alive - see mem_mapping::release_pages().  Explicit
+    // rather than done by free(): a syscall per freed node would be paid on
+    // the erase path, and only a batch can see which pages are entirely free.
+    // Returns how many nodes it released.
+    std::uint32_t release_free_nodes();
     // ...and the ones a commit_to() would copy, which is what a COW clone of
     // this tree costs to commit.  A tree nobody has mutated owes nothing.
     [[ gnu::pure, nodiscard ]] std::uint32_t nodes_dirty   () const noexcept;
@@ -956,6 +977,15 @@ private:
 
     void assign_nodes_to_free_pool( node_slot::value_type starting_node ) noexcept;
 
+    // Put up to 'count' released nodes back on the free list (see
+    // release_free_nodes()).
+    void reclaim_released( node_slot::value_type count ) noexcept;
+    // A released node as a freshly freed one would be: its dropped page reads
+    // back as zeros (or unspecified bytes), which are not a null link.
+    node_header & reinitialise_released( node_slot ) noexcept;
+    // Whether another tree may be reading this one's pages (see cow_group_).
+    [[ gnu::pure ]] bool shares_pages() const noexcept { return cow_group_ && ( cow_group_.use_count() > 1 ); }
+
     void init_fresh_pool( std::uint32_t initial_capacity_as_number_of_nodes ) noexcept;
 
     void update_leaf_list_ends( node_header & removed_leaf ) noexcept;
@@ -981,6 +1011,13 @@ protected:
     mutable dirty_node_set dirty_; // which nodes this tree has written - see dirty_node_set
     unique_nonowned_ptr<header> p_hdr_; // cached pointer to header in mapped storage (compilers/clang still unable to fully optimize away the vm::header_data code)
     node_pool nodes_;
+    // Free nodes whose pages release_free_nodes() handed back, ascending (so
+    // the one new_node() takes, the back, is the highest).  Not persisted:
+    // file backed storage never releases.
+    heap_vector<node_slot::value_type> released_;
+    // Shared by a tree and every COW clone made of it (and of those): its use
+    // count says whether anything else may still be mapping this pool's pages.
+    mutable std::shared_ptr<void> cow_group_;
 #ifndef NDEBUG // debugging helpers (undoing type erasure done by contiguous_container_storage_base)
     std::span<node_placeholder const> nodes__{};
 #endif
@@ -998,6 +1035,8 @@ bptree_base::map_file( auto const file, flags::named_object_construction_policy 
     if ( success )
     {
         update_cached_pointers();
+        released_.clear();
+        cow_group_.reset();
         if ( nodes_.empty() )
             hdr() = {};
     }

@@ -359,6 +359,28 @@ public:
     // copy into small pages whatever the advice.
     err::result_or_error<void, error> map_cow_memory( size_type data_size, header_info, huge_pages = huge_pages::no ) noexcept;
 
+    // Hand whole pages of the view back to the OS without unmapping them:
+    // their contents are dropped and they stop counting as resident, and the
+    // next touch faults in a fresh page (zero filled on Linux and Windows,
+    // unspecified on macOS). 'shared' says whether another view may still be
+    // reading these pages - a COW clone of this storage, or the storage this
+    // one is a clone of - which rules out every mechanism that frees the pages
+    // themselves rather than this view's private copies of them. Returns
+    // whether the pages were released:
+    //  * file backed storage: never - a file's pages are its data, and hole
+    //    punching a persisted file is not this call's to decide;
+    //  * a private view (Linux map_memory(), any Linux COW clone):
+    //    MADV_DONTNEED, which drops this view's pages and nothing else;
+    //  * a shared view (the memfd behind Linux map_cow_memory(), the pagefile
+    //    section behind Windows storage, macOS anonymous shared memory): the
+    //    pages are freed where they live - MADV_REMOVE, DiscardVirtualMemory,
+    //    MADV_FREE_REUSABLE - so only while nothing else maps them. A Windows
+    //    copy-on-write view cannot be discarded at all.
+    // On a huge page backed view a partial release splits the huge page.
+    bool release_pages( std::byte * first, size_type size, bool shared ) noexcept;
+    // Whether release_pages() would release anything from this storage.
+    [[ nodiscard ]] bool can_release_pages( bool shared ) const noexcept;
+
     explicit operator bool() const noexcept { return has_attached_storage(); }
 
 protected:

@@ -212,7 +212,70 @@ is individually cheaper. `to_move = room / 2` is the tuning knob.
 
 ---
 
-## 5. Open
+## 5. Giving memory back
+
+Everything above is about how full a node is kept while the tree is being
+built and modified. Neither half of the tree ever hands memory back: erasure
+frees a node only once two siblings together fit into one — which leaves a
+thinned-out tree well above half full and therefore unmerged — and a freed
+node goes on a free list, resident, in a pool that never shrinks.
+
+### 5.1 `release_free_nodes()`: dropping the pages of free nodes
+
+A node is a fixed slot of a contiguous pool, addressed by its index, so the
+pages under a free node can be handed back to the OS where they are, without
+renumbering anything (pool compaction - relocating nodes to the front and
+truncating - would have to rewrite every link that names one). What the call
+takes is **whole pages**:
+
+- with page sized nodes (`PSI_VM_BT_PAGE_SIZED_NODES`) that is every free
+  node;
+- with smaller ones only a page whose nodes are *all* free: runs of
+  neighbouring free nodes, such as a range erase of a sequentially built
+  tree leaves, but hardly ever what scattered frees leave.
+
+A released node leaves the free list. The list is threaded through the free
+nodes themselves, and a dropped page reads back as zeros - which is node 0,
+not a null link. So released nodes are kept in a sorted set beside the pool,
+which `new_node()` takes from once the free list is empty (before the pool
+grows), and which `reserve_additional()` puts back on the list for the bulk
+paths that walk it; a node taken back is reinitialised, and its page faults in
+again on the first write. The set is not persisted.
+
+How the pages are dropped depends on who else maps them:
+
+| storage | mechanism | refused when |
+|---|---|---|
+| file backed | — (a file's pages are its data) | always |
+| a private view: Linux `map_memory()`, any Linux COW clone | `MADV_DONTNEED` (drops this view's pages only) | never |
+| Linux `map_cow_memory()`: a shared memfd | `MADV_REMOVE` (punches the pages out of the memfd) | a COW clone of the tree is alive |
+| Windows: a pagefile backed section | `DiscardVirtualMemory` | a clone is alive; a copy-on-write view rejects it outright |
+| macOS: shared anonymous memory | `MADV_FREE_REUSABLE` | a clone is alive |
+
+A tree and every clone made of it share a reference count, which is how a
+shared view tells that dropping its pages would pull them from under a clone.
+`commit_to()` carries a clone's released set over along with its header; a
+node the target still holds resident goes back on its free list instead.
+
+It is explicit rather than done by `free()`: a system call per freed node
+would land on the erase path, and only a batch can see which pages are
+entirely free. On a huge page backed pool a partial release splits the huge
+page.
+
+Measured (`bp_tree.benchmark_compact`, x86-64 Linux, clang, 4M `std::uint32_t`
+keys built one at a time in random order, then a share erased at random -
+erasure alone, before any compaction):
+
+| erased | 4096-byte nodes: free nodes released | cost per node | 512-byte nodes: released of free |
+|---|---|---|---|
+| 50 % | 1534 of 1534 | 0.83 µs | 8 of 12558 |
+| 70 % | 2520 of 2520 | 0.67 µs | 536 of 22120 |
+
+The cost is the system call (one per run of neighbouring pages) plus the
+page's zeroing on its next fault. With 512-byte nodes a page holds eight, and
+erasure leaves them free in ones and twos.
+
+## 6. Open
 
 - **Devector nodes.** `node_header` carries `start`, where a node's live
   entries begin, and every accessor honours it; nothing opens a gap yet. The

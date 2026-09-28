@@ -35,6 +35,10 @@
 #   ifndef MADV_COLLAPSE // Linux 6.1
 #       define MADV_COLLAPSE 25
 #   endif
+#elif defined( __APPLE__ )
+#   include <sys/mman.h>
+#elif defined( _WIN32 )
+#   include <psi/vm/detail/nt.hpp>
 #endif
 
 #include <algorithm> // min
@@ -525,6 +529,40 @@ mem_mapping::size_type mem_mapping::memory_storage_size( size_type const storage
         return align_up( storage_size, detail::pmd_span );
 #endif
     return storage_size;
+}
+
+bool mem_mapping::can_release_pages( [[ maybe_unused ]] bool const shared ) const noexcept
+{
+    if ( !has_attached_storage() || mapping_.is_file_based() )
+        return false;
+#if defined( __linux__ )
+    // a private view drops only its own pages; a shared one (the memfd behind
+    // map_cow_memory) frees them for every view
+    return mapping_.view_mapping_flags.is_cow() || !shared;
+#elif defined( __APPLE__ ) || defined( _WIN32 )
+    // a Windows copy-on-write view rejects DiscardVirtualMemory outright
+    return !mapping_.view_mapping_flags.is_cow() && !shared;
+#else
+    return false;
+#endif
+}
+
+bool mem_mapping::release_pages( std::byte * const first, size_type const size, bool const shared ) noexcept
+{
+    BOOST_ASSERT( is_aligned( first, page_size ) );
+    BOOST_ASSERT( size % page_size == 0 );
+    BOOST_ASSERT( ( first >= view_.data() ) && ( first + size <= view_.data() + view_.size() ) );
+    if ( !size || !can_release_pages( shared ) )
+        return false;
+#if defined( __linux__ )
+    return ::madvise( first, size, mapping_.view_mapping_flags.is_cow() ? MADV_DONTNEED : MADV_REMOVE ) == 0;
+#elif defined( __APPLE__ )
+    return ::madvise( first, size, MADV_FREE_REUSABLE ) == 0;
+#elif defined( _WIN32 )
+    return ::DiscardVirtualMemory( first, size ) == ERROR_SUCCESS;
+#else
+    return false;
+#endif
 }
 
 PSI_COLD

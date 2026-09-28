@@ -42,6 +42,7 @@ void bptree_base::clear() noexcept
 {
     nodes_.clear();
     dirty_.reset( 0 );
+    released_.clear();
     update_cached_pointers(); // required for targets which cannot downsize mappings but have to unmap-remap (e.g. Windows)
     hdr() = {};
 }
@@ -98,6 +99,8 @@ void bptree_base::init_fresh_pool( std::uint32_t const initial_capacity_as_numbe
 {
     update_cached_pointers();
     hdr() = {};
+    released_.clear();
+    cow_group_.reset(); // fresh storage: no clone maps it
     if ( initial_capacity_as_number_of_nodes ) {
         dirty_.reset( nodes_.size() ); // sized before anything can mark
         assign_nodes_to_free_pool( 0 );
@@ -113,6 +116,9 @@ void bptree_base::init_fresh_pool( std::uint32_t const initial_capacity_as_numbe
 PSI_COLD
 void bptree_base::reserve_additional( node_slot::value_type additional_nodes )
 {
+    // the callers walk the free list itself, so released nodes go back on it
+    if ( additional_nodes > hdr().free_node_count_ )
+        reclaim_released( additional_nodes - hdr().free_node_count_ );
     auto const preallocated_count{ hdr().free_node_count_ };
     additional_nodes -= std::min( preallocated_count, additional_nodes );
     auto const current_size{ nodes_.size() };
@@ -139,7 +145,7 @@ void bptree_base::assign_nodes_to_free_pool( node_slot::value_type const startin
 
 bptree_base::node_slot::value_type bptree_base::used_number_of_nodes() const noexcept
 {
-    return nodes_.size() - hdr().free_node_count_;
+    return nodes_.size() - hdr().free_node_count_ - nodes_released();
 }
 
 std::uint32_t bptree_base::nodes_used    () const noexcept { return used_number_of_nodes(); }
@@ -590,6 +596,8 @@ void bptree_base::swap( bptree_base & other ) noexcept
     swap( this->nodes_ , other.nodes_  );
     swap( this->p_hdr_ , other.p_hdr_  );
     swap( this->dirty_ , other.dirty_  ); // indexed by the pool it describes, so it goes with it
+    swap( this->released_ , other.released_  ); // ditto
+    swap( this->cow_group_, other.cow_group_ );
 #ifndef NDEBUG
     swap( this->nodes__, other.nodes__ );
 #endif
@@ -676,6 +684,14 @@ bptree_base::new_node()
         mark_dirty( cached_node );
         return as<node_placeholder>( cached_node );
     }
+    if ( !released_.empty() )
+    {
+        auto const slot{ node_slot{ released_.back() } };
+        released_.pop_back();
+        reinitialise_released( slot );
+        mark_dirty( slot );
+        return node( slot );
+    }
     auto & new_nd{ nodes_.emplace_back() };
     dirty_.grow( nodes_.size() ); // emplace_back does not go through update_cached_pointers before the mark below
     BOOST_ASSUME( !new_nd.num_vals );
@@ -722,6 +738,105 @@ void bptree_base::free( node_header & node ) noexcept
     else             { BOOST_ASSUME( !hdr.free_node_count_ ); }
     free_list = freed_node_slot;
     ++hdr.free_node_count_;
+}
+
+bptree_base::node_header &
+bptree_base::reinitialise_released( node_slot const slot ) noexcept
+{
+    auto & released{ static_cast<node_header &>( node( slot ) ) };
+    released = {};
+    if constexpr ( PSI_VM_BT_FRONT_GAP_COMPILED )
+        front_gap_start_of( released ) = 0;
+    return released;
+}
+
+void bptree_base::reclaim_released( node_slot::value_type count ) noexcept
+{
+    for ( ; count && !released_.empty(); --count )
+    {
+        auto const slot{ node_slot{ released_.back() } };
+        released_.pop_back();
+        free( reinitialise_released( slot ) );
+    }
+}
+
+std::uint32_t bptree_base::release_free_nodes()
+{
+    auto const shared{ shares_pages() };
+    if ( !has_attached_storage() || !hdr().free_node_count_ || !nodes_.can_release_pages( shared ) )
+        return 0;
+
+    // Which pages are entirely free, by address: the pool is aligned to a node
+    // but not necessarily to a page (the header shares the first one with the
+    // leading nodes), and a node is either a whole number of pages or a whole
+    // fraction of one.
+    auto const nodes_per_page{ std::max<std::size_t>( 1, page_size / node_size ) };
+    auto const pool_begin    { reinterpret_cast<std::uintptr_t>( nodes_.data() ) };
+    auto const first_whole   { static_cast<node_slot::value_type>( ( align_up( pool_begin, std::size_t{ page_size } ) - pool_begin ) / node_size ) };
+    auto const node_count    { static_cast<node_slot::value_type>( nodes_.size() ) };
+
+    // allocations first: nothing below may fail half way through the list
+    dirty_node_set on_free_list; on_free_list.reset( node_count );
+    dirty_node_set released    ; released    .reset( node_count );
+    for ( auto slot{ hdr().free_list_ }; slot; slot = node( slot ).right )
+        on_free_list.set( *slot );
+    for ( auto const slot : released_ )
+        released.set( slot );
+    heap_vector<node_slot::value_type> newly_released;
+    for ( auto first{ first_whole }; first + nodes_per_page <= node_count; first += nodes_per_page )
+    {
+        bool whole_page_free{ true }, any_on_list{ false };
+        for ( auto n{ first }; n != first + nodes_per_page; ++n )
+        {
+            auto const listed{ on_free_list.test( n ) };
+            any_on_list     |= listed;
+            whole_page_free &= listed || released.test( n );
+        }
+        if ( whole_page_free && any_on_list )
+            for ( auto n{ first }; n != first + nodes_per_page; ++n )
+                if ( on_free_list.test( n ) )
+                    newly_released.push_back( n );
+    }
+    if ( newly_released.empty() )
+        return 0;
+    released_.reserve( released_.size() + newly_released.size() );
+
+    auto & hdr{ this->hdr() };
+    // unlink them from the free list: it is doubly linked (see free())...
+    for ( auto const n : newly_released )
+    {
+        auto & freed{ node( node_slot{ n } ) };
+        if ( freed.left ) { node( freed.left ).right = freed.right; mark_dirty( freed.left ); }
+        else              { BOOST_ASSERT( hdr.free_list_.index == n ); hdr.free_list_ = freed.right; }
+        if ( freed.right ) { node( freed.right ).left = freed.left; mark_dirty( freed.right ); }
+        --hdr.free_node_count_;
+    }
+    // ...and only then drop their pages, which takes their links with them -
+    // coalesced into runs of neighbouring pages, one call per run
+    auto const page_bytes{ std::max<std::size_t>( page_size, node_size ) };
+    auto * const pool{ reinterpret_cast<std::byte *>( nodes_.data() ) };
+    std::size_t run_begin{ 0 }, run_end{ 0 };
+    std::uint32_t pages_released{ 0 };
+    auto const flush_run{ [ & ] {
+        if ( run_end != run_begin && nodes_.release_pages( pool + run_begin, run_end - run_begin, shared ) )
+            pages_released += static_cast<std::uint32_t>( ( run_end - run_begin ) / page_bytes );
+    } };
+    for ( auto const n : newly_released )
+    {
+        auto const page_begin{ align_down( std::size_t{ n } * node_size + pool_begin, page_bytes ) - pool_begin };
+        if ( page_begin < run_end ) // another node on a page already in the run
+            continue;
+        if ( page_begin != run_end ) { flush_run(); run_begin = page_begin; }
+        run_end = page_begin + page_bytes;
+    }
+    flush_run();
+    // (kept even should a call fail: off the free list their contents no
+    // longer matter, and they are reclaimed on demand all the same)
+    auto const old_size{ released_.size() };
+    for ( auto const n : newly_released )
+        released_.push_back( n );
+    std::ranges::inplace_merge( released_, released_.begin() + static_cast<std::ptrdiff_t>( old_size ) );
+    return pages_released ? static_cast<std::uint32_t>( newly_released.size() ) : 0;
 }
 
 void bptree_base::free_leaf( node_header & leaf ) noexcept
@@ -773,10 +888,14 @@ PSI_COLD
 bptree_base::bptree_base( bptree_base const & source )
     :
     p_hdr_{},
-    nodes_{ source.nodes_ } // COW copy via mem_mapping copy ctor
+    nodes_{ source.nodes_ }, // COW copy via mem_mapping copy ctor
+    released_{ source.released_ } // their pages are no more use to the clone than to the source
 {
     if ( nodes_.has_attached_storage() )
     {
+        if ( !source.cow_group_ )
+            source.cow_group_ = std::make_shared<std::byte>();
+        cow_group_ = source.cow_group_;
         update_cached_pointers();
         // A clone starts owing its target nothing: what it must commit is what
         // IT writes from here on, not what the source wrote before the clone.
@@ -850,6 +969,28 @@ void bptree_base::commit_to( bptree_base & target ) const noexcept
     // Sync the target's cached header pointer (the header contents may have
     // changed -- size_, root_, depth_, free list, etc.).
     target.update_cached_pointers();
+
+    // The header now describes this tree's free list, which holds none of the
+    // nodes this tree released - so those are the target's released set too,
+    // except that the target may still hold (resident) nodes this tree
+    // released but it did not: those go back on its free list instead, where
+    // a node lives that the target has not released.  Both sets are sorted,
+    // so this is one merge - and allocates nothing, as commit_to must not.
+    auto &     kept    { target.released_ };
+    auto       kept_end{ kept.begin() };
+    auto       p_kept  { kept.begin() };
+    for ( auto const slot : released_ )
+    {
+        while ( ( p_kept != kept.end() ) && ( *p_kept < slot ) )
+            ++p_kept; // released by the target, since reused here: live now
+        if ( ( p_kept != kept.end() ) && ( *p_kept == slot ) ) {
+            *kept_end++ = slot;
+            ++p_kept;
+        } else {
+            target.free( target.reinitialise_released( node_slot{ slot } ) );
+        }
+    }
+    kept.shrink_by( static_cast<decltype( kept.size() )>( kept.end() - kept_end ) );
 }
 
 //------------------------------------------------------------------------------
