@@ -120,8 +120,10 @@ bool allocate_fixed( void * const address, std::size_t const size, allocation_ty
 {
     // Cannot use MAP_FIXED as it silently overwrites existing mappings
     // https://stackoverflow.com/questions/14943990/overlapping-pages-with-mmap-map-fixed
-    // Linux 4.7 has MAP_FIXED_NOREPLACE
+    // Linux 4.17 has MAP_FIXED_NOREPLACE
     // https://github.com/torvalds/linux/commit/a4ff8e8620d3f4f50ac4b41e8067b7d395056843
+    // but older kernels ignore the flag and take the address as a hint, as
+    // does every other POSIX system: a mapping placed elsewhere is undone.
 #ifdef MAP_FIXED_NOREPLACE
     auto const noreplace_fixed_flag{ MAP_FIXED_NOREPLACE };
 #else
@@ -133,9 +135,6 @@ bool allocate_fixed( void * const address, std::size_t const size, allocation_ty
 
     if ( adjusted_address )
     {
-#   if !defined( __ANDROID__ ) // API level and kernel version chaos
-        BOOST_ASSUME( !noreplace_fixed_flag );
-#   endif
         BOOST_VERIFY( ::munmap( adjusted_address, size ) == 0 );
     }
     return false;
