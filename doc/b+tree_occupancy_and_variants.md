@@ -349,6 +349,32 @@ faster to search, but hardly any page is left with all eight of its nodes
 free, so resident memory barely moves: getting it back there would take
 moving nodes, which §5.1 rules out.
 
+Trees built by insertion sit much higher already, because it relieves a
+full leaf into a sibling before splitting it (§4), and there `compact()` has
+little to do - unlike wherever a net share of the keys was erased:
+
+| built by | node size | leaf fill | nodes in use | resident pages |
+|---|---|---|---|---|
+| 4M random inserts | 4096 | 89.8 → 94.9 % | 4386 → 4144 | 4386 → 4144 |
+| churn: then 4M erase + insert pairs | 4096 | 89.8 → 94.9 % | 4383 → 4143 | 4383 → 4143 (after `release_free_nodes()`) |
+| sorted bulk, then 50 % erased | 4096 | 60.4 → 93.0 % | 3254 → 2114 | 3254 → 2114 (ditto) |
+| 50 % erased, then 25 % re-inserted | 4096 | 74.6 → 94.2 % | 3958 → 3129 | 3958 → 3129 (ditto) |
+| 4M random inserts | 512 | 87.2 → 95.4 % | 38009 → 34414 | 4752 → 4752 |
+| churn | 512 | 87.2 → 95.3 % | 37891 → 34423 | 6174 → 6174 |
+
+Over repeated runs on a shared host, `find()` on the two insert-built trees
+moved by −26 to +7 %, which is not distinguishable from the run-to-run noise;
+on the trees with keys erased it was faster in nearly every run, by up to
+40 %. So `compact()` pays after net shrinkage, and in memory only with page
+sized nodes.
+
+Merging the inner levels too is what lets the leaves merge at all: a parent
+may not drop below its minimum, so with the leaves alone compacted a
+randomly built 4096-byte-node tree erased by 30-70 % only goes from 63-69 %
+to 67-77 % leaf fill (93-95 % with every level), and a 512-byte-node one
+from 62-65 % to 73-78 %. Leaving the inner levels out would save 0.6-1.8 kB
+of an LTO-linked test binary's 6.7 MB of code, and no measurable compile time.
+
 On Windows, per call (x86-64, 4 kB pages, re-dirtied before each call):
 
 | | one scattered page | runs of 64–256 pages |
