@@ -201,7 +201,8 @@ void discard( mapped_span const range ) noexcept
     // https://devblogs.microsoft.com/oldnewthing/20170113-00/?p=95185
     // https://chromium.googlesource.com/chromium/src.git/+/refs/heads/main/docs/memory/key_concepts.md https://issues.chromium.org/issues/40522456
     // VirtualFree (wrapped by decommit) does not work for mapped views (only for VirtualAlloced memory)
-    BOOST_VERIFY( ::DiscardVirtualMemory( range.data(), range.size() ) );
+    // DiscardVirtualMemory() returns a DWORD *error code*, not a BOOL - ERROR_SUCCESS (0) on success.
+    BOOST_VERIFY( ::DiscardVirtualMemory( range.data(), range.size() ) == ERROR_SUCCESS );
 }
 
 namespace
