@@ -192,8 +192,10 @@ void * mem_mapping::expand_capacity( std::size_t target_capacity )
     // private view grows with anonymous memory, so it is not).
     if ( ( !mapping_.is_file_based() || private_view ) && ( target_capacity >= detail::pmd_span ) )
     {
-        auto const base{ reinterpret_cast<std::uintptr_t>( view_.data() ) };
-        target_capacity = align_up( base + target_capacity, detail::pmd_span ) - base;
+        // (A private view grows in place or relocates as a whole, keeping its
+        // phase: it never takes the move into its file's phase.)
+        auto const phase{ detail::pmd_phase_after_growth( view_.data(), mapped_size(), target_capacity, private_view ? -1 : mapping_.get() ) };
+        target_capacity = align_up( phase + target_capacity, detail::pmd_span ) - phase;
     }
 #endif
     if ( private_view ) [[ unlikely ]]
