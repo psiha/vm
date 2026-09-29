@@ -32,6 +32,7 @@
 #include <fstream>
 #include <iterator>
 #include <numeric>
+#include <optional>
 #include <random>
 #include <print>
 #include <string>
@@ -522,6 +523,72 @@ TEST( vm_vector_cow, clone_grows_where_it_has_no_room_to_grow_in_place )
     }
     std::filesystem::remove( test_vec );
 }
+
+#ifdef __linux__
+namespace
+{
+    //! How many mappings (VMAs) make up [ begin, end ).
+    std::size_t mappings_in( void const * const begin, void const * const end )
+    {
+        std::ifstream maps( "/proc/self/maps" );
+        std::string   line;
+        auto const    b{ reinterpret_cast<std::uintptr_t>( begin ) };
+        auto const    e{ reinterpret_cast<std::uintptr_t>( end   ) };
+        std::size_t   count{ 0 };
+        while ( std::getline( maps, line ) )
+        {
+            unsigned long lo, hi;
+            if ( std::sscanf( line.c_str(), "%lx-%lx", &lo, &hi ) == 2 && hi > b && lo < e )
+                ++count;
+        }
+        return count;
+    }
+} // anonymous namespace
+
+// A clone's own memory past the object it shares stays one mapping however
+// often the clone grows in place or moves, so that it always moves in one
+// call and is never copied: the view is two mappings, the object's and the
+// clone's own.
+TEST( vm_vector_cow, clone_that_grows_and_moves_stays_two_mappings )
+{
+    auto const test_vec{ "test_cow_two_mappings.vec" };
+    for ( auto const kind : { backing::file, backing::cow_memory } )
+    {
+        auto constexpr count{ 10000u };
+        vm_vector<std::uint32_t, std::uint32_t> src;
+        map_source( src, kind, test_vec );
+        for ( std::uint32_t i{ 0 }; i < count; ++i )
+            src.push_back( i );
+        if ( kind == backing::file )
+            src.flush_blocking();
+
+        auto clone{ src };
+        auto const grow{ [ & ]( std::uint32_t const target_count, bool const in_place ) {
+            std::optional<address_blocker> blocker;
+            if ( !in_place )
+                ASSERT_TRUE( blocker.emplace( clone ).placed() );
+            auto const from{ clone.size() };
+            clone.resize( target_count );
+            for ( auto i{ from }; i < target_count; ++i )
+                clone[ i ] = ~i;
+        } };
+        auto const mappings{ [ & ] {
+            auto const * const begin{ reinterpret_cast<void const *>( align_down( reinterpret_cast<std::uintptr_t>( clone.data() ), std::uintptr_t{ page_size } ) ) };
+            return mappings_in( begin, clone.data() + clone.capacity() );
+        } };
+        grow(  2 * count, true  ); EXPECT_EQ( mappings(), 2U ) << "grown";
+        grow(  4 * count, false ); EXPECT_EQ( mappings(), 2U ) << "moved";
+        grow(  8 * count, true  ); EXPECT_EQ( mappings(), 2U ) << "grown after a move";
+        grow( 16 * count, false ); EXPECT_EQ( mappings(), 2U ) << "moved again";
+        EXPECT_TRUE( backed_by_an_object( clone.data() ) );
+        for ( std::uint32_t i{ 0 }; i < count; ++i )
+            ASSERT_EQ( clone[ i ], i );
+        for ( std::uint32_t i{ count }; i < 16 * count; ++i )
+            ASSERT_EQ( clone[ i ], ~i );
+    }
+    std::filesystem::remove( test_vec );
+}
+#endif // __linux__
 
 // What a clone shrank away is not the source's to fill: growing back over it
 // never shows what the source has since written there.
