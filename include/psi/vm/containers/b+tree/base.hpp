@@ -344,12 +344,16 @@ public:
     void clear() noexcept;
 
     storage_result map_file  ( auto file, flags::named_object_construction_policy, header_info = {} ) noexcept;
-    storage_result map_memory( std::uint32_t initial_capacity_as_number_of_nodes = 0, header_info = {} ) noexcept;
+    // huge_pages::yes backs the node pool with transparent huge pages where
+    // the kernel allows it (see mem_mapping::map_memory()). It pays where
+    // descents are bound by page walks (keys compared in the node, a pool well
+    // past the TLB's reach), and costs memory; doc/huge_pages.md.
+    storage_result map_memory( std::uint32_t initial_capacity_as_number_of_nodes = 0, header_info = {}, huge_pages = huge_pages::no ) noexcept;
     // map_memory() for a tree that will be COW cloned (see the copy
     // constructor): on Linux the node pool is memfd-backed, so a clone shares
     // its pages (dup + MAP_PRIVATE) instead of copying the whole pool up front.
     // Elsewhere it is exactly map_memory().
-    storage_result map_cow_memory( std::uint32_t initial_capacity_as_number_of_nodes = 0, header_info = {} ) noexcept;
+    storage_result map_cow_memory( std::uint32_t initial_capacity_as_number_of_nodes = 0, header_info = {}, huge_pages = huge_pages::no ) noexcept;
 
     std::span<std::byte> user_header_data() noexcept;
 

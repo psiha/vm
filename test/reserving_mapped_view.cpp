@@ -153,21 +153,22 @@ TEST( reserving_mapped_view, exhaustion_is_a_clean_failure )
 }
 
 #if defined( __linux__ ) && !defined( __ANDROID__ )
-// A plain (non-reserving) file view is placed where its address and its file
-// offset agree modulo a PMD span (2 MiB with 4 KiB pages) - the kernel maps a
-// huge folio of a file only there - whatever the view's size and offset, and
-// moving it there keeps what it maps.
+// A plain (non-reserving) file view of at least a PMD span (2 MiB with 4 KiB
+// pages) is placed where its address and its file offset agree modulo a PMD
+// span - the kernel maps a huge folio of a file only there - whatever its
+// offset, and moving it there keeps what it maps. (Smaller views hold no
+// whole span to put a huge folio in, and are left where the kernel put them.)
 TEST( mapped_view, file_view_address_is_pmd_congruent_to_its_offset )
 {
     std::size_t constexpr pmd_span { std::size_t{ page_size } * ( page_size / sizeof( std::uint64_t ) ) };
-    std::size_t constexpr view_size{ 16 * page_size };
+    std::size_t constexpr view_size{ pmd_span };
     auto        constexpr file_name{ "pmd_phase_view.bin" };
     test_file cleanup{ file_name };
 
-    auto mapping{ make_rw_mapping( file_name, 2 * pmd_span ) };
+    auto mapping{ make_rw_mapping( file_name, 3 * pmd_span ) };
     ASSERT_TRUE( mapping );
 
-    auto whole{ mapped_view::map( mapping, 0, 2 * pmd_span )() };
+    auto whole{ mapped_view::map( mapping, 0, 3 * pmd_span )() };
     ASSERT_TRUE( whole );
     EXPECT_EQ( reinterpret_cast<std::uintptr_t>( whole->data() ) % pmd_span, 0U );
 

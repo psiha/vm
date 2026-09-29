@@ -62,43 +62,35 @@ bptree_base::hdr() noexcept
     return *p_hdr_;
 }
 
+// Every lookup and insertion descent is a chain of dependent loads, one per
+// level, into nodes scattered across the whole pool: with 4 KiB pages nearly
+// every one of those also misses the TLB once the pool outgrows its reach, so
+// a walk bound by those loads pays a page walk per level on top of the cache
+// miss, and huge pages (512x fewer translations) take most of that away. A
+// comparator that loads each key from elsewhere (an index of rows) spends the
+// descent on those loads instead, and gains nothing measurable - so huge pages
+// are the caller's request (doc/huge_pages.md). They are asked for before the
+// pool is first touched (constructing the initial capacity writes every
+// node): advice given after that leaves the whole initial capacity in small
+// pages. A memfd backed (map_cow_memory()) pool gets them where shmem_enabled
+// lets madvise() ask; its COW clones never do (a clone's writes copy into small
+// pages whatever the advice). map_file() does not ask: a huge folio would make
+// every sparse node update dirty, and the next flush write, 2 MiB of the file.
 bptree_base::storage_result
-bptree_base::map_memory( std::uint32_t const initial_capacity_as_number_of_nodes, header_info const hdr_info ) noexcept
+bptree_base::map_memory( std::uint32_t const initial_capacity_as_number_of_nodes, header_info const hdr_info, huge_pages const huge ) noexcept
 {
-    auto success{ nodes_.map_memory( initial_capacity_as_number_of_nodes, hdr_info.add_header<header>(), value_init )() };
+    auto success{ nodes_.map_memory( initial_capacity_as_number_of_nodes, hdr_info.add_header<header>(), value_init, huge )() };
     if ( success )
-    {
-        // Every lookup and insertion descent is a chain of dependent loads,
-        // one per level, into nodes scattered across the whole pool: with 4 KiB
-        // pages nearly every one of those also misses the TLB once the pool
-        // outgrows its reach, so the walk pays a page walk per level on top of
-        // the cache miss. Huge pages cut the number of translations the pool
-        // needs by 512x. Every page the pool grows into from here on faults in
-        // huge; only an initial capacity is already resident in small pages
-        // (map_memory() constructed those nodes), which is left to khugepaged.
-        // map_file() does not advise: a huge folio would make every sparse
-        // node update dirty, and the next flush write, 2 MiB of the file.
-        nodes_.advise_huge_pages();
         init_fresh_pool( initial_capacity_as_number_of_nodes );
-    }
     return success;
 }
 
 bptree_base::storage_result
-bptree_base::map_cow_memory( std::uint32_t const initial_capacity_as_number_of_nodes, header_info const hdr_info ) noexcept
+bptree_base::map_cow_memory( std::uint32_t const initial_capacity_as_number_of_nodes, header_info const hdr_info, huge_pages const huge ) noexcept
 {
-    auto success{ nodes_.map_cow_memory( initial_capacity_as_number_of_nodes, hdr_info.add_header<header>(), value_init )() };
+    auto success{ nodes_.map_cow_memory( initial_capacity_as_number_of_nodes, hdr_info.add_header<header>(), value_init, huge )() };
     if ( success )
-    {
-        // As in map_memory(). The pool is memfd (shmem) backed here, so the
-        // advice takes effect where shmem_enabled lets madvise() ask for huge
-        // pages (the fallback to anonymous memory follows enabled instead).
-        // COW clones are not advised: a clone's writes copy into 4 KiB pages
-        // whatever the advice, and a clone of a file backed tree would pull
-        // huge folios into the source file's page cache.
-        nodes_.advise_huge_pages();
         init_fresh_pool( initial_capacity_as_number_of_nodes );
-    }
     return success;
 }
 

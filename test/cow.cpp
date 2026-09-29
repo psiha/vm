@@ -25,6 +25,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdint>
@@ -399,7 +400,8 @@ TEST( vm_vector_cow, clone_of_a_clone_sees_the_first_clones_writes )
 namespace
 {
     //! Occupies the address range right past a container's mapping for as
-    //! long as it lives, so that the container cannot grow in place.
+    //! long as it lives, so that the container cannot grow in place - unless
+    //! something else already occupies it (blocks() either way).
     class address_blocker
     {
     public:
@@ -416,6 +418,16 @@ namespace
                 address_ = nullptr;
 #       endif
             placed_ = ( address_ == reinterpret_cast<void *>( at ) );
+#       ifndef _WIN32
+            if ( !placed_ )
+            {
+                // The kernel put it elsewhere: the page past the mapping is
+                // taken already (mincore() fails with ENOMEM where nothing
+                // is mapped).
+                if ( address_ ) { ::munmap( address_, size ); address_ = nullptr; }
+                taken_ = mapped( ::mincore, reinterpret_cast<void *>( at ) );
+            }
+#       endif
         }
         address_blocker( address_blocker const & ) = delete;
        ~address_blocker() noexcept
@@ -426,11 +438,27 @@ namespace
             if ( address_ ) ::munmap( address_, size );
 #       endif
         }
-        bool placed() const noexcept { return placed_; }
+        bool blocks() const noexcept { return placed_ || taken_; }
     private:
+#   ifndef _WIN32
+        // (mincore()'s vector is unsigned char * on Linux, char * on macOS)
+        template <typename Address, typename Residency>
+        static bool mapped( int (*mincore)( Address, std::size_t, Residency * ), void * const address ) noexcept
+        {
+            Residency resident;
+            return ( mincore( address, page_size, &resident ) == 0 ) || ( errno != ENOMEM );
+        }
+#   endif
+        // one allocation granule: a larger range could be refused where just
+        // its first page is free, which leaves room to grow in place
+#   ifdef _WIN32
         static std::size_t constexpr size{ 64 * 1024 };
+#   else
+        static std::size_t constexpr size{ page_size };
+#   endif
         void * address_{};
         bool   placed_ {};
+        bool   taken_  {};
     };
 } // anonymous namespace
 
@@ -492,7 +520,7 @@ TEST( vm_vector_cow, clone_grows_where_it_has_no_room_to_grow_in_place )
             // view, which a blocker cannot take)
             address_blocker const blocker{ clone };
 #       ifndef _WIN32
-            ASSERT_TRUE( blocker.placed() );
+            ASSERT_TRUE( blocker.blocks() );
 #       endif
             clone.resize( grown_count );
         }
@@ -566,7 +594,7 @@ TEST( vm_vector_cow, clone_that_grows_and_moves_stays_two_mappings )
         auto const grow{ [ & ]( std::uint32_t const target_count, bool const in_place ) {
             std::optional<address_blocker> blocker;
             if ( !in_place )
-                ASSERT_TRUE( blocker.emplace( clone ).placed() );
+                ASSERT_TRUE( blocker.emplace( clone ).blocks() );
             auto const from{ clone.size() };
             clone.resize( target_count );
             for ( auto i{ from }; i < target_count; ++i )

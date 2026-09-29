@@ -204,6 +204,19 @@ template <typename Header>
 }
 
 
+//! Whether memory backed storage asks for transparent huge pages (see
+//! mem_mapping::map_memory() and doc/huge_pages.md).
+enum class huge_pages : bool { no, yes };
+
+// -DPSI_VM_HUGE_PAGE_MAX_COVERAGE=1: storage that asks for huge pages is also
+// sized in whole PMD spans, advised when it first grows into a PMD span, and
+// that span collapsed (see map_memory() and doc/huge_pages.md). Off by
+// default: it buys coverage with memory, and it adds a member to mem_mapping
+// and a check to every growth, so it must be defined for the whole program.
+#ifndef PSI_VM_HUGE_PAGE_MAX_COVERAGE
+#   define PSI_VM_HUGE_PAGE_MAX_COVERAGE 0
+#endif
+
 PSI_WARNING_DISABLE_PUSH()
 PSI_WARNING_CLANGCL_DISABLE( -Wignored-attributes )
 
@@ -323,29 +336,28 @@ public:
         );
     }
 
-    err::result_or_error<void, error> map_memory    ( size_type data_size, header_info ) noexcept;
+    // With huge_pages::yes, storage that spans at least one PMD (2 MiB with
+    // the 4 KiB granule) when mapped is advised to be backed by transparent
+    // huge pages (Linux MADV_HUGEPAGE; ignored on every other platform). The
+    // kernel weighs the hint per backing: private anonymous (map_memory)
+    // storage follows transparent_hugepage/enabled, memfd (map_cow_memory)
+    // storage follows transparent_hugepage/shmem_enabled.
+    // The advice is given here, before this function (the sizes header) or
+    // the container (the initial elements) writes anything: the kernel
+    // decides a page's size when the page is first touched, and a small page
+    // keeps the whole PMD span around it small. The advice is a property of
+    // the kernel's VMA, so growth (mremap, in place or moved) keeps it.
+    // Smaller storage is not advised: some kernels (6.6) allocate a whole
+    // huge folio for a memfd span the mapping covers only partly.
+    // huge_pages::no (the default) costs nothing. What each option costs and
+    // when it pays: doc/huge_pages.md.
+    err::result_or_error<void, error> map_memory    ( size_type data_size, header_info, huge_pages = huge_pages::no ) noexcept;
     // Like map_memory but on Linux creates a memfd-backed mapping so that
     // future COW copies (via copy constructor) are zero-copy dup+MAP_PRIVATE
     // instead of requiring an initial memcpy. On other platforms this is
-    // identical to map_memory.
-    err::result_or_error<void, error> map_cow_memory( size_type data_size, header_info ) noexcept;
-
-    // Ask for the current view to be backed by transparent huge pages (Linux
-    // MADV_HUGEPAGE; a no-op on every other platform). A hint the kernel
-    // weighs per backing: private anonymous (map_memory) storage follows
-    // transparent_hugepage/enabled, memfd (map_cow_memory) storage follows
-    // transparent_hugepage/shmem_enabled - honoured under "advise" and
-    // "within_size" - and a regular file follows its filesystem's large folio
-    // support (e.g. xfs). On a writable file mapping that also makes the 2 MiB
-    // folio the unit of dirtying and writeback: a single store dirties, and
-    // the next flush writes, the whole folio.
-    // One call covers the life of the mapping: the advice is a property of
-    // the kernel's VMA, which growth (mremap, in place or moved) and shrinking
-    // (a tail munmap) keep, and the view is never mapped afresh - it always
-    // spans at least the sizes header, so expand() never takes its from-empty
-    // path. It is also the only advice such storage gets: it is mapped by
-    // mmap and resized by mremap/munmap, never through vm::commit().
-    void advise_huge_pages() noexcept;
+    // identical to map_memory. COW copies are never advised: a copy's writes
+    // copy into small pages whatever the advice.
+    err::result_or_error<void, error> map_cow_memory( size_type data_size, header_info, huge_pages = huge_pages::no ) noexcept;
 
     explicit operator bool() const noexcept { return has_attached_storage(); }
 
@@ -461,6 +473,14 @@ private:
     void                 shrink_privately( size_type target_size ) noexcept( mapping::views_downsizeable );
     void move_into_memory( size_type mapped_size );
 
+    //! Linux: the storage size to map for storage_size bytes (whole PMD spans
+    //! for huge page backed storage under PSI_VM_HUGE_PAGE_MAX_COVERAGE).
+    static size_type memory_storage_size( size_type storage_size, huge_pages ) noexcept;
+    //! Linux: advises the view MADV_HUGEPAGE if it spans a PMD (and, under
+    //! PSI_VM_HUGE_PAGE_MAX_COVERAGE, collapses the whole PMD spans that
+    //! already hold the first populated_size bytes in small pages).
+    void advise_huge_pages( size_type populated_size ) noexcept;
+
     size_type client_to_storage_size( size_type sz ) const noexcept;
 
 private:
@@ -477,6 +497,11 @@ private:
     // reads from the view's start, lives there), and it only ever grows or
     // shrinks at its end, or moves whole - never at its front.
     size_type              object_extent_{ 0 };
+#if PSI_VM_HUGE_PAGE_MAX_COVERAGE && defined( __linux__ ) && !defined( __ANDROID__ )
+    // map_memory()/map_cow_memory() were asked for huge pages (the advice
+    // itself is a property of the kernel's VMA, which growth keeps).
+    bool                   huge_pages_{ false };
+#endif
 }; // mem_mapping
 
 
@@ -546,21 +571,23 @@ public:
 
     template <typename InitPolicy = value_init_t>
     err::fallible_result<void, error>
-    map_memory( sz_t const initial_data_size = 0, header_info const hdr_info = {}, InitPolicy const init_policy = {} ) noexcept
+    map_memory( sz_t const initial_data_size = 0, header_info const hdr_info = {}, InitPolicy const init_policy = {}, huge_pages const huge = huge_pages::no ) noexcept
     {
         return construct_fresh( initial_data_size, init_policy, base::map_memory(
             to_byte_sz( initial_data_size ),
-            hdr_info.with_final_alignment_for<T>()
+            hdr_info.with_final_alignment_for<T>(),
+            huge
         ) );
     }
 
     template <typename InitPolicy = value_init_t>
     err::fallible_result<void, error>
-    map_cow_memory( sz_t const initial_data_size = 0, header_info const hdr_info = {}, InitPolicy const init_policy = {} ) noexcept
+    map_cow_memory( sz_t const initial_data_size = 0, header_info const hdr_info = {}, InitPolicy const init_policy = {}, huge_pages const huge = huge_pages::no ) noexcept
     {
         return construct_fresh( initial_data_size, init_policy, base::map_cow_memory(
             to_byte_sz( initial_data_size ),
-            hdr_info.with_final_alignment_for<T>()
+            hdr_info.with_final_alignment_for<T>(),
+            huge
         ) );
     }
 

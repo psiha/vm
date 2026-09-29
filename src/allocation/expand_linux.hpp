@@ -91,24 +91,28 @@ inline mremap_result mremap_to_pmd_phase( void * const address, std::size_t cons
 /// Moves a file (incl. memfd/shmem) view that the kernel has just placed
 /// [address, address + size), mapping the file from offset on, to an address
 /// congruent to that offset modulo pmd_span, and returns where the view now
-/// is: address itself if it already is congruent, if the view is not a file
-/// view (file_handle -1) or if the move fails (the view stays valid there).
+/// is: address itself if it already is congruent, if it is smaller than a
+/// pmd_span, if the view is not a file view (file_handle -1) or if the move
+/// fails (the view stays valid there).
 ///
-/// The kernel maps a large folio of a file (page cache or shmem) only where
-/// the virtual address and the file offset agree modulo the folio size
-/// (thp_vma_suitable_order()), and it aligns a file mapping so on its own
-/// only when the mapping is at least a pmd_span long when created. A view
-/// that starts smaller and then grows - in place, or by a relocation that
-/// keeps its phase (linux_mremap()) - would therefore never get a huge
-/// folio. The view is mapped at a place of the kernel's choosing first and
-/// only then moved, so that a failing mmap (e.g. a protection the file
+/// The kernel maps a huge folio of a file (page cache or shmem) only where
+/// the virtual address and the file offset agree modulo pmd_span
+/// (thp_vma_suitable_order()). It aligns a file mapping so on its own when
+/// it creates one of at least a pmd_span and the file can have huge folios,
+/// so this is only a fallback for when it did not. A view smaller than that
+/// holds no whole span that could take a huge folio: it is left where the
+/// kernel put it, and moved only by the growth that first makes it span a
+/// PMD (grow_file_view_into_pmd_phase()) - moving every small view (most
+/// of them never grow) costs a reservation, a move and two unmaps each.
+/// The view is mapped at a place of the kernel's choosing first and only
+/// then moved, so that a failing mmap (e.g. a protection the file
 /// descriptor does not permit) never leaves a reservation behind.
 [[ nodiscard ]] PSI_COLD
 inline void * place_file_view_at_offset_phase( void * const address, std::size_t const size, int const file_handle, std::uint64_t const offset ) noexcept
 {
 #ifndef __ANDROID__ // server Linux
     auto const phase{ static_cast<std::uintptr_t>( offset % pmd_span ) };
-    if ( ( file_handle != -1 ) && ( reinterpret_cast<std::uintptr_t>( address ) % pmd_span != phase ) )
+    if ( ( file_handle != -1 ) && ( size >= pmd_span ) && ( reinterpret_cast<std::uintptr_t>( address ) % pmd_span != phase ) )
     {
         if ( auto const moved{ mremap_to_pmd_phase( address, size, size, phase ) } ) [[ likely ]]
             return moved.address;
@@ -117,6 +121,36 @@ inline void * place_file_view_at_offset_phase( void * const address, std::size_t
     (void)size; (void)file_handle; (void)offset;
 #endif
     return address;
+}
+
+/// The offset within a pmd_span at which a view now at address, which maps
+/// its file (file_handle, -1 for none) from offset 0, starts after growing
+/// from current_size to target_size: where it is, except for a file view
+/// that reaches its first PMD span, which moves to phase 0
+/// (grow_file_view_into_pmd_phase()).
+[[ nodiscard, gnu::const ]]
+inline std::uintptr_t pmd_phase_after_growth( void const * const address, std::size_t const current_size, std::size_t const target_size, int const file_handle ) noexcept
+{
+#ifndef __ANDROID__ // server Linux
+    if ( ( file_handle != -1 ) && ( current_size < pmd_span ) && ( target_size >= pmd_span ) )
+        return 0;
+#else
+    (void)current_size; (void)target_size; (void)file_handle;
+#endif
+    return reinterpret_cast<std::uintptr_t>( address ) % pmd_span;
+}
+
+/// Grows a file view that maps its file from offset 0 and spans less than a
+/// pmd_span into one of target_size >= pmd_span at an address PMD congruent
+/// to offset 0 (see place_file_view_at_offset_phase()), unless it already is
+/// there (a failure result: the caller then grows it as usual, in place if
+/// it can, keeping that phase).
+[[ nodiscard ]] PSI_COLD
+inline mremap_result grow_file_view_into_pmd_phase( void * const address, std::size_t const current_size, std::size_t const target_size, int const file_handle ) noexcept
+{
+    if ( pmd_phase_after_growth( address, current_size, target_size, file_handle ) != reinterpret_cast<std::uintptr_t>( address ) % pmd_span )
+        return mremap_to_pmd_phase( address, current_size, target_size, 0 );
+    return { MAP_FAILED };
 }
 
 /// Linux mremap: atomic in-place or relocating expansion.
