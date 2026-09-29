@@ -1020,6 +1020,12 @@ TEST( SmallVectorNarrowSize, sizingPastTheRepresentableMaximumIsRefused )
     EXPECT_THROW( v.reserve( past_it ), std::length_error );
     EXPECT_THROW( (void)sv8( past_it ), std::length_error );
     EXPECT_EQ( v.size(), 0 );
+
+    // A `size() + delta` sum past what the counter can express at all is
+    // refused as well, rather than wrapped into a small length (4 + 255 is 3).
+    v.resize( 4 );
+    EXPECT_THROW( v.grow_by( std::uint8_t{ 255 }, value_init ), std::length_error );
+    EXPECT_EQ( v.size(), 4 );
 }
 
 TEST( SmallVectorNarrowSize, appendingPastTheRepresentableMaximumIsRefused )

@@ -27,6 +27,7 @@
 #pragma once
 
 #include <psi/vm/align.hpp>
+#include <psi/vm/allocators/allocator_base.hpp> // detail::length_error
 #include <psi/vm/containers/abi.hpp>
 #include <psi/vm/containers/complete.hpp>
 #include <psi/vm/containers/growth_policy.hpp>
@@ -261,7 +262,63 @@ public:
     using       reverse_iterator = std::reverse_iterator<      iterator>;
     using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 
+    //! How a length past what size_type can count is reported. A storage that
+    //! has its own rule for lengths past its ceiling (heap_storage) decides;
+    //! otherwise it follows the storage's growth: a `length_error` where
+    //! growing can throw anyway, an assertion where growing is noexcept (e.g.
+    //! a fixed-capacity container with an asserting overflow policy), so no
+    //! noexcept growth acquires a throw.
+    static bool consteval length_error_is_reportable() noexcept
+    {
+        if constexpr ( requires { { storage_t::length_error_is_reportable } -> std::convertible_to<bool>; } )
+            return storage_t::length_error_is_reportable;
+        else
+            return !noexcept( std::declval<storage_t &>().template storage_grow_to<Growth>( size_type{} ) );
+    }
+
 private:
+    // Intermediate lengths - a `size() + delta` sum, a range's std::size_t
+    // extent - are formed in this type, wider than a narrow size_type, so one
+    // past what size_type can count is seen and refused instead of wrapping
+    // into a small, valid-looking length. With size_type == std::size_t it is
+    // size_type itself and nothing changes.
+    using wide_size_type = std::conditional_t<( sizeof( size_type ) < sizeof( std::size_t ) ), std::size_t, size_type>;
+    static bool constexpr lengths_can_overflow{ sizeof( wide_size_type ) > sizeof( size_type ) };
+
+    static bool consteval noexcept_sizing() noexcept
+    {
+        if constexpr ( lengths_can_overflow )
+            return !length_error_is_reportable();
+        else
+            return true;
+    }
+
+    //! Narrows an intermediate length to size_type, refusing one size_type
+    //! cannot count. Only representability is judged here: a representable
+    //! length past what the storage can hold is the storage's to refuse,
+    //! under its own policy.
+    [[ nodiscard ]] static constexpr size_type checked_size( wide_size_type const length ) noexcept( noexcept_sizing() )
+    {
+        if constexpr ( lengths_can_overflow )
+        {
+            if ( length > std::numeric_limits<size_type>::max() ) [[ unlikely ]]
+                detail::length_error<length_error_is_reportable()>();
+        }
+        return static_cast<size_type>( length );
+    }
+    //! A range's extent, whatever integer type the range counts it in.
+    [[ nodiscard ]] static constexpr size_type checked_size( std::integral auto const extent ) noexcept( noexcept_sizing() )
+    requires( !std::same_as<decltype( extent ), wide_size_type> )
+    {
+        return checked_size( static_cast<wide_size_type>( extent ) );
+    }
+
+    //! `base + delta`, formed without wrapping.
+    [[ nodiscard ]] static constexpr size_type checked_sum( size_type const base, size_type const delta ) noexcept( noexcept_sizing() )
+    {
+        return checked_size( static_cast<wide_size_type>( static_cast<wide_size_type>( base ) + delta ) );
+    }
+
     constexpr auto begin_ptr( this auto & self ) noexcept { return self.data(); }
     constexpr auto   end_ptr( this auto & self ) noexcept { return self.data() + self.size(); }
     constexpr iterator make_iterator( value_type * const ptr ) noexcept
@@ -383,12 +440,12 @@ public:
     }
 
     template <std::input_iterator It>
-    constexpr vector( It const first, It const last ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
+    constexpr vector( It const first, It const last ) noexcept( noexcept_storage() && noexcept_sizing() && std::is_nothrow_copy_constructible_v<value_type> )
         : storage_t{}
     {
         if constexpr ( std::random_access_iterator<It> )
         {
-            auto const sz{ static_cast<size_type>( std::distance( first, last ) ) };
+            auto const sz{ checked_size( std::distance( first, last ) ) };
             initialized_impl( sz, no_init );
             std::uninitialized_copy_n( first, sz, gcc_dse_workaround( this->data() ) );
         }
@@ -399,7 +456,7 @@ public:
         }
     }
 
-    constexpr vector( std::initializer_list<value_type> const initial_values ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
+    constexpr vector( std::initializer_list<value_type> const initial_values ) noexcept( noexcept_storage() && noexcept_sizing() && std::is_nothrow_copy_constructible_v<value_type> )
         : vector( initial_values.begin(), initial_values.end() )
     {}
 
@@ -434,7 +491,7 @@ public:
     void assign( It const first, It const last )
     requires( std::is_trivially_destructible_v<value_type> )
     {
-        auto const input_size{ static_cast<size_type>( std::distance( first, last ) ) };
+        auto const input_size{ checked_size( std::distance( first, last ) ) };
         resize( input_size, no_init );
         std::uninitialized_copy_n( first, input_size, begin() );
     }
@@ -443,7 +500,7 @@ public:
     {
         if constexpr ( std::ranges::sized_range<Rng> )
         {
-            auto const input_size{ static_cast<size_type>( std::size( data ) ) };
+            auto const input_size{ checked_size( std::size( data ) ) };
             if constexpr ( std::is_trivially_destructible_v<value_type> )
             {
                 // Pedantic exception-safety for weirdos which may throw on copy
@@ -811,7 +868,7 @@ public:
         auto const current_size{ this->size() };
         // Use storage_grow_to (with Growth policy) directly — this is the
         // amortized-O(1) append path that gets geometric headroom.
-        auto const data{ this->storage_grow_to( current_size + 1 ) };
+        auto const data{ this->storage_grow_to( checked_sum( current_size, 1 ) ) };
         auto & placeholder{ data[ current_size ] };
         try {
             return construct_at( placeholder, std::forward<Args>( args )... );
@@ -834,7 +891,13 @@ public:
     template <typename... Args>
     bool stable_emplace_back( Args &&... args )
     {
-        if ( !stable_reserve( this->size() + 1 ) )
+        if constexpr ( lengths_can_overflow )
+        {
+            // A query, so it never throws: past the counter no capacity helps.
+            if ( this->size() == std::numeric_limits<size_type>::max() ) [[ unlikely ]]
+                return false;
+        }
+        if ( !stable_reserve( static_cast<size_type>( this->size() + 1 ) ) )
             return false;
         emplace_back( std::forward<Args>( args )... );
         return true;
@@ -886,7 +949,7 @@ public:
     //!   T's copy/move constructor throws.
     //!
     //! <b>Complexity</b>: Amortized constant time.
-    void push_back( param_const_ref x ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
+    void push_back( param_const_ref x ) noexcept( noexcept_storage() && noexcept_sizing() && std::is_nothrow_copy_constructible_v<value_type> )
     requires( !can_be_passed_in_reg<value_type> )
     {
         emplace_back( x );
@@ -909,7 +972,7 @@ public:
     //! requested alignment of 256 won't be aligned"), before any requires-clause
     //! can exclude it. Dependent, it is only instantiated once a call selects it.
     template <typename V = value_type>
-    void push_back( V x ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
+    void push_back( V x ) noexcept( noexcept_storage() && noexcept_sizing() && std::is_nothrow_copy_constructible_v<value_type> )
     requires( can_be_passed_in_reg<value_type> && std::convertible_to<V const &, value_type> )
     {
         emplace_back( std::move( x ) );
@@ -922,7 +985,7 @@ public:
     //!   T's copy/move constructor throws.
     //!
     //! <b>Complexity</b>: Amortized constant time.
-    void push_back( value_type && x ) noexcept( noexcept_storage() && std::is_nothrow_move_constructible_v<value_type> )
+    void push_back( value_type && x ) noexcept( noexcept_storage() && noexcept_sizing() && std::is_nothrow_move_constructible_v<value_type> )
     requires( !can_be_passed_in_reg<value_type> ) // otherwise better to go through the pass-in-reg overload
     {
         emplace_back( std::move( x ) );
@@ -980,7 +1043,7 @@ public:
     template <std::input_iterator InIt>
     iterator insert( const_iterator const position, InIt const first, InIt const last )
     {
-        auto const n{ static_cast<size_type>( std::distance( first, last ) ) };
+        auto const n{ checked_size( std::distance( first, last ) ) };
         auto const iter{ make_space_for_insert( position, n ) };
         if constexpr ( is_trivially_moveable<value_type> || trivially_destructible_after_move_assignment<value_type> ) // see emplace()
             std::uninitialized_copy_n( first, n, iter );
@@ -1006,7 +1069,7 @@ public:
     {
         if constexpr ( std::ranges::sized_range<Rng> )
         {
-            auto const n{ verified_cast<size_type>( std::ranges::size( rng ) ) };
+            auto const n{ checked_size( std::ranges::size( rng ) ) };
             auto const iter{ make_space_for_insert( position, n ) };
             if constexpr ( std::is_rvalue_reference_v<Rng &&> )
             {
@@ -1047,7 +1110,7 @@ public:
         auto const current_size{ this->size() };
         if constexpr ( requires{ std::size( rng ); } )
         {
-            auto const additional_size{ verified_cast<size_type>( std::size( rng ) ) };
+            auto const additional_size{ checked_size( std::size( rng ) ) };
             auto const input_begin    {                           std::begin( rng )   };
             value_type * target_position;
             if constexpr ( amortized_growth )
@@ -1289,7 +1352,7 @@ public:
 
     value_type * grow_by( size_type const delta, auto const init_policy )
     {
-        return grow_to( this->size() + delta, init_policy );
+        return grow_to( checked_sum( this->size(), delta ), init_policy );
     }
 
     // Amortized-O(1) bulk append. Unlike grow_by/grow_to (exact-fit), this sizes
@@ -1302,7 +1365,7 @@ public:
     // leaving reserve()/expand_capacity() semantics untouched.
     value_type * grow_by_amortized( size_type const delta, auto const init_policy )
     {
-        auto const target{ static_cast<size_type>( this->size() + delta ) };
+        auto const target{ checked_sum( this->size(), delta ) };
         if constexpr ( static_cast<bool>( Growth ) ) {
             if ( target > this->capacity() ) {
                 // A target past max_size() is left for reserve() to refuse.
@@ -1332,7 +1395,7 @@ private:
         verify_iterator( position );
         auto const position_index{ index_of( position ) };
         auto const current_size  { this->size() };
-        auto const new_size      { static_cast<size_type>( current_size + n ) };
+        auto const new_size      { checked_sum( current_size, n ) };
         auto const data          { grow_to( new_size, no_init ) };
         // Storage-independent element shift (parameterized only on T, not Storage)
         detail::shift_elements_right( data, current_size, position_index, n );

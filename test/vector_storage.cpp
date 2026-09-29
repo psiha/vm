@@ -930,6 +930,83 @@ TEST( vector_storage, length_past_the_ceiling_is_reported_on_the_in_place_expans
     }
 }
 
+// Lengths the container forms itself - `size() + delta` sums, a range's
+// std::size_t extent - are formed wider than a narrow size_type, so one past
+// what the counter can express is refused, where forming it in the counter
+// would wrap it into a small length the storage happily serves. With a 1-byte
+// element the storage's ceiling IS the counter's maximum, so the storage's own
+// ceiling check cannot see such a length at all.
+namespace
+{
+    using narrow_bytes     = heap_storage<std::uint8_t, std::uint32_t>;
+    using narrow_bytes_vec = vector<narrow_bytes>;
+    static_assert( narrow_bytes::max_size() == std::numeric_limits<std::uint32_t>::max() );
+
+    // A sized range that only reports its extent: refused before it is read.
+    struct extent_only
+    {
+        std::size_t extent;
+        std::uint8_t const * begin() const noexcept { return nullptr; }
+        std::uint8_t const * end  () const noexcept { return nullptr; }
+        std::size_t          size () const noexcept { return extent; }
+    };
+    // Four past the counter: converted to it, this is the length 4.
+    constexpr std::size_t past_the_counter{ std::size_t{ std::numeric_limits<std::uint32_t>::max() } + 5 };
+} // anonymous namespace
+
+TEST( vector_storage, a_size_plus_delta_sum_past_a_narrow_counter_is_reported )
+{
+    static_assert( sizeof( std::size_t ) > sizeof( std::uint32_t ) );
+    narrow_bytes_vec vec;
+    vec.resize( 4, value_init );
+
+    // size() + delta is one past the counter's maximum: summed in the counter
+    // it wraps to 3, a length the container already exceeds. Each is refused
+    // before anything is allocated, so driving it costs nothing.
+    constexpr auto delta{ std::numeric_limits<std::uint32_t>::max() };
+    EXPECT_THROW( vec.grow_by          ( delta, value_init ), std::length_error );
+    EXPECT_THROW( vec.grow_by_amortized( delta, value_init ), std::length_error );
+    EXPECT_EQ( vec.size(), 4u );
+}
+
+TEST( vector_storage, an_insert_whose_sum_is_past_a_narrow_counter_is_reported )
+{
+    narrow_bytes_vec vec;
+    vec.resize( 4, value_init );
+
+    constexpr auto count{ std::numeric_limits<std::uint32_t>::max() };
+    EXPECT_THROW( vec.insert( vec.begin(), count, std::uint8_t{ 7 } ), std::length_error );
+    EXPECT_EQ( vec.size(), 4u );
+}
+
+TEST( vector_storage, a_range_extent_past_a_narrow_counter_is_reported )
+{
+    static_assert( sizeof( std::size_t ) > sizeof( std::uint32_t ) );
+    narrow_bytes_vec vec;
+    vec.resize( 4, value_init );
+
+    EXPECT_THROW( vec.append_range( extent_only{ past_the_counter } ), std::length_error );
+    EXPECT_THROW( vec.insert_range( vec.begin(), extent_only{ past_the_counter } ), std::length_error );
+    EXPECT_THROW( vec.assign      ( extent_only{ past_the_counter } ), std::length_error );
+    EXPECT_EQ( vec.size(), 4u );
+}
+
+TEST( vector_storage, appending_past_a_narrow_counter_is_reported_for_a_1_byte_element )
+{
+    // A 16-bit counter puts its maximum within cheap reach (64 KiB).
+    using storage = heap_storage<std::uint8_t, std::uint16_t>;
+    static_assert( storage::max_size() == std::numeric_limits<std::uint16_t>::max() );
+
+    vector<storage> vec;
+    vec.resize( storage::max_size(), value_init );
+    EXPECT_THROW( vec.push_back( 1 ), std::length_error );
+    EXPECT_THROW( vec.grow_by( 1, value_init ), std::length_error );
+    EXPECT_EQ( vec.size(), storage::max_size() );
+    // A query does not throw: past the counter no capacity helps.
+    EXPECT_FALSE( vec.stable_emplace_back( std::uint8_t{ 1 } ) );
+    EXPECT_EQ( vec.size(), storage::max_size() );
+}
+
 // The storage-kind axis: a fixed-capacity container allocates nothing, so it
 // has no byte ceiling to report and keeps the overflow contract its own policy
 // argument selects - asserting by default, independently of any of the above.
