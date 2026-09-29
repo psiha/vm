@@ -383,14 +383,23 @@ public:
     // the ranges overload): a caller with many pages to release hands them
     // over all at once, coalesced into runs.
     bool release_pages( std::byte * first, size_type size, bool shared ) noexcept;
-    // Several ranges (each page aligned, a whole number of pages) in one go:
-    // madvise() per range on POSIX; on Windows a MEM_RESET per range and one
-    // working set call for all of them.  Returns whether all were released.
-    struct page_range { std::byte * first; size_type size; }; // (the layout of the NT MEMORY_RANGE_ENTRY)
+    // Several ranges (each page aligned, a whole number of pages) in one go.
+    // Linux: one process_madvise() for all of them (up to IOV_MAX a call)
+    // where the kernel takes this advice for the calling process (6.13 on),
+    // else madvise() per range; macOS: madvise() per range; Windows: a
+    // MEM_RESET per range and one working set call for all of them.  Whether
+    // the one-call form works is found out by trying it: the first refusal
+    // (EINVAL, ENOSYS, an unknown information class...) switches every
+    // mem_mapping to the per range calls for good.  Returns whether all the
+    // ranges were released.
+    struct page_range { std::byte * first; size_type size; }; // (the layout of the NT MEMORY_RANGE_ENTRY, and of iovec)
     bool release_pages( std::span<page_range const> ranges, bool shared ) noexcept;
-    // Whether that is fewer calls than ranges (Windows, where the OS has the
-    // multi-range working set call).
+    // Whether that takes fewer calls than ranges: the OS has not refused the
+    // one-call form (yet), and it is not switched off - which
+    // allow_release_ranges_at_once( false ) does, for every mem_mapping (for
+    // diagnostics, and to test the per range path where the OS has both).
     [[ nodiscard ]] static bool release_takes_ranges_at_once() noexcept;
+    static void allow_release_ranges_at_once( bool allowed ) noexcept;
     // Whether release_pages() would release anything from this storage.
     [[ nodiscard ]] bool can_release_pages( bool shared ) const noexcept;
     // Released pages about to be written again (macOS: MADV_FREE_REUSE, so

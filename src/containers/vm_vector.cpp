@@ -31,7 +31,11 @@
 #       define MFD_CLOEXEC 0x0001U
         extern "C" int memfd_create( char const *, unsigned int ) noexcept;
 #   endif
-#   include <unistd.h> // ftruncate, close
+#   include <unistd.h> // ftruncate, close, getpid, syscall
+#   include <sys/syscall.h>
+#   include <sys/uio.h> // iovec
+#   include <cerrno>
+#   include <climits>  // IOV_MAX
 #   ifndef MADV_COLLAPSE // Linux 6.1
 #       define MADV_COLLAPSE 25
 #   endif
@@ -571,12 +575,102 @@ bool mem_mapping::release_pages( std::byte * const first, size_type const size, 
     return release_pages( { &range, 1 }, shared );
 }
 
-#if defined( _WIN32 )
 namespace
 {
-    // set once VmRemoveFromWorkingSetInformation fails (an OS without it)
-    constinit std::atomic<bool> working_set_batch_unsupported{ false };
-}
+    // Whether release_pages() may hand many ranges to the OS in one call,
+    // found out by trying (never from a version number): off once the OS
+    // refuses the call, or while switched off (allow_release_ranges_at_once()).
+    [[ maybe_unused ]] constinit std::atomic<bool> ranges_at_once_refused { false };
+    [[ maybe_unused ]] constinit std::atomic<bool> ranges_at_once_disabled{ false };
+    [[ maybe_unused ]] bool ranges_at_once() noexcept { return !ranges_at_once_refused.load( std::memory_order_relaxed ) && !ranges_at_once_disabled.load( std::memory_order_relaxed ); }
+    [[ maybe_unused ]] void refuse_ranges_at_once() noexcept { ranges_at_once_refused.store( true, std::memory_order_relaxed ); }
+
+#if defined( __linux__ )
+    // process_madvise() takes up to IOV_MAX ranges in one call, but any advice
+    // (MADV_DONTNEED, MADV_REMOVE) only for the calling process and only since
+    // Linux 6.13; before that, and for another process, only MADV_COLD,
+    // MADV_PAGEOUT, MADV_WILLNEED and MADV_COLLAPSE - EINVAL otherwise.  The
+    // process is named by a pidfd: since 6.15 the PIDFD_SELF_PROCESS sentinel,
+    // which needs no descriptor and stays right across a fork; on 6.13-6.14,
+    // which reject the sentinel (EBADF), a pidfd_open() of this process,
+    // opened again after a fork (the parent's pidfd names another process to
+    // the child, for which the kernel refuses this advice).
+    // Returns whether every range was released; on false the caller goes over
+    // them all with madvise() (a no-op for the pages already released).
+    auto constexpr pidfd_self_process{ -10001 }; // PIDFD_SELF_PROCESS = PIDFD_SELF_THREAD_GROUP (<linux/fcntl.h>, 6.15)
+#   ifdef SYS_process_madvise
+    auto constexpr sys_process_madvise{ SYS_process_madvise };
+#   else
+    auto constexpr sys_process_madvise{ 440 }; // the same on every architecture (the generic syscall table)
+#   endif
+#   ifdef SYS_pidfd_open
+    auto constexpr sys_pidfd_open{ SYS_pidfd_open };
+#   else
+    auto constexpr sys_pidfd_open{ 434 };
+#   endif
+    constinit std::atomic<bool>          self_sentinel_refused{ false };
+    constinit std::atomic<std::uint64_t> own_pidfd{ 0 }; // ( pid << 32 ) | fd, 0: none yet
+
+    int pidfd_of_this_process() noexcept
+    {
+        auto const pid   { static_cast<std::uint32_t>( ::getpid() ) };
+        auto       cached{ own_pidfd.load( std::memory_order_acquire ) };
+        if ( cached && ( ( cached >> 32 ) == pid ) )
+            return static_cast<int>( cached & 0xFFFF'FFFF );
+        auto const fd{ static_cast<int>( ::syscall( sys_pidfd_open, static_cast<::pid_t>( pid ), 0 ) ) };
+        if ( fd < 0 )
+            return -1;
+        auto const fresh{ ( std::uint64_t{ pid } << 32 ) | static_cast<std::uint32_t>( fd ) };
+        if ( !own_pidfd.compare_exchange_strong( cached, fresh, std::memory_order_acq_rel ) ) {
+            ::close( fd ); // another thread got there first
+            return ( ( cached >> 32 ) == pid ) ? static_cast<int>( cached & 0xFFFF'FFFF ) : -1;
+        }
+        // (one inherited across a fork is left open: closing a descriptor
+        // another thread may still be passing is worse than one idle fd)
+        return fd;
+    }
+
+    bool process_madvise_all( std::span<mem_mapping::page_range const> const ranges, int const advice ) noexcept
+    {
+        static_assert( sizeof ( mem_mapping::page_range        ) == sizeof ( ::iovec           ) );
+        static_assert( offsetof( mem_mapping::page_range, first ) == offsetof( ::iovec, iov_base ) );
+        static_assert( offsetof( mem_mapping::page_range, size  ) == offsetof( ::iovec, iov_len  ) );
+        for ( std::size_t done{ 0 }; done < ranges.size(); )
+        {
+            auto const count{ std::min<std::size_t>( ranges.size() - done, IOV_MAX ) };
+            auto const chunk{ ranges.subspan( done, count ) };
+            std::size_t bytes{ 0 };
+            for ( auto const & range : chunk )
+                bytes += range.size;
+            auto const * const iov{ reinterpret_cast<::iovec const *>( chunk.data() ) };
+            for ( ;; )
+            {
+                auto const sentinel{ !self_sentinel_refused.load( std::memory_order_relaxed ) };
+                auto const pidfd   { sentinel ? pidfd_self_process : pidfd_of_this_process() };
+                if ( pidfd == -1 ) {
+                    refuse_ranges_at_once();
+                    return false;
+                }
+                auto const advised{ ::syscall( sys_process_madvise, pidfd, iov, count, advice, 0U ) };
+                if ( advised == static_cast<long>( bytes ) )
+                    break;
+                if ( advised >= 0 ) // partial: madvise() takes it from here
+                    return false;
+                if ( sentinel && ( errno == EBADF ) ) { // before 6.15
+                    self_sentinel_refused.store( true, std::memory_order_relaxed );
+                    continue;
+                }
+                refuse_ranges_at_once(); // EINVAL (before 6.13), ENOSYS, EPERM
+                return false;
+            }
+            done += count;
+        }
+        return true;
+    }
+#endif // __linux__
+} // anonymous namespace
+
+#if defined( _WIN32 )
 static_assert( sizeof ( mem_mapping::page_range        ) == sizeof ( nt::MEMORY_RANGE_ENTRY               ) );
 static_assert( offsetof( mem_mapping::page_range, first ) == offsetof( nt::MEMORY_RANGE_ENTRY, VirtualAddress ) );
 static_assert( offsetof( mem_mapping::page_range, size  ) == offsetof( nt::MEMORY_RANGE_ENTRY, NumberOfBytes  ) );
@@ -599,8 +693,12 @@ bool mem_mapping::release_pages( std::span<page_range const> const ranges, bool 
 #   else
     auto const advice{ MADV_FREE_REUSABLE };
 #   endif
-    // (process_madvise() takes a vector of ranges, but for other than the
-    // reclaim hints - MADV_COLD, MADV_PAGEOUT - only since Linux 6.13)
+#   if defined( __linux__ )
+    // all the ranges in one call where the kernel takes it (see
+    // process_madvise_all()), else one madvise() per range
+    if ( ( ranges.size() > 1 ) && ranges_at_once() && process_madvise_all( ranges, advice ) )
+        return true;
+#   endif
     for ( auto const & range : ranges )
         released &= ( ::madvise( range.first, range.size, advice ) == 0 );
 #elif defined( _WIN32 )
@@ -625,13 +723,11 @@ bool mem_mapping::release_pages( std::span<page_range const> const ranges, bool 
     }
     auto const * const entries{ reinterpret_cast<nt::MEMORY_RANGE_ENTRY const *>( ranges.data() ) };
     nt::MEMORY_REMOVE_WORKING_SET_INFORMATION flags{ 0 };
-    if
-    (
-        working_set_batch_unsupported.load( std::memory_order_relaxed ) ||
-        ( nt::NtSetInformationVirtualMemory( nt::current_process, nt::VmRemoveFromWorkingSetInformation, ranges.size(), entries, &flags, sizeof( flags ) ) != nt::STATUS_SUCCESS )
-    )
+    bool const at_once{ ranges_at_once() };
+    if ( !at_once || ( nt::NtSetInformationVirtualMemory( nt::current_process, nt::VmRemoveFromWorkingSetInformation, ranges.size(), entries, &flags, sizeof( flags ) ) != nt::STATUS_SUCCESS ) )
     {
-        working_set_batch_unsupported.store( true, std::memory_order_relaxed );
+        if ( at_once )
+            refuse_ranges_at_once(); // an OS without the class
         for ( auto const & range : ranges )
         {
             PVOID  address{ range.first };
@@ -647,11 +743,16 @@ bool mem_mapping::release_pages( std::span<page_range const> const ranges, bool 
 
 bool mem_mapping::release_takes_ranges_at_once() noexcept
 {
-#if defined( _WIN32 )
-    return !working_set_batch_unsupported.load( std::memory_order_relaxed );
+#if defined( _WIN32 ) || defined( __linux__ )
+    return ranges_at_once();
 #else
     return false;
 #endif
+}
+
+void mem_mapping::allow_release_ranges_at_once( bool const allowed ) noexcept
+{
+    ranges_at_once_disabled.store( !allowed, std::memory_order_relaxed );
 }
 
 void mem_mapping::reuse_pages( [[ maybe_unused ]] std::byte * const first, [[ maybe_unused ]] size_type const size ) noexcept

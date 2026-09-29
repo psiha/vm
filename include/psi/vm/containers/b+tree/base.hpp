@@ -395,10 +395,12 @@ public:
     //    is what it was before release existed;
     //  * not after bulk insertion: the free nodes it leaves are the pool's
     //    growth headroom, which the next insertion takes.
-    // A release costs a system call per run of neighbouring free pages (on
-    // Windows a reset per run, plus one working set call for all of them):
-    // ~1-2 us a run, several times what erasing a node costs, which is why it
-    // is batched and why only a batch can see which pages are entirely free.
+    // A release costs a system call per run of neighbouring free pages - on
+    // Windows a reset per run plus one working set call for all of them, on
+    // Linux 6.13 on one process_madvise() per 1024 runs (see
+    // mem_mapping::release_pages()): ~0.2-2 us a run, several times what
+    // erasing a node costs, which is why it is batched and why only a batch
+    // can see which pages are entirely free.
     // Its bookkeeping is a scan of the pool (~1 ns a node), which the pool
     // share bounds per freed node, and a walk of the whole free list (a cache
     // miss per free node), which the half bounds: the walk is never mostly

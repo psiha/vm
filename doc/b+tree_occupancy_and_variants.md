@@ -281,13 +281,26 @@ did not take the pool's pages - so a batch of N runs is N + 1 calls rather than 
 `DiscardVirtualMemory` and `OfferVirtualMemory` are no better underneath:
 both are kernelbase wrappers that scan the range's working set entries
 (`NtQueryVirtualMemory`), reset it, lower its page priority
-(`VmPagePriorityInformation`) and unlock it, one range per call. On POSIX it
-is `madvise()` per run (`process_madvise()` takes a vector of ranges, but for
-other than `MADV_COLD`/`MADV_PAGEOUT` only since Linux 6.13).
+(`VmPagePriorityInformation`) and unlock it, one range per call.
+
+On Linux `process_madvise()` takes up to `IOV_MAX` (1024) ranges a call, but
+`MADV_DONTNEED` and `MADV_REMOVE` only for the calling process and only since
+6.13 (before, and for another process, only `MADV_COLD`, `MADV_PAGEOUT`,
+`MADV_WILLNEED` and `MADV_COLLAPSE`: `EINVAL`). The process is named by the
+`PIDFD_SELF_PROCESS` sentinel since 6.15 (no descriptor, right across a
+fork), else by a `pidfd_open()` of it (6.13-6.14, which answer the sentinel
+with `EBADF`). Elsewhere, and on macOS, it is `madvise()` per run.
+
+On both systems the one-call form is chosen by trying it, not by a version
+number: the first refusal (`EINVAL`, `ENOSYS`, `EPERM`, an unknown
+information class) switches every mapping to the per range calls for good,
+and a partial result is finished per range. `allow_release_ranges_at_once(
+false )` forces the per range path (the tests run both).
 
 Per call and per page (256 MB of dirty pages, the thread pinned to one
 core, best of several runs; Windows 11 x86-64, a pagefile backed section as
-the pool uses, the variants interleaved; Linux 6.6 x86-64 under WSL2):
+the pool uses, the variants interleaved; Linux x86-64, 6.6 under WSL2 and
+7.0 on an AMD EPYC VM, the variants interleaved there too):
 
 | µs per page (read-write section view / a COW clone's view) | single pages, apart (a call each) | runs of 16 pages | one 256 MB range |
 |---|---|---|---|
@@ -299,11 +312,16 @@ the pool uses, the variants interleaved; Linux 6.6 x86-64 under WSL2):
 | `DiscardVirtualMemory` | 460-2600 a call | 41-44 (650-710 a call) | 1.7 / 1.5 |
 | `VmPageDirtyStateInformation` (a multi-range reset, were it accepted) | flags 0: `STATUS_NOT_SUPPORTED`, flags 1: `STATUS_INVALID_PARAMETER_5`; the pages stay dirty | | |
 
-| µs per page, Linux | single pages, apart | runs of 16 pages | one 256 MB range |
+| µs per page, Linux (6.6 / 7.0) | single pages, apart | runs of 16 pages | one 256 MB range |
 |---|---|---|---|
-| `madvise( MADV_DONTNEED )`, a private view | 0.97 | 0.23 | 0.07 |
-| `madvise( MADV_REMOVE )`, a shared memfd | 1.58 | 0.45 | 0.20 |
-| `process_madvise()`, 1024 ranges a call | `EINVAL` for either advice (any advice on the calling process only since 6.13) | | |
+| `madvise( MADV_DONTNEED )` per range, a private view | 0.97 / 0.36 | 0.23 / 0.14 | 0.07 / 0.08 |
+| **`process_madvise( MADV_DONTNEED )`, 1024 ranges a call** | `EINVAL` / **0.16** | - / **0.09** | - / 0.08 |
+| `madvise( MADV_REMOVE )` per range, a shared memfd | 1.58 / 0.80 | 0.45 / 0.29 | 0.20 / 0.19 |
+| **`process_madvise( MADV_REMOVE )`, 1024 ranges a call** | `EINVAL` / **0.73** | - / 0.28 | - / 0.20 |
+
+On 7.0 the one call saves ~0.2 µs per range: less than half the cost of
+scattered single pages of a private view, a tenth of a shared memfd's, whose
+hole punching dominates.
 
 The direct NT calls cost what the kernel32 ones do (those are thin
 wrappers); what the batch saves is the working set call per range - a
