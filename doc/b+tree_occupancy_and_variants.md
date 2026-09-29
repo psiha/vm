@@ -253,7 +253,7 @@ How the pages are dropped depends on who else maps them:
 | Linux `map_cow_memory()`: a shared memfd | `MADV_REMOVE` (punches the pages out of the memfd) | a COW clone of the tree is alive |
 | Windows: a pagefile backed section, read-write view | `MEM_RESET` + `VirtualUnlock` (the section's pages, clean, to the standby list) | a COW clone of the tree is alive |
 | Windows: a COW clone's copy-on-write view | the same (only the pages the view has copied) | never |
-| macOS: shared anonymous memory | `MADV_FREE_REUSABLE` | a COW clone of the tree is alive, and in the clone |
+| macOS: shared anonymous memory | `MADV_FREE_REUSABLE` | in a clone (the source goes ahead: see below) |
 
 A tree and every clone made of it share a reference count, which is how a
 shared view tells that dropping its pages would pull them from under a clone:
@@ -261,9 +261,10 @@ a clone reads the pages it has not copied yet from the shared object, so
 after `MADV_REMOVE` (Linux) or a reset and repurposing (Windows) it reads
 zeros - lost data, not a fault. Unmapping the source would not do that: it
 drops a view, not the object's pages. On macOS the kernel ignores the advice
-from either side while the two share the memory, so there it only saves a
-call. `MADV_DONTNEED` on the shared memfd view frees nothing: the pages stay
-in the memfd.
+from either side while the two share the memory, so a release there can
+waste a call but never harm a clone - and the count is compiled out (an
+empty stand-in with the same interface). `MADV_DONTNEED` on the shared memfd
+view frees nothing: the pages stay in the memfd.
 `commit_to()` carries a clone's released set over along with its header; a
 node the target still holds resident goes back on its free list instead.
 

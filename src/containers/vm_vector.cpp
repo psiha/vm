@@ -557,7 +557,8 @@ bool mem_mapping::can_release_pages( [[ maybe_unused ]] bool const shared ) cons
     // A clone is a mach_vm_remap() copy of the source's shared anonymous
     // memory, and while the two share it the kernel takes MADV_FREE_REUSABLE
     // from either side without freeing anything: not a hazard, just a
-    // wasted call.
+    // wasted call - which a clone's view never makes, and which the b+tree
+    // does not even track clones to avoid (its cow_group is a no-op here).
     return !clone_view && !shared;
 #else
     return false;

@@ -1022,6 +1022,19 @@ protected:
     // cannot live in the pool's own header, which a clone maps copy-on-write
     // (its increment would land in its private copy) and which the source may
     // unmap before its clones.
+    // (macOS: releasing memory a clone shares is inert rather than harmful -
+    // see mem_mapping::can_release_pages() - so there is nothing to count, and
+    // the group is an empty stand-in with the same interface.)
+#if defined( __APPLE__ )
+    class cow_group
+    {
+    public:
+        void join ( cow_group const & ) noexcept {}
+        void leave(                   ) noexcept {}
+        [[ gnu::const ]] static constexpr bool shared() noexcept { return false; }
+        void swap ( cow_group &       ) noexcept {}
+    }; // class cow_group
+#else
     class cow_group
     {
     public:
@@ -1048,7 +1061,8 @@ protected:
     private:
         mutable std::atomic<std::atomic<std::uint32_t> *> members_{ nullptr };
     }; // class cow_group
-    cow_group cow_group_;
+#endif
+    PSI_NO_UNIQUE_ADDRESS cow_group cow_group_;
 #ifndef NDEBUG // debugging helpers (undoing type erasure done by contiguous_container_storage_base)
     std::span<node_placeholder const> nodes__{};
 #endif

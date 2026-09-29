@@ -4359,12 +4359,21 @@ TEST( bp_tree, release_free_nodes_spares_a_live_clone )
         tree_t other;
         other.swap( clone );
         clone.swap( other );
+#   if defined( __APPLE__ )
+        // releasing what a clone shares is inert here (the kernel frees
+        // nothing), so the source does not even track its clones: it goes
+        // ahead, and the clone must be none the worse for it
+        EXPECT_GT( source.release_free_nodes(), 0U );
+        ASSERT_TRUE( clone.structure_is_sound() ) << "clone, after the source released";
+        EXPECT_TRUE( std::ranges::equal( clone, kept ) );
+#   else
         auto const resident_before{ resident_pages( source.node_pool_bytes() ) };
         EXPECT_EQ( source.release_free_nodes(), 0U ) << "shared with a live clone";
         EXPECT_EQ( source.nodes_released(), 0U );
         auto const resident_after{ resident_pages( source.node_pool_bytes() ) };
         if ( resident_before && resident_after )
             EXPECT_EQ( *resident_after, *resident_before );
+#   endif
 #   if defined( __linux__ ) || defined( _WIN32 )
         EXPECT_GT( clone.release_free_nodes(), 0U ) << "the clone's own view is private";
 #   else
@@ -4377,7 +4386,9 @@ TEST( bp_tree, release_free_nodes_spares_a_live_clone )
         ASSERT_TRUE( source.structure_is_sound() ) << "source, beside the clone";
         EXPECT_TRUE( std::ranges::equal( source, kept ) );
     }
+#if !defined( __APPLE__ ) // (there it released already)
     EXPECT_GT( source.release_free_nodes(), 0U ) << "the clone is gone";
+#endif
     ASSERT_TRUE( source.structure_is_sound() );
     EXPECT_TRUE( std::ranges::equal( source, kept ) );
 }

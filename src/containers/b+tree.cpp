@@ -883,6 +883,7 @@ void bptree_base::update_dbg_helpers() noexcept {
 // - Old generation reclaimed when readers drain
 ////////////////////////////////////////////////////////////////////////////////
 
+#if !defined( __APPLE__ )
 void bptree_base::cow_group::join( cow_group const & source )
 {
     auto * members{ source.members_.load( std::memory_order_acquire ) };
@@ -905,6 +906,7 @@ void bptree_base::cow_group::leave() noexcept
         if ( members->fetch_sub( 1, std::memory_order_acq_rel ) == 1 )
             delete members;
 }
+#endif // !__APPLE__
 
 PSI_COLD
 bptree_base::bptree_base( bptree_base const & source )
