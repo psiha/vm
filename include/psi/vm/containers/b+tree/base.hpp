@@ -380,11 +380,36 @@ public:
     // the free list runs dry, reinitialising the node; the next write faults
     // its page back in.  Nothing is released from file backed storage, nor
     // from shared storage while a COW clone of this tree (or the tree this is
-    // a clone of) is alive - see mem_mapping::release_pages().  Explicit
-    // rather than done by free(): a syscall per freed node would be paid on
-    // the erase path, and only a batch can see which pages are entirely free.
+    // a clone of) is alive, where that would pull pages from under it - see
+    // mem_mapping::release_pages().
+    //
+    // When it runs (see doc/b+tree_occupancy_and_variants.md for the numbers):
+    //  * explicitly: this call, and compact(), which ends with it;
+    //  * automatically after the bulk operations that free many nodes at
+    //    once - erase( first, last ), erase_sorted*(), merge() - once the nodes
+    //    they have freed since the last release (counted by the free list's
+    //    count across each, never per node) reach
+    //        max( nodes per page, pool / auto_release_pool_share, free nodes / 2 )
+    //    and no COW clone shares the pool;
+    //  * never from single-key erase(), which does not even count: its code
+    //    is what it was before release existed;
+    //  * not after bulk insertion: the free nodes it leaves are the pool's
+    //    growth headroom, which the next insertion takes.
+    // A release costs a system call per run of neighbouring free pages (on
+    // Windows a reset per run, plus one working set call for all of them):
+    // ~1-2 us a run, several times what erasing a node costs, which is why it
+    // is batched and why only a batch can see which pages are entirely free.
+    // Its bookkeeping is a scan of the pool (~1 ns a node), which the pool
+    // share bounds per freed node, and a walk of the whole free list (a cache
+    // miss per free node), which the half bounds: the walk is never mostly
+    // over nodes an earlier release found it could not release (small nodes
+    // whose page neighbours are live).  A tree which shares its pool with a
+    // live COW clone is either the source, which may not release, or the
+    // clone, whose commit_to() writes every node it released back into the
+    // target: an automatic release there would be work thrown away.
     // Returns how many nodes it released.
     std::uint32_t release_free_nodes();
+    static constexpr std::uint32_t auto_release_pool_share{ 16 };
     // ...and the ones a commit_to() would copy, which is what a COW clone of
     // this tree costs to commit.  A tree nobody has mutated owes nothing.
     [[ gnu::pure, nodiscard ]] std::uint32_t nodes_dirty   () const noexcept;
@@ -1017,6 +1042,13 @@ protected:
     // file backed storage never releases.
     heap_vector<node_slot> released_;
 
+    // The automatic release (see release_free_nodes()): a bulk operation
+    // notes what it has freed, by the free list count it started from, and
+    // once enough has been freed since the last release the free nodes are
+    // released.  Nothing on the single-key paths calls it.
+    void note_bulk_free( node_slot::value_type free_nodes_before ) noexcept;
+    node_slot::value_type freed_in_bulk_{ 0 }; // since the last release (not persisted)
+
     // How many trees map one pool's pages: a tree and every COW clone made of
     // it (and of those) share one count, allocated by the first clone.  It
     // cannot live in the pool's own header, which a clone maps copy-on-write
@@ -1081,6 +1113,7 @@ bptree_base::map_file( auto const file, flags::named_object_construction_policy 
     {
         update_cached_pointers();
         released_.clear();
+        freed_in_bulk_ = 0;
         cow_group_.leave();
         if ( nodes_.empty() )
             hdr() = {};

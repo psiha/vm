@@ -251,7 +251,7 @@ How the pages are dropped depends on who else maps them:
 | file backed | — (a file's pages are its data) | always |
 | a private view: Linux `map_memory()`, any Linux COW clone | `MADV_DONTNEED` (drops this view's pages only) | never |
 | Linux `map_cow_memory()`: a shared memfd | `MADV_REMOVE` (punches the pages out of the memfd) | a COW clone of the tree is alive |
-| Windows: a pagefile backed section, read-write view | `MEM_RESET` + `VirtualUnlock` (the section's pages, clean, to the standby list) | a COW clone of the tree is alive |
+| Windows: a pagefile backed section, read-write view | `MEM_RESET` per run, then one working set call for all of them (the section's pages, clean, to the standby list) | a COW clone of the tree is alive |
 | Windows: a COW clone's copy-on-write view | the same (only the pages the view has copied) | never |
 | macOS: shared anonymous memory | `MADV_FREE_REUSABLE` | in a clone (the source goes ahead: see below) |
 
@@ -268,10 +268,103 @@ view frees nothing: the pages stay in the memfd.
 `commit_to()` carries a clone's released set over along with its header; a
 node the target still holds resident goes back on its free list instead.
 
-It is explicit rather than done by `free()`: a system call per freed node
-would land on the erase path, and only a batch can see which pages are
-entirely free. On a huge page backed pool a partial release splits the huge
-page.
+On a huge page backed pool a partial release splits the huge page.
+
+**The calls.** Every page released costs a system call per run of
+neighbouring pages - on Windows two, as the reset and the working set removal
+are separate calls - so the pages of a batch are coalesced into runs and
+handed over together. On Windows the working set removal takes every run in
+one call (`NtSetInformationVirtualMemory`, `VmRemoveFromWorkingSetInformation`,
+a `MEMORY_RANGE_ENTRY` array); the reset has no multi-range form - it is
+`NtAllocateVirtualMemory( MEM_RESET )`, and `VmPageDirtyStateInformation`
+did not take the pool's pages - so a batch of N runs is N + 1 calls rather than 2N.
+`DiscardVirtualMemory` and `OfferVirtualMemory` are no better underneath:
+both are kernelbase wrappers that scan the range's working set entries
+(`NtQueryVirtualMemory`), reset it, lower its page priority
+(`VmPagePriorityInformation`) and unlock it, one range per call. On POSIX it
+is `madvise()` per run (`process_madvise()` takes a vector of ranges, but for
+other than `MADV_COLD`/`MADV_PAGEOUT` only since Linux 6.13).
+
+Per call and per page (256 MB of dirty pages, the thread pinned to one
+core, best of several runs; Windows 11 x86-64, a pagefile backed section as
+the pool uses, the variants interleaved; Linux 6.6 x86-64 under WSL2):
+
+| µs per page (read-write section view / a COW clone's view) | single pages, apart (a call each) | runs of 16 pages | one 256 MB range |
+|---|---|---|---|
+| `VirtualAlloc( MEM_RESET )` + `VirtualUnlock`, per range | 2.2 / 1.5 | 0.89 / 0.76 | 0.87 / 0.62 |
+| `NtAllocateVirtualMemory( MEM_RESET )` + `NtUnlockVirtualMemory`, per range | 2.0 / 1.5 | 0.88 / 0.67 | 0.85 / 0.63 |
+| **the reset per range + one `VmRemoveFromWorkingSetInformation` for all** | **1.5 / 1.6** | 0.86 / 0.70 | 0.85 / 0.68 |
+| the reset alone (the pages stay in the working set) | 0.53 / 0.58 | 0.22 / 0.12 | 0.19 / 0.09 |
+| the working set removal alone (dirty: to the modified list, owed a pagefile write) | 0.90 / 0.97 | 0.49 / 0.43 | 0.52 / 0.42 |
+| `DiscardVirtualMemory` | 460-2600 a call | 41-44 (650-710 a call) | 1.7 / 1.5 |
+| `VmPageDirtyStateInformation` (a multi-range reset, were it accepted) | flags 0: `STATUS_NOT_SUPPORTED`, flags 1: `STATUS_INVALID_PARAMETER_5`; the pages stay dirty | | |
+
+| µs per page, Linux | single pages, apart | runs of 16 pages | one 256 MB range |
+|---|---|---|---|
+| `madvise( MADV_DONTNEED )`, a private view | 0.97 | 0.23 | 0.07 |
+| `madvise( MADV_REMOVE )`, a shared memfd | 1.58 | 0.45 | 0.20 |
+| `process_madvise()`, 1024 ranges a call | `EINVAL` for either advice (any advice on the calling process only since 6.13) | | |
+
+The direct NT calls cost what the kernel32 ones do (those are thin
+wrappers); what the batch saves is the working set call per range - a
+third of the cost of scattered pages on the section view, nothing
+measurable on a clone's view or on long runs. Every variant that resets
+first sends the pages to the standby list clean (no growth of the modified
+list), the clone's source keeps its contents, and the pages come back
+usable on the next touch. `DiscardVirtualMemory`'s cost per call grows with
+the size of the whole mapping the range lies in, not with the range: one
+page costs 3 µs in a 1 MB section view, 9 in 4 MB, 32 in 16 MB, 135 in
+64 MB and 2.6 ms in 256 MB (private memory: 3, 9, 26, 100, 460 µs).
+
+**When it runs.** Explicitly - `release_free_nodes()`, and `compact()`, which
+ends with it - and automatically after the bulk operations that can free
+many nodes at once: `erase( first, last )`, `erase_sorted()` and
+`erase_sorted_exact()`, and `merge()` (which leaves free whatever its
+reservation overestimated). Each notes how many nodes it freed (the change in
+the free list's count across it, so nothing is counted per node), and the
+release runs once the nodes freed that way since the last release reach
+
+```
+max( nodes per page, pool / 16, free nodes / 2 )
+```
+
+and no COW clone shares the pool. Single-key `erase()` never releases, and
+does not count: its code is what it was before release existed. The terms:
+
+- a sweep scans the pool (two bitsets and a pass over its pages: ~1 ns per
+  pool node) and walks the whole free list (~30-40 ns per free node, a cache
+  miss each), besides the calls. *pool / 16* keeps the scan at most 16 ns per
+  freed node - under the release's own cost per node, and a small share of
+  the bulk erasure that freed it (0.1 µs per freed 512-byte leaf, 0.8 µs per
+  4096-byte one);
+- *free nodes / 2*: at least as many freed since the last sweep as were
+  already free, so the walk is never mostly over nodes an earlier sweep found
+  it could not release (with 512-byte nodes most scattered free nodes share
+  their page with live ones), and costs at most twice what the new ones do;
+- a tree that shares its pool is either a clone's source, which may not
+  release, or a clone, whose `commit_to()` writes every node it released back
+  into its target: releasing there is work thrown away.
+
+Measured (`bp_tree.benchmark_release_sweep`, 4M `std::uint32_t` keys built in
+order, a middle range erased): the release costs about as much as the range
+erasure itself or more - the calls, not the bookkeeping, are the price of
+handing memory back:
+
+| nodes | erased keys | nodes released | range erasure, its automatic release included (Windows / Linux) | the release alone | per page |
+|---|---|---|---|---|---|
+| 4096 | 1M | 988 | 3838 / 3139 µs | 911 / 163 µs | 0.92 / 0.17 µs |
+| 4096 | 3M | 2953 | 12252 / 10089 µs | 2649 / 332 µs | 0.90 / 0.11 µs |
+| 512 | 1M | 8720 | 1842 / 1092 µs | 1145 / 426 µs | 1.05 / 0.39 µs |
+| 512 | 3M | 25104 | 5889 / 3078 µs | 3773 / 1120 µs | 1.20 / 0.36 µs |
+| 4096 | 62 500 (60 leaves: under pool / 16) | 0 | 51 / 52 µs | - | - |
+| 512 | 250 000 (2048 leaves: under pool / 16) | 0 | 249 / 226 µs | - | - |
+
+So the release is a quarter (4 KB nodes) to two thirds (512-byte nodes) of
+a large range erasure on Windows, and a twentieth to two fifths on Linux. The
+bookkeeping alone - the same release repeated with nothing new to release -
+is 30-50 µs on the 33 K-node pool of 512-byte nodes (~1 ns a pool node);
+after half the keys were erased at random it walks 5.4 K scattered free
+nodes, of which it can release none, in 170-225 µs (30-40 ns a free node).
 
 Measured (`bp_tree.benchmark_compact`, x86-64 Linux, clang, 4M `std::uint32_t`
 keys built one at a time in random order, then a share erased at random -
@@ -375,22 +468,6 @@ randomly built 4096-byte-node tree erased by 30-70 % only goes from 63-69 %
 to 67-77 % leaf fill (93-95 % with every level), and a 512-byte-node one
 from 62-65 % to 73-78 %. Leaving the inner levels out would save 0.6-1.8 kB
 of an LTO-linked test binary's 6.7 MB of code, and no measurable compile time.
-
-On Windows, per call (x86-64, 4 kB pages, re-dirtied before each call):
-
-| | one scattered page | runs of 64–256 pages |
-|---|---|---|
-| `DiscardVirtualMemory` | 15–18 µs | 0.8–1.0 µs a page |
-| `OfferVirtualMemory` (+ `ReclaimVirtualMemory` on reuse) | 14–17 µs (+1.6–1.8) | 0.6–0.9 µs (+1.0–1.3) |
-| `MEM_RESET` + `VirtualUnlock` | 1.0 (private) – 2.0 (section) µs | 0.45–0.7 µs a page |
-| `MEM_DECOMMIT` (+ `MEM_COMMIT` on reuse; private memory only) | 0.6 µs (+0.24) | 0.23 µs |
-
-The cost of the first two is a fixed ~15 µs a call, so it is the scattered
-pages that paid it. `MEM_RESET` alone leaves the pages in the working set
-and `VirtualUnlock` alone sends them to the modified list, to be written to
-the pagefile; together they put them on the standby list clean, where
-`DiscardVirtualMemory` puts them on the free list. Either way they leave the
-working set and the OS can repurpose them without I/O.
 
 ## 6. Open
 

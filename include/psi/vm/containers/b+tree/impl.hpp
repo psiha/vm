@@ -1050,6 +1050,7 @@ bp_tree_impl<Key, Comparator>::erase_sorted_impl( std::span<Key const> const key
 
     BOOST_ASSERT( std::ranges::is_sorted( keys_to_remove, comp() ) );
 
+    auto const free_nodes_before{ this->hdr().free_node_count_ };
     size_type erased_count{ 0 };
     size_t    key_idx     { 0 };
 
@@ -1150,6 +1151,7 @@ bp_tree_impl<Key, Comparator>::erase_sorted_impl( std::span<Key const> const key
         offset = found_pos.pos;
     }
 
+    this->note_bulk_free( free_nodes_before );
     return erased_count;
 }
 
@@ -1890,6 +1892,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
     // merge happens at the (bulk) end - otherwise lots of splitting can occur
     // of intermediate leaves (with, then, lower load percentages)...
     //this->reserve_additional( total_size );
+    auto const free_nodes_before{ this->hdr().free_node_count_ };
     bptree_base::reserve( this->used_number_of_nodes() + other.used_number_of_nodes() * 3 / 2 );
 
     auto const p_new_nodes_begin{ other.ra_begin() };
@@ -2017,7 +2020,9 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
             inserted += static_cast<size_type>( total_size - so_far_consumed );
             auto const last_src_copy_node{ this->leaf( prev_src_copy_node ).right };
             iter_pos const end_pos{ last_src_copy_node, src_leaf->num_vals };
-            return base::bulk_append( *tgt_leaf, this->leaf( src_copy_begin ), inserted, end_pos, src_copy_begin );
+            auto const appended{ base::bulk_append( *tgt_leaf, this->leaf( src_copy_begin ), inserted, end_pos, src_copy_begin ) };
+            this->note_bulk_free( free_nodes_before );
+            return appended;
         }
         // TODO in-the-middle partial bulk-inserts
 
@@ -2044,6 +2049,8 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
     BOOST_ASSUME( inserted <= total_size );
     this->hdr().size_ += inserted;
 
+    // what the reservation above overestimated is left free
+    this->note_bulk_free( free_nodes_before );
     return inserted;
 } // bp_tree_impl::merge()
 

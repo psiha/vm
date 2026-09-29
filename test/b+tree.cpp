@@ -4292,10 +4292,11 @@ TEST( bp_tree, compact_a_cow_clone_and_commit )
 
 namespace
 {
-    // A sequentially built tree whose middle half is then erased leaves runs
-    // of neighbouring free nodes - whole pages of them even where a node is a
-    // fraction of a page.  Releasing them has to take those pages out of
-    // residency, keep the tree intact, and hand the nodes back as it grows.
+    // A sequentially built tree whose middle half is then erased (key by key,
+    // which never releases anything by itself) leaves runs of neighbouring
+    // free nodes - whole pages of them even where a node is a fraction of a
+    // page.  Releasing them has to take those pages out of residency, keep the
+    // tree intact, and hand the nodes back as it grows.
     template <bool cow>
     void release_roundtrip()
     {
@@ -4306,8 +4307,9 @@ namespace
         else                 bpt.map_memory();
         ASSERT_EQ( bpt.insert( std::views::iota( 0, size ) ), static_cast<std::size_t>( size ) );
         auto const reserved{ bpt.nodes_reserved() };
-        auto const last    { std::ranges::find( bpt, 3 * size / 4 ) };
-        bpt.erase( std::ranges::find( bpt, size / 4 ), last );
+        for ( auto k{ size / 4 }; k < 3 * size / 4; ++k )
+            ASSERT_TRUE( bpt.erase( k ) );
+        EXPECT_EQ( bpt.nodes_released(), 0U ) << "single key erasure releases nothing";
         auto const free_nodes{ reserved - bpt.nodes_used() };
         ASSERT_GT( free_nodes, 0U );
 
@@ -4351,7 +4353,8 @@ TEST( bp_tree, release_free_nodes_spares_a_live_clone )
     tree_t source;
     source.map_cow_memory();
     ASSERT_EQ( source.insert( std::views::iota( 0, size ) ), static_cast<std::size_t>( size ) );
-    source.erase( std::ranges::find( source, size / 4 ), std::ranges::find( source, 3 * size / 4 ) );
+    for ( auto k{ size / 4 }; k < 3 * size / 4; ++k ) // (key by key: nothing released yet)
+        ASSERT_TRUE( source.erase( k ) );
     auto kept{ std::views::iota( 0, size ) | std::views::filter( [ = ]( int const k ) { return k < size / 4 || k >= 3 * size / 4; } ) };
     {
         tree_t first_clone{ source };
@@ -4391,6 +4394,81 @@ TEST( bp_tree, release_free_nodes_spares_a_live_clone )
 #endif
     ASSERT_TRUE( source.structure_is_sound() );
     EXPECT_TRUE( std::ranges::equal( source, kept ) );
+}
+
+// The automatic release: a bulk erasure which frees enough nodes releases
+// their pages by itself - erase( first, last ) and erase_sorted() alike - one
+// which frees few does not, nor does erasing the same keys one at a time, nor
+// a bulk erasure in a COW clone (whose commit would write the nodes back).
+namespace
+{
+    enum struct erased_by { range, sorted, one_by_one };
+    void erase_keys( inspectable<bptree_set<int>> & bpt, int const first, int const last, erased_by const how )
+    {
+        switch ( how )
+        {
+            case erased_by::range     : bpt.erase( std::ranges::find( bpt, first ), std::ranges::find( bpt, last ) ); break;
+            case erased_by::sorted    : { std::vector<int> keys( static_cast<std::size_t>( last - first ) ); std::iota( keys.begin(), keys.end(), first ); EXPECT_EQ( bpt.erase_sorted( keys ), keys.size() ); break; }
+            case erased_by::one_by_one: for ( auto k{ first }; k < last; ++k ) EXPECT_TRUE( bpt.erase( k ) ); break;
+        }
+    }
+} // anonymous namespace
+
+TEST( bp_tree, bulk_erase_releases_by_itself )
+{
+    using tree_t = inspectable<bptree_set<int>>;
+    // erasing three quarters of the leaves is well past the threshold, and
+    // four of them well below it
+    auto const leaves{ 1024U };
+    auto const size  { static_cast<int>( tree_t::max_values_per_leaf() * leaves ) };
+    auto const build { [ & ]( bool const cow ) { tree_t bpt; if ( cow ) bpt.map_cow_memory(); else bpt.map_memory(); EXPECT_EQ( bpt.insert( std::views::iota( 0, size ) ), static_cast<std::size_t>( size ) ); return bpt; } };
+    auto const kept_after{ [ = ]( int const first, int const last ) { return std::views::iota( 0, size ) | std::views::filter( [ = ]( int const k ) { return k < first || k >= last; } ); } };
+    for ( auto const how : { erased_by::range, erased_by::sorted, erased_by::one_by_one } )
+    {
+        auto const name{ how == erased_by::range ? "erase( first, last )" : how == erased_by::sorted ? "erase_sorted()" : "erase( key ) one by one" };
+        {
+            auto bpt{ build( false ) };
+            auto const resident_before{ resident_pages( bpt.node_pool_bytes() ) };
+            erase_keys( bpt, size / 8, 7 * size / 8, how );
+            auto const resident_after{ resident_pages( bpt.node_pool_bytes() ) };
+            ASSERT_TRUE( bpt.structure_is_sound() ) << name;
+            EXPECT_TRUE( std::ranges::equal( bpt, kept_after( size / 8, 7 * size / 8 ) ) ) << name;
+            if ( how == erased_by::one_by_one ) {
+                EXPECT_EQ( bpt.nodes_released(), 0U ) << name;
+            } else {
+                EXPECT_GT( bpt.nodes_released(), 0U ) << name;
+                if ( resident_before && resident_after ) {
+                    auto const pages{ bpt.nodes_released() * tree_t::node_byte_size() / page_size };
+                    EXPECT_LE( *resident_after + pages, *resident_before ) << name;
+                    std::println( "{}: {} nodes released by itself, resident pages {} -> {}", name, bpt.nodes_released(), *resident_before, *resident_after );
+                }
+            }
+            // and takes them back as it grows
+            for ( auto k{ size / 8 }; k < 7 * size / 8; ++k )
+                ASSERT_TRUE( bpt.insert( k ).second ) << name;
+            ASSERT_TRUE( bpt.structure_is_sound() ) << name << ", regrown";
+            EXPECT_TRUE( std::ranges::equal( bpt, std::views::iota( 0, size ) ) ) << name;
+        }
+        if ( how == erased_by::one_by_one )
+            continue;
+        {   // a few leaves' worth: below the threshold
+            auto bpt{ build( false ) };
+            auto const few{ static_cast<int>( tree_t::max_values_per_leaf() ) * 4 };
+            erase_keys( bpt, size / 2, size / 2 + few, how );
+            EXPECT_EQ( bpt.nodes_released(), 0U ) << name << ", a few leaves";
+        }
+        {   // in a COW clone
+            auto source{ build( true ) };
+            {
+                tree_t clone{ source };
+                erase_keys( clone, size / 8, 7 * size / 8, how );
+                EXPECT_EQ( clone.nodes_released(), 0U ) << name << ", in a clone";
+                clone.commit_to( source );
+            }
+            ASSERT_TRUE( source.structure_is_sound() ) << name << ", committed";
+            EXPECT_TRUE( std::ranges::equal( source, kept_after( size / 8, 7 * size / 8 ) ) ) << name;
+        }
+    }
 }
 
 //------------------------------------------------------------------------------

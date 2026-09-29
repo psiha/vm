@@ -43,6 +43,7 @@ void bptree_base::clear() noexcept
     nodes_.clear();
     dirty_.reset( 0 );
     released_.clear();
+    freed_in_bulk_ = 0;
     update_cached_pointers(); // required for targets which cannot downsize mappings but have to unmap-remap (e.g. Windows)
     hdr() = {};
 }
@@ -100,6 +101,7 @@ void bptree_base::init_fresh_pool( std::uint32_t const initial_capacity_as_numbe
     update_cached_pointers();
     hdr() = {};
     released_.clear();
+    freed_in_bulk_ = 0;
     cow_group_.leave(); // fresh storage: no clone maps it
     if ( initial_capacity_as_number_of_nodes ) {
         dirty_.reset( nodes_.size() ); // sized before anything can mark
@@ -597,6 +599,7 @@ void bptree_base::swap( bptree_base & other ) noexcept
     swap( this->p_hdr_ , other.p_hdr_  );
     swap( this->dirty_ , other.dirty_  ); // indexed by the pool it describes, so it goes with it
     swap( this->released_ , other.released_  ); // ditto
+    swap( this->freed_in_bulk_, other.freed_in_bulk_ );
     this->cow_group_.swap( other.cow_group_ );
 #ifndef NDEBUG
     swap( this->nodes__, other.nodes__ );
@@ -762,8 +765,23 @@ void bptree_base::reclaim_released( node_slot::value_type count ) noexcept
     }
 }
 
+void bptree_base::note_bulk_free( node_slot::value_type const free_nodes_before ) noexcept
+{
+    auto const free_nodes{ hdr().free_node_count_ };
+    if ( free_nodes <= free_nodes_before )
+        return;
+    freed_in_bulk_ += free_nodes - free_nodes_before;
+    auto const nodes_per_page{ std::max<std::uint32_t>( 1, page_size / node_size ) };
+    auto const threshold     { std::max( { nodes_per_page, static_cast<std::uint32_t>( nodes_.size() / auto_release_pool_share ), free_nodes / 2 } ) };
+    if ( ( freed_in_bulk_ < threshold ) || shares_pages() )
+        return;
+    try { release_free_nodes(); }
+    catch ( ... ) {} // (its bookkeeping allocates) nothing released, nothing lost
+}
+
 std::uint32_t bptree_base::release_free_nodes()
 {
+    freed_in_bulk_ = 0;
     auto const shared{ shares_pages() };
     if ( !has_attached_storage() || !hdr().free_node_count_ || !nodes_.can_release_pages( shared ) )
         return 0;
@@ -1013,6 +1031,7 @@ void bptree_base::commit_to( bptree_base & target ) const noexcept
         }
     }
     kept.shrink_by( static_cast<decltype( kept.size() )>( kept.end() - kept_end ) );
+    target.freed_in_bulk_ = freed_in_bulk_; // it has this tree's free list now
 }
 
 //------------------------------------------------------------------------------

@@ -2123,6 +2123,7 @@ bptree_base_wkey<Key, leaf_gap>::erase( const_iterator const first, const_iterat
     if ( pos == end_pos ) [[ unlikely ]]
         return last;
 
+    auto const free_nodes_before{ hdr().free_node_count_ };
     size_type erased_count{ 0 };
     auto const erase_values{ [ & ]( leaf_node & node, node_size_type const offset, node_size_type const count ) noexcept {
         shift_entries_left( node, offset, node.num_vals, count );
@@ -2216,6 +2217,7 @@ bptree_base_wkey<Key, leaf_gap>::erase( const_iterator const first, const_iterat
         result = this->end_pos();
 
     this->hdr().size_ -= erased_count;
+    this->note_bulk_free( free_nodes_before ); // (releases only free nodes: 'result' stays valid)
     return make_iter( result );
 }
 

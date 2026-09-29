@@ -355,6 +355,63 @@ TEST( bp_tree, benchmark_compact )
     }
 }
 
+// What releasing free nodes costs, next to the bulk erasure that freed them -
+// the numbers behind the automatic release's threshold (see
+// bptree_base::release_free_nodes()).  A sorted build loses a middle range of
+// growing share: erase( first, last ) (which releases by itself past the
+// threshold) against the same keys erased one by one and then released
+// explicitly, and that release repeated with nothing new to release (the walk
+// of the free list and the scan of the pool alone); then half the keys erased
+// at random, whose free nodes are scattered.
+TEST( bp_tree, benchmark_release_sweep )
+{
+    std::uint32_t const n{ 4'000'000 };
+    auto const us{ []( timer::duration const d ) { return double( std::chrono::duration_cast<std::chrono::nanoseconds>( d ).count() ) / 1000; } };
+    auto const timed{ [ & ]( auto && f ) { auto const start{ timer::now() }; f(); return us( timer::now() - start ); } };
+    auto const build{ [ & ] { auto tree{ make_tree() }; tree.insert( std::views::iota( std::uint32_t{ 0 }, n ) ); return tree; } };
+    std::println( "release_free_nodes() vs bulk erasure: {} keys, {}-byte nodes", n, tree_t::node_byte_size() );
+    std::println( "{:>10} {:>8} {:>7} | {:>10} {:>8} | {:>10} {:>8} {:>9} | {:>10} {:>9}", "erased", "freed", "pool", "range us", "auto rel", "sweep us", "released", "us/page", "rewalk us", "leftover" );
+    for ( auto const share : { 1. / 1024, 1. / 256, 1. / 64, 1. / 16, 1. / 4, 3. / 4 } )
+    {
+        auto const count{ static_cast<std::uint32_t>( n * share ) };
+        auto const first{ ( n - count ) / 2 };
+        double range_us{ 1e12 }, sweep_us{ 1e12 }, rewalk_us{ 1e12 };
+        std::uint32_t auto_released{ 0 }, released{ 0 }, freed{ 0 }, pool{ 0 }, leftover{ 0 };
+        for ( auto rep{ 0 }; rep < 3; ++rep )
+        {
+            {
+                auto tree{ build() };
+                auto const b{ tree.find( first ) }, e{ tree.find( first + count ) };
+                range_us = std::min( range_us, timed( [ & ] { tree.erase( b, e ); } ) );
+                auto_released = tree.nodes_released();
+            }
+            auto tree{ build() };
+            auto const used{ tree.nodes_used() };
+            for ( auto k{ first }; k < first + count; ++k ) tree.erase( k );
+            freed = used - tree.nodes_used();
+            pool  = tree.nodes_reserved();
+            sweep_us  = std::min( sweep_us , timed( [ & ] { released = tree.release_free_nodes(); } ) );
+            leftover  = tree.nodes_reserved() - tree.nodes_used() - tree.nodes_released();
+            rewalk_us = std::min( rewalk_us, timed( [ & ] { tree.release_free_nodes(); } ) );
+        }
+        auto const pages{ std::max<std::uint32_t>( 1, released * tree_t::node_byte_size() / page_size ) };
+        std::println( "{:>10} {:>8} {:>7} | {:>10.1f} {:>8} | {:>10.1f} {:>8} {:>9.2f} | {:>10.1f} {:>9}",
+            count, freed, pool, range_us, auto_released, sweep_us, released, sweep_us / pages, rewalk_us, leftover );
+    }
+    {   // scattered: half the keys, at random, one by one
+        auto const keys{ shuffled( n, 42 ) };
+        auto tree{ build() };
+        for ( auto const k : std::span{ keys }.first( n / 2 ) ) tree.erase( k );
+        auto const free_nodes{ tree.nodes_reserved() - tree.nodes_used() };
+        std::uint32_t released{ 0 };
+        auto const sweep_us { timed( [ & ] { released = tree.release_free_nodes(); } ) };
+        auto const leftover { tree.nodes_reserved() - tree.nodes_used() - tree.nodes_released() };
+        auto const rewalk_us{ timed( [ & ] { tree.release_free_nodes(); } ) };
+        std::println( "scattered: {} free nodes, sweep {:.1f} us releasing {} nodes; again with {} free nodes left: {:.1f} us ({:.1f} ns per free node)",
+            free_nodes, sweep_us, released, leftover, rewalk_us, leftover ? rewalk_us * 1000 / leftover : 0. );
+    }
+}
+
 #endif // NDEBUG
 
 //------------------------------------------------------------------------------
