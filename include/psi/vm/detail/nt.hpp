@@ -208,6 +208,46 @@ using NtProtectVirtualMemory_t  = NTSTATUS (NTAPI*)( IN HANDLE ProcessHandle, IN
 inline auto const NtAllocateVirtualMemory{ detail::get_nt_proc<NtAllocateVirtualMemory_t>( "NtAllocateVirtualMemory" ) };
 inline auto const NtFreeVirtualMemory    { detail::get_nt_proc<NtFreeVirtualMemory_t    >( "NtFreeVirtualMemory"     ) };
 
+// Page release (see mem_mapping::release_pages()).  DiscardVirtualMemory()
+// and OfferVirtualMemory() have no system call of their own: both are
+// kernelbase wrappers which scan the range's working set entries
+// (NtQueryVirtualMemory), then reset it (NtAllocateVirtualMemory with
+// MEM_RESET), lower its page priority and take it out of the working set
+// (NtSetInformationVirtualMemory, NtUnlockVirtualMemory) - one range per call.
+// Of those steps only the working set one has a multi-range form.
+enum VIRTUAL_MEMORY_INFORMATION_CLASS
+{
+    VmPrefetchInformation,
+    VmPagePriorityInformation,
+    VmCfgCallTargetInformation,
+    VmPageDirtyStateInformation,
+    VmImageHotPatchInformation,
+    VmPhysicalContiguityInformation,
+    VmVirtualMachinePrepopulateInformation,
+    VmRemoveFromWorkingSetInformation // MEMORY_REMOVE_WORKING_SET_INFORMATION
+};
+struct MEMORY_RANGE_ENTRY
+{
+    PVOID  VirtualAddress;
+    SIZE_T NumberOfBytes;
+};
+struct MEMORY_REMOVE_WORKING_SET_INFORMATION { ULONG Flags; };
+
+using NtSetInformationVirtualMemory_t = NTSTATUS (NTAPI*)
+(
+    IN HANDLE                           ProcessHandle,
+    IN VIRTUAL_MEMORY_INFORMATION_CLASS VmInformationClass,
+    IN ULONG_PTR                        NumberOfEntries,
+    IN MEMORY_RANGE_ENTRY const *       VirtualAddresses,
+    IN PVOID                            VmInformation,
+    IN ULONG                            VmInformationLength
+) noexcept;
+using NtUnlockVirtualMemory_t = NTSTATUS (NTAPI*)( IN HANDLE ProcessHandle, IN OUT PVOID * BaseAddress, IN OUT PSIZE_T RegionSize, IN ULONG MapType ) noexcept;
+auto constexpr MAP_PROCESS{ ULONG( 1 ) }; // NtUnlockVirtualMemory: the working set
+
+inline auto const NtSetInformationVirtualMemory{ detail::get_nt_proc<NtSetInformationVirtualMemory_t>( "NtSetInformationVirtualMemory" ) };
+inline auto const NtUnlockVirtualMemory        { detail::get_nt_proc<NtUnlockVirtualMemory_t        >( "NtUnlockVirtualMemory"         ) };
+
 ////////////////////////////////////////////////////////////////////////////////
 // Windows 10 RS5 (1809+) placeholder virtual memory APIs
 // https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc2

@@ -35,6 +35,9 @@
 #include <psi/build/disable_warnings.hpp>
 
 #include <boost/assert.hpp>
+
+#include <cstddef>
+#include <span>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -371,10 +374,23 @@ public:
     //    Windows): only the view's own copies - MADV_DONTNEED, MEM_RESET;
     //  * a shared view (the memfd behind Linux map_cow_memory(), the pagefile
     //    section behind Windows storage, macOS anonymous shared memory): the
-    //    pages themselves - MADV_REMOVE, MEM_RESET, MADV_FREE_REUSABLE - so
-    //    only while no clone reads them.  A macOS clone releases nothing.
+    //    pages themselves - MADV_REMOVE, MEM_RESET - so only while no clone
+    //    reads them.  macOS: MADV_FREE_REUSABLE, which the kernel ignores
+    //    while the memory is shared with a clone (from either side, so it is
+    //    never a hazard there - and a clone's view does not try).
     // On a huge page backed view a partial release splits the huge page.
+    // The cost is a system call per range, and on Windows more than one (see
+    // the ranges overload): a caller with many pages to release hands them
+    // over all at once, coalesced into runs.
     bool release_pages( std::byte * first, size_type size, bool shared ) noexcept;
+    // Several ranges (each page aligned, a whole number of pages) in one go:
+    // madvise() per range on POSIX; on Windows a MEM_RESET per range and one
+    // working set call for all of them.  Returns whether all were released.
+    struct page_range { std::byte * first; size_type size; }; // (the layout of the NT MEMORY_RANGE_ENTRY)
+    bool release_pages( std::span<page_range const> ranges, bool shared ) noexcept;
+    // Whether that is fewer calls than ranges (Windows, where the OS has the
+    // multi-range working set call).
+    [[ nodiscard ]] static bool release_takes_ranges_at_once() noexcept;
     // Whether release_pages() would release anything from this storage.
     [[ nodiscard ]] bool can_release_pages( bool shared ) const noexcept;
     // Released pages about to be written again (macOS: MADV_FREE_REUSE, so

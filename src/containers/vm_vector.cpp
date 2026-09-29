@@ -42,6 +42,8 @@
 #endif
 
 #include <algorithm> // min
+#include <atomic>
+#include <cstddef>
 #include <cstring> // memcpy
 #include <stdexcept>
 //------------------------------------------------------------------------------
@@ -564,25 +566,88 @@ bool mem_mapping::can_release_pages( [[ maybe_unused ]] bool const shared ) cons
 
 bool mem_mapping::release_pages( std::byte * const first, size_type const size, bool const shared ) noexcept
 {
-    BOOST_ASSERT( is_aligned( first, page_size ) );
-    BOOST_ASSERT( size % page_size == 0 );
-    BOOST_ASSERT( ( first >= view_.data() ) && ( first + size <= view_.data() + view_.size() ) );
-    if ( !size || !can_release_pages( shared ) )
+    page_range const range{ first, size };
+    return release_pages( { &range, 1 }, shared );
+}
+
+#if defined( _WIN32 )
+namespace
+{
+    // set once VmRemoveFromWorkingSetInformation fails (an OS without it)
+    constinit std::atomic<bool> working_set_batch_unsupported{ false };
+}
+static_assert( sizeof ( mem_mapping::page_range        ) == sizeof ( nt::MEMORY_RANGE_ENTRY               ) );
+static_assert( offsetof( mem_mapping::page_range, first ) == offsetof( nt::MEMORY_RANGE_ENTRY, VirtualAddress ) );
+static_assert( offsetof( mem_mapping::page_range, size  ) == offsetof( nt::MEMORY_RANGE_ENTRY, NumberOfBytes  ) );
+#endif
+
+bool mem_mapping::release_pages( std::span<page_range const> const ranges, bool const shared ) noexcept
+{
+    for ( [[ maybe_unused ]] auto const & range : ranges )
+    {
+        BOOST_ASSERT( is_aligned( range.first, page_size ) );
+        BOOST_ASSERT( range.size % page_size == 0 );
+        BOOST_ASSERT( ( range.first >= view_.data() ) && ( range.first + range.size <= view_.data() + view_.size() ) );
+    }
+    if ( ranges.empty() || !can_release_pages( shared ) )
         return false;
-#if defined( __linux__ )
-    return ::madvise( first, size, mapping_.view_mapping_flags.is_cow() ? MADV_DONTNEED : MADV_REMOVE ) == 0;
-#elif defined( __APPLE__ )
-    return ::madvise( first, size, MADV_FREE_REUSABLE ) == 0;
+    bool released{ true };
+#if defined( __linux__ ) || defined( __APPLE__ )
+#   if defined( __linux__ )
+    auto const advice{ mapping_.view_mapping_flags.is_cow() ? MADV_DONTNEED : MADV_REMOVE };
+#   else
+    auto const advice{ MADV_FREE_REUSABLE };
+#   endif
+    // (process_madvise() takes a vector of ranges, but for other than the
+    // reclaim hints - MADV_COLD, MADV_PAGEOUT - only since Linux 6.13)
+    for ( auto const & range : ranges )
+        released &= ( ::madvise( range.first, range.size, advice ) == 0 );
 #elif defined( _WIN32 )
-    // MEM_RESET marks the contents disposable and VirtualUnlock, on pages that
-    // were never locked, takes them out of the working set: they go to the
-    // standby list clean, for the OS to repurpose without writing them to the
-    // pagefile.  DiscardVirtualMemory does the same (to the free list) for
-    // ~15 us per call rather than ~1-2 us.
-    if ( !::VirtualAlloc( first, size, MEM_RESET, PAGE_READWRITE ) )
-        return false;
-    ::VirtualUnlock( first, size ); // 'fails' with ERROR_NOT_LOCKED, as documented for this use
-    return true;
+    // MEM_RESET marks the contents disposable, and taking the pages out of the
+    // working set then puts them on the standby list clean, for the OS to
+    // repurpose without writing them to the pagefile (without the reset they
+    // would go to the modified list, owed a pagefile write).  The reset has no
+    // multi-range form (MEM_RESET is an NtAllocateVirtualMemory call, and
+    // VmPageDirtyStateInformation does not take these pages), but the
+    // working set removal has: VmRemoveFromWorkingSetInformation takes every
+    // range at once, where NtUnlockVirtualMemory - VirtualUnlock(), which on
+    // pages that were never locked just removes them - takes one per call.
+    // DiscardVirtualMemory() is a MEM_RESET, a page priority change and an
+    // unlock too, preceded by a scan of the range's working set entries, and
+    // costs per call in proportion to the whole mapping, not the range: a few
+    // us in a 1 MB one, milliseconds in 256 MB.
+    for ( auto const & range : ranges )
+    {
+        PVOID  address{ range.first };
+        SIZE_T size   { range.size  };
+        released &= ( nt::NtAllocateVirtualMemory( nt::current_process, &address, 0, &size, MEM_RESET, PAGE_READWRITE ) == nt::STATUS_SUCCESS );
+    }
+    auto const * const entries{ reinterpret_cast<nt::MEMORY_RANGE_ENTRY const *>( ranges.data() ) };
+    nt::MEMORY_REMOVE_WORKING_SET_INFORMATION flags{ 0 };
+    if
+    (
+        working_set_batch_unsupported.load( std::memory_order_relaxed ) ||
+        ( nt::NtSetInformationVirtualMemory( nt::current_process, nt::VmRemoveFromWorkingSetInformation, ranges.size(), entries, &flags, sizeof( flags ) ) != nt::STATUS_SUCCESS )
+    )
+    {
+        working_set_batch_unsupported.store( true, std::memory_order_relaxed );
+        for ( auto const & range : ranges )
+        {
+            PVOID  address{ range.first };
+            SIZE_T size   { range.size  };
+            nt::NtUnlockVirtualMemory( nt::current_process, &address, &size, nt::MAP_PROCESS ); // 'fails' with STATUS_NOT_LOCKED, having done its job
+        }
+    }
+#else
+    released = false;
+#endif
+    return released;
+}
+
+bool mem_mapping::release_takes_ranges_at_once() noexcept
+{
+#if defined( _WIN32 )
+    return !working_set_batch_unsupported.load( std::memory_order_relaxed );
 #else
     return false;
 #endif

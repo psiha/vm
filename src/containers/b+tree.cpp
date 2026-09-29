@@ -814,31 +814,28 @@ std::uint32_t bptree_base::release_free_nodes()
         --hdr.free_node_count_;
     }
     // ...and only then drop their pages, which takes their links with them -
-    // coalesced into runs of neighbouring pages, one call per run
+    // coalesced into runs of neighbouring pages, all handed over at once
     auto const page_bytes{ std::max<std::size_t>( page_size, node_size ) };
     auto * const pool{ reinterpret_cast<std::byte *>( nodes_.data() ) };
-    std::size_t run_begin{ 0 }, run_end{ 0 };
-    std::uint32_t pages_released{ 0 };
-    auto const flush_run{ [ & ] {
-        if ( run_end != run_begin && nodes_.release_pages( pool + run_begin, run_end - run_begin, shared ) )
-            pages_released += static_cast<std::uint32_t>( ( run_end - run_begin ) / page_bytes );
-    } };
+    heap_vector<mem_mapping::page_range> runs;
     for ( auto const n : newly_released )
     {
-        auto const page_begin{ align_down( std::size_t{ *n } * node_size + pool_begin, page_bytes ) - pool_begin };
-        if ( page_begin < run_end ) // another node on a page already in the run
+        auto * const page{ pool + ( align_down( std::size_t{ *n } * node_size + pool_begin, page_bytes ) - pool_begin ) };
+        if ( !runs.empty() && ( page < runs.back().first + runs.back().size ) ) // another node on a page already in the run
             continue;
-        if ( page_begin != run_end ) { flush_run(); run_begin = page_begin; }
-        run_end = page_begin + page_bytes;
+        if ( !runs.empty() && ( page == runs.back().first + runs.back().size ) )
+            runs.back().size += page_bytes;
+        else
+            runs.push_back( { page, page_bytes } );
     }
-    flush_run();
+    auto const released_pages{ nodes_.release_pages( runs, shared ) };
     // (kept even should a call fail: off the free list their contents no
     // longer matter, and they are reclaimed on demand all the same)
     auto const old_size{ released_.size() };
     for ( auto const n : newly_released )
         released_.push_back( n );
     std::ranges::inplace_merge( released_, released_.begin() + static_cast<std::ptrdiff_t>( old_size ), {}, &node_slot::index );
-    return pages_released ? static_cast<std::uint32_t>( newly_released.size() ) : 0;
+    return released_pages ? static_cast<std::uint32_t>( newly_released.size() ) : 0;
 }
 
 void bptree_base::free_leaf( node_header & leaf ) noexcept
