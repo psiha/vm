@@ -74,7 +74,7 @@ struct mi_heap_allocator
     [[ nodiscard ]] PSI_COLD [[ using gnu: assume_aligned( alignment ), malloc, returns_nonnull ]]
     pointer allocate( size_type const count, void const * const /*hint*/ = nullptr )
     {
-        BOOST_ASSUME( count < base::max_size() );
+        BOOST_ASSUME( count <= base::max_size() );
         BOOST_ASSERT_MSG( heap_, "mi_heap_allocator: no heap assigned" );
         auto const byte_size{ count * sizeof( T ) };
         void * p;
