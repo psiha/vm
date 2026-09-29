@@ -94,8 +94,8 @@ public:
         return max_sz;
     }
 
-    storage_result map_memory    ( size_type initial_capacity = 0 ) noexcept { return bptree_base::map_memory    ( node_count_required_for_values( initial_capacity ) ); }
-    storage_result map_cow_memory( size_type initial_capacity = 0 ) noexcept { return bptree_base::map_cow_memory( node_count_required_for_values( initial_capacity ) ); }
+    storage_result map_memory    ( size_type initial_capacity = 0, huge_pages const huge = huge_pages::no ) noexcept { return bptree_base::map_memory    ( node_count_required_for_values( initial_capacity ), {}, huge ); }
+    storage_result map_cow_memory( size_type initial_capacity = 0, huge_pages const huge = huge_pages::no ) noexcept { return bptree_base::map_cow_memory( node_count_required_for_values( initial_capacity ), {}, huge ); }
     size_type capacity() const noexcept
     {
         auto const n{ nodes_.capacity() };

@@ -271,6 +271,7 @@ All three debugger integrations support the same container types with layout-awa
 
 - [Flat container comparison: psi::vm vs libc++ vs MS STL](doc/flat_container_comparison.md) — detailed architectural, codegen, and compliance analysis
 - [B+ tree lower_bound optimization](include/psi/vm/containers/BTREE_LOWER_BOUND_OPTIMIZATION.md)
+- [Transparent huge pages for memory backed storage](doc/huge_pages.md) — what `huge_pages::yes` and `PSI_VM_HUGE_PAGE_MAX_COVERAGE` do, what they cost, and when they pay
 
 ---
 

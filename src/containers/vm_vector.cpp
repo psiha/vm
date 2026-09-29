@@ -32,8 +32,12 @@
         extern "C" int memfd_create( char const *, unsigned int ) noexcept;
 #   endif
 #   include <unistd.h> // ftruncate, close
+#   ifndef MADV_COLLAPSE // Linux 6.1
+#       define MADV_COLLAPSE 25
+#   endif
 #endif
 
+#include <algorithm> // min
 #include <cstring> // memcpy
 #include <stdexcept>
 //------------------------------------------------------------------------------
@@ -87,6 +91,9 @@ void mem_mapping::close() noexcept
     mapping_.close();
     live_size_     = 0;
     object_extent_ = 0;
+#if PSI_VM_HUGE_PAGE_MAX_COVERAGE && defined( __linux__ ) && !defined( __ANDROID__ )
+    huge_pages_    = false;
+#endif
 }
 
 // A flush that starts at 0 covers sizes_hdr, so it is also the point at which
@@ -208,7 +215,17 @@ void * mem_mapping::expand_capacity( std::size_t target_capacity )
     auto const current_fc_capacity{ storage_size() };
     if ( current_fc_capacity < target_capacity ) [[ unlikely ]]
         set_size( mapping_, file_length_for( target_capacity ) );
+#if PSI_VM_HUGE_PAGE_MAX_COVERAGE && defined( __linux__ ) && !defined( __ANDROID__ )
+    auto const populated_size{ mapped_size() };
+    auto * const data{ expand_view( target_capacity ) };
+    // Storage that asked for huge pages but started below a PMD span has
+    // just reached one: advise it now (see map_memory()).
+    if ( huge_pages_ && ( populated_size < detail::pmd_span ) && ( target_capacity >= detail::pmd_span ) )
+        advise_huge_pages( populated_size );
+    return data;
+#else
     return expand_view( target_capacity );
+#endif
 }
 
 void * mem_mapping::expand_view( std::size_t const target_size )
@@ -384,6 +401,9 @@ mem_mapping::map_file( file_handle file, flags::named_object_construction_policy
         }
     }
 
+#if PSI_VM_HUGE_PAGE_MAX_COVERAGE && defined( __linux__ ) && !defined( __ANDROID__ )
+    huge_pages_ = false;
+#endif
     auto map_rslt{ map( std::move( file ), mapping_size ) };
     if ( map_rslt )
     {
@@ -440,12 +460,17 @@ mem_mapping::map_file( file_handle file, flags::named_object_construction_policy
     return map_rslt.propagate();
 }
 PSI_COLD
-err::result_or_error<void, error> mem_mapping::map_memory( size_type const data_size, header_info const hdr_info ) noexcept
+err::result_or_error<void, error> mem_mapping::map_memory( size_type const data_size, header_info const hdr_info, huge_pages const huge ) noexcept
 {
     auto hdr{ unpack( hdr_info ) };
-    auto map_success{ map( {}, hdr.total_hdr_size() + data_size ) };
+    auto map_success{ map( {}, memory_storage_size( hdr.total_hdr_size() + data_size, huge ) ) };
     if ( !map_success )
         return map_success.error();
+#if PSI_VM_HUGE_PAGE_MAX_COVERAGE && defined( __linux__ ) && !defined( __ANDROID__ )
+    huge_pages_ = ( huge == huge_pages::yes );
+#endif
+    if ( huge == huge_pages::yes )
+        advise_huge_pages( 0 ); // before anything is written
     hdr.data_size = data_size;
     get_sizes() = hdr;
     live_size_  = data_size; // anonymous storage: nothing to commit to, live == committed
@@ -453,14 +478,14 @@ err::result_or_error<void, error> mem_mapping::map_memory( size_type const data_
 }
 
 PSI_COLD
-err::result_or_error<void, error> mem_mapping::map_cow_memory( size_type const data_size, header_info const hdr_info ) noexcept
+err::result_or_error<void, error> mem_mapping::map_cow_memory( size_type const data_size, header_info const hdr_info, huge_pages const huge ) noexcept
 {
 #ifdef __linux__
     // On Linux, create a memfd-backed mapping so that future COW copies (via
     // the copy constructor) are zero-copy: dup(fd) + MAP_PRIVATE, instead of
     // requiring an initial memcpy into a memfd. The memfd is anonymous but
     // fd-backed, so it participates in the regular file-backed COW path.
-    auto const total_size{ unpack( hdr_info ).total_hdr_size() + data_size };
+    auto const total_size{ memory_storage_size( unpack( hdr_info ).total_hdr_size() + data_size, huge ) };
     auto const mfd{ ::memfd_create( "psi_vm_cow_src", MFD_CLOEXEC ) };
     if ( mfd != -1 )
     {
@@ -471,6 +496,11 @@ err::result_or_error<void, error> mem_mapping::map_cow_memory( size_type const d
             if ( !map_success )
                 return map_success.error();
             mapping_.set_ephemeral(); // memfd: fd-backed but not on-disk
+#if PSI_VM_HUGE_PAGE_MAX_COVERAGE && defined( __linux__ ) && !defined( __ANDROID__ )
+            huge_pages_ = ( huge == huge_pages::yes );
+#endif
+            if ( huge == huge_pages::yes )
+                advise_huge_pages( 0 ); // before anything is written
             hdr.data_size = data_size;
             get_sizes() = hdr;
             live_size_  = data_size; // ephemeral storage: live == committed
@@ -480,17 +510,44 @@ err::result_or_error<void, error> mem_mapping::map_cow_memory( size_type const d
     }
     // memfd_create or ftruncate failed -- fall back to regular anonymous
 #endif // __linux__
-    return map_memory( data_size, hdr_info );
+    return map_memory( data_size, hdr_info, huge );
+}
+
+mem_mapping::size_type mem_mapping::memory_storage_size( size_type const storage_size, [[ maybe_unused ]] huge_pages const huge ) noexcept
+{
+#if PSI_VM_HUGE_PAGE_MAX_COVERAGE && defined( __linux__ ) && !defined( __ANDROID__ )
+    // A huge page is only ever mapped where the whole PMD span lies inside
+    // the mapping, so storage that asked for them spans whole PMDs: the last
+    // span gets a huge page too, at the cost of up to one span of capacity
+    // the storage may never use (and, on kernels that allocate a huge folio
+    // for a partly covered memfd span, would pay for anyway).
+    if ( ( huge == huge_pages::yes ) && ( storage_size >= detail::pmd_span ) )
+        return align_up( storage_size, detail::pmd_span );
+#endif
+    return storage_size;
 }
 
 PSI_COLD
-void mem_mapping::advise_huge_pages() noexcept
+void mem_mapping::advise_huge_pages( [[ maybe_unused ]] size_type const populated_size ) noexcept
 {
 #if defined( __linux__ ) && !defined( __ANDROID__ ) // server Linux
-    // Only a hint, and the kernel decides per backing whether it applies, so
-    // its result is not checked (a kernel built without THP rejects it with
-    // EINVAL).
+    if ( view_.size() < detail::pmd_span )
+        return;
+    // Only hints, and the kernel decides per backing whether they apply, so
+    // their results are not checked (a kernel built without THP rejects them
+    // with EINVAL, one older than 6.1 does not know MADV_COLLAPSE).
     (void)::madvise( view_.data(), view_.size(), MADV_HUGEPAGE );
+#   if PSI_VM_HUGE_PAGE_MAX_COVERAGE
+    // Storage that reached its first PMD span by growing already holds small
+    // pages there, and they would stay small (khugepaged may collapse them,
+    // eventually, or never): collapse them now, synchronously - a copy of up
+    // to one span, once per storage.
+    auto const begin{ reinterpret_cast<std::uintptr_t>( view_.data() ) };
+    auto const first{ align_up  ( begin                                  , detail::pmd_span ) };
+    auto const last { align_down( begin + std::min( view_.size(), align_up( populated_size, detail::pmd_span ) ), detail::pmd_span ) };
+    if ( populated_size && ( last > first ) )
+        (void)::madvise( reinterpret_cast<void *>( first ), last - first, MADV_COLLAPSE );
+#   endif
 #endif
 }
 
