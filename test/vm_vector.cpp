@@ -1,11 +1,17 @@
 #include <psi/vm/containers/vm_vector.hpp>
+#include <psi/vm/align.hpp>
+
+#include "resident_pages.hpp"
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <print>
 #include <system_error>
 #include <vector>
 //------------------------------------------------------------------------------
@@ -326,6 +332,59 @@ TEST( vm_vector, memory_backed_growth_past_a_pmd_ends_on_a_pmd_boundary )
     }
 }
 #endif // server Linux
+
+// Many ranges released in one call (single pages apart - more of them than
+// one process_madvise() takes - and runs): exactly those pages leave
+// residency, the rest keep their contents, and the released ones are usable
+// again.  Where the OS takes the ranges at once (Linux 6.13 on, Windows) that
+// is the path tried first, so the same is checked with it switched off: the
+// path an OS without it takes.
+namespace
+{
+    void release_many_ranges()
+    {
+        vm_vector<std::uint8_t, std::uint32_t> vec;
+        vec.map_memory();
+        std::size_t const pages{ 4096 };
+        vec.grow_by( static_cast<std::uint32_t>( ( pages + 1 ) * page_size ), default_init );
+        auto * const first_page{ reinterpret_cast<std::byte *>( align_up( reinterpret_cast<std::uintptr_t>( vec.data() ), std::uintptr_t{ page_size } ) ) };
+        std::memset( first_page, 0x5A, pages * page_size );
+
+        std::vector<mem_mapping::page_range> ranges;
+        std::vector<bool> released( pages );
+        for ( std::size_t p{ 0 }; p < 3 * pages / 4; p += 2 ) { ranges.push_back( { first_page + p * page_size, page_size } ); released[ p ] = true; } // scattered single pages
+        for ( std::size_t p{ 3 * pages / 4 }; p + 16 <= pages; p += 32 ) { ranges.push_back( { first_page + p * page_size, 16 * page_size } ); for ( auto q{ p }; q < p + 16; ++q ) released[ q ] = true; } // runs
+        auto const released_pages{ static_cast<std::size_t>( std::ranges::count( released, true ) ) };
+
+        auto const bytes{ std::span<std::byte const>{ first_page, pages * page_size } };
+        auto const resident_before{ resident_pages( bytes ) };
+        ASSERT_TRUE( vec.release_pages( ranges, false ) );
+        auto const resident_after{ resident_pages( bytes ) };
+        std::println( "release_pages(): {} ranges, {} pages, {}", ranges.size(), released_pages, mem_mapping::release_takes_ranges_at_once() ? "fewer calls than ranges" : "a call per range" );
+        if ( resident_before && resident_after ) {
+            EXPECT_EQ( *resident_before, pages );
+            EXPECT_EQ( *resident_after, pages - released_pages );
+        }
+        for ( std::size_t p{ 0 }; p < pages; ++p )
+            if ( !released[ p ] )
+                ASSERT_EQ( first_page[ p * page_size + 7 ], std::byte{ 0x5A } ) << "page " << p << " was not released";
+        for ( std::size_t p{ 0 }; p < pages; ++p ) {
+            first_page[ p * page_size ] = std::byte( p );
+            ASSERT_EQ( first_page[ p * page_size ], std::byte( p ) );
+        }
+        EXPECT_FALSE( vec.release_pages( std::span<mem_mapping::page_range const>{}, false ) ) << "nothing to release";
+    }
+} // anonymous namespace
+
+TEST( vm_vector, release_pages_takes_many_ranges )
+{
+    release_many_ranges();
+    ASSERT_FALSE( testing::Test::HasFatalFailure() );
+    mem_mapping::allow_release_ranges_at_once( false );
+    EXPECT_FALSE( mem_mapping::release_takes_ranges_at_once() );
+    release_many_ranges();
+    mem_mapping::allow_release_ranges_at_once( true );
+}
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm

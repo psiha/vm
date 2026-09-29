@@ -212,7 +212,294 @@ is individually cheaper. `to_move = room / 2` is the tuning knob.
 
 ---
 
-## 5. Open
+## 5. Giving memory back
+
+Everything above is about how full a node is kept while the tree is being
+built and modified. Neither half of the tree ever hands memory back: erasure
+frees a node only once two siblings together fit into one — which leaves a
+thinned-out tree well above half full and therefore unmerged — and a freed
+node goes on a free list, resident, in a pool that never shrinks.
+
+### 5.1 `release_free_nodes()`: dropping the pages of free nodes
+
+A node is a fixed slot of a contiguous pool, addressed by its index, so the
+pages under a free node can be handed back to the OS where they are, without
+renumbering anything (pool compaction - relocating nodes to the front and
+truncating - would have to rewrite every link that names one). What the call
+takes is **whole pages**:
+
+- with page sized nodes (`PSI_VM_BT_PAGE_SIZED_NODES`) that is every free
+  node;
+- with smaller ones only a page whose nodes are *all* free: runs of
+  neighbouring free nodes, such as a range erase of a sequentially built
+  tree leaves, but hardly ever what scattered merges leave (§5.2).
+
+A released node leaves the free list. The list is threaded through the free
+nodes themselves, and a dropped page reads back as unspecified bytes - zeros
+(node 0, not a null link), a Linux clone's source's bytes, or stale ones. So released nodes are kept in a sorted set beside the pool,
+which `new_node()` takes from once the free list is empty (before the pool
+grows), and which `reserve_additional()` puts back on the list for the bulk
+paths that walk it; a node taken back is reinitialised (on macOS after
+`MADV_FREE_REUSE`, without which the page stays out of the task's footprint
+however much it is written), and its page faults in again on the first write.
+The set is not persisted.
+
+How the pages are dropped depends on who else maps them:
+
+| storage | mechanism | refused when |
+|---|---|---|
+| file backed | — (a file's pages are its data) | always |
+| a private view: Linux `map_memory()`, any Linux COW clone | `MADV_DONTNEED` (drops this view's pages only) | never |
+| Linux `map_cow_memory()`: a shared memfd | `MADV_REMOVE` (punches the pages out of the memfd) | a COW clone of the tree is alive |
+| Windows: a pagefile backed section, read-write view | `MEM_RESET` per run, then one working set call for all of them (the section's pages, clean, to the standby list) | a COW clone of the tree is alive |
+| Windows: a COW clone's copy-on-write view | the same (only the pages the view has copied) | never |
+| macOS: shared anonymous memory | `MADV_FREE_REUSABLE` | in a clone (the source goes ahead: see below) |
+
+A tree and every clone made of it share a reference count, which is how a
+shared view tells that dropping its pages would pull them from under a clone:
+a clone reads the pages it has not copied yet from the shared object, so
+after `MADV_REMOVE` (Linux) or a reset and repurposing (Windows) it reads
+zeros - lost data, not a fault. Unmapping the source would not do that: it
+drops a view, not the object's pages. On macOS the kernel ignores the advice
+from either side while the two share the memory, so a release there can
+waste a call but never harm a clone - and the count is compiled out (an
+empty stand-in with the same interface). `MADV_DONTNEED` on the shared memfd
+view frees nothing: the pages stay in the memfd.
+`commit_to()` carries a clone's released set over along with its header; a
+node the target still holds resident goes back on its free list instead.
+
+**Huge pages.** Releasing part of a huge page does not return its memory.
+For anonymous memory (`MADV_DONTNEED`) the kernel splits the huge mapping
+into small ones and queues the page, which it splits, and frees the rest of,
+only under memory pressure; meanwhile khugepaged may collapse the span back,
+faulting the released pages in again. For a memfd (`MADV_REMOVE`) the range
+is zeroed and the page split where that succeeds, else nothing is freed. So
+a pool that asked for huge pages (`huge_pages::yes`) releases whole, aligned
+PMD spans (2 MiB with 4 KiB pages) only: a span with a single live node stays
+as it is (`mem_mapping::release_granularity()`). The pool knows it asked only
+under `PSI_VM_HUGE_PAGE_MAX_COVERAGE` (the flag lives there); in other builds
+it releases by the page, as it does where the system's transparent huge page
+policy is `always` and backs a pool that never asked (reading that policy
+once would cover the case; it is not done).
+
+**The calls.** Every page released costs a system call per run of
+neighbouring pages - on Windows two, as the reset and the working set removal
+are separate calls - so the pages of a batch are coalesced into runs and
+handed over together. On Windows the working set removal takes every run in
+one call (`NtSetInformationVirtualMemory`, `VmRemoveFromWorkingSetInformation`,
+a `MEMORY_RANGE_ENTRY` array); the reset has no multi-range form - it is
+`NtAllocateVirtualMemory( MEM_RESET )`, and `VmPageDirtyStateInformation`
+did not take the pool's pages - so a batch of N runs is N + 1 calls rather than 2N.
+`DiscardVirtualMemory` and `OfferVirtualMemory` are no better underneath:
+both are kernelbase wrappers that scan the range's working set entries
+(`NtQueryVirtualMemory`), reset it, lower its page priority
+(`VmPagePriorityInformation`) and unlock it, one range per call.
+
+On Linux `process_madvise()` takes up to `IOV_MAX` (1024) ranges a call, but
+`MADV_DONTNEED` and `MADV_REMOVE` only for the calling process and only since
+6.13 (before, and for another process, only `MADV_COLD`, `MADV_PAGEOUT`,
+`MADV_WILLNEED` and `MADV_COLLAPSE`: `EINVAL`). The process is named by the
+`PIDFD_SELF_PROCESS` sentinel since 6.15 (no descriptor, right across a
+fork), else by a `pidfd_open()` of it (6.13-6.14, which answer the sentinel
+with `EBADF`). Elsewhere, and on macOS, it is `madvise()` per run.
+
+On both systems the one-call form is chosen by trying it, not by a version
+number: the first refusal (`EINVAL`, `ENOSYS`, `EPERM`, an unknown
+information class) switches every mapping to the per range calls for good,
+and a partial result is finished per range. `allow_release_ranges_at_once(
+false )` forces the per range path (the tests run both).
+
+Per call and per page (256 MB of dirty pages, the thread pinned to one
+core, best of several runs; Windows 11 x86-64, a pagefile backed section as
+the pool uses, the variants interleaved; Linux x86-64, 6.6 under WSL2 and
+7.0 on an AMD EPYC VM, the variants interleaved there too):
+
+| µs per page (read-write section view / a COW clone's view) | single pages, apart (a call each) | runs of 16 pages | one 256 MB range |
+|---|---|---|---|
+| `VirtualAlloc( MEM_RESET )` + `VirtualUnlock`, per range | 2.2 / 1.5 | 0.89 / 0.76 | 0.87 / 0.62 |
+| `NtAllocateVirtualMemory( MEM_RESET )` + `NtUnlockVirtualMemory`, per range | 2.0 / 1.5 | 0.88 / 0.67 | 0.85 / 0.63 |
+| **the reset per range + one `VmRemoveFromWorkingSetInformation` for all** | **1.5 / 1.6** | 0.86 / 0.70 | 0.85 / 0.68 |
+| the reset alone (the pages stay in the working set) | 0.53 / 0.58 | 0.22 / 0.12 | 0.19 / 0.09 |
+| the working set removal alone (dirty: to the modified list, owed a pagefile write) | 0.90 / 0.97 | 0.49 / 0.43 | 0.52 / 0.42 |
+| `DiscardVirtualMemory` | 460-2600 a call | 41-44 (650-710 a call) | 1.7 / 1.5 |
+| `VmPageDirtyStateInformation` (a multi-range reset, were it accepted) | flags 0: `STATUS_NOT_SUPPORTED`, flags 1: `STATUS_INVALID_PARAMETER_5`; the pages stay dirty | | |
+
+| µs per page, Linux (6.6 / 7.0) | single pages, apart | runs of 16 pages | one 256 MB range |
+|---|---|---|---|
+| `madvise( MADV_DONTNEED )` per range, a private view | 0.97 / 0.36 | 0.23 / 0.14 | 0.07 / 0.08 |
+| **`process_madvise( MADV_DONTNEED )`, 1024 ranges a call** | `EINVAL` / **0.16** | - / **0.09** | - / 0.08 |
+| `madvise( MADV_REMOVE )` per range, a shared memfd | 1.58 / 0.80 | 0.45 / 0.29 | 0.20 / 0.19 |
+| **`process_madvise( MADV_REMOVE )`, 1024 ranges a call** | `EINVAL` / **0.73** | - / 0.28 | - / 0.20 |
+
+On 7.0 the one call saves ~0.2 µs per range: less than half the cost of
+scattered single pages of a private view, a tenth of a shared memfd's, whose
+hole punching dominates.
+
+The direct NT calls cost what the kernel32 ones do (those are thin
+wrappers); what the batch saves is the working set call per range - a
+third of the cost of scattered pages on the section view, nothing
+measurable on a clone's view or on long runs. Every variant that resets
+first sends the pages to the standby list clean (no growth of the modified
+list), the clone's source keeps its contents, and the pages come back
+usable on the next touch. `DiscardVirtualMemory`'s cost per call grows with
+the size of the whole mapping the range lies in, not with the range: one
+page costs 3 µs in a 1 MB section view, 9 in 4 MB, 32 in 16 MB, 135 in
+64 MB and 2.6 ms in 256 MB (private memory: 3, 9, 26, 100, 460 µs).
+
+**When it runs.** Explicitly - `release_free_nodes()`, and `compact()`, which
+ends with it - and automatically after the bulk operations that can free
+many nodes at once: `erase( first, last )`, `erase_sorted()` and
+`erase_sorted_exact()`, and `merge()` (which leaves free whatever its
+reservation overestimated). Each notes how many nodes it freed (the change in
+the free list's count across it, so nothing is counted per node), and the
+release runs once the nodes freed that way since the last release reach
+
+```
+max( nodes per page, pool / 16, free nodes / 2 )
+```
+
+and no COW clone shares the pool. Single-key `erase()` never releases, and
+does not count: its code is what it was before release existed. The terms:
+
+- a sweep scans the pool (two bitsets and a pass over its pages: ~1 ns per
+  pool node) and walks the whole free list (~30-40 ns per free node, a cache
+  miss each), besides the calls. *pool / 16* keeps the scan at most 16 ns per
+  freed node - under the release's own cost per node, and a small share of
+  the bulk erasure that freed it (0.1 µs per freed 512-byte leaf, 0.8 µs per
+  4096-byte one);
+- *free nodes / 2*: at least as many freed since the last sweep as were
+  already free, so the walk is never mostly over nodes an earlier sweep found
+  it could not release (with 512-byte nodes most scattered free nodes share
+  their page with live ones), and costs at most twice what the new ones do;
+- a tree that shares its pool is either a clone's source, which may not
+  release, or a clone, whose `commit_to()` writes every node it released back
+  into its target: releasing there is work thrown away.
+
+Measured (`bp_tree.benchmark_release_sweep`, 4M `std::uint32_t` keys built in
+order, a middle range erased): the release costs about as much as the range
+erasure itself or more - the calls, not the bookkeeping, are the price of
+handing memory back:
+
+| nodes | erased keys | nodes released | range erasure, its automatic release included (Windows / Linux) | the release alone | per page |
+|---|---|---|---|---|---|
+| 4096 | 1M | 988 | 3838 / 3139 µs | 911 / 163 µs | 0.92 / 0.17 µs |
+| 4096 | 3M | 2953 | 12252 / 10089 µs | 2649 / 332 µs | 0.90 / 0.11 µs |
+| 512 | 1M | 8720 | 1842 / 1092 µs | 1145 / 426 µs | 1.05 / 0.39 µs |
+| 512 | 3M | 25104 | 5889 / 3078 µs | 3773 / 1120 µs | 1.20 / 0.36 µs |
+| 4096 | 62 500 (60 leaves: under pool / 16) | 0 | 51 / 52 µs | - | - |
+| 512 | 250 000 (2048 leaves: under pool / 16) | 0 | 249 / 226 µs | - | - |
+
+So the release is a quarter (4 KB nodes) to two thirds (512-byte nodes) of
+a large range erasure on Windows, and a twentieth to two fifths on Linux. The
+bookkeeping alone - the same release repeated with nothing new to release -
+is 30-50 µs on the 33 K-node pool of 512-byte nodes (~1 ns a pool node);
+after half the keys were erased at random it walks 5.4 K scattered free
+nodes, of which it can release none, in 170-225 µs (30-40 ns a free node).
+
+Measured (`bp_tree.benchmark_compact`, x86-64 Linux, clang, 4M `std::uint32_t`
+keys built one at a time in random order, then a share erased at random -
+erasure alone, before any compaction):
+
+| erased | 4096-byte nodes: free nodes released | cost per node | 512-byte nodes: released of free |
+|---|---|---|---|
+| 50 % | 1534 of 1534 | 0.83 µs | 8 of 12558 |
+| 70 % | 2520 of 2520 | 0.67 µs | 536 of 22120 |
+
+The cost is the system call (one per run of neighbouring pages) plus the
+page's zeroing on its next fault. With 512-byte nodes a page holds eight, and
+erasure leaves them free in ones and twos.
+
+### 5.2 `compact()`: XMerge
+
+Freeing a node out of a group of X siblings at fill *f* needs
+
+```
+X >= 1 / ( 1 - f )
+```
+
+The classic pairwise merge is X = 2, and needs both siblings at or below
+half full. At the 60–90 % a modified tree sits at that almost never happens,
+which is why the tree stays there however much of it has been erased.
+XMerge (Alhomssi & Leis, CIDR 2021, from LeanStore) merges X neighbouring
+siblings into X − 1 as soon as their summed free space is a whole node, and
+with fixed size entries that test is the entry counts alone: a group that
+does not qualify costs the reads of its headers.
+
+`compact()` applies it to the whole tree, on request:
+
+- **Groups of up to 8 siblings under one parent** (X ≤ 8, so a node is freed
+  wherever the fill is under 87.5 %), each merged group's entries spread
+  evenly over the X − 1 nodes that remain. The first node of a group keeps
+  its first entry, so the separator above it - which can be in any ancestor
+  - stays valid; every other separator involved is in the parent.
+- **Bottom-up**, the leaves' parents first, then each level above.
+- **A parent never drops below its minimum.** LeanStore's nodes have no
+  minimum fill; here the underflow half of the tree depends on one (§3.2), so
+  a parent may only lose the children it can spare, and the root all but one
+  (after which it hands over to that one). A parent at its minimum therefore
+  blocks the merges below it until its own level has been merged, which
+  refills it - so the levels are swept again until a sweep frees nothing.
+  Every step of a sweep leaves a valid tree; nothing is repaired afterwards.
+- **A group that does not merge is not written.** A COW clone's
+  `commit_to()` copies what was written, so a compaction that finds little
+  to do costs a commit little.
+- Then `release_free_nodes()` (§5.1).
+
+Differences from LeanStore: the trigger (there, a node is merged when the
+buffer manager evicts it; this container has no buffer manager, so the call
+is explicit), the group size, the minimum fill it keeps, and the repeated
+sweeps. An amortised scan on the erase path was not built: erasure is
+`noexcept` and on the hot path, a scan there reads up to eight siblings'
+headers per erasure to free a node rarely, and a single explicit pass sees
+the whole tree - where it is worth doing (after bulk erasure, before a
+snapshot) is the caller's knowledge, not the container's.
+
+Same benchmark as §5.1, the other copy of the tree compacted instead:
+
+| erased | node size | leaf fill | nodes in use | resident pages | `compact()` | `find()` |
+|---|---|---|---|---|---|---|
+| 30 % | 4096 | 63.1 → 92.9 % | 4364 → 2963 | 4386 → 2963 | 4.4 ms, 1.0 µs/node | −35 % |
+| 50 % | 4096 | 69.0 → 93.7 % | 2852 → 2099 | 4386 → 2099 | 3.1 ms, 1.1 µs/node | −14 % |
+| 70 % | 4096 | 63.3 → 94.6 % | 1866 → 1247 | 4386 → 1247 | 3.3 ms, 1.8 µs/node | −13 % |
+| 30 % | 512 | 62.3 → 94.5 % | 37251 → 24320 | 4752 → 4751 | 7.1 ms, 0.19 µs/node | −11 % |
+| 50 % | 512 | 65.1 → 94.3 % | 25451 → 17393 | 4752 → 4713 | 5.9 ms, 0.23 µs/node | −10 % |
+| 70 % | 512 | 62.5 → 94.8 % | 15889 → 10389 | 4752 → 4401 | 5.5 ms, 0.35 µs/node | −1 % |
+
+(cost per node in use before the call, its release included; `find()` is a
+random lookup of every remaining key, best of three blocks per arm with the
+order alternated.) With page sized nodes the resident pool follows the nodes
+in use down. With 512-byte nodes the tree shrinks by a third to a half and is
+faster to search, but hardly any page is left with all eight of its nodes
+free, so resident memory barely moves: getting it back there would take
+moving nodes, which §5.1 rules out.
+
+Trees built by insertion sit much higher already, because it relieves a
+full leaf into a sibling before splitting it (§4), and there `compact()` has
+little to do - unlike wherever a net share of the keys was erased:
+
+| built by | node size | leaf fill | nodes in use | resident pages |
+|---|---|---|---|---|
+| 4M random inserts | 4096 | 89.8 → 94.9 % | 4386 → 4144 | 4386 → 4144 |
+| churn: then 4M erase + insert pairs | 4096 | 89.8 → 94.9 % | 4383 → 4143 | 4383 → 4143 (after `release_free_nodes()`) |
+| sorted bulk, then 50 % erased | 4096 | 60.4 → 93.0 % | 3254 → 2114 | 3254 → 2114 (ditto) |
+| 50 % erased, then 25 % re-inserted | 4096 | 74.6 → 94.2 % | 3958 → 3129 | 3958 → 3129 (ditto) |
+| 4M random inserts | 512 | 87.2 → 95.4 % | 38009 → 34414 | 4752 → 4752 |
+| churn | 512 | 87.2 → 95.3 % | 37891 → 34423 | 6174 → 6174 |
+
+Over repeated runs on a shared host, `find()` on the two insert-built trees
+moved by −26 to +7 %, which is not distinguishable from the run-to-run noise;
+on the trees with keys erased it was faster in nearly every run, by up to
+40 %. So `compact()` pays after net shrinkage, and in memory only with page
+sized nodes.
+
+Merging the inner levels too is what lets the leaves merge at all: a parent
+may not drop below its minimum, so with the leaves alone compacted a
+randomly built 4096-byte-node tree erased by 30-70 % only goes from 63-69 %
+to 67-77 % leaf fill (93-95 % with every level), and a 512-byte-node one
+from 62-65 % to 73-78 %. Leaving the inner levels out would save 0.6-1.8 kB
+of an LTO-linked test binary's 6.7 MB of code, and no measurable compile time.
+
+## 6. Open
 
 - **Devector nodes.** `node_header` carries `start`, where a node's live
   entries begin, and every accessor honours it; nothing opens a gap yet. The
@@ -230,5 +517,5 @@ is individually cheaper. `to_move = room / 2` is the tuning knob.
 
 - D. Comer, *The Ubiquitous B-Tree*, ACM Computing Surveys 11(2), 1979.
 - D. Knuth, *TAOCP* Vol. 3, §6.2.4 (B\* definition; cited via Comer).
-- A. Alhomssi, V. Leis, *Contention and Space Management in B-Trees*, CIDR 2021.
+- A. Alhomssi, V. Leis, *Contention and Space Management in B-Trees*, CIDR 2021 (XMerge).
 - A. C. Yao, *On random 2-3 trees*, Acta Informatica 9, 1978 (the ln 2 result).

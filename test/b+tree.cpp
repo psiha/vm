@@ -2,6 +2,8 @@
 #include <psi/vm/containers/b+tree_print.hpp>
 #include <psi/vm/containers/heap_vector.hpp>
 
+#include "resident_pages.hpp"
+
 #include <boost/assert.hpp>
 #include <boost/container/flat_set.hpp>
 
@@ -3968,7 +3970,7 @@ namespace
     std::size_t constexpr pmd_span{ std::size_t{ page_size } * ( page_size / sizeof( std::uint64_t ) ) };
 
     // The mapping (VMA) holding the given address, from /proc/self/smaps.
-    struct vma_info { std::size_t size{}, shmem_pmd_mapped{}; bool huge_advised{}; bool memfd{}; };
+    struct vma_info { std::size_t size{}, shmem_pmd_mapped{}, anon_huge{}; bool huge_advised{}; bool memfd{}; };
     std::optional<vma_info> vma_of( void const * const address )
     {
         auto const a{ reinterpret_cast<std::uintptr_t>( address ) };
@@ -3994,21 +3996,33 @@ namespace
             std::size_t kb;
             if ( std::sscanf( line.c_str(), "ShmemPmdMapped: %zu kB", &kb ) == 1 )
                 vma.shmem_pmd_mapped = kb * 1024;
+            else if ( std::sscanf( line.c_str(), "AnonHugePages: %zu kB", &kb ) == 1 )
+                vma.anon_huge = kb * 1024;
             else if ( line.starts_with( "VmFlags:" ) )
                 vma.huge_advised = ( line + ' ' ).find( " hg " ) != std::string::npos;
         }
         return in ? std::optional{ vma } : std::nullopt;
     }
 
-    std::size_t thp_file_fallbacks()
+    std::size_t vmstat( std::string_view const counter )
     {
         std::ifstream vmstat{ "/proc/vmstat" };
         std::string   key;
         std::size_t   value;
         while ( vmstat >> key >> value )
-            if ( key == "thp_file_fallback" )
+            if ( key == counter )
                 return value;
         return 0;
+    }
+    std::size_t thp_file_fallbacks() { return vmstat( "thp_file_fallback" ); }
+
+    // Whether madvise( MADV_HUGEPAGE ) anonymous memory gets huge pages here.
+    bool anon_huge_pages_on_advice()
+    {
+        std::ifstream enabled{ "/sys/kernel/mm/transparent_hugepage/enabled" };
+        std::string   setting;
+        std::getline( enabled, setting );
+        return ( setting.find( "[always]" ) != std::string::npos ) || ( setting.find( "[madvise]" ) != std::string::npos );
     }
 
     // Whether madvise( MADV_HUGEPAGE ) memfd (shmem) memory gets huge pages here.
@@ -4102,6 +4116,437 @@ TEST( bp_tree, memfd_node_pool_is_backed_by_huge_pages_on_request )
     EXPECT_TRUE( std::ranges::equal( grown, std::views::iota( 0U, rows              ) ) );
 }
 #endif // server Linux
+
+//------------------------------------------------------------------------------
+// compact() and release_free_nodes()
+//------------------------------------------------------------------------------
+namespace
+{
+    template <typename Tree>
+    double leaf_fill( Tree const & bpt )
+    {
+        std::size_t leaves{ 0 }, keys{ 0 };
+        for ( auto const leaf_keys : bpt.leaves() ) { ++leaves; keys += leaf_keys.size(); }
+        return leaves ? double( keys ) / double( leaves * Tree::max_values_per_leaf() ) : 0;
+    }
+
+    // Fill a tree one key at a time in random order, erase a share of it -
+    // at random, or every second key, or one contiguous range - and compact
+    // it: every key must remain, in order, reachable by lookups, in a tree
+    // that is still sound and at least as full as before, down to the nodes
+    // the compaction reports to have freed.  Then the compacted tree has to
+    // take the erased keys back (into the full leaves, and the released
+    // nodes) and lose them again.  A multiset holds every value three times.
+    enum struct erasure { random, alternate, range };
+    template <typename Tree>
+    void compact_roundtrip( erasure const pattern, double const erased_share )
+    {
+        using key_t = typename Tree::key_type;
+        bool constexpr multiset{ !requires( Tree & t, key_t k ) { t.erase( k ); } };
+        auto const runs  { multiset ? 3 : 1 };
+        auto const values{ static_cast<int>( Tree::max_values_per_leaf() ) * 160 };
+        std::vector<key_t> keys;
+        for ( auto v{ 0 }; v < values; ++v )
+            for ( auto r{ 0 }; r < runs; ++r )
+                keys.push_back( key_t{ 2 * v } );
+        std::mt19937 rng{ 20260928 };
+        std::ranges::shuffle( keys, rng );
+
+        Tree bpt;
+        bpt.map_memory();
+        for ( auto const & k : keys ) bpt.insert( k );
+
+        std::vector<key_t> erased, kept;
+        {
+            auto sorted{ keys };
+            std::ranges::sort( sorted );
+            auto const erase_count{ static_cast<std::size_t>( double( sorted.size() ) * erased_share ) };
+            std::vector<bool> erase( sorted.size() );
+            switch ( pattern )
+            {
+                case erasure::random:
+                {
+                    std::vector<std::size_t> at( sorted.size() );
+                    std::iota( at.begin(), at.end(), std::size_t{ 0 } );
+                    std::ranges::shuffle( at, rng );
+                    for ( std::size_t i{ 0 }; i < erase_count; ++i ) erase[ at[ i ] ] = true;
+                    break;
+                }
+                case erasure::alternate: for ( std::size_t i{ 0 }; i < sorted.size(); ++i ) erase[ i ] = ( i % 2 == 0 ); break;
+                case erasure::range    : for ( std::size_t i{ 0 }; i < erase_count; ++i ) erase[ ( sorted.size() - erase_count ) / 2 + i ] = true; break;
+            }
+            for ( std::size_t i{ 0 }; i < sorted.size(); ++i ) ( erase[ i ] ? erased : kept ).push_back( sorted[ i ] );
+        }
+        auto shuffled_erased{ erased };
+        std::ranges::shuffle( shuffled_erased, rng );
+        for ( auto const & k : shuffled_erased ) {
+            if constexpr ( multiset ) bpt.erase( bpt.find( k ) );
+            else                      ASSERT_TRUE( bpt.erase( k ) );
+        }
+        ASSERT_TRUE( bpt.structure_is_sound() ) << "before compact()";
+        ASSERT_TRUE( std::ranges::equal( bpt, kept ) );
+
+        auto const fill_before{ leaf_fill( bpt ) };
+        auto const used_before{ bpt.nodes_used() };
+        auto const freed      { bpt.compact() };
+        auto const fill_after { leaf_fill( bpt ) };
+        ASSERT_TRUE( bpt.structure_is_sound() ) << "after compact()";
+        ASSERT_TRUE( std::ranges::equal( bpt, kept ) );
+        EXPECT_EQ( bpt.size(), kept.size() );
+        EXPECT_TRUE( lookups_are_sound( bpt, !multiset ) );
+        EXPECT_EQ( bpt.nodes_used(), used_before - freed );
+        EXPECT_GE( fill_after, fill_before );
+        // what the group size can reach: at a fill of 1 - 1 / compact_group_size
+        // every group is a node short of qualifying
+        EXPECT_GT( fill_after, 0.80 ) << "from " << fill_before;
+        if ( fill_before < 0.75 )
+            EXPECT_GT( freed, 0U );
+        std::println( "compact(): {:>6} keys, leaf fill {:5.1f}% -> {:5.1f}%, {} of {} nodes freed, {} released", bpt.size(), fill_before * 100, fill_after * 100, freed, used_before, bpt.nodes_released() );
+        // nothing left to merge
+        EXPECT_EQ( bpt.compact(), 0U );
+
+        // the compacted tree takes the keys back, and loses them again
+        auto const reserved{ bpt.nodes_reserved() };
+        for ( auto const & k : shuffled_erased ) bpt.insert( k );
+        ASSERT_TRUE( bpt.structure_is_sound() ) << "reinserted";
+        auto all{ keys };
+        std::ranges::sort( all );
+        ASSERT_TRUE( std::ranges::equal( bpt, all ) );
+        if ( bpt.nodes_released() )
+            EXPECT_EQ( bpt.nodes_reserved(), reserved ) << "the released nodes are taken before the pool grows";
+        for ( auto const & k : shuffled_erased ) {
+            if constexpr ( multiset ) bpt.erase( bpt.find( k ) );
+            else                      ASSERT_TRUE( bpt.erase( k ) );
+        }
+        ASSERT_TRUE( bpt.structure_is_sound() ) << "erased again";
+        ASSERT_TRUE( std::ranges::equal( bpt, kept ) );
+    }
+
+    template <typename Tree>
+    void compact_roundtrips()
+    {
+        for ( auto const share : { 0.3, 0.5, 0.7 } ) {
+            compact_roundtrip<Tree>( erasure::random, share );
+            ASSERT_FALSE( testing::Test::HasFatalFailure() ) << "random, " << share;
+        }
+        compact_roundtrip<Tree>( erasure::alternate, 0.5 );
+        ASSERT_FALSE( testing::Test::HasFatalFailure() ) << "alternate";
+        compact_roundtrip<Tree>( erasure::range, 0.6 );
+        ASSERT_FALSE( testing::Test::HasFatalFailure() ) << "range";
+    }
+} // anonymous namespace
+
+TEST( bp_tree, compact_set_int         ) { compact_roundtrips<inspectable<bptree_set     <int>>>(); }
+TEST( bp_tree, compact_multiset_int    ) { compact_roundtrips<inspectable<bptree_multiset<int>>>(); }
+TEST( bp_tree, compact_set_opt_in_gap  ) { compact_roundtrips<inspectable<bptree_set     <int          , gap_less>>>(); }
+// small fanouts, so a deep tree, whose parents' minimum holds merges back
+TEST( bp_tree, compact_set_padded      ) { compact_roundtrips<inspectable<bptree_set     <padded_key<64>>>>(); }
+TEST( bp_tree, compact_multiset_padded ) { compact_roundtrips<inspectable<bptree_multiset<padded_key<64>>>>(); }
+
+// A tree with nothing to merge is left as it is: not a node written, which is
+// what a COW clone would otherwise have to copy back.
+TEST( bp_tree, compact_leaves_a_full_tree_unwritten )
+{
+    using tree_t = inspectable<bptree_set<int>>;
+    tree_t empty;
+    empty.map_memory();
+    EXPECT_EQ( empty.compact(), 0U );
+    EXPECT_TRUE( empty.insert( 42 ).second );
+    EXPECT_EQ( empty.compact(), 0U ) << "a lone root leaf";
+
+    tree_t source;
+    source.map_cow_memory();
+    auto const size{ static_cast<int>( tree_t::max_values_per_leaf() ) * 300 };
+    ASSERT_EQ( source.insert( std::views::iota( 0, size ) ), static_cast<std::size_t>( size ) );
+    // compared with what releasing the free nodes alone writes (on a Linux
+    // clone, whose view is private, it relinks the free list around them)
+    auto const released_only{ [ & ] { tree_t other{ source }; other.release_free_nodes(); return other.nodes_dirty(); }() };
+    tree_t clone{ source };
+    EXPECT_EQ( clone.compact(), 0U );
+    EXPECT_EQ( clone.nodes_dirty(), released_only );
+    EXPECT_TRUE( std::ranges::equal( clone, std::views::iota( 0, size ) ) );
+}
+
+// compact() on a COW clone, carried back by commit_to(): the source ends up
+// with what the clone did, released nodes included, and stays sound.
+TEST( bp_tree, compact_a_cow_clone_and_commit )
+{
+    using tree_t = inspectable<bptree_set<int>>;
+    auto const size{ static_cast<int>( tree_t::max_values_per_leaf() ) * 300 };
+    auto const even{ []( int const k ) { return k % 2 == 0; } };
+    auto const odd { []( int const k ) { return k % 2 != 0; } };
+    tree_t source;
+    source.map_cow_memory();
+    std::vector<int> keys( static_cast<std::size_t>( size ) );
+    std::iota( keys.begin(), keys.end(), 0 );
+    std::ranges::shuffle( keys, std::mt19937{ 20260928 } );
+    for ( auto const k : keys ) source.insert( k );
+    {
+        tree_t clone{ source };
+        for ( auto const k : std::views::iota( 0, size ) | std::views::filter( even ) )
+            ASSERT_TRUE( clone.erase( k ) );
+        EXPECT_GT( clone.compact(), 0U );
+        ASSERT_TRUE( clone.structure_is_sound() );
+        // the source is untouched by whatever the clone released
+        ASSERT_TRUE( source.structure_is_sound() ) << "source, with a live clone";
+        EXPECT_TRUE( std::ranges::equal( source, std::views::iota( 0, size ) ) );
+        clone.commit_to( source );
+    }
+    ASSERT_TRUE( source.structure_is_sound() ) << "committed";
+    EXPECT_TRUE( std::ranges::equal( source, std::views::iota( 0, size ) | std::views::filter( odd ) ) );
+    EXPECT_TRUE( lookups_are_sound( source ) );
+    // and grows back through whatever it was left
+    for ( auto const k : std::views::iota( 0, size ) | std::views::filter( even ) )
+        ASSERT_TRUE( source.insert( k ).second );
+    ASSERT_TRUE( source.structure_is_sound() ) << "refilled";
+    EXPECT_TRUE( std::ranges::equal( source, std::views::iota( 0, size ) ) );
+}
+
+namespace
+{
+    // A sequentially built tree whose middle half is then erased (key by key,
+    // which never releases anything by itself) leaves runs of neighbouring
+    // free nodes - whole pages of them even where a node is a fraction of a
+    // page.  Releasing them has to take those pages out of residency, keep the
+    // tree intact, and hand the nodes back as it grows.
+    template <bool cow>
+    void release_roundtrip()
+    {
+        using tree_t = inspectable<bptree_set<int>>;
+        auto const size{ static_cast<int>( tree_t::max_values_per_leaf() ) * 512 };
+        tree_t bpt;
+        if constexpr ( cow ) bpt.map_cow_memory();
+        else                 bpt.map_memory();
+        ASSERT_EQ( bpt.insert( std::views::iota( 0, size ) ), static_cast<std::size_t>( size ) );
+        auto const reserved{ bpt.nodes_reserved() };
+        for ( auto k{ size / 4 }; k < 3 * size / 4; ++k )
+            ASSERT_TRUE( bpt.erase( k ) );
+        EXPECT_EQ( bpt.nodes_released(), 0U ) << "single key erasure releases nothing";
+        auto const free_nodes{ reserved - bpt.nodes_used() };
+        ASSERT_GT( free_nodes, 0U );
+
+        auto const resident_before{ resident_pages( bpt.node_pool_bytes() ) };
+        auto const released{ bpt.release_free_nodes() };
+        auto const resident_after { resident_pages( bpt.node_pool_bytes() ) };
+        EXPECT_GT( released, free_nodes / 2 ) << "whole pages of neighbouring free nodes";
+        EXPECT_EQ( bpt.nodes_released(), released );
+        EXPECT_EQ( bpt.nodes_used(), reserved - free_nodes );
+        if ( resident_before && resident_after ) {
+            auto const pages{ released * tree_t::node_byte_size() / page_size };
+            EXPECT_LE( *resident_after + pages, *resident_before ) << "released " << released << " nodes";
+            std::println( "release_free_nodes(): {} nodes, resident pages {} -> {}", released, *resident_before, *resident_after );
+        }
+        ASSERT_TRUE( bpt.structure_is_sound() );
+        auto kept{ std::views::iota( 0, size ) | std::views::filter( [ = ]( int const k ) { return k < size / 4 || k >= 3 * size / 4; } ) };
+        EXPECT_TRUE( std::ranges::equal( bpt, kept ) );
+        EXPECT_EQ( bpt.release_free_nodes(), 0U ) << "nothing more to release";
+
+        // growing again takes the released nodes before the pool grows
+        for ( auto k{ size / 4 }; k < 3 * size / 4; ++k )
+            ASSERT_TRUE( bpt.insert( k ).second );
+        ASSERT_TRUE( bpt.structure_is_sound() ) << "regrown";
+        EXPECT_TRUE( std::ranges::equal( bpt, std::views::iota( 0, size ) ) );
+        EXPECT_EQ( bpt.nodes_reserved(), reserved );
+    }
+} // anonymous namespace
+
+TEST( bp_tree, release_free_nodes_memory     ) { release_roundtrip<false>(); }
+TEST( bp_tree, release_free_nodes_cow_memory ) { release_roundtrip<true >(); }
+
+#if defined( __linux__ ) && !defined( __ANDROID__ )
+namespace
+{
+    // A huge page backed pool releases whole huge pages only: releasing part
+    // of one would split its mapping and free nothing until the kernel splits
+    // the page itself (see mem_mapping::release_granularity()).  So what the
+    // pool loses in huge pages is exactly what it released - none is split.
+    // (Only under PSI_VM_HUGE_PAGE_MAX_COVERAGE does the pool know it is huge
+    // page backed: elsewhere this prints what a page granular release costs.)
+    template <bool cow>
+    void huge_page_release_roundtrip()
+    {
+        if ( cow ? !shmem_huge_pages_on_advice() : !anon_huge_pages_on_advice() )
+            GTEST_SKIP() << "transparent huge pages are not given on advice here";
+        using tree_t = inspectable<bptree_set<int>>;
+        auto const leaves{ static_cast<int>( 32 * pmd_span / tree_t::node_byte_size() ) }; // a pool of many PMD spans
+        auto const size  { static_cast<int>( tree_t::max_values_per_leaf() ) * leaves };
+        tree_t bpt;
+        if constexpr ( cow ) ASSERT_TRUE( static_cast<bool>( bpt.map_cow_memory( static_cast<std::size_t>( size ), huge_pages::yes ) ) );
+        else                 ASSERT_TRUE( static_cast<bool>( bpt.map_memory    ( static_cast<std::size_t>( size ), huge_pages::yes ) ) );
+        ASSERT_EQ( bpt.insert( std::views::iota( 0, size ) ), static_cast<std::size_t>( size ) );
+        auto const huge_bytes{ [ & ] {
+            auto const vma{ vma_of( bpt.node_pool_bytes().data() ) };
+            return vma ? ( cow ? vma->shmem_pmd_mapped : vma->anon_huge ) : 0;
+        } };
+        for ( auto k{ size / 4 }; k < 3 * size / 4; ++k ) // (key by key: nothing released yet)
+            ASSERT_TRUE( bpt.erase( k ) );
+        auto const huge_before{ huge_bytes() };
+        if ( huge_before < 4 * pmd_span )
+            GTEST_SKIP() << "the kernel gave the pool no huge pages (fragmented memory?): " << huge_before / 1024 << " KiB";
+
+        auto const splits_before{ vmstat( "thp_split_pmd" ) };
+        auto const start        { std::chrono::steady_clock::now() };
+        auto const released     { bpt.release_free_nodes() };
+        auto const elapsed      { std::chrono::steady_clock::now() - start };
+        auto const splits       { vmstat( "thp_split_pmd" ) - splits_before };
+        auto const huge_after   { huge_bytes() };
+        auto const released_bytes{ std::size_t{ released } * tree_t::node_byte_size() };
+        std::println
+        (
+            "{}: released {} KiB in {} us, huge pages {} -> {} KiB, PMD splits {}",
+            cow ? "memfd" : "anonymous", released_bytes / 1024,
+            std::chrono::duration_cast<std::chrono::microseconds>( elapsed ).count(),
+            huge_before / 1024, huge_after / 1024, splits
+        );
+        EXPECT_GT( released, 0U );
+#   if PSI_VM_HUGE_PAGE_MAX_COVERAGE
+        EXPECT_EQ( released_bytes % pmd_span, 0U ) << "released part of a huge page";
+        EXPECT_EQ( huge_before - huge_after, released_bytes ) << "split a huge page";
+#   endif
+        ASSERT_TRUE( bpt.structure_is_sound() );
+        auto kept{ std::views::iota( 0, size ) | std::views::filter( [ = ]( int const k ) { return k < size / 4 || k >= 3 * size / 4; } ) };
+        EXPECT_TRUE( std::ranges::equal( bpt, kept ) );
+
+        for ( auto k{ size / 4 }; k < 3 * size / 4; ++k )
+            ASSERT_TRUE( bpt.insert( k ).second );
+        ASSERT_TRUE( bpt.structure_is_sound() ) << "regrown";
+        EXPECT_TRUE( std::ranges::equal( bpt, std::views::iota( 0, size ) ) );
+    }
+} // anonymous namespace
+
+TEST( bp_tree, release_free_nodes_huge_page_memory     ) { huge_page_release_roundtrip<false>(); }
+TEST( bp_tree, release_free_nodes_huge_page_cow_memory ) { huge_page_release_roundtrip<true >(); }
+#endif // server Linux
+
+// While a COW clone lives, shared storage must not be released from under
+// it - the clone reads those pages - and once the clone is gone it can be,
+// wherever the clone went (moved, swapped) in between.  The clone itself may
+// drop what it holds privately wherever that frees nothing the source reads
+// (Linux, Windows).
+TEST( bp_tree, release_free_nodes_spares_a_live_clone )
+{
+    using tree_t = inspectable<bptree_set<int>>;
+    auto const size{ static_cast<int>( tree_t::max_values_per_leaf() ) * 512 };
+    tree_t source;
+    source.map_cow_memory();
+    ASSERT_EQ( source.insert( std::views::iota( 0, size ) ), static_cast<std::size_t>( size ) );
+    for ( auto k{ size / 4 }; k < 3 * size / 4; ++k ) // (key by key: nothing released yet)
+        ASSERT_TRUE( source.erase( k ) );
+    auto kept{ std::views::iota( 0, size ) | std::views::filter( [ = ]( int const k ) { return k < size / 4 || k >= 3 * size / 4; } ) };
+    {
+        tree_t first_clone{ source };
+        tree_t clone{ std::move( first_clone ) };
+        tree_t other;
+        other.swap( clone );
+        clone.swap( other );
+#   if defined( __APPLE__ )
+        // releasing what a clone shares is inert here (the kernel frees
+        // nothing), so the source does not even track its clones: it goes
+        // ahead, and the clone must be none the worse for it
+        EXPECT_GT( source.release_free_nodes(), 0U );
+        ASSERT_TRUE( clone.structure_is_sound() ) << "clone, after the source released";
+        EXPECT_TRUE( std::ranges::equal( clone, kept ) );
+#   else
+        auto const resident_before{ resident_pages( source.node_pool_bytes() ) };
+        EXPECT_EQ( source.release_free_nodes(), 0U ) << "shared with a live clone";
+        EXPECT_EQ( source.nodes_released(), 0U );
+        auto const resident_after{ resident_pages( source.node_pool_bytes() ) };
+        if ( resident_before && resident_after )
+            EXPECT_EQ( *resident_after, *resident_before );
+#   endif
+#   if defined( __linux__ ) || defined( _WIN32 )
+        EXPECT_GT( clone.release_free_nodes(), 0U ) << "the clone's own view is private";
+#   else
+        EXPECT_EQ( clone.release_free_nodes(), 0U ) << "shared with its live source";
+#   endif
+        ASSERT_TRUE( clone.structure_is_sound() );
+        EXPECT_TRUE( std::ranges::equal( clone, kept ) );
+        for ( auto k{ size / 4 }; k < size / 2; ++k )
+            ASSERT_TRUE( clone.insert( k ).second );
+        ASSERT_TRUE( source.structure_is_sound() ) << "source, beside the clone";
+        EXPECT_TRUE( std::ranges::equal( source, kept ) );
+    }
+#if !defined( __APPLE__ ) // (there it released already)
+    EXPECT_GT( source.release_free_nodes(), 0U ) << "the clone is gone";
+#endif
+    ASSERT_TRUE( source.structure_is_sound() );
+    EXPECT_TRUE( std::ranges::equal( source, kept ) );
+}
+
+// The automatic release: a bulk erasure which frees enough nodes releases
+// their pages by itself - erase( first, last ) and erase_sorted() alike - one
+// which frees few does not, nor does erasing the same keys one at a time, nor
+// a bulk erasure in a COW clone (whose commit would write the nodes back).
+namespace
+{
+    enum struct erased_by { range, sorted, one_by_one };
+    void erase_keys( inspectable<bptree_set<int>> & bpt, int const first, int const last, erased_by const how )
+    {
+        switch ( how )
+        {
+            case erased_by::range     : bpt.erase( std::ranges::find( bpt, first ), std::ranges::find( bpt, last ) ); break;
+            case erased_by::sorted    : { std::vector<int> keys( static_cast<std::size_t>( last - first ) ); std::iota( keys.begin(), keys.end(), first ); EXPECT_EQ( bpt.erase_sorted( keys ), keys.size() ); break; }
+            case erased_by::one_by_one: for ( auto k{ first }; k < last; ++k ) EXPECT_TRUE( bpt.erase( k ) ); break;
+        }
+    }
+} // anonymous namespace
+
+TEST( bp_tree, bulk_erase_releases_by_itself )
+{
+    using tree_t = inspectable<bptree_set<int>>;
+    // erasing three quarters of the leaves is well past the threshold, and
+    // four of them well below it
+    auto const leaves{ 1024U };
+    auto const size  { static_cast<int>( tree_t::max_values_per_leaf() * leaves ) };
+    auto const build { [ & ]( bool const cow ) { tree_t bpt; if ( cow ) bpt.map_cow_memory(); else bpt.map_memory(); EXPECT_EQ( bpt.insert( std::views::iota( 0, size ) ), static_cast<std::size_t>( size ) ); return bpt; } };
+    auto const kept_after{ [ = ]( int const first, int const last ) { return std::views::iota( 0, size ) | std::views::filter( [ = ]( int const k ) { return k < first || k >= last; } ); } };
+    for ( auto const how : { erased_by::range, erased_by::sorted, erased_by::one_by_one } )
+    {
+        auto const name{ how == erased_by::range ? "erase( first, last )" : how == erased_by::sorted ? "erase_sorted()" : "erase( key ) one by one" };
+        {
+            auto bpt{ build( false ) };
+            auto const resident_before{ resident_pages( bpt.node_pool_bytes() ) };
+            erase_keys( bpt, size / 8, 7 * size / 8, how );
+            auto const resident_after{ resident_pages( bpt.node_pool_bytes() ) };
+            ASSERT_TRUE( bpt.structure_is_sound() ) << name;
+            EXPECT_TRUE( std::ranges::equal( bpt, kept_after( size / 8, 7 * size / 8 ) ) ) << name;
+            if ( how == erased_by::one_by_one ) {
+                EXPECT_EQ( bpt.nodes_released(), 0U ) << name;
+            } else {
+                EXPECT_GT( bpt.nodes_released(), 0U ) << name;
+                if ( resident_before && resident_after ) {
+                    auto const pages{ bpt.nodes_released() * tree_t::node_byte_size() / page_size };
+                    EXPECT_LE( *resident_after + pages, *resident_before ) << name;
+                    std::println( "{}: {} nodes released by itself, resident pages {} -> {}", name, bpt.nodes_released(), *resident_before, *resident_after );
+                }
+            }
+            // and takes them back as it grows
+            for ( auto k{ size / 8 }; k < 7 * size / 8; ++k )
+                ASSERT_TRUE( bpt.insert( k ).second ) << name;
+            ASSERT_TRUE( bpt.structure_is_sound() ) << name << ", regrown";
+            EXPECT_TRUE( std::ranges::equal( bpt, std::views::iota( 0, size ) ) ) << name;
+        }
+        if ( how == erased_by::one_by_one )
+            continue;
+        {   // a few leaves' worth: below the threshold
+            auto bpt{ build( false ) };
+            auto const few{ static_cast<int>( tree_t::max_values_per_leaf() ) * 4 };
+            erase_keys( bpt, size / 2, size / 2 + few, how );
+            EXPECT_EQ( bpt.nodes_released(), 0U ) << name << ", a few leaves";
+        }
+        {   // in a COW clone
+            auto source{ build( true ) };
+            {
+                tree_t clone{ source };
+                erase_keys( clone, size / 8, 7 * size / 8, how );
+                EXPECT_EQ( clone.nodes_released(), 0U ) << name << ", in a clone";
+                clone.commit_to( source );
+            }
+            ASSERT_TRUE( source.structure_is_sound() ) << name << ", committed";
+            EXPECT_TRUE( std::ranges::equal( source, kept_after( size / 8, 7 * size / 8 ) ) ) << name;
+        }
+    }
+}
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm

@@ -29,6 +29,7 @@
 #include <climits>
 #include <concepts>
 #include <cstddef>
+#include <atomic>
 #include <cstdint>
 #include <iterator>
 #include <limits>
@@ -360,10 +361,59 @@ public:
     bool has_attached_storage() const noexcept { return nodes_.has_attached_storage(); }
 
     // Footprint, in nodes: the ones the tree is actually using (all levels),
-    // and the ones the pool holds - which is what is resident, since the pool
-    // grows geometrically for bulk operations and is never handed back.
+    // and the ones the pool holds - which is what is resident, less the
+    // nodes_released(): the pool grows geometrically for bulk operations and
+    // never shrinks, and a freed node stays resident until
+    // release_free_nodes() hands its page back.
     [[ gnu::pure, nodiscard ]] std::uint32_t nodes_used    () const noexcept;
     [[ gnu::pure, nodiscard ]] std::uint32_t nodes_reserved() const noexcept;
+    [[ gnu::pure, nodiscard ]] std::uint32_t nodes_released() const noexcept { return static_cast<std::uint32_t>( released_.size() ); }
+
+    // Return the memory of free nodes to the OS, without renumbering a single
+    // node: a node is a fixed slot of a contiguous pool, so the pages of free
+    // nodes can be dropped from under them in place (see
+    // doc/b+tree_occupancy_and_variants.md).  Takes whole pages only - every
+    // node on the page free - which with page sized nodes is every free node,
+    // and with smaller ones only runs of free neighbours; from a pool backed by
+    // huge pages, whole huge pages only (see
+    // mem_mapping::release_granularity()).  A released node
+    // leaves the free list (a dropped page would lose its links) for a set
+    // beside the pool, which new_node() and reserve_additional() draw on once
+    // the free list runs dry, reinitialising the node; the next write faults
+    // its page back in.  Nothing is released from file backed storage, nor
+    // from shared storage while a COW clone of this tree (or the tree this is
+    // a clone of) is alive, where that would pull pages from under it - see
+    // mem_mapping::release_pages().
+    //
+    // When it runs (see doc/b+tree_occupancy_and_variants.md for the numbers):
+    //  * explicitly: this call, and compact(), which ends with it;
+    //  * automatically after the bulk operations that free many nodes at
+    //    once - erase( first, last ), erase_sorted*(), merge() - once the nodes
+    //    they have freed since the last release (counted by the free list's
+    //    count across each, never per node) reach
+    //        max( nodes per page, pool / auto_release_pool_share, free nodes / 2 )
+    //    and no COW clone shares the pool;
+    //  * never from single-key erase(), which does not even count: its code
+    //    is what it was before release existed;
+    //  * not after bulk insertion: the free nodes it leaves are the pool's
+    //    growth headroom, which the next insertion takes.
+    // A release costs a system call per run of neighbouring free pages - on
+    // Windows a reset per run plus one working set call for all of them, on
+    // Linux 6.13 on one process_madvise() per 1024 runs (see
+    // mem_mapping::release_pages()): ~0.2-2 us a run, several times what
+    // erasing a node costs, which is why it is batched and why only a batch
+    // can see which pages are entirely free.
+    // Its bookkeeping is a scan of the pool (~1 ns a node), which the pool
+    // share bounds per freed node, and a walk of the whole free list (a cache
+    // miss per free node), which the half bounds: the walk is never mostly
+    // over nodes an earlier release found it could not release (small nodes
+    // whose page neighbours are live).  A tree which shares its pool with a
+    // live COW clone is either the source, which may not release, or the
+    // clone, whose commit_to() writes every node it released back into the
+    // target: an automatic release there would be work thrown away.
+    // Returns how many nodes it released.
+    std::uint32_t release_free_nodes();
+    static constexpr std::uint32_t auto_release_pool_share{ 16 };
     // ...and the ones a commit_to() would copy, which is what a COW clone of
     // this tree costs to commit.  A tree nobody has mutated owes nothing.
     [[ gnu::pure, nodiscard ]] std::uint32_t nodes_dirty   () const noexcept;
@@ -956,6 +1006,16 @@ private:
 
     void assign_nodes_to_free_pool( node_slot::value_type starting_node ) noexcept;
 
+    // Put up to 'count' released nodes back on the free list (see
+    // release_free_nodes()).
+    void reclaim_released( node_slot::value_type count ) noexcept;
+    // A released node as a freshly freed one would be: its released page
+    // reads back unspecified bytes (see mem_mapping::release_pages()), which
+    // are not a null link.
+    node_header & reinitialise_released( node_slot ) noexcept;
+    // Whether another tree may be reading this one's pages (see cow_group).
+    [[ gnu::pure ]] bool shares_pages() const noexcept { return cow_group_.shared(); }
+
     void init_fresh_pool( std::uint32_t initial_capacity_as_number_of_nodes ) noexcept;
 
     void update_leaf_list_ends( node_header & removed_leaf ) noexcept;
@@ -981,6 +1041,64 @@ protected:
     mutable dirty_node_set dirty_; // which nodes this tree has written - see dirty_node_set
     unique_nonowned_ptr<header> p_hdr_; // cached pointer to header in mapped storage (compilers/clang still unable to fully optimize away the vm::header_data code)
     node_pool nodes_;
+    // Free nodes whose pages release_free_nodes() handed back, ascending (so
+    // the one new_node() takes, the back, is the highest).  Not persisted:
+    // file backed storage never releases.
+    heap_vector<node_slot> released_;
+
+    // The automatic release (see release_free_nodes()): a bulk operation
+    // notes what it has freed, by the free list count it started from, and
+    // once enough has been freed since the last release the free nodes are
+    // released.  Nothing on the single-key paths calls it.
+    void note_bulk_free( node_slot::value_type free_nodes_before ) noexcept;
+    node_slot::value_type freed_in_bulk_{ 0 }; // since the last release (not persisted)
+
+    // How many trees map one pool's pages: a tree and every COW clone made of
+    // it (and of those) share one count, allocated by the first clone.  It
+    // cannot live in the pool's own header, which a clone maps copy-on-write
+    // (its increment would land in its private copy) and which the source may
+    // unmap before its clones.
+    // (macOS: releasing memory a clone shares is inert rather than harmful -
+    // see mem_mapping::can_release_pages() - so there is nothing to count, and
+    // the group is an empty stand-in with the same interface.)
+#if defined( __APPLE__ )
+    class cow_group
+    {
+    public:
+        void join ( cow_group const & ) noexcept {}
+        void leave(                   ) noexcept {}
+        [[ gnu::const ]] static constexpr bool shared() noexcept { return false; }
+        void swap ( cow_group &       ) noexcept {}
+    }; // class cow_group
+#else
+    class cow_group
+    {
+    public:
+        constexpr cow_group() noexcept = default;
+        cow_group( cow_group && other ) noexcept : members_{ other.members_.exchange( nullptr, std::memory_order_relaxed ) } {}
+        cow_group & operator=( cow_group && other ) noexcept { swap( other ); other.leave(); return *this; }
+        ~cow_group() noexcept { leave(); }
+
+        // Join the group of 'source' (a const tree being cloned, possibly by
+        // several threads at once), creating it on the first clone.
+        void join( cow_group const & source );
+        void leave() noexcept;
+        [[ gnu::pure ]] bool shared() const noexcept
+        {
+            auto const members{ members_.load( std::memory_order_acquire ) };
+            return members && ( members->load( std::memory_order_acquire ) > 1 );
+        }
+        void swap( cow_group & other ) noexcept
+        {
+            auto const mine{ members_.load( std::memory_order_relaxed ) };
+            members_.store( other.members_.exchange( mine, std::memory_order_relaxed ), std::memory_order_relaxed );
+        }
+
+    private:
+        mutable std::atomic<std::atomic<std::uint32_t> *> members_{ nullptr };
+    }; // class cow_group
+#endif
+    PSI_NO_UNIQUE_ADDRESS cow_group cow_group_;
 #ifndef NDEBUG // debugging helpers (undoing type erasure done by contiguous_container_storage_base)
     std::span<node_placeholder const> nodes__{};
 #endif
@@ -998,6 +1116,9 @@ bptree_base::map_file( auto const file, flags::named_object_construction_policy 
     if ( success )
     {
         update_cached_pointers();
+        released_.clear();
+        freed_in_bulk_ = 0;
+        cow_group_.leave();
         if ( nodes_.empty() )
             hdr() = {};
     }
