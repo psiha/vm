@@ -212,6 +212,23 @@ namespace
     }
 
 #if defined( __linux__ )
+    //! Whether [ address, address + size ) lies within a single mapping,
+    //! which is what a single mremap() can move. Asked with an in-place grow
+    //! by a page: the resize path checks the range, and fails (EFAULT) for
+    //! one that spans several mappings. A same-size mremap() does not ask:
+    //! some kernels (6.6) return success for it without looking at the range.
+    //! Any other failure (no room to grow, ENOMEM) still means one mapping;
+    //! a grow that succeeds took a free page, which is handed straight back.
+    [[ nodiscard ]] bool tail_is_one_mapping( std::byte * const address, std::size_t const size ) noexcept
+    {
+        if ( ::mremap( address, size, size + page_size, 0 ) != MAP_FAILED )
+        {
+            BOOST_VERIFY( ::munmap( address + size, page_size ) == 0 );
+            return true;
+        }
+        return errno != EFAULT;
+    }
+
     //! Moves a private view [ object part | anonymous tail ] of mapped_end
     //! bytes to a range of target_end bytes (at the same huge page phase, see
     //! mremap_to_pmd_phase()), the part past mapped_end being fresh anonymous
@@ -248,9 +265,7 @@ namespace
         auto * const tail     { base        + object_extent };
         auto * const new_tail { destination + object_extent };
         auto   const tail_size{ mapped_end - object_extent };
-        // A same-size mremap() in place is a no-op for a range within one
-        // mapping, and fails (EFAULT) for one that spans several.
-        auto const tail_moves{ !tail_size || ( ::mremap( tail, tail_size, tail_size, 0 ) != MAP_FAILED ) };
+        auto const tail_moves{ !tail_size || tail_is_one_mapping( tail, tail_size ) };
         if ( !tail_moves ) // (MAP_FIXED over the reservation, which is ours)
         {
             BOOST_VERIFY( ::mmap( new_tail, tail_size, rw, anonymous | MAP_FIXED, -1, 0 ) == new_tail );
