@@ -211,19 +211,47 @@ namespace
         return false;
     }
 
+    //! Grows a private view of mapped_end bytes, object_extent of them the
+    //! object part, to target_end bytes where it is. On Linux a tail the view
+    //! already has is grown by mremap(), never by mapping more next to it: a
+    //! tail that has moved keeps the page offset of where it was created, so
+    //! an anonymous mapping made next to it would not merge with it - and a
+    //! tail of several mappings could no longer move in one call (relocate()).
+    [[ nodiscard ]] bool grow_in_place
+    (
+        std::byte * const base,
+        std::size_t const object_extent,
+        std::size_t const mapped_end,
+        std::size_t const target_end
+    ) noexcept
+    {
+#   ifdef __linux__
+        if ( object_extent != mapped_end )
+            return ::mremap( base + object_extent, mapped_end - object_extent, target_end - object_extent, 0 ) != MAP_FAILED;
+#   else
+        (void)object_extent;
+#   endif
+        return map_anonymous_at( base + mapped_end, target_end - mapped_end );
+    }
+
 #if defined( __linux__ )
     //! Moves a private view [ object part | anonymous tail ] of mapped_end
     //! bytes to a range of target_end bytes (at the same huge page phase, see
     //! mremap_to_pmd_phase()), the part past mapped_end being fresh anonymous
-    //! memory, and returns where it now is - or nullptr where the object part
-    //! could not be moved (the view then is still where it was). mremap()
-    //! moves a single mapping (VMA) per call, so the two parts move one by
-    //! one: the object part first, so that nothing has to be put back if it
-    //! cannot move. A tail that has split into several mappings cannot move
-    //! in one call: it is copied (it is the clone's own memory, not the
-    //! object's) - up front, while the destination is still wholly the
-    //! reservation's, so that nothing is ever mapped over a range the kernel
-    //! may already have handed back.
+    //! memory, and returns where it now is - or nullptr where it could not be
+    //! moved (the view then is still where it was). mremap() moves a single
+    //! mapping (VMA) per call, and a file and anonymous memory never share
+    //! one, so the view is two: the object part, and the tail, which stays a
+    //! single mapping - it is only ever created whole, grown in place by
+    //! mremap() (grow_in_place()) and moved and grown by one mremap() here.
+    //! The tail takes its place at the destination first, moved and grown
+    //! (or, where there is none yet, mapped fresh): that is the step that can
+    //! fail, for want of memory for the growth, and nothing has moved then.
+    //! The object part follows; that move grows nothing, so it can only fail
+    //! where the process has run out of mappings (vm.max_map_count), or where
+    //! a caller has split the view's mappings itself (mprotect(), a madvise()
+    //! that changes a mapping's flags, mlock() of a part of it): the view is
+    //! then half moved, and the process aborts.
     [[ nodiscard ]] std::byte * relocate
     (
         std::byte * const base,
@@ -238,45 +266,33 @@ namespace
             return nullptr;
         auto const   head       { ( reinterpret_cast<std::uintptr_t>( base ) - reinterpret_cast<std::uintptr_t>( reservation ) ) % detail::pmd_span };
         auto * const destination{ reservation + head };
-        auto const release_slack{ [ = ]() noexcept
+        auto * const new_tail   { destination + object_extent };
+        auto const   tail_size  { mapped_end - object_extent };
+        auto const   tail_placed
         {
-            if ( head )
-                BOOST_VERIFY( ::munmap( reservation, head ) == 0 );
+            tail_size
+                ? ::mremap( base + object_extent, tail_size, target_end - object_extent, MREMAP_MAYMOVE | MREMAP_FIXED, new_tail ) == new_tail
+                : ::mmap  ( new_tail, target_end - object_extent, rw, anonymous | MAP_FIXED, -1, 0 )                          == new_tail
+        };
+        // what the reservation still holds past its first lead bytes and past the view's new end
+        auto const release_slack{ [ = ]( std::size_t const lead ) noexcept
+        {
+            if ( lead )
+                BOOST_VERIFY( ::munmap( reservation, lead ) == 0 );
             BOOST_VERIFY( ::munmap( destination + target_end, detail::pmd_span - head ) == 0 );
         } };
-
-        auto * const tail     { base        + object_extent };
-        auto * const new_tail { destination + object_extent };
-        auto   const tail_size{ mapped_end - object_extent };
-        // A same-size mremap() in place is a no-op for a range within one
-        // mapping, and fails (EFAULT) for one that spans several.
-        auto const tail_moves{ !tail_size || ( ::mremap( tail, tail_size, tail_size, 0 ) != MAP_FAILED ) };
-        if ( !tail_moves ) // (MAP_FIXED over the reservation, which is ours)
+        if ( !tail_placed ) [[ unlikely ]]
         {
-            BOOST_VERIFY( ::mmap( new_tail, tail_size, rw, anonymous | MAP_FIXED, -1, 0 ) == new_tail );
-            std::memcpy( new_tail, tail, tail_size );
-        }
-
-        if ( ::mremap( base, object_extent, object_extent, MREMAP_MAYMOVE | MREMAP_FIXED, destination ) == MAP_FAILED ) [[ unlikely ]]
-        {
-            // as in mremap_to_pmd_phase(): the destination may already have
-            // been unmapped by the kernel, so it is no longer ours to unmap
-            release_slack();
+            // The kernel may already have unmapped the tail's destination (a
+            // fixed-address mremap() or mmap() unmaps before it checks), and
+            // may then have handed it to another thread: it is no longer ours
+            // to unmap - only the rest of the reservation is.
+            release_slack( head + object_extent );
             return nullptr;
         }
-        if ( tail_moves )
-        {
-            // Can fail only for want of memory (ENOMEM), after the object
-            // part has moved: nothing is left but to give up.
-            if ( tail_size && ( ::mremap( tail, tail_size, tail_size, MREMAP_MAYMOVE | MREMAP_FIXED, new_tail ) == MAP_FAILED ) ) [[ unlikely ]]
-                std::abort();
-        }
-        else
-        {
-            BOOST_VERIFY( ::munmap( tail, tail_size ) == 0 );
-        }
-        BOOST_VERIFY( ::mmap( destination + mapped_end, target_end - mapped_end, rw, anonymous | MAP_FIXED, -1, 0 ) == destination + mapped_end );
-        release_slack();
+        if ( ::mremap( base, object_extent, object_extent, MREMAP_MAYMOVE | MREMAP_FIXED, destination ) == MAP_FAILED ) [[ unlikely ]]
+            std::abort();
+        release_slack( head );
         return destination;
     }
 #elif defined( __APPLE__ )
@@ -323,7 +339,7 @@ bool mem_mapping::grow_privately( std::size_t const target_size )
     std::memset( base + size, 0, std::min( target_size, mapped_end ) - size );
     if ( target_end > mapped_end )
     {
-        if ( !map_anonymous_at( base + mapped_end, target_end - mapped_end ) )
+        if ( !grow_in_place( base, object_extent_, mapped_end, target_end ) )
         {
             auto * const moved{ relocate( base, object_extent_, mapped_end, target_end ) };
             if ( !moved ) [[ unlikely ]]

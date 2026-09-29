@@ -311,6 +311,13 @@ TEST( vm_vector, memory_backed_growth_past_a_pmd_ends_on_a_pmd_boundary )
         vec.map_cow_memory();
         check( vec );
     }
+    {
+        // A copy-on-write clone grows privately, in place or moved whole.
+        psi::vm::vm_vector<std::uint8_t, std::size_t> source;
+        source.map_cow_memory();
+        auto clone{ source };
+        check( clone );
+    }
 }
 #endif // server Linux
 
