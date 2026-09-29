@@ -51,6 +51,17 @@ namespace
         friend constexpr auto operator<=>( strong_u32, strong_u32 ) noexcept = default;
     };
 
+    // A strong typedef around a 16-bit unsigned integer: a key narrower than
+    // any it is packed with.
+    struct strong_u16
+    {
+        std::uint16_t value;
+
+        static constexpr bool orders_as_unsigned{ true };
+
+        friend constexpr auto operator<=>( strong_u16, strong_u16 ) noexcept = default;
+    };
+
     // Two 32-bit halves ordered by (high, low), laid out so that the 64-bit
     // little-endian reading of the pair is high << 32 | low. Its fields give
     // it the alignment of a 32-bit integer only, so it declares that of the
@@ -135,7 +146,11 @@ namespace
     static_assert(  sort_key<strong_u32   > );
     static_assert(  sort_key<high_low_pair> == ( std::endian::native == std::endian::little ) );
     static_assert( !sort_key<std::int32_t > );              // signed: its unsigned reading does not order as it does
-    static_assert( !sort_key<std::uint16_t> );              // no worker of that width
+    static_assert(  sort_key<std::uint8_t > );
+    static_assert(  sort_key<std::uint16_t> );
+    static_assert(  sort_key<strong_u16   > );
+    struct three_bytes { std::uint8_t b[ 3 ]; static constexpr bool orders_as_unsigned{ true }; };
+    static_assert( !sort_key<three_bytes  > );              // no unsigned integer of that width
     static_assert( !sort_key<float        > );
     static_assert( !sort_key<no_opt_in    > );              // says nothing about its representation
     static_assert( !sort_key<padded       > );              // padding bits carry no order
@@ -268,7 +283,7 @@ namespace
 template <typename T>
 class sort_keys_typed : public ::testing::Test {};
 
-using key_types = ::testing::Types<std::uint32_t, std::uint64_t, other_unsigned, strong_u32, high_low_pair, biased_i32, biased_f32, biased_f64>;
+using key_types = ::testing::Types<std::uint8_t, std::uint16_t, strong_u16, std::uint32_t, std::uint64_t, other_unsigned, strong_u32, high_low_pair, biased_i32, biased_f32, biased_f64>;
 TYPED_TEST_SUITE( sort_keys_typed, key_types );
 
 template <key_sort_algo Algo, typename T, key_order Order = std::less<>>
@@ -485,7 +500,7 @@ TYPED_TEST( sort_keys_typed, pdq_argsort_agrees_with_std_stable_sort_of_indices 
 #if PSI_VM_HAS_INTEGER_SORT
 TYPED_TEST( sort_keys_typed, radix_argsort_agrees_with_std_stable_sort_of_indices )
 {
-    if constexpr ( sort_key<TypeParam> && sizeof( TypeParam ) == sizeof( std::uint32_t ) )
+    if constexpr ( sort_key<TypeParam> && sizeof( TypeParam ) <= sizeof( std::uint32_t ) )
         check_argsort<key_sort_algo::radix, TypeParam>();
 }
 #endif
@@ -501,7 +516,7 @@ TYPED_TEST( sort_keys_typed, pdq_argsort_descending_agrees_with_std_stable_sort_
 #if PSI_VM_HAS_INTEGER_SORT
 TYPED_TEST( sort_keys_typed, radix_argsort_descending_agrees_with_std_stable_sort_of_indices_reversed )
 {
-    if constexpr ( sort_key<TypeParam> && sizeof( TypeParam ) == sizeof( std::uint32_t ) )
+    if constexpr ( sort_key<TypeParam> && sizeof( TypeParam ) <= sizeof( std::uint32_t ) )
         check_argsort<key_sort_algo::radix, TypeParam, std::greater<>>();
 }
 #endif

@@ -8,9 +8,9 @@
 /// spells them, so here every such key type of a width is sorted by one worker
 /// over that width's unsigned integer: a program gets at most one worker per
 /// (algorithm, width) pair, whatever key types it sorts. argsort_keys and
-/// argsort_by_key reuse the 64-bit workers for 4-byte keys with 32-bit
-/// indices, and add one pdqsort worker per (key width, index width) pair for
-/// the keys that leave no room to pack their index beside them.
+/// argsort_by_key reuse the 64-bit workers for keys of up to 4 bytes with
+/// 32-bit indices, and add one pdqsort worker per (key width, index width)
+/// pair for the keys that leave no room to pack their index beside them.
 ///
 /// The radix algorithm lives in psi/vm/sort_keys_radix.hpp, so that only a
 /// program that asks for it includes spreadsort.
@@ -76,11 +76,18 @@ namespace key_sort_detail
 {
     // The unsigned integer of a key's size, which the worker sorts in the
     // key's place.
+    template <std::size_t Size> struct uint_of_size;
+    template <> struct uint_of_size<sizeof( std::uint8_t  )> { using type = std::uint8_t ; };
+    template <> struct uint_of_size<sizeof( std::uint16_t )> { using type = std::uint16_t; };
+    template <> struct uint_of_size<sizeof( std::uint32_t )> { using type = std::uint32_t; };
+    template <> struct uint_of_size<sizeof( std::uint64_t )> { using type = std::uint64_t; };
+
     template <typename T>
-    using key_uint_t = std::conditional_t<sizeof( T ) == sizeof( std::uint32_t ), std::uint32_t, std::uint64_t>;
+    using key_uint_t = typename uint_of_size<sizeof( T )>::type;
 } // namespace key_sort_detail
 
-/// A key that sorts as the unsigned integer of its own size, 4 or 8 bytes:
+/// A key that sorts as the unsigned integer of its own size, 1, 2, 4 or 8
+/// bytes:
 ///  * an unsigned integral type, or
 ///  * a trivially copyable type without padding bits that states
 ///        static constexpr bool orders_as_unsigned{ true };
@@ -110,7 +117,7 @@ namespace key_sort_detail
 /// against the key's own operator<, where it has one.
 template <typename T>
 concept sort_key =
-    ( sizeof( T ) == sizeof( std::uint32_t ) || sizeof( T ) == sizeof( std::uint64_t ) ) &&
+    requires { typename key_sort_detail::key_uint_t<T>; } &&
     alignof( T ) >= alignof( key_sort_detail::key_uint_t<T> ) &&
     !std::is_const_v<T> && !std::is_volatile_v<T> &&
     (
@@ -409,9 +416,9 @@ void sort_unique_keys( Keys & keys, Order const order = {} ) noexcept( key_sort_
 /// by key in that order. (Descending, only the key is complemented, never the
 /// index beside it.) Index is the type of the indices (and of n), 32 bits
 /// unless a wider one is asked for.
-///  * a 4-byte key with an index of at most 32 bits is packed with it into one
-///    64-bit integer, key << 32 | index, which the sort_keys worker sorts -
-///    with Algo;
+///  * a key of at most 4 bytes with an index of at most 32 bits is packed with
+///    it into one 64-bit integer, key << 32 | index, which the sort_keys
+///    worker sorts - with Algo;
 ///  * any other key is sorted as a ( key, index ) pair by pdqsort, the only
 ///    algorithm offered for them.
 /// The keys are gathered, with their indices, into scratch storage whose
@@ -425,11 +432,12 @@ void argsort_by_key( std::type_identity_t<Index> const n, KeyOf && key_of, std::
 {
     using key_t = std::remove_cvref_t<std::invoke_result_t<KeyOf &, Index>>;
     BOOST_ASSERT( perm.size() == n );
-    if constexpr ( sizeof( key_t ) == sizeof( std::uint32_t ) && sizeof( Index ) <= sizeof( std::uint32_t ) )
+    if constexpr ( sizeof( key_t ) <= sizeof( std::uint32_t ) && sizeof( Index ) <= sizeof( std::uint32_t ) )
     {
+        using key_uint = key_sort_detail::key_uint_t<key_t>;
         small_vector<std::uint64_t, 512, key_sort_detail::scratch_size_t<Index>> packed( n, no_init );
         for ( Index i{ 0 }; i < n; ++i )
-            packed[ i ] = ( std::uint64_t{ std::bit_cast<std::uint32_t>( key_t{ key_of( i ) } ) ^ key_sort_detail::order_mask<Order, std::uint32_t> } << 32 ) | i;
+            packed[ i ] = ( std::uint64_t{ static_cast<key_uint>( std::bit_cast<key_uint>( key_t{ key_of( i ) } ) ^ key_sort_detail::order_mask<Order, key_uint> ) } << 32 ) | i;
         std::ignore = key_sort_detail::sort_uints<Algo>( std::span<std::uint64_t>{ packed }, false );
         for ( Index i{ 0 }; i < n; ++i )
             perm[ i ] = static_cast<Index>( packed[ i ] );
