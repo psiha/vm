@@ -6,8 +6,11 @@
 /// POSIX COW copy constructor for mem_mapping:
 /// - File-backed (all): dup(fd) + MAP_PRIVATE view (kernel COW)
 /// - Anonymous macOS: mach_vm_remap(copy=TRUE) + memcpy fallback
-/// - Anonymous Linux: memfd_create + memcpy + MAP_PRIVATE (true COW)
-///                    or plain memcpy fallback
+/// - Anonymous Linux: memfd_create + memcpy into a memfd of the clone's own,
+///                    mapped shared as map_cow_memory() maps one (so clones
+///                    of the clone are true COW), or plain memcpy fallback
+/// A source that is itself a clone (a private view) takes the anonymous path:
+/// its own writes are in no object the fd refers to.
 ///
 /// Copyright (c) Domagoj Saric 2026.
 ///
@@ -19,6 +22,7 @@
 #include <psi/vm/containers/vm_vector.hpp>
 #include <psi/vm/allocators/allocator_base.hpp> // detail::throw_bad_alloc
 
+#include <psi/vm/align.hpp>
 #include <psi/vm/handles/handle.hpp>
 
 #include <boost/assert.hpp>
@@ -27,8 +31,9 @@
 #   include "../../detail/mach.hpp"
 #endif
 
+#include <sys/mman.h>
 #ifdef __linux__
-#   include <sys/mman.h>
+#   include "../../allocation/expand_linux.hpp" // pmd_span
 #   if __has_include( <sys/memfd.h> )
 #       include <sys/memfd.h>
 #   endif
@@ -40,8 +45,11 @@
 
 #include <unistd.h>
 
+#include <algorithm> // min
 #include <cerrno>
-#include <cstring> // memcpy
+#include <cstdint>
+#include <cstdlib> // abort
+#include <cstring> // memcpy, memset
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -71,8 +79,11 @@ mem_mapping::mem_mapping( mem_mapping const & source )
     // ahead of the strategy branches below, so every success path gets it.
     live_size_ = source.live_size_;
 
-    // fd-backed (real file or memfd): dup + MAP_PRIVATE gives kernel COW.
-    if ( source.mapping_.has_fd() )
+    // fd-backed (real file or memfd): dup + MAP_PRIVATE gives kernel COW -
+    // provided the source's view shows what the fd holds. A source that is
+    // itself a clone keeps its own writes in private pages no second view of
+    // the fd could see, so it is copied like anonymous memory instead.
+    if ( source.mapping_.has_fd() && !source.views_privately() )
     {
         // handle_traits::copy returns fallible_result — auto-throws on error
         posix::handle_traits::native_t const cow_fd{ posix::handle_traits::copy( source.mapping_.get() ) };
@@ -82,16 +93,24 @@ mem_mapping::mem_mapping( mem_mapping const & source )
             .protection = PROT_READ | PROT_WRITE,
             .flags      = MAP_PRIVATE
         };
-        mapping_ = { posix::handle{ cow_fd }, cow_view_flags, total_mapped };
+        // The view spans the source's header and live bytes only: what the
+        // object holds past them (the source's spare capacity) is the
+        // source's to fill, and never shows through as the clone's - the
+        // clone grows past its view with memory of its own (grow_privately()).
+        auto const view_size{ source.get_sizes().data_offset + live_size_ };
+        BOOST_ASSUME( view_size <= total_mapped );
+        mapping_ = { posix::handle{ cow_fd }, cow_view_flags, view_size };
 #   ifdef __linux__
         if ( !source.mapping_.is_file_based() ) // source is ephemeral (memfd)
             mapping_.set_ephemeral();
 #   endif
-        view_ = extendable_mapped_view::map( mapping_, cow_view_flags, 0, total_mapped );
+        view_          = extendable_mapped_view::map( mapping_, cow_view_flags, 0, view_size );
+        object_extent_ = align_up( view_size, page_size );
         return;
     }
 
-    // Anonymous (no fd): platform-specific strategies, each with a memcpy fallback.
+    // Anonymous (no fd), or a private view: platform-specific strategies, each
+    // with a memcpy fallback.
 
 #if defined( __APPLE__ )
     {
@@ -124,7 +143,10 @@ mem_mapping::mem_mapping( mem_mapping const & source )
 
 #elif defined( __linux__ )
     {
-        // Linux: try memfd_create + memcpy + MAP_PRIVATE for true kernel COW.
+        // Linux: copy into a memfd of the clone's own - set up as
+        // map_cow_memory() sets one up: the clone is its only holder, so it
+        // maps it shared and may resize it, while clones of this clone map it
+        // privately (dup + MAP_PRIVATE above) for true kernel COW.
         auto const mfd{ ::memfd_create( "psi_vm_cow", MFD_CLOEXEC ) };
         if ( mfd != -1 )
         {
@@ -134,26 +156,13 @@ mem_mapping::mem_mapping( mem_mapping const & source )
                 ::close( mfd );
                 detail::throw_bad_alloc();
             }
-
-            // Map the memfd as MAP_SHARED to write the source data
-            auto * const tmp_map{ ::mmap( nullptr, total_mapped, PROT_READ | PROT_WRITE, MAP_SHARED, mfd, 0 ) };
-            if ( tmp_map == MAP_FAILED ) [[ unlikely ]]
+            if ( !map( file_handle{ mfd }, total_mapped ) ) [[ unlikely ]]
             {
-                BOOST_ASSERT( errno == ENOMEM );
-                ::close( mfd );
+                mapping_.close();
                 detail::throw_bad_alloc();
             }
-            std::memcpy( tmp_map, source.view_.data(), total_mapped );
-            BOOST_VERIFY( ::munmap( tmp_map, total_mapped ) == 0 );
-
-            flags::viewing const cow_view_flags
-            {
-                .protection = PROT_READ | PROT_WRITE,
-                .flags      = MAP_PRIVATE
-            };
-            mapping_ = { posix::handle{ mfd }, cow_view_flags, total_mapped };
             mapping_.set_ephemeral(); // memfd: fd-backed but not on-disk
-            view_ = extendable_mapped_view::map( mapping_, cow_view_flags, 0, total_mapped );
+            std::memcpy( view_.data(), source.view_.data(), total_mapped );
             return;
         }
         // memfd_create failed (fd limit or kernel too old) — fall through to memcpy
@@ -169,6 +178,174 @@ mem_mapping::mem_mapping( mem_mapping const & source )
     mapping_ = { posix::handle{}, cow_view_flags, total_mapped };
     view_    = extendable_mapped_view::map( mapping_, cow_view_flags, 0, total_mapped );
     std::memcpy( view_.data(), source.view_.data(), total_mapped );
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Growth and shrinkage of a private view (a COW clone of an fd-backed
+// container): [ object part: MAP_PRIVATE view of the shared file/memfd |
+// tail: MAP_PRIVATE | MAP_ANONYMOUS ]. Neither ever resizes the object, nor
+// maps more of it than the clone was created with.
+////////////////////////////////////////////////////////////////////////////////
+
+namespace
+{
+    int constexpr anonymous{ MAP_PRIVATE | MAP_ANONYMOUS };
+    int constexpr rw       { PROT_READ | PROT_WRITE };
+
+    //! Maps anonymous memory exactly at [address, address + size) if that
+    //! range is free, never replacing anything already mapped there.
+    [[ nodiscard ]] bool map_anonymous_at( std::byte * const address, std::size_t const size ) noexcept
+    {
+#   ifdef MAP_FIXED_NOREPLACE
+        int constexpr noreplace{ MAP_FIXED_NOREPLACE };
+#   else
+        int constexpr noreplace{ 0 }; // a hint only: checked below
+#   endif
+        auto * const mapped{ ::mmap( address, size, rw, anonymous | noreplace, -1, 0 ) };
+        if ( mapped == address )
+            return true;
+        // kernels older than MAP_FIXED_NOREPLACE (4.17) take it as a hint,
+        // as a system without it takes the address
+        if ( mapped != MAP_FAILED )
+            BOOST_VERIFY( ::munmap( mapped, size ) == 0 );
+        return false;
+    }
+
+#if defined( __linux__ )
+    //! Moves a private view [ object part | anonymous tail ] of mapped_end
+    //! bytes to a range of target_end bytes (at the same huge page phase, see
+    //! mremap_to_pmd_phase()), the part past mapped_end being fresh anonymous
+    //! memory, and returns where it now is - or nullptr where the object part
+    //! could not be moved (the view then is still where it was). mremap()
+    //! moves a single mapping (VMA) per call, so the two parts move one by
+    //! one: the object part first, so that nothing has to be put back if it
+    //! cannot move. A tail that has split into several mappings cannot move
+    //! in one call: it is copied (it is the clone's own memory, not the
+    //! object's) - up front, while the destination is still wholly the
+    //! reservation's, so that nothing is ever mapped over a range the kernel
+    //! may already have handed back.
+    [[ nodiscard ]] std::byte * relocate
+    (
+        std::byte * const base,
+        std::size_t const object_extent,
+        std::size_t const mapped_end,
+        std::size_t const target_end
+    ) noexcept
+    {
+        auto const reservation_size{ target_end + detail::pmd_span };
+        auto * const reservation{ static_cast<std::byte *>( ::mmap( nullptr, reservation_size, PROT_NONE, anonymous | MAP_NORESERVE, -1, 0 ) ) };
+        if ( reservation == MAP_FAILED ) [[ unlikely ]]
+            return nullptr;
+        auto const   head       { ( reinterpret_cast<std::uintptr_t>( base ) - reinterpret_cast<std::uintptr_t>( reservation ) ) % detail::pmd_span };
+        auto * const destination{ reservation + head };
+        auto const release_slack{ [ = ]() noexcept
+        {
+            if ( head )
+                BOOST_VERIFY( ::munmap( reservation, head ) == 0 );
+            BOOST_VERIFY( ::munmap( destination + target_end, detail::pmd_span - head ) == 0 );
+        } };
+
+        auto * const tail     { base        + object_extent };
+        auto * const new_tail { destination + object_extent };
+        auto   const tail_size{ mapped_end - object_extent };
+        // A same-size mremap() in place is a no-op for a range within one
+        // mapping, and fails (EFAULT) for one that spans several.
+        auto const tail_moves{ !tail_size || ( ::mremap( tail, tail_size, tail_size, 0 ) != MAP_FAILED ) };
+        if ( !tail_moves ) // (MAP_FIXED over the reservation, which is ours)
+        {
+            BOOST_VERIFY( ::mmap( new_tail, tail_size, rw, anonymous | MAP_FIXED, -1, 0 ) == new_tail );
+            std::memcpy( new_tail, tail, tail_size );
+        }
+
+        if ( ::mremap( base, object_extent, object_extent, MREMAP_MAYMOVE | MREMAP_FIXED, destination ) == MAP_FAILED ) [[ unlikely ]]
+        {
+            // as in mremap_to_pmd_phase(): the destination may already have
+            // been unmapped by the kernel, so it is no longer ours to unmap
+            release_slack();
+            return nullptr;
+        }
+        if ( tail_moves )
+        {
+            // Can fail only for want of memory (ENOMEM), after the object
+            // part has moved: nothing is left but to give up.
+            if ( tail_size && ( ::mremap( tail, tail_size, tail_size, MREMAP_MAYMOVE | MREMAP_FIXED, new_tail ) == MAP_FAILED ) ) [[ unlikely ]]
+                std::abort();
+        }
+        else
+        {
+            BOOST_VERIFY( ::munmap( tail, tail_size ) == 0 );
+        }
+        BOOST_VERIFY( ::mmap( destination + mapped_end, target_end - mapped_end, rw, anonymous | MAP_FIXED, -1, 0 ) == destination + mapped_end );
+        release_slack();
+        return destination;
+    }
+#elif defined( __APPLE__ )
+    //! As above, via mach_vm_remap( copy = FALSE ), which moves any number of
+    //! mappings in one call (the object part keeps its file backing and the
+    //! clone's private copies alike).
+    [[ nodiscard ]] std::byte * relocate
+    (
+        std::byte * const base,
+        std::size_t const /*object_extent*/,
+        std::size_t const mapped_end,
+        std::size_t const target_end
+    ) noexcept
+    {
+        auto * const destination{ static_cast<std::byte *>( ::mmap( nullptr, target_end, rw, anonymous, -1, 0 ) ) };
+        if ( destination == MAP_FAILED ) [[ unlikely ]]
+            return nullptr;
+        auto target_address{ reinterpret_cast<mach_vm_address_t>( destination ) };
+        if ( mach::vm_remap_overwrite( &target_address, mapped_end, base, FALSE, VM_INHERIT_COPY ) != KERN_SUCCESS ) [[ unlikely ]]
+        {
+            BOOST_VERIFY( ::munmap( destination, target_end ) == 0 );
+            return nullptr;
+        }
+        BOOST_VERIFY( ::munmap( base, mapped_end ) == 0 );
+        return destination;
+    }
+#else
+    [[ nodiscard ]] std::byte * relocate( std::byte *, std::size_t, std::size_t, std::size_t ) noexcept { return nullptr; }
+#endif
+} // anonymous namespace
+
+bool mem_mapping::grow_privately( std::size_t const target_size )
+{
+    auto *     base      { view_.data() };
+    auto const size      { view_.size() };
+    auto const mapped_end{ align_up( size       , std::size_t{ page_size } ) };
+    auto const target_end{ align_up( target_size, std::size_t{ page_size } ) };
+    BOOST_ASSUME( target_size > size );
+    BOOST_ASSUME( object_extent_ <= mapped_end );
+    // What is already mapped past the view's end - its last page - reads as
+    // zero once it is part of the view, as fresh growth does. Where that is
+    // the object's page this also makes it the clone's own (a private copy),
+    // so that what the source writes there later does not show through.
+    std::memset( base + size, 0, std::min( target_size, mapped_end ) - size );
+    if ( target_end > mapped_end )
+    {
+        if ( !map_anonymous_at( base + mapped_end, target_end - mapped_end ) )
+        {
+            auto * const moved{ relocate( base, object_extent_, mapped_end, target_end ) };
+            if ( !moved ) [[ unlikely ]]
+                return false;
+            base = moved;
+        }
+    }
+    static_cast<mapped_span &>( view_ ) = { base, target_size };
+    return true;
+}
+
+void mem_mapping::shrink_privately( std::size_t const target_size ) noexcept( mapping::views_downsizeable )
+{
+    auto * const base      { view_.data() };
+    auto   const mapped_end{ align_up( view_.size(), std::size_t{ page_size } ) };
+    auto   const target_end{ align_up( target_size , std::size_t{ page_size } ) };
+    // Unmapped, never truncated: the object stays the source's, and a
+    // regrowth maps fresh memory of the clone's own.
+    if ( mapped_end > target_end )
+        BOOST_VERIFY( ::munmap( base + target_end, mapped_end - target_end ) == 0 );
+    object_extent_ = std::min( object_extent_, target_end );
+    static_cast<mapped_span &>( view_ ) = { base, target_size };
 }
 
 //------------------------------------------------------------------------------

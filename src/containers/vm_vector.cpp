@@ -14,6 +14,7 @@
 #include <psi/vm/containers/vm_vector.hpp>
 
 #include <psi/vm/align.hpp>
+#include <psi/vm/allocators/allocator_base.hpp> // detail::throw_bad_alloc
 #include <psi/vm/mapped_view/ops.hpp>
 
 #include <psi/build/attributes.hpp>
@@ -33,6 +34,7 @@
 #   include <unistd.h> // ftruncate, close
 #endif
 
+#include <cstring> // memcpy
 #include <stdexcept>
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -83,7 +85,8 @@ void mem_mapping::close() noexcept
     publish_size();
     unmap();
     mapping_.close();
-    live_size_ = 0;
+    live_size_     = 0;
+    object_extent_ = 0;
 }
 
 // A flush that starts at 0 covers sizes_hdr, so it is also the point at which
@@ -135,10 +138,49 @@ namespace
     }
 } // anonymous namespace
 
+bool mem_mapping::views_privately() const noexcept
+{
+#ifdef _WIN32
+    return mapping_.view_mapping_flags.is_cow();
+#else
+    // An anonymous MAP_PRIVATE mapping is private too, but it views no object
+    return mapping_.has_fd() && mapping_.view_mapping_flags.is_cow();
+#endif
+}
+
+// A private (copy-on-write) view - a COW clone - shares the object it views
+// (a file, a memfd, a pagefile section) with the container it was cloned
+// from, which alone owns its length: resizing it from here would resize the
+// source's object under it (and, shrinking, cut off pages the source still
+// maps), and mapping more of it would show the source's bytes as the
+// clone's. So a clone grows past the object with anonymous memory of its own
+// (grow_privately()). Only where that cannot be done does it move off the
+// object entirely, into memory of its own, carrying the header and its live
+// elements (the rest reads as zero, as fresh growth anywhere does): from
+// there on it is an ordinary memory backed container - it grows, and clones,
+// like one.
+PSI_COLD
+void mem_mapping::move_into_memory( std::size_t const mapped_size )
+{
+    auto const carried_size{ get_sizes().data_offset + live_size_ };
+    BOOST_ASSUME( carried_size <= mapped_size );
+    auto       file_view   { std::move( view_    ) };
+    auto       file_mapping{ std::move( mapping_ ) };
+    if ( auto const mapped{ map( {}, mapped_size ) }; !mapped ) [[ unlikely ]]
+    {
+        view_    = std::move( file_view    );
+        mapping_ = std::move( file_mapping );
+        detail::throw_bad_alloc();
+    }
+    std::memcpy( view_.data(), file_view.data(), carried_size );
+    object_extent_ = 0;
+}
+
 [[ gnu::noinline ]]
 void * mem_mapping::expand_capacity( std::size_t target_capacity )
 {
     BOOST_ASSUME( target_capacity > mapped_size() );
+    auto const private_view{ views_privately() };
 #if defined( __linux__ ) && !defined( __ANDROID__ ) // server Linux
     // A memory backed view that spans at least one PMD grows to end on a PMD
     // boundary: the kernel faults a huge page in only where the whole aligned
@@ -146,13 +188,20 @@ void * mem_mapping::expand_capacity( std::size_t target_capacity )
     // last span with small pages - which stay small once the next growth
     // covers the rest of it (only khugepaged would collapse them). The extra
     // tail is untouched address space (and, for a memfd, a sparse length).
-    // File backed views are left exact: their length is the file's.
-    if ( !mapping_.is_file_based() && ( target_capacity >= detail::pmd_span ) )
+    // File backed views are left exact: their length is the file's (a
+    // private view grows with anonymous memory, so it is not).
+    if ( ( !mapping_.is_file_based() || private_view ) && ( target_capacity >= detail::pmd_span ) )
     {
         auto const base{ reinterpret_cast<std::uintptr_t>( view_.data() ) };
         target_capacity = align_up( base + target_capacity, detail::pmd_span ) - base;
     }
 #endif
+    if ( private_view ) [[ unlikely ]]
+    {
+        if ( grow_privately( target_capacity ) ) [[ likely ]]
+            return data();
+        move_into_memory( mapped_size() );
+    }
     // Exact-size expansion only. Geometric growth is the vector's responsibility.
     auto const current_fc_capacity{ storage_size() };
     if ( current_fc_capacity < target_capacity ) [[ unlikely ]]
@@ -170,8 +219,14 @@ void * mem_mapping::expand_view( std::size_t const target_size )
 [[ gnu::noinline ]]
 void * mem_mapping::shrink_to_slow( std::size_t const target_size ) noexcept( mapping::views_downsizeable )
 {
-    auto const current_file_length{ storage_size() };
-    auto const storage_size       { client_to_storage_size( target_size ) };
+    auto const storage_size{ client_to_storage_size( target_size ) };
+    // A private view never resizes what it views (see move_into_memory()).
+    if ( views_privately() ) [[ unlikely ]]
+    {
+        shrink_privately( storage_size );
+        return data();
+    }
+    auto const current_file_length{ this->storage_size() };
     // Keep the on-disk EOF page-aligned here too - a file that shrank to an
     // unaligned length would pay the tail-block flush on its next extension
     // (see file_length_for). A shrink never *grows* the file: when the aligned

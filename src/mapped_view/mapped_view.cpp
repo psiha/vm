@@ -584,6 +584,22 @@ extendable_basic_mapped_view<read_only>::expand( std::size_t const target_size, 
     return expand_windows_adjacent_or_remap( *this, target_size, original_mapping, &trailing_placeholder_size_ );
 }
 
+template <bool read_only>
+bool extendable_basic_mapped_view<read_only>::expand_privately( std::size_t const target_size ) noexcept
+{
+    auto * const address            { const_cast<std::byte *>( this->data() ) };
+    auto   const kernel_current_size{ align_up( this->size(), reserve_granularity ) };
+    if ( kernel_current_size < target_size )
+    {
+        auto const additional{ align_up( target_size, reserve_granularity ) - kernel_current_size };
+        if ( ( trailing_placeholder_size_ < additional ) || !detail::try_placeholder_expand( address, kernel_current_size, additional ) )
+            return false;
+        trailing_placeholder_size_ -= additional;
+    }
+    static_cast<span &>( *this ) = { address, target_size };
+    return true;
+}
+
 template class extendable_basic_mapped_view<false>;
 template class extendable_basic_mapped_view<true >;
 
