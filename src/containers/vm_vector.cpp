@@ -537,6 +537,17 @@ mem_mapping::size_type mem_mapping::memory_storage_size( size_type const storage
     return storage_size;
 }
 
+mem_mapping::size_type mem_mapping::release_granularity() const noexcept
+{
+#if PSI_VM_HUGE_PAGE_MAX_COVERAGE && defined( __linux__ ) && !defined( __ANDROID__ )
+    // (a COW clone does not carry the flag: its own pages are the small copies
+    // its writes made)
+    if ( huge_pages_ )
+        return detail::pmd_span;
+#endif
+    return page_size;
+}
+
 bool mem_mapping::can_release_pages( [[ maybe_unused ]] bool const shared ) const noexcept
 {
     if ( !has_attached_storage() || mapping_.is_file_based() )

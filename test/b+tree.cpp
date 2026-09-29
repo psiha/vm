@@ -3970,7 +3970,7 @@ namespace
     std::size_t constexpr pmd_span{ std::size_t{ page_size } * ( page_size / sizeof( std::uint64_t ) ) };
 
     // The mapping (VMA) holding the given address, from /proc/self/smaps.
-    struct vma_info { std::size_t size{}, shmem_pmd_mapped{}; bool huge_advised{}; bool memfd{}; };
+    struct vma_info { std::size_t size{}, shmem_pmd_mapped{}, anon_huge{}; bool huge_advised{}; bool memfd{}; };
     std::optional<vma_info> vma_of( void const * const address )
     {
         auto const a{ reinterpret_cast<std::uintptr_t>( address ) };
@@ -3996,21 +3996,33 @@ namespace
             std::size_t kb;
             if ( std::sscanf( line.c_str(), "ShmemPmdMapped: %zu kB", &kb ) == 1 )
                 vma.shmem_pmd_mapped = kb * 1024;
+            else if ( std::sscanf( line.c_str(), "AnonHugePages: %zu kB", &kb ) == 1 )
+                vma.anon_huge = kb * 1024;
             else if ( line.starts_with( "VmFlags:" ) )
                 vma.huge_advised = ( line + ' ' ).find( " hg " ) != std::string::npos;
         }
         return in ? std::optional{ vma } : std::nullopt;
     }
 
-    std::size_t thp_file_fallbacks()
+    std::size_t vmstat( std::string_view const counter )
     {
         std::ifstream vmstat{ "/proc/vmstat" };
         std::string   key;
         std::size_t   value;
         while ( vmstat >> key >> value )
-            if ( key == "thp_file_fallback" )
+            if ( key == counter )
                 return value;
         return 0;
+    }
+    std::size_t thp_file_fallbacks() { return vmstat( "thp_file_fallback" ); }
+
+    // Whether madvise( MADV_HUGEPAGE ) anonymous memory gets huge pages here.
+    bool anon_huge_pages_on_advice()
+    {
+        std::ifstream enabled{ "/sys/kernel/mm/transparent_hugepage/enabled" };
+        std::string   setting;
+        std::getline( enabled, setting );
+        return ( setting.find( "[always]" ) != std::string::npos ) || ( setting.find( "[madvise]" ) != std::string::npos );
     }
 
     // Whether madvise( MADV_HUGEPAGE ) memfd (shmem) memory gets huge pages here.
@@ -4340,6 +4352,71 @@ namespace
 
 TEST( bp_tree, release_free_nodes_memory     ) { release_roundtrip<false>(); }
 TEST( bp_tree, release_free_nodes_cow_memory ) { release_roundtrip<true >(); }
+
+#if defined( __linux__ ) && !defined( __ANDROID__ )
+namespace
+{
+    // A huge page backed pool releases whole huge pages only: releasing part
+    // of one would split its mapping and free nothing until the kernel splits
+    // the page itself (see mem_mapping::release_granularity()).  So what the
+    // pool loses in huge pages is exactly what it released - none is split.
+    // (Only under PSI_VM_HUGE_PAGE_MAX_COVERAGE does the pool know it is huge
+    // page backed: elsewhere this prints what a page granular release costs.)
+    template <bool cow>
+    void huge_page_release_roundtrip()
+    {
+        if ( cow ? !shmem_huge_pages_on_advice() : !anon_huge_pages_on_advice() )
+            GTEST_SKIP() << "transparent huge pages are not given on advice here";
+        using tree_t = inspectable<bptree_set<int>>;
+        auto const leaves{ static_cast<int>( 32 * pmd_span / tree_t::node_byte_size() ) }; // a pool of many PMD spans
+        auto const size  { static_cast<int>( tree_t::max_values_per_leaf() ) * leaves };
+        tree_t bpt;
+        if constexpr ( cow ) ASSERT_TRUE( static_cast<bool>( bpt.map_cow_memory( static_cast<std::size_t>( size ), huge_pages::yes ) ) );
+        else                 ASSERT_TRUE( static_cast<bool>( bpt.map_memory    ( static_cast<std::size_t>( size ), huge_pages::yes ) ) );
+        ASSERT_EQ( bpt.insert( std::views::iota( 0, size ) ), static_cast<std::size_t>( size ) );
+        auto const huge_bytes{ [ & ] {
+            auto const vma{ vma_of( bpt.node_pool_bytes().data() ) };
+            return vma ? ( cow ? vma->shmem_pmd_mapped : vma->anon_huge ) : 0;
+        } };
+        for ( auto k{ size / 4 }; k < 3 * size / 4; ++k ) // (key by key: nothing released yet)
+            ASSERT_TRUE( bpt.erase( k ) );
+        auto const huge_before{ huge_bytes() };
+        if ( huge_before < 4 * pmd_span )
+            GTEST_SKIP() << "the kernel gave the pool no huge pages (fragmented memory?): " << huge_before / 1024 << " KiB";
+
+        auto const splits_before{ vmstat( "thp_split_pmd" ) };
+        auto const start        { std::chrono::steady_clock::now() };
+        auto const released     { bpt.release_free_nodes() };
+        auto const elapsed      { std::chrono::steady_clock::now() - start };
+        auto const splits       { vmstat( "thp_split_pmd" ) - splits_before };
+        auto const huge_after   { huge_bytes() };
+        auto const released_bytes{ std::size_t{ released } * tree_t::node_byte_size() };
+        std::println
+        (
+            "{}: released {} KiB in {} us, huge pages {} -> {} KiB, PMD splits {}",
+            cow ? "memfd" : "anonymous", released_bytes / 1024,
+            std::chrono::duration_cast<std::chrono::microseconds>( elapsed ).count(),
+            huge_before / 1024, huge_after / 1024, splits
+        );
+        EXPECT_GT( released, 0U );
+#   if PSI_VM_HUGE_PAGE_MAX_COVERAGE
+        EXPECT_EQ( released_bytes % pmd_span, 0U ) << "released part of a huge page";
+        EXPECT_EQ( huge_before - huge_after, released_bytes ) << "split a huge page";
+#   endif
+        ASSERT_TRUE( bpt.structure_is_sound() );
+        auto kept{ std::views::iota( 0, size ) | std::views::filter( [ = ]( int const k ) { return k < size / 4 || k >= 3 * size / 4; } ) };
+        EXPECT_TRUE( std::ranges::equal( bpt, kept ) );
+
+        for ( auto k{ size / 4 }; k < 3 * size / 4; ++k )
+            ASSERT_TRUE( bpt.insert( k ).second );
+        ASSERT_TRUE( bpt.structure_is_sound() ) << "regrown";
+        EXPECT_TRUE( std::ranges::equal( bpt, std::views::iota( 0, size ) ) );
+    }
+} // anonymous namespace
+
+TEST( bp_tree, release_free_nodes_huge_page_memory     ) { huge_page_release_roundtrip<false>(); }
+TEST( bp_tree, release_free_nodes_huge_page_cow_memory ) { huge_page_release_roundtrip<true >(); }
+#endif // server Linux
 
 // While a COW clone lives, shared storage must not be released from under
 // it - the clone reads those pages - and once the clone is gone it can be,

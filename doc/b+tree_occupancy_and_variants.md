@@ -268,7 +268,19 @@ view frees nothing: the pages stay in the memfd.
 `commit_to()` carries a clone's released set over along with its header; a
 node the target still holds resident goes back on its free list instead.
 
-On a huge page backed pool a partial release splits the huge page.
+**Huge pages.** Releasing part of a huge page does not return its memory.
+For anonymous memory (`MADV_DONTNEED`) the kernel splits the huge mapping
+into small ones and queues the page, which it splits, and frees the rest of,
+only under memory pressure; meanwhile khugepaged may collapse the span back,
+faulting the released pages in again. For a memfd (`MADV_REMOVE`) the range
+is zeroed and the page split where that succeeds, else nothing is freed. So
+a pool that asked for huge pages (`huge_pages::yes`) releases whole, aligned
+PMD spans (2 MiB with 4 KiB pages) only: a span with a single live node stays
+as it is (`mem_mapping::release_granularity()`). The pool knows it asked only
+under `PSI_VM_HUGE_PAGE_MAX_COVERAGE` (the flag lives there); in other builds
+it releases by the page, as it does where the system's transparent huge page
+policy is `always` and backs a pool that never asked (reading that policy
+once would cover the case; it is not done).
 
 **The calls.** Every page released costs a system call per run of
 neighbouring pages - on Windows two, as the reset and the working set removal

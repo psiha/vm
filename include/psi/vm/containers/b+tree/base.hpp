@@ -374,7 +374,9 @@ public:
     // nodes can be dropped from under them in place (see
     // doc/b+tree_occupancy_and_variants.md).  Takes whole pages only - every
     // node on the page free - which with page sized nodes is every free node,
-    // and with smaller ones only runs of free neighbours.  A released node
+    // and with smaller ones only runs of free neighbours; from a pool backed by
+    // huge pages, whole huge pages only (see
+    // mem_mapping::release_granularity()).  A released node
     // leaves the free list (a dropped page would lose its links) for a set
     // beside the pool, which new_node() and reserve_additional() draw on once
     // the free list runs dry, reinitialising the node; the next write faults

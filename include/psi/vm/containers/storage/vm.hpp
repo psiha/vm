@@ -378,7 +378,7 @@ public:
     //    reads them.  macOS: MADV_FREE_REUSABLE, which the kernel ignores
     //    while the memory is shared with a clone (from either side, so it is
     //    never a hazard there - and a clone's view does not try).
-    // On a huge page backed view a partial release splits the huge page.
+    // A huge page is released whole or not at all: see release_granularity().
     // The cost is a system call per range, and on Windows more than one (see
     // the ranges overload): a caller with many pages to release hands them
     // over all at once, coalesced into runs.
@@ -402,6 +402,18 @@ public:
     static void allow_release_ranges_at_once( bool allowed ) noexcept;
     // Whether release_pages() would release anything from this storage.
     [[ nodiscard ]] bool can_release_pages( bool shared ) const noexcept;
+    // The unit to hand to release_pages() whole, and aligned to by address:
+    // a PMD span (2 MiB with 4 KiB pages) for storage that asked for huge
+    // pages, else a page. Releasing part of a huge page does not return its
+    // memory: the kernel splits the huge mapping, and frees the rest of the
+    // huge page only when it later splits the page itself under memory
+    // pressure - or, for a memfd, only zeroes the range where that split
+    // fails - while khugepaged may collapse the span again, faulting the
+    // released pages back in. Known only under PSI_VM_HUGE_PAGE_MAX_COVERAGE
+    // (elsewhere this is a page, and a huge page backed release is partial);
+    // not known either way for storage that the system's transparent huge
+    // page policy ("always") backs with huge pages without being asked.
+    [[ nodiscard ]] size_type release_granularity() const noexcept;
     // Released pages about to be written again (macOS: MADV_FREE_REUSE, so
     // they count toward the footprint again; nothing elsewhere).
     void reuse_pages( std::byte * first, size_type size ) noexcept;

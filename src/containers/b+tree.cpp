@@ -771,8 +771,8 @@ void bptree_base::note_bulk_free( node_slot::value_type const free_nodes_before 
     if ( free_nodes <= free_nodes_before )
         return;
     freed_in_bulk_ += free_nodes - free_nodes_before;
-    auto const nodes_per_page{ std::max<std::uint32_t>( 1, page_size / node_size ) };
-    auto const threshold     { std::max( { nodes_per_page, static_cast<std::uint32_t>( nodes_.size() / auto_release_pool_share ), free_nodes / 2 } ) };
+    auto const nodes_per_unit{ static_cast<std::uint32_t>( std::max<std::size_t>( 1, nodes_.release_granularity() / node_size ) ) };
+    auto const threshold     { std::max( { nodes_per_unit, static_cast<std::uint32_t>( nodes_.size() / auto_release_pool_share ), free_nodes / 2 } ) };
     if ( ( freed_in_bulk_ < threshold ) || shares_pages() )
         return;
     try { release_free_nodes(); }
@@ -786,13 +786,15 @@ std::uint32_t bptree_base::release_free_nodes()
     if ( !has_attached_storage() || !hdr().free_node_count_ || !nodes_.can_release_pages( shared ) )
         return 0;
 
-    // Which pages are entirely free, by address: the pool is aligned to a node
-    // but not necessarily to a page (the header shares the first one with the
-    // leading nodes), and a node is either a whole number of pages or a whole
-    // fraction of one.
-    auto const nodes_per_page{ std::max<std::size_t>( 1, page_size / node_size ) };
+    // Which release units - pages, or PMD spans of a huge page backed pool
+    // (see mem_mapping::release_granularity()) - are entirely free, by
+    // address: the pool is aligned to a node but not necessarily to a unit
+    // (the header shares the first one with the leading nodes), and a node is
+    // either a whole number of units or a whole fraction of one.
+    auto const granularity   { nodes_.release_granularity() };
+    auto const nodes_per_page{ std::max<std::size_t>( 1, granularity / node_size ) };
     auto const pool_begin    { reinterpret_cast<std::uintptr_t>( nodes_.data() ) };
-    auto const first_whole   { static_cast<node_slot::value_type>( ( align_up( pool_begin, std::size_t{ page_size } ) - pool_begin ) / node_size ) };
+    auto const first_whole   { static_cast<node_slot::value_type>( ( align_up( pool_begin, granularity ) - pool_begin ) / node_size ) };
     auto const node_count    { static_cast<node_slot::value_type>( nodes_.size() ) };
 
     // allocations first: nothing below may fail half way through the list
@@ -833,7 +835,7 @@ std::uint32_t bptree_base::release_free_nodes()
     }
     // ...and only then drop their pages, which takes their links with them -
     // coalesced into runs of neighbouring pages, all handed over at once
-    auto const page_bytes{ std::max<std::size_t>( page_size, node_size ) };
+    auto const page_bytes{ std::max<std::size_t>( granularity, node_size ) };
     auto * const pool{ reinterpret_cast<std::byte *>( nodes_.data() ) };
     heap_vector<mem_mapping::page_range> runs;
     for ( auto const n : newly_released )
