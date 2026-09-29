@@ -45,14 +45,7 @@ namespace psi::vm
 // is taken as a descriptor and the call fails with EBADF).
 void * mmap( void * const target_address, std::size_t const size, int const protection, int const flags ) noexcept
 {
-    auto const actual_address{ posix::mmap( target_address, size, protection, MAP_PRIVATE | MAP_ANONYMOUS | flags,
-#   if defined( __APPLE__ ) && 0 // always wired
-        VM_FLAGS_SUPERPAGE_SIZE_2MB,
-#   else
-        -1,
-#   endif
-        0
-    ) };
+    auto const actual_address{ posix::mmap( target_address, size, protection, MAP_PRIVATE | MAP_ANONYMOUS | flags, -1, 0 ) };
     auto const succeeded{ actual_address != MAP_FAILED };
     if ( succeeded ) [[ likely ]]
     {
@@ -67,6 +60,19 @@ void * mmap( void * const target_address, std::size_t const size, int const prot
 void * allocate( std::size_t & size ) noexcept
 {
     size = align_up( size, reserve_granularity );
+#if defined( __APPLE__ ) && !defined( __aarch64__ )
+    // macOS supports superpages only on x86_64 (Apple Silicon has none). They
+    // are wired and may be unavailable, so a failed request falls back to
+    // normal pages; the kernel handles such a mapping in whole 2 MB units only.
+    auto constexpr superpage_size{ std::size_t{ 2 } * 1024 * 1024 };
+    if ( size && is_aligned( size, superpage_size ) )
+    {
+        // For anonymous memory Darwin takes the VM_FLAGS_* in the fd argument.
+        auto const superpages{ posix::mmap( nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, VM_FLAGS_SUPERPAGE_SIZE_2MB, 0 ) };
+        if ( superpages != MAP_FAILED )
+            return std::assume_aligned<reserve_granularity>( superpages );
+    }
+#endif
     return mmap( nullptr, size, PROT_READ | PROT_WRITE, /*TODO rethink*/ MAP_NORESERVE );
 }
 
