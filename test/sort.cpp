@@ -25,6 +25,7 @@
 #include <concepts>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <limits>
 #include <numeric>
@@ -937,6 +938,118 @@ TEST( sort_unique, keeps_one_element_of_each_run_of_equivalent_ones )
         std::sort( sorted_input.begin(), sorted_input.end() );
         EXPECT_TRUE( std::ranges::all_of( actual, [ & ]( element const & e ) { return std::binary_search( sorted_input.begin(), sorted_input.end(), e ); } ) ) << "n " << n;
     }
+}
+
+namespace
+{
+    // Distinct items with gaps (every third index, shuffled), keys drawn from
+    // key_bits bits - few distinct values at small widths, so equal keys and
+    // their tie order are exercised too.
+    template <std::unsigned_integral Item>
+    struct by_key_case
+    {
+        std::vector<Item>          items;
+        std::vector<std::uint64_t> key_of_item;
+    };
+
+    template <std::unsigned_integral Item>
+    by_key_case<Item> make_by_key_case( std::size_t const n, unsigned const key_bits, std::uint64_t const seed )
+    {
+        by_key_case<Item> c;
+        std::mt19937_64 rng{ seed };
+        c.items.resize( n );
+        for ( std::size_t i{ 0 }; i < n; ++i )
+            c.items[ i ] = static_cast<Item>( i * 3 );
+        std::shuffle( c.items.begin(), c.items.end(), rng );
+        c.key_of_item.resize( n * 3 );
+        auto const mask{ key_bits >= 64 ? ~std::uint64_t{ 0 } : ( std::uint64_t{ 1 } << key_bits ) - 1 };
+        for ( auto & k : c.key_of_item )
+            k = rng() & mask;
+        return c;
+    }
+
+    template <std::unsigned_integral Item>
+    std::vector<Item> by_key_reference( by_key_case<Item> const & c )
+    {
+        auto expected{ c.items };
+        std::ranges::sort( expected, [ &c ]( Item const l, Item const r ) { auto const kl{ c.key_of_item[ l ] }, kr{ c.key_of_item[ r ] }; return ( kl < kr ) || ( ( kl == kr ) && ( l < r ) ); } );
+        return expected;
+    }
+
+    template <key_sort_algo Algo>
+    void check_sort_by_key()
+    {
+        std::uint64_t seed{ 3'000 };
+        for ( auto const key_bits : { 0U, 1U, 8U, 20U, 33U, 48U, 64U } )
+        for ( auto const n : { 0UZ, 1UZ, 2UZ, 7UZ, 300UZ, 5'000UZ } )
+        for ( auto const bucket_limit : { 2U, 16U, 1'000U, sort_by_key_bucket_limit } )
+        {
+            auto c{ make_by_key_case<std::uint32_t>( n, key_bits, ++seed ) };
+            auto const expected{ by_key_reference( c ) };
+            sort_by_key<Algo>( c.items.begin(), c.items.end(), [ &c ]( std::uint32_t const item ) { return c.key_of_item[ item ]; }, key_bits, bucket_limit );
+            EXPECT_EQ( c.items, expected ) << "key bits " << key_bits << ", n " << n << ", bucket limit " << bucket_limit;
+        }
+    }
+} // anonymous namespace
+
+TEST( sort_by_key, pdq_agrees_with_std_sort_by_key_then_item )
+{
+    check_sort_by_key<key_sort_algo::pdq>();
+}
+
+#if PSI_VM_HAS_INTEGER_SORT
+TEST( sort_by_key, radix_agrees_with_std_sort_by_key_then_item )
+{
+    check_sort_by_key<key_sort_algo::radix>();
+}
+#endif
+
+// Items in order already are recognised by one pass that reads each key
+// once, and left as they were.
+TEST( sort_by_key, items_in_order_cost_one_key_each_and_stay )
+{
+    auto c{ make_by_key_case<std::uint32_t>( 10'000, 40, 42 ) };
+    c.items = by_key_reference( c );
+    auto const expected{ c.items };
+    std::size_t keys_read{ 0 };
+    sort_by_key( c.items.begin(), c.items.end(), [ & ]( std::uint32_t const item ) { ++keys_read; return c.key_of_item[ item ]; }, 40 );
+    EXPECT_EQ( c.items, expected );
+    EXPECT_EQ( keys_read, c.items.size() );
+}
+
+// Any random-access range, not only a contiguous one; and a caller's own
+// worker never gets more than a bucket of keys at a time.
+TEST( sort_by_key, sorts_a_deque_through_a_caller_worker_a_bucket_at_a_time )
+{
+    auto c{ make_by_key_case<std::uint32_t>( 20'000, 30, 7 ) };
+    auto const expected{ by_key_reference( c ) };
+    std::deque<std::uint32_t> items( c.items.begin(), c.items.end() );
+    std::size_t largest{ 0 }, calls{ 0 };
+    sort_by_key
+    (
+        items.begin(), items.end(),
+        [ &c ]( std::uint32_t const item ) { return c.key_of_item[ item ]; }, 30,
+        [ & ]( std::span<std::uint64_t> const keys ) { ++calls; largest = std::max( largest, keys.size() ); std::ranges::sort( keys ); },
+        1'024
+    );
+    EXPECT_TRUE( std::ranges::equal( items, expected ) );
+    EXPECT_GT( calls, 1U );
+    EXPECT_LE( largest, 1'024U );
+}
+
+// 64-bit keys beside 64-bit items never fit together: the ranges are
+// partitioned down to equal keys, whose items are then ordered in place.
+TEST( sort_by_key, wide_keys_beside_wide_items_still_sort )
+{
+    std::mt19937_64 rng{ 11 };
+    std::vector<std::uint64_t> items( 3'000 );
+    for ( auto & item : items )
+        item = rng() | ( std::uint64_t{ 1 } << 63 );
+    auto const key_of{ []( std::uint64_t const item ) { return ( item * 0x9E37'79B9'7F4A'7C15ULL ) & 0xFFFF'0000'0000'00FFULL; } };
+    auto expected{ items };
+    std::ranges::sort( expected, [ & ]( std::uint64_t const l, std::uint64_t const r ) { return std::pair{ key_of( l ), l } < std::pair{ key_of( r ), r }; } );
+    sort_by_key( items.begin(), items.end(), key_of, 64, 64 );
+    EXPECT_EQ( items, expected );
 }
 
 //------------------------------------------------------------------------------
