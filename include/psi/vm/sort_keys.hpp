@@ -12,7 +12,8 @@
 /// 32-bit indices, and add one pdqsort worker per (key width, index width)
 /// pair for the keys that leave no room to pack their index beside them.
 /// sort_by_key sorts a range of indices by a computed key of up to 64 bits in
-/// bounded memory, through the same 64-bit workers.
+/// bounded memory, through the same 64-bit workers, making no pass over the
+/// items that is not part of the sort.
 ///
 /// The radix algorithm lives in psi/vm/sort_keys_radix.hpp, so that only a
 /// program that asks for it includes spreadsort.
@@ -492,7 +493,7 @@ namespace key_sort_detail
     [[ nodiscard ]] constexpr std::uint64_t low_bits( unsigned const bits ) noexcept { return ( bits >= 64 ) ? ~std::uint64_t{ 0 } : ( ( std::uint64_t{ 1 } << bits ) - 1 ); }
 
     template <std::random_access_iterator It, typename KeyOf, typename SortBucket>
-    void sort_by_key( It const first, It const last, KeyOf & key_of, unsigned const key_bits, SortBucket & sort_bucket, std::uint32_t const bucket_limit )
+    void sort_by_key( It const first, It const last, KeyOf & key_of, unsigned const key_bits, unsigned const item_bits, SortBucket & sort_bucket, std::uint32_t const bucket_limit )
     {
         using item_t = std::iter_value_t<It>;
         using diff_t = std::iter_difference_t<It>;
@@ -500,29 +501,11 @@ namespace key_sort_detail
         if ( n < 2 )
             return;
         BOOST_ASSERT( key_bits <= 64 );
+        BOOST_ASSERT( item_bits <= std::numeric_limits<item_t>::digits );
         BOOST_ASSERT( bucket_limit >= 2 );
         auto const at { [ first ]( std::size_t const i ) noexcept -> decltype( auto ) { return first[ static_cast<diff_t>( i ) ]; } };
         auto const key{ [ &key_of ]( item_t const item ) -> std::uint64_t { return static_cast<std::uint64_t>( key_of( item ) ); } };
 
-        // Already in order? One pass decides, and stops comparing at the first
-        // item out of order; the rest of it only finds the widest item.
-        item_t        max_item{ at( 0 ) };
-        std::uint64_t prev_key{ key( max_item ) };
-        std::size_t   i       { 1 };
-        for ( ; i < n; ++i )
-        {
-            item_t const item{ at( i ) };
-            auto   const k   { key( item ) };
-            if ( ( k < prev_key ) || ( ( k == prev_key ) && ( item < at( i - 1 ) ) ) )
-                break;
-            max_item = std::max( max_item, item );
-            prev_key = k;
-        }
-        if ( i == n )
-            return;
-        for ( ; i < n; ++i )
-            max_item = std::max( max_item, item_t{ at( i ) } );
-        auto const item_bits{ static_cast<unsigned>( std::bit_width( static_cast<std::uint64_t>( max_item ) ) ) };
         auto const item_mask{ low_bits( item_bits ) };
 
         // A range of items whose keys agree above their lowest `shift` bits.
@@ -545,7 +528,11 @@ namespace key_sort_detail
                 for ( std::uint32_t k{ 0 }; k < size; ++k )
                 {
                     item_t const item{ at( begin + k ) };
-                    keys[ k ] = ( ( key( item ) & key_mask ) << item_bits ) | static_cast<std::uint64_t>( item );
+                    BOOST_ASSERT( ( static_cast<std::uint64_t>( item ) & ~item_mask ) == 0 );
+                    // With 64-bit items the keys are decided (shift 0) and
+                    // nothing is shifted: a shift by 64 is undefined.
+                    auto const high{ ( item_bits < 64 ) ? ( ( key( item ) & key_mask ) << item_bits ) : std::uint64_t{ 0 } };
+                    keys[ k ] = high | static_cast<std::uint64_t>( item );
                 }
                 sort_bucket( std::span<std::uint64_t>{ keys } );
                 for ( std::uint32_t k{ 0 }; k < size; ++k )
@@ -598,9 +585,12 @@ inline constexpr std::uint32_t sort_by_key_bucket_limit{ std::uint32_t{ 1 } << 2
 /// elements kept elsewhere - in place, by the unsigned integer key_of( item ),
 /// ascending, equal keys by ascending item, with scratch memory bounded
 /// however many items there are. Every key must be below 2^key_bits (key_bits
-/// at most 64).
-///  * Items already in that order are recognised in one pass, which stops
-///    comparing at the first item out of order, and left as they are.
+/// at most 64) and every item below 2^item_bits: the caller knows both bounds
+/// (for indices, the size of what they index) more cheaply than a pass over
+/// the items would find them. Every pass is part of the sort: none only
+/// measures the items, and none checks whether they are in order already -
+/// a caller that expects sorted input checks it first, as cheaply as its data
+/// allows.
 ///  * A range of at most bucket_limit items, whose keys (the bits of them not
 ///    yet decided) and items fit together in 64 bits, is gathered as the
 ///    integers key << item_bits | item and those are sorted - by the sort_keys
@@ -616,11 +606,11 @@ inline constexpr std::uint32_t sort_by_key_bucket_limit{ std::uint32_t{ 1 } << 2
 /// than a bucket at a time.
 template <key_sort_algo Algo = key_sort_algo::pdq, std::random_access_iterator It, typename KeyOf>
 requires( std::unsigned_integral<std::iter_value_t<It>> && std::unsigned_integral<std::remove_cvref_t<std::invoke_result_t<KeyOf &, std::iter_value_t<It>>>> )
-void sort_by_key( It const first, It const last, KeyOf && key_of, unsigned const key_bits, std::uint32_t const bucket_limit = sort_by_key_bucket_limit )
+void sort_by_key( It const first, It const last, KeyOf && key_of, unsigned const key_bits, unsigned const item_bits, std::uint32_t const bucket_limit = sort_by_key_bucket_limit )
     noexcept( key_sort_detail::allocation_nothrow && key_sort_detail::key_sort_nothrow<Algo> && std::is_nothrow_invocable_v<KeyOf &, std::iter_value_t<It>> )
 {
     auto sort_bucket{ []( std::span<std::uint64_t> const keys ) noexcept( key_sort_detail::key_sort_nothrow<Algo> ) { std::ignore = key_sort_detail::sort_uints<Algo>( keys, false ); } };
-    key_sort_detail::sort_by_key( first, last, key_of, key_bits, sort_bucket, bucket_limit );
+    key_sort_detail::sort_by_key( first, last, key_of, key_bits, item_bits, sort_bucket, bucket_limit );
 }
 
 /// sort_by_key with the gathered 64-bit integers sorted by sort_bucket, a
@@ -628,10 +618,10 @@ void sort_by_key( It const first, It const last, KeyOf && key_of, unsigned const
 /// out of line, e.g. to keep the radix algorithm's headers out of its own.
 template <std::random_access_iterator It, typename KeyOf, typename SortBucket>
 requires( std::unsigned_integral<std::iter_value_t<It>> && std::unsigned_integral<std::remove_cvref_t<std::invoke_result_t<KeyOf &, std::iter_value_t<It>>>> && std::invocable<SortBucket &, std::span<std::uint64_t>> )
-void sort_by_key( It const first, It const last, KeyOf && key_of, unsigned const key_bits, SortBucket && sort_bucket, std::uint32_t const bucket_limit = sort_by_key_bucket_limit )
+void sort_by_key( It const first, It const last, KeyOf && key_of, unsigned const key_bits, unsigned const item_bits, SortBucket && sort_bucket, std::uint32_t const bucket_limit = sort_by_key_bucket_limit )
     noexcept( key_sort_detail::allocation_nothrow && std::is_nothrow_invocable_v<KeyOf &, std::iter_value_t<It>> && std::is_nothrow_invocable_v<SortBucket &, std::span<std::uint64_t>> )
 {
-    key_sort_detail::sort_by_key( first, last, key_of, key_bits, sort_bucket, bucket_limit );
+    key_sort_detail::sort_by_key( first, last, key_of, key_bits, item_bits, sort_bucket, bucket_limit );
 }
 
 PSI_WARNING_DISABLE_POP()

@@ -986,7 +986,8 @@ namespace
         {
             auto c{ make_by_key_case<std::uint32_t>( n, key_bits, ++seed ) };
             auto const expected{ by_key_reference( c ) };
-            sort_by_key<Algo>( c.items.begin(), c.items.end(), [ &c ]( std::uint32_t const item ) { return c.key_of_item[ item ]; }, key_bits, bucket_limit );
+            auto const item_bits{ static_cast<unsigned>( std::bit_width( n * 3 ) ) };
+            sort_by_key<Algo>( c.items.begin(), c.items.end(), [ &c ]( std::uint32_t const item ) { return c.key_of_item[ item ]; }, key_bits, item_bits, bucket_limit );
             EXPECT_EQ( c.items, expected ) << "key bits " << key_bits << ", n " << n << ", bucket limit " << bucket_limit;
         }
     }
@@ -1004,17 +1005,19 @@ TEST( sort_by_key, radix_agrees_with_std_sort_by_key_then_item )
 }
 #endif
 
-// Items in order already are recognised by one pass that reads each key
-// once, and left as they were.
-TEST( sort_by_key, items_in_order_cost_one_key_each_and_stay )
+// Items in order already stay as they are, and the sort reads each item's key
+// a bounded number of times: no pass only measures the items or checks their
+// order (a bucket gathers each key once; a partition reads it once to count
+// and at most once more per move).
+TEST( sort_by_key, reads_each_key_a_bounded_number_of_times )
 {
     auto c{ make_by_key_case<std::uint32_t>( 10'000, 40, 42 ) };
     c.items = by_key_reference( c );
     auto const expected{ c.items };
     std::size_t keys_read{ 0 };
-    sort_by_key( c.items.begin(), c.items.end(), [ & ]( std::uint32_t const item ) { ++keys_read; return c.key_of_item[ item ]; }, 40 );
+    sort_by_key( c.items.begin(), c.items.end(), [ & ]( std::uint32_t const item ) { ++keys_read; return c.key_of_item[ item ]; }, 40, 15 );
     EXPECT_EQ( c.items, expected );
-    EXPECT_EQ( keys_read, c.items.size() );
+    EXPECT_EQ( keys_read, c.items.size() ) << "one bucket: each key gathered once, nothing else";
 }
 
 // Any random-access range, not only a contiguous one; and a caller's own
@@ -1028,7 +1031,7 @@ TEST( sort_by_key, sorts_a_deque_through_a_caller_worker_a_bucket_at_a_time )
     sort_by_key
     (
         items.begin(), items.end(),
-        [ &c ]( std::uint32_t const item ) { return c.key_of_item[ item ]; }, 30,
+        [ &c ]( std::uint32_t const item ) { return c.key_of_item[ item ]; }, 30, 16,
         [ & ]( std::span<std::uint64_t> const keys ) { ++calls; largest = std::max( largest, keys.size() ); std::ranges::sort( keys ); },
         1'024
     );
@@ -1048,7 +1051,7 @@ TEST( sort_by_key, wide_keys_beside_wide_items_still_sort )
     auto const key_of{ []( std::uint64_t const item ) { return ( item * 0x9E37'79B9'7F4A'7C15ULL ) & 0xFFFF'0000'0000'00FFULL; } };
     auto expected{ items };
     std::ranges::sort( expected, [ & ]( std::uint64_t const l, std::uint64_t const r ) { return std::pair{ key_of( l ), l } < std::pair{ key_of( r ), r }; } );
-    sort_by_key( items.begin(), items.end(), key_of, 64, 64 );
+    sort_by_key( items.begin(), items.end(), key_of, 64, 64, 64 );
     EXPECT_EQ( items, expected );
 }
 
