@@ -413,6 +413,13 @@ public:
     // target: an automatic release there would be work thrown away.
     // Returns how many nodes it released.
     std::uint32_t release_free_nodes();
+    // The automatic release's own test, for the tree whose pool has just
+    // stopped being shared: bulk erasures made in a COW clone could not
+    // release there, and commit_to() hands the nodes they freed, and their
+    // count, to the target - which can release them once the clone is gone.
+    // Releases when the count has reached the threshold above (a constant
+    // time check when it has not), and returns how many nodes it released.
+    std::uint32_t release_free_nodes_if_due() noexcept;
     static constexpr std::uint32_t auto_release_pool_share{ 16 };
     // ...and the ones a commit_to() would copy, which is what a COW clone of
     // this tree costs to commit.  A tree nobody has mutated owes nothing.

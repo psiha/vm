@@ -4534,16 +4534,40 @@ TEST( bp_tree, bulk_erase_releases_by_itself )
             erase_keys( bpt, size / 2, size / 2 + few, how );
             EXPECT_EQ( bpt.nodes_released(), 0U ) << name << ", a few leaves";
         }
-        {   // in a COW clone
+        {   // in a COW clone: nothing while the clone shares the pool, and the
+            // tree committed to releases once it is gone
             auto source{ build( true ) };
             {
                 tree_t clone{ source };
                 erase_keys( clone, size / 8, 7 * size / 8, how );
                 EXPECT_EQ( clone.nodes_released(), 0U ) << name << ", in a clone";
                 clone.commit_to( source );
+#           if !defined( __APPLE__ ) // (there the source goes ahead: see release_free_nodes_spares_a_live_clone)
+                EXPECT_EQ( source.release_free_nodes_if_due(), 0U ) << name << ", the clone still alive";
+#           endif
             }
             ASSERT_TRUE( source.structure_is_sound() ) << name << ", committed";
             EXPECT_TRUE( std::ranges::equal( source, kept_after( size / 8, 7 * size / 8 ) ) ) << name;
+            EXPECT_EQ( source.nodes_released(), 0U ) << name << ", committed";
+            auto const resident_before{ resident_pages( source.node_pool_bytes() ) };
+            auto const released       { source.release_free_nodes_if_due() };
+            auto const resident_after { resident_pages( source.node_pool_bytes() ) };
+            EXPECT_GT( released, 0U ) << name << ", the clone gone";
+            EXPECT_EQ( source.nodes_released(), released );
+            if ( resident_before && resident_after )
+                EXPECT_LE( *resident_after + released * tree_t::node_byte_size() / page_size, *resident_before ) << name;
+            EXPECT_EQ( source.release_free_nodes_if_due(), 0U ) << name << ", once";
+            ASSERT_TRUE( source.structure_is_sound() ) << name << ", released";
+            EXPECT_TRUE( std::ranges::equal( source, kept_after( size / 8, 7 * size / 8 ) ) ) << name;
+        }
+        {   // a few leaves' worth in a clone: not due after it either
+            auto source{ build( true ) };
+            {
+                tree_t clone{ source };
+                erase_keys( clone, size / 2, size / 2 + static_cast<int>( tree_t::max_values_per_leaf() ) * 4, how );
+                clone.commit_to( source );
+            }
+            EXPECT_EQ( source.release_free_nodes_if_due(), 0U ) << name << ", a few leaves in a clone";
         }
     }
 }

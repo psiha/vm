@@ -771,12 +771,21 @@ void bptree_base::note_bulk_free( node_slot::value_type const free_nodes_before 
     if ( free_nodes <= free_nodes_before )
         return;
     freed_in_bulk_ += free_nodes - free_nodes_before;
+    (void)release_free_nodes_if_due();
+}
+
+std::uint32_t bptree_base::release_free_nodes_if_due() noexcept
+{
+    // (the count is kept where nothing can be released: it goes with the
+    // free nodes to the tree a clone commits to, which may release them)
+    if ( !freed_in_bulk_ || !has_attached_storage() || shares_pages() || !nodes_.can_release_pages( false ) )
+        return 0;
     auto const nodes_per_unit{ static_cast<std::uint32_t>( std::max<std::size_t>( 1, nodes_.release_granularity() / node_size ) ) };
-    auto const threshold     { std::max( { nodes_per_unit, static_cast<std::uint32_t>( nodes_.size() / auto_release_pool_share ), free_nodes / 2 } ) };
-    if ( ( freed_in_bulk_ < threshold ) || shares_pages() )
-        return;
-    try { release_free_nodes(); }
-    catch ( ... ) {} // (its bookkeeping allocates) nothing released, nothing lost
+    auto const threshold     { std::max( { nodes_per_unit, static_cast<std::uint32_t>( nodes_.size() / auto_release_pool_share ), hdr().free_node_count_ / 2 } ) };
+    if ( freed_in_bulk_ < threshold )
+        return 0;
+    try { return release_free_nodes(); }
+    catch ( ... ) { return 0; } // (its bookkeeping allocates) nothing released, nothing lost
 }
 
 std::uint32_t bptree_base::release_free_nodes()
