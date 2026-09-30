@@ -982,7 +982,7 @@ namespace
         std::uint64_t seed{ 3'000 };
         for ( auto const key_bits : { 0U, 1U, 8U, 20U, 33U, 48U, 64U } )
         for ( auto const n : { 0UZ, 1UZ, 2UZ, 7UZ, 300UZ, 5'000UZ } )
-        for ( auto const bucket_limit : { 2UZ, 16UZ, 1'000UZ, sort_by_key_bucket_limit } )
+        for ( auto const bucket_limit : { 2U, 16U, 1'000U, sort_by_key_bucket_limit } )
         {
             auto c{ make_by_key_case<std::uint32_t>( n, key_bits, ++seed ) };
             auto const expected{ by_key_reference( c ) };
