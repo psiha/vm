@@ -603,11 +603,13 @@ private:
     PSI_WARNING_GCC_OR_CLANG_DISABLE( -Wsign-conversion )
     static T *  to_t_ptr  ( extendable_mapped_view::value_type * const ptr     ) noexcept {                                             return reinterpret_cast<T *>( ptr ); }
     static sz_t to_t_sz   ( auto                                 const byte_sz ) noexcept { BOOST_ASSUME( byte_sz % sizeof( T ) == 0 ); return static_cast<sz_t>( byte_sz / sizeof( T ) ); }
-    static sz_t to_byte_sz( auto                                 const sz      ) noexcept
+    // A byte count, in the mapping's own size_type: sz_t counts elements, and
+    // a narrow one (a 32 bit counter of 8 byte elements) cannot hold the
+    // bytes of every size it can count.
+    static base::size_type to_byte_sz( sz_t const sz ) noexcept
     {
-        auto const rez{ sz * sizeof( T ) };
-        BOOST_ASSERT( rez <= std::numeric_limits<sz_t>::max() );
-        return static_cast<sz_t>( rez );
+        BOOST_ASSERT( sz <= std::numeric_limits<base::size_type>::max() / sizeof( T ) );
+        return base::size_type{ sz } * sizeof( T );
     }
     PSI_WARNING_DISABLE_POP()
 
@@ -669,7 +671,7 @@ public:
     base       & storage_base()       noexcept { return *this; }
     base const & storage_base() const noexcept { return *this; }
 
-    [[ nodiscard, gnu::pure ]] sz_t mapped_size() const noexcept { return static_cast<sz_t>( base::mapped_size() ); }
+    [[ nodiscard, gnu::pure ]] base::size_type mapped_size() const noexcept { return base::mapped_size(); } // bytes
 
     // --- storage_* interface for vector<> ---
     template <geometric_growth G = geometric_growth{1, 1}>

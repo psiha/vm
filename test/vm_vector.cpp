@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <new>
 #include <print>
 #include <system_error>
 #include <vector>
@@ -34,6 +35,27 @@ TEST( vm_vector, anon_memory_backed )
     EXPECT_EQ( vec[ 0 ], 3.14 );
     EXPECT_EQ( vec[ 1 ], 0.14 );
     EXPECT_EQ( vec[ 2 ], 0.04 );
+}
+
+// A 32 bit counter of 8 byte elements counts more elements than 32 bits of
+// bytes hold: the storage's byte counts must not be narrowed to the counter
+// (only address space is taken: nothing past two pages is written).
+TEST( vm_vector, narrow_counter_of_wide_elements_passes_4_gib )
+{
+#ifdef _WIN32
+    GTEST_SKIP() << "anonymous storage on Windows is a pagefile backed section of at most 2 GiB (max_anonymous_pf_mapping_size)";
+#endif
+    psi::vm::vm_vector<std::uint64_t, std::uint32_t> vec;
+    vec.map_memory();
+    auto const count{ static_cast<std::uint32_t>( ( std::uint64_t{ 1 } << 32 ) / sizeof( std::uint64_t ) + 1 ) }; // 4 GiB + 8 bytes
+    try { vec.grow_to( count, default_init ); }
+    catch ( std::bad_alloc const & ) { GTEST_SKIP() << "no room for 4 GiB here"; }
+    ASSERT_EQ( vec.size(), count );
+    EXPECT_GE( vec.capacity(), count );
+    vec.front() = 1;
+    vec.back () = 2;
+    EXPECT_EQ( vec.front(), 1U );
+    EXPECT_EQ( vec.back (), 2U );
 }
 
 TEST( vm_vector, file_backed )
