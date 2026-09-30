@@ -56,7 +56,7 @@ struct jemalloc_allocator
     [[ nodiscard ]] PSI_COLD [[ using gnu: assume_aligned( alignment ), malloc, returns_nonnull ]]
     static pointer allocate( size_type const count, void const * const /*hint*/ = nullptr )
     {
-        BOOST_ASSUME( count < base::max_size() );
+        BOOST_ASSUME( count <= base::max_size() );
         auto * const ptr{ static_cast<pointer>( ::je_mallocx( count * sizeof( T ), je_flags<alignment>() ) ) };
         if ( !ptr ) [[ unlikely ]]
             detail::throw_bad_alloc();

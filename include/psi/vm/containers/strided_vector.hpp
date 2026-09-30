@@ -527,7 +527,7 @@ public:
 
     // Construct `count` default-initialized entries of the given stride
     constexpr strided_vector( stride_type const stride, size_type const count )
-        : data_( static_cast<size_type>( count * stride ) ), stride_{ stride }
+        : data_( backing_length( count, stride ) ), stride_{ stride }
     {
         BOOST_ASSUME( stride <= MaxStride );
         BOOST_ASSUME( stride > 0 || count == 0 ); // zero-stride only supported when empty
@@ -544,14 +544,14 @@ public:
         {
             // Single reserve-and-resize with no per-slot construction, then
             // stamp `prototype` into each slot. Avoids N append_range calls.
-            data_.resize( count * stride, no_init );
+            data_.resize( backing_length( count, stride ), no_init );
             auto * dst{ data_.data() };
             for ( size_type i{ 0 }; i < count; ++i, dst += stride )
                 std::ranges::copy( prototype, dst );
         }
         else
         {
-            data_.reserve( count * stride );
+            data_.reserve( backing_length( count, stride ) );
             for ( size_type i{ 0 }; i < count; ++i ) {
                 data_.append_range( prototype );
             }
@@ -565,7 +565,7 @@ public:
     {
         BOOST_ASSUME( stride <= MaxStride );
         if constexpr ( std::ranges::sized_range<EntryRng> ) {
-            data_.reserve( static_cast<size_type>( std::ranges::size( entries ) ) * stride );
+            data_.reserve( backing_length( std::ranges::size( entries ), stride ) );
         }
         for ( std::span const e : entries ) {
             push_back( e );
@@ -626,7 +626,7 @@ public:
     [[ nodiscard, gnu::pure ]]        constexpr size_type capacity() const noexcept { return static_cast<size_type>( data_.capacity() / std::max<stride_type>( stride_, 1 ) ); }
     [[ nodiscard, gnu::pure ]] static constexpr size_type max_size()       noexcept { return backing_vector_type::max_size(); }
 
-    constexpr void reserve      ( size_type const numEntries )          { data_.reserve( numEntries * stride() ); }
+    constexpr void reserve      ( size_type const numEntries )          { data_.reserve( backing_length( numEntries, stride() ) ); }
     constexpr void shrink_to_fit(                            ) noexcept { data_.shrink_to_fit(); }
 
     //--------------------------------------------------------------------------
@@ -735,14 +735,14 @@ public:
         data_.clear();
         if constexpr ( std::is_trivially_destructible_v<T> )
         {
-            data_.resize( count * stride_, no_init );
+            data_.resize( backing_length( count, stride_ ), no_init );
             auto * dst{ data_.data() };
             for ( size_type i{ 0 }; i < count; ++i, dst += stride_ )
                 std::ranges::copy( prototype, dst );
         }
         else
         {
-            data_.reserve( count * stride_ );
+            data_.reserve( backing_length( count, stride_ ) );
             for ( size_type i{ 0 }; i < count; ++i ) {
                 data_.append_range( prototype );
             }
@@ -757,7 +757,7 @@ public:
         BOOST_ASSUME( stride_ >= 1 );
         data_.clear();
         if constexpr ( std::ranges::sized_range<EntryRng> ) {
-            data_.reserve( static_cast<size_type>( std::ranges::size( entries ) ) * stride_ );
+            data_.reserve( backing_length( std::ranges::size( entries ), stride_ ) );
         }
         for ( std::span const e : entries ) {
             push_back( e );
@@ -784,7 +784,7 @@ public:
     {
         BOOST_ASSUME( stride_ >= 1 );
         ensure_capacity();
-        data_.resize( data_.size() + stride_, value );
+        data_.resize( backing_sum( data_.size(), stride_ ), value );
     }
 
     /// Construct an entry in place from `stride` scalar arguments.
@@ -829,7 +829,7 @@ public:
         BOOST_ASSERT( prototype.size() == stride_ );
         auto const offset   { static_cast<size_type>( pos - cbegin() ) };
         auto const scalarPos{ data_.cbegin() + static_cast<difference_type>( offset ) * stride_ };
-        auto const totalTs  { static_cast<size_type>( count ) * stride_ };
+        auto const totalTs  { backing_length( count, stride_ ) };
         // Make room: single shift of the tail (via backing vector's insert of default-init Ts)
         data_.insert( scalarPos, totalTs, T{} );
         // Fill the gap with `count` copies of prototype
@@ -864,7 +864,7 @@ public:
     }
 
     /// Resize to `count` entries. New entries are default-initialized.
-    void resize( size_type const count ) { data_.resize( count * stride_ ); }
+    void resize( size_type const count ) { data_.resize( backing_length( count, stride_ ) ); }
 
     /// Resize to `count` entries, forwarding init-policy to the backing
     /// vector (no_init / default_init / value_init — see psi::vm::vector).
@@ -872,7 +872,7 @@ public:
     /// types use `default_init` or `value_init`, or the span-prototype form.
     void resize( size_type const count, init_policy auto const initializer )
     {
-        data_.resize( count * stride_, initializer );
+        data_.resize( backing_length( count, stride_ ), initializer );
     }
 
     /// Resize to `count` entries. New entries are filled from `prototype`.
@@ -883,7 +883,7 @@ public:
         auto const old_entries{ size() };
         if ( count <= old_entries )
         {
-            data_.resize( count * stride_ );
+            data_.resize( backing_length( count, stride_ ) );
         }
         else if constexpr ( std::is_trivially_destructible_v<T> )
         {
@@ -892,14 +892,14 @@ public:
             // beats N append_range calls (each re-checks capacity and
             // increments size).
             auto const first_new{ old_entries };
-            data_.resize( count * stride_, no_init );
+            data_.resize( backing_length( count, stride_ ), no_init );
             auto * dst{ data_.data() + first_new * stride_ };
             for ( auto i{ first_new }; i < count; ++i, dst += stride_ )
                 std::ranges::copy( prototype, dst );
         }
         else
         {
-            data_.reserve( count * stride_ );
+            data_.reserve( backing_length( count, stride_ ) );
             for ( auto i{ old_entries }; i < count; ++i )
                 data_.append_range( prototype );
         }
@@ -945,11 +945,47 @@ private:
     void ensure_capacity( size_type const additionalEntries = 1 )
     {
         BOOST_ASSUME( stride_ >= 1 );
-        auto const needed{ data_.size() + additionalEntries * stride_ };
+        auto const needed{ backing_sum( data_.size(), backing_length( additionalEntries, stride_ ) ) };
         if ( needed > data_.capacity() )
         {
-            data_.reserve( Growth( needed, data_.capacity() ) );
+            // The ceiling is itself a reachable length: headroom that would
+            // overshoot it is clamped to it, and a need past it is refused by
+            // the backing vector.
+            data_.reserve( Growth( needed, data_.capacity(), max_size() ) );
         }
+    }
+
+    // Backing lengths - `count * stride` products and sums of them - are
+    // formed in this type, wider than a narrow size_type, so one past what the
+    // backing vector can count is refused instead of wrapping into a short
+    // buffer. With size_type == std::size_t it is size_type itself.
+    using wide_size_type = std::conditional_t<( sizeof( size_type ) < sizeof( std::size_t ) ), std::size_t, size_type>;
+
+    [[ nodiscard ]] static constexpr size_type checked_backing_length( wide_size_type const length )
+    {
+        if constexpr ( sizeof( wide_size_type ) > sizeof( size_type ) )
+        {
+            if ( length > std::numeric_limits<size_type>::max() ) [[ unlikely ]]
+                detail::length_error<backing_vector_type::length_error_is_reportable()>();
+        }
+        return static_cast<size_type>( length );
+    }
+    //! The backing length of `count` entries. The entry count is itself
+    //! refused first if size_type cannot count it (a range's extent), after
+    //! which the product cannot wrap the wide type.
+    [[ nodiscard ]] static constexpr size_type backing_length( std::integral auto const count, stride_type const stride )
+    {
+        static_assert
+        (
+            sizeof( wide_size_type ) == sizeof( size_type ) ||
+            std::numeric_limits<size_type>::max() <= std::numeric_limits<wide_size_type>::max() / MaxStride
+        );
+        auto const entries{ checked_backing_length( static_cast<wide_size_type>( count ) ) };
+        return checked_backing_length( static_cast<wide_size_type>( static_cast<wide_size_type>( entries ) * stride ) );
+    }
+    [[ nodiscard ]] static constexpr size_type backing_sum( size_type const base, size_type const delta )
+    {
+        return checked_backing_length( static_cast<wide_size_type>( static_cast<wide_size_type>( base ) + delta ) );
     }
 
     backing_vector_type data_;

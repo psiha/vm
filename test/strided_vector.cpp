@@ -18,9 +18,11 @@
 #include <array>
 #include <cstdint>
 #include <iterator>
+#include <limits>
 #include <numeric>
 #include <ranges>
 #include <span>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -1018,6 +1020,32 @@ TYPED_TEST( strided_vector_compliance, sort_preserves_element_identity )
 }
 
 #endif // !MSVC native
+
+// count * stride is formed wide enough not to wrap, so an entry count whose
+// backing length a narrow counter cannot express is refused, where the
+// product formed in the counter would wrap into a short buffer.
+TEST( strided_vector_narrow_size, a_backing_length_past_the_counter_is_reported )
+{
+    using sv = strided_vector<std::uint8_t, 64, heap_storage<std::uint8_t, std::uint32_t>>;
+    static_assert( sv::max_size() == std::numeric_limits<std::uint32_t>::max() );
+    static_assert( sizeof( std::size_t ) > sizeof( std::uint32_t ) );
+
+    constexpr std::uint8_t  stride{ 16 };
+    // Entries that each fit the counter, whose backing length is 16 past it:
+    // formed in the counter that is 16 elements, i.e. one entry.
+    constexpr std::uint32_t entries{ ( std::uint32_t{ 1 } << 28 ) + 1 };
+
+    sv v{ stride };
+    v.resize( 2, value_init );
+
+    EXPECT_THROW( v.resize ( entries             ), std::length_error );
+    EXPECT_THROW( v.resize ( entries, value_init ), std::length_error );
+    EXPECT_THROW( v.reserve( entries             ), std::length_error );
+    std::array<std::uint8_t, stride> const prototype{};
+    EXPECT_THROW( v.insert ( v.cbegin(), entries, prototype ), std::length_error );
+    EXPECT_THROW( (void)sv( stride, entries ), std::length_error );
+    EXPECT_EQ( v.size(), 2u );
+}
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm

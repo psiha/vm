@@ -61,7 +61,7 @@ struct tcmalloc_allocator
     [[ nodiscard ]] PSI_COLD [[ using gnu: assume_aligned( alignment ), malloc, returns_nonnull ]]
     static pointer allocate( size_type const count, void const * const /*hint*/ = nullptr )
     {
-        BOOST_ASSUME( count < base::max_size() );
+        BOOST_ASSUME( count <= base::max_size() );
         auto const byte_size{ count * sizeof( T ) };
         void * new_allocation;
         if constexpr ( alignment > alignof( std::max_align_t ) )

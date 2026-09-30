@@ -176,7 +176,7 @@ struct crt_allocator
 #endif
     static pointer allocate( size_type const count, [[ maybe_unused ]] void const * const hint = nullptr )
     {
-        BOOST_ASSUME( count < base::max_size() );
+        BOOST_ASSUME( count <= base::max_size() );
         auto const byte_size{ count * sizeof( T ) };
         void * new_allocation{ nullptr };
         if constexpr ( alignment > detail::guaranteed_alignment )
