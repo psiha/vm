@@ -19,6 +19,7 @@
 
 #include <boost/assert.hpp>
 
+#include <algorithm> // min
 #include <cstdint>
 #include <cstdlib>
 #include <cstring> // memcpy
@@ -97,7 +98,8 @@ namespace detail
             {
                 BOOST_ASSUME( try_realloc ); // nullptr handled implicitly above
                 if ( posix_memalign( &new_allocation, alignment, new_size ) == 0 ) [[ likely ]]
-                    std::memcpy( new_allocation, try_realloc, existing_allocation_size );
+                    // (only what both blocks hold: a shrink's realloc kept new_size bytes)
+                    std::memcpy( new_allocation, try_realloc, std::min( existing_allocation_size, new_size ) );
                 std::free( try_realloc );
             }
         }
@@ -228,7 +230,7 @@ struct crt_allocator
     //!Returns the maximum number of objects the previously allocated memory
     //!pointed by p can hold.
     template <std::uint8_t alignment = detail::safe_alignof_v<T>>
-    [[ nodiscard, gnu::pure ]] static size_type size( const_pointer const p ) noexcept
+    [[ nodiscard, gnu::pure ]] static size_type size( const_pointer const p, size_type /*requested*/ = 0 ) noexcept
     {
         return static_cast<size_type>( detail::crt_aligned_alloc_size<alignment>( p ) / sizeof( T ) );
     }
