@@ -37,6 +37,43 @@ TEST( vm_vector, anon_memory_backed )
     EXPECT_EQ( vec[ 2 ], 0.04 );
 }
 
+// A default constructed vm_vector has no backing store: it reads as empty,
+// clearing or shrinking it is a no-op, and the first growth attaches anonymous
+// memory, so it can be used as a plain container without map_memory().
+TEST( vm_vector, first_growth_attaches_anonymous_memory )
+{
+    psi::vm::vm_vector<std::uint32_t, std::uint32_t> vec;
+    EXPECT_TRUE ( vec.empty() );
+    EXPECT_EQ   ( vec.size(), 0 );
+    EXPECT_EQ   ( vec.capacity(), 0 );
+    EXPECT_EQ   ( vec.data(), nullptr );
+    vec.clear();
+    vec.shrink_to_fit();
+    EXPECT_FALSE( vec.storage_base().has_attached_storage() );
+
+    vec.grow_by_amortized( 3, no_init );
+    EXPECT_TRUE( vec.storage_base().has_attached_storage() );
+    ASSERT_EQ  ( vec.size(), 3 );
+    vec[ 0 ] = 1; vec[ 1 ] = 2; vec[ 2 ] = 3;
+    for ( std::uint32_t i{ 4 }; i <= 100'000; ++i )
+        vec.push_back( i );
+    ASSERT_EQ( vec.size(), 100'000 );
+    for ( std::uint32_t i{ 0 }; i < vec.size(); ++i )
+        ASSERT_EQ( vec[ i ], i + 1 );
+
+    // The first reserve() maps the requested capacity in one go: filling it
+    // then neither grows nor moves the mapping.
+    psi::vm::vm_vector<std::uint32_t, std::uint32_t> reserved;
+    reserved.reserve( 1000 );
+    EXPECT_GE( reserved.capacity(), 1000 );
+    EXPECT_EQ( reserved.size(), 0 );
+    auto const * const first_data{ reserved.data() };
+    auto const mapped{ reserved.mapped_size() };
+    reserved.grow_by( 1000, value_init );
+    EXPECT_EQ( reserved.data(), first_data );
+    EXPECT_EQ( reserved.mapped_size(), mapped );
+}
+
 // A 32 bit counter of 8 byte elements counts more elements than 32 bits of
 // bytes hold: the storage's byte counts must not be narrowed to the counter
 // (only address space is taken: nothing past two pages is written).

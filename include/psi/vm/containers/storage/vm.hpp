@@ -38,6 +38,7 @@
 
 #include <cstddef>
 #include <span>
+#include <utility>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -265,8 +266,13 @@ public:
     [[ gnu::pure, nodiscard ]] std::span<std::byte const> header_storage() const noexcept { return const_cast<mem_mapping &>( *this ).header_storage(); }
     [[ gnu::pure, nodiscard ]] std::span<std::byte      > header_storage()       noexcept;
 
+    // Unattached storage (default constructed, closed or moved from) reads as
+    // empty: no data, no size, no capacity. Its first growth (or reserve())
+    // attaches anonymous memory.
+
     //! The live length: what the container currently spans, including growth
-    //! not yet committed. Reads a plain member - no mapped-page touch.
+    //! not yet committed. Reads a plain member - no mapped-page touch - which
+    //! is zero whenever no storage is attached.
     [[ nodiscard, gnu::pure ]] size_type size       () const noexcept { return live_size_; }
     //! The length recorded in the persisted header, i.e. the extent as of the
     //! last header-covering flush (or clean detach). After an abnormal
@@ -275,12 +281,16 @@ public:
     //! outside an in-flight mutation.
     [[ nodiscard, gnu::pure ]] size_type committed_size() const noexcept { return has_attached_storage() ? get_sizes().data_size : size_type{ 0 }; }
     [[ nodiscard, gnu::pure ]] size_type fs_capacity() const noexcept { return storage_size() - get_sizes().data_offset; }
-    [[ nodiscard, gnu::pure ]] size_type vm_capacity() const noexcept { return  mapped_size() - get_sizes().data_offset; }
+    [[ nodiscard, gnu::pure ]] size_type vm_capacity() const noexcept { return has_attached_storage() ? attached_vm_capacity() : size_type{ 0 }; }
+
+    //! The start of the data, or null while no storage is attached.
+    [[ nodiscard, gnu::pure ]] value_type       * data()       noexcept { return has_attached_storage() ? attached_data() : nullptr; }
+    [[ nodiscard, gnu::pure ]] value_type const * data() const noexcept { return const_cast<mem_mapping &>( *this ).data(); }
 
     //! <b>Effects</b>: Returns true if the vector contains no elements.
     //! <b>Throws</b>: Nothing.
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard, gnu::pure ]] bool empty() const noexcept { return !has_attached_storage() || !size(); }
+    [[ nodiscard, gnu::pure ]] bool empty() const noexcept { return !size(); }
 
     //! <b>Effects</b>: Tries to deallocate the excess of memory created
     //!   with previous allocations. The size of the vector is unchanged.
@@ -446,11 +456,15 @@ protected:
     [[ nodiscard, gnu::pure, gnu::assume_aligned( reserve_granularity ) ]] value_type       * mapped_data()       noexcept { BOOST_ASSERT_MSG( mapping_, "Backing storage not attached" ); return std::assume_aligned<commit_granularity>( view_.data() ); }
     [[ nodiscard, gnu::pure, gnu::assume_aligned( reserve_granularity ) ]] value_type const * mapped_data() const noexcept { return const_cast<mem_mapping &>( *this ).mapped_data(); }
 
+    // Attached storage only (unchecked).
     [[ nodiscard, gnu::pure, gnu::assume_aligned( header_info::minimal_data_alignment ) ]]
-    auto * data( this auto & self ) noexcept
+    value_type * attached_data() noexcept
     {
-        return std::assume_aligned<header_info::minimal_data_alignment>( self.mapped_data() + self.get_sizes().data_offset );
+        return std::assume_aligned<header_info::minimal_data_alignment>( mapped_data() + get_sizes().data_offset );
     }
+    [[ nodiscard, gnu::pure, gnu::assume_aligned( header_info::minimal_data_alignment ) ]]
+    value_type const * attached_data() const noexcept { return const_cast<mem_mapping &>( *this ).attached_data(); }
+    [[ nodiscard, gnu::pure ]] size_type attached_vm_capacity() const noexcept { return mapped_size() - get_sizes().data_offset; }
 
     sizes_hdr       & get_sizes()       noexcept { return *reinterpret_cast<sizes_hdr       *>( mapped_data() ); }
     sizes_hdr const & get_sizes() const noexcept { return *reinterpret_cast<sizes_hdr const *>( mapped_data() ); }
@@ -462,20 +476,23 @@ protected:
 
     void swap( mem_mapping & other ) noexcept { std::swap( *this, other ); }
 
-    void   reserve              ( size_type new_capacity );
+    // Attaches anonymous memory first when no storage is attached yet, its
+    // data aligned to data_alignment.
+    void   reserve              ( size_type new_capacity, header_info::align_t data_alignment = header_info::minimal_data_alignment );
     void * shrink_to_slow       ( size_type target_size ) noexcept( mapping::views_downsizeable );
     void * expand_view          ( size_type target_size );
     void   shrink_mapped_size_to( size_type target_size ) noexcept( mapping::views_downsizeable );
 
     template <geometric_growth G = geometric_growth{1, 1}>
-    void * grow_to( size_type const byte_target )
+    void * grow_to( size_type const byte_target, header_info::align_t const data_alignment = header_info::minimal_data_alignment )
     {
         if ( byte_target > size() ) [[ likely ]]
         {
-            auto const byte_cap{ vm_capacity() };
+            auto const byte_cap{ vm_capacity() }; // zero while unattached: reserve() attaches
             if ( byte_target > byte_cap ) [[ unlikely ]]
-                reserve( static_cast<bool>( G ) ? G( byte_target, byte_cap ) : byte_target );
+                reserve( static_cast<bool>( G ) ? G( byte_target, byte_cap ) : byte_target, data_alignment );
             live_size() = byte_target;
+            return attached_data();
         }
         return data();
     }
@@ -511,7 +528,7 @@ private:
     //! Mutable access to the LIVE length (the in-flight one). Every internal
     //! growth/shrink path moves this and only this - publishing to the header
     //! is the caller's explicit act (publish_size()).
-    [[ nodiscard, gnu::pure ]] size_type & live_size() noexcept { return live_size_; }
+    [[ nodiscard, gnu::pure ]] size_type & live_size() noexcept { return live_size_.value; }
     //! Mutable access to the PERSISTED length in the mapped header. Only
     //! publish_size() may move it.
     [[ nodiscard, gnu::pure ]] size_type & persisted_size() noexcept { return get_sizes().data_size; }
@@ -547,8 +564,21 @@ private:
     mapping                mapping_;
     // The live (in-flight) length. The persisted copy in sizes_hdr::data_size
     // is deliberately NOT updated by growth/shrinkage - see size() and
-    // committed_size().
-    size_type              live_size_{ 0 };
+    // committed_size(). A move hands it over and leaves zero behind, so it is
+    // zero whenever no storage is attached and size() needs no check.
+    struct [[ clang::trivial_abi ]] live_length
+    {
+        size_type value{ 0 };
+
+        constexpr live_length() noexcept = default;
+        constexpr live_length( live_length const &  ) noexcept = default;
+        constexpr live_length( live_length       && other ) noexcept : value{ std::exchange( other.value, size_type{ 0 } ) } {}
+        constexpr live_length & operator=( live_length const &  ) noexcept = default;
+        constexpr live_length & operator=( live_length       && other ) noexcept { value = std::exchange( other.value, size_type{ 0 } ); return *this; }
+        constexpr live_length & operator=( size_type const v ) noexcept { value = v; return *this; }
+        constexpr operator size_type() const noexcept { return value; }
+    };
+    live_length            live_size_;
     // Private views (COW clones) only: how much of the view's address range,
     // from its start, the shared object backs - past it the view is
     // anonymous memory of the clone's own. A length suffices: the view always
@@ -652,15 +682,15 @@ public:
         ) );
     }
 
-    [[ nodiscard, gnu::pure ]] T       * data()       noexcept { return has_attached_storage() ? to_t_ptr( base::data() ) : nullptr; }
+    [[ nodiscard, gnu::pure ]] T       * data()       noexcept { return to_t_ptr( base::data() ); }
     [[ nodiscard, gnu::pure ]] T const * data() const noexcept { return const_cast<vm_storage &>( *this ).data(); }
 
-    [[ nodiscard, gnu::pure ]] sz_t size    () const noexcept { return has_attached_storage() ? to_t_sz( base::size()        ) : sz_t{}; }
+    [[ nodiscard, gnu::pure ]] sz_t size    () const noexcept { return to_t_sz( base::size() ); }
     //! Element-count counterpart of mem_mapping::committed_size().
-    [[ nodiscard, gnu::pure ]] sz_t committed_size() const noexcept { return has_attached_storage() ? to_t_sz( base::committed_size() ) : sz_t{}; }
-    [[ nodiscard, gnu::pure ]] sz_t capacity() const noexcept { return has_attached_storage() ? static_cast<sz_t>( base::vm_capacity() / sizeof( T ) ) : sz_t{}; }
+    [[ nodiscard, gnu::pure ]] sz_t committed_size() const noexcept { return to_t_sz( base::committed_size() ); }
+    [[ nodiscard, gnu::pure ]] sz_t capacity() const noexcept { return static_cast<sz_t>( base::vm_capacity() / sizeof( T ) ); }
 
-    void reserve( sz_t const new_capacity ) { base::reserve( to_byte_sz( new_capacity ) ); }
+    void reserve( sz_t const new_capacity ) { base::reserve( to_byte_sz( new_capacity ), data_alignment ); }
 
     // Compatibility aliases for boost::container::flat_* and generic code
     using allocator_type = std::allocator<T>;
@@ -675,7 +705,7 @@ public:
 
     // --- storage_* interface for vector<> ---
     template <geometric_growth G = geometric_growth{1, 1}>
-    T * storage_grow_to  ( sz_t const target_size )          { return static_cast<T *>( base::template grow_to<G>( to_byte_sz( target_size ) ) ); }
+    T * storage_grow_to  ( sz_t const target_size )          { return static_cast<T *>( base::template grow_to<G>( to_byte_sz( target_size ), data_alignment ) ); }
     T * storage_shrink_to( sz_t const target_size ) noexcept { return static_cast<T *>( base::         shrink_to ( to_byte_sz( target_size ) ) ); }
 
     // Opt in to vector<>'s shrink_to_fit(): spare capacity here is file
@@ -690,6 +720,10 @@ public:
     void storage_free() noexcept {} // NO-OP: mem_mapping dtor closes the mapping cleanly
 
 private:
+    // The alignment map_memory() gives T's data, and so also the storage the
+    // first growth attaches.
+    static header_info::align_t constexpr data_alignment{ alignof( T ) };
+
     // Freshly mapped memory reads as zeros, which is a constructed T only for a
     // trivially default constructible one - anything else is constructed here,
     // whichever kind of memory the mapping is.
