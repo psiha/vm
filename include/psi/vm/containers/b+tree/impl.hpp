@@ -120,7 +120,7 @@ public:
     using base::clear;
 
     bp_tree_impl(                             ) noexcept = default;
-    bp_tree_impl( Comparator const & comp     ) noexcept : Komp{ comp } {}
+    bp_tree_impl( Comparator const & comparator ) noexcept : Komp{ comparator } {}
     bp_tree_impl( bp_tree_impl const & source ) : base{ source }, Komp{ static_cast<Komp const &>( source ) } {}
     bp_tree_impl( bp_tree_impl &&             ) noexcept = default;
     bp_tree_impl & operator=( bp_tree_impl && ) noexcept = default;
@@ -363,12 +363,12 @@ private:
     }
     template <node_size_type maximum_values>
     find_pos lower_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return lower_bound<search_capacity<maximum_values>>( keys, num_vals, value, pass_in_reg{ comp() } ); }
-    find_pos lower_bound( auto const & node, auto const & value ) const noexcept { return lower_bound<bptree_base::node_capacity<decltype( node )>>( node.keys().data(), node.num_vals, pass_in_reg{ value } ); }
+    find_pos lower_bound( auto const & nd, auto const & value ) const noexcept { return lower_bound<bptree_base::node_capacity<decltype( nd )>>( nd.keys().data(), nd.num_vals, pass_in_reg{ value } ); }
     [[ using gnu: pure, hot, sysv_abi ]]
-    find_pos lower_bound( auto const & node, node_size_type const offset, Reg auto const value ) const noexcept
+    find_pos lower_bound( auto const & nd, node_size_type const offset, Reg auto const value ) const noexcept
     {
-        BOOST_ASSUME( offset < node.num_vals );
-        auto result{ lower_bound<bptree_base::node_capacity<decltype( node )>>( &node.key( offset ), node.num_vals - offset, value ) };
+        BOOST_ASSUME( offset < nd.num_vals );
+        auto result{ lower_bound<bptree_base::node_capacity<decltype( nd )>>( &nd.key( offset ), nd.num_vals - offset, value ) };
         result.pos += offset;
         return result;
     }
@@ -405,22 +405,22 @@ protected:
     }
     template <node_size_type maximum_values>
     node_size_type upper_bound( Key const keys[], node_size_type const num_vals, Reg auto const value ) const noexcept { return upper_bound<search_capacity<maximum_values>>( keys, num_vals, value, pass_in_reg{ comp() } ); }
-    node_size_type upper_bound( auto const & node, auto const & value ) const noexcept { return upper_bound<bptree_base::node_capacity<decltype( node )>>( node.keys().data(), node.num_vals, pass_in_reg{ value } ); }
+    node_size_type upper_bound( auto const & nd, auto const & value ) const noexcept { return upper_bound<bptree_base::node_capacity<decltype( nd )>>( nd.keys().data(), nd.num_vals, pass_in_reg{ value } ); }
     [[ using gnu: pure, hot, sysv_abi ]]
-    node_size_type upper_bound( auto const & node, node_size_type const offset, Reg auto const value ) const noexcept
+    node_size_type upper_bound( auto const & nd, node_size_type const offset, Reg auto const value ) const noexcept
     {
-        BOOST_ASSUME( offset < node.num_vals );
-        return upper_bound<bptree_base::node_capacity<decltype( node )>>( &node.key( offset ), node.num_vals - offset, value ) + offset;
+        BOOST_ASSUME( offset < nd.num_vals );
+        return upper_bound<bptree_base::node_capacity<decltype( nd )>>( &nd.key( offset ), nd.num_vals - offset, value ) + offset;
     }
 
     // upper_bound find >from a starting point, across nodes within the level/depth of the starting node<
-    std::pair<iter_pos, size_type> upper_bound_across_nodes( auto const & node, node_size_type const offset, Reg auto const value ) const noexcept
+    std::pair<iter_pos, size_type> upper_bound_across_nodes( auto const & start_node, node_size_type const offset, Reg auto const value ) const noexcept
     {
         // 'optimized' (simplified to linear across the leaves) for the
         // assumption/prevalence of shorter equal-range spans that will mostly
         // fit within a single node (making it not worth it to go up the tree
         // like find_from, the lower_bound version, does).
-        auto * p_node{ &node };
+        auto * p_node{ &start_node };
         // extracted the initial call to upper_bound as it is the only one that
         // has to take the offset in to account (simplifies the loop slightly)
         auto pos  { upper_bound( *p_node, offset, value ) };
@@ -491,10 +491,10 @@ private:
     [[ gnu::always_inline ]] void prefetch_lines( node_slot const slot ) const noexcept
     {
         static_assert( std::ranges::all_of( prefetch_offsets<N>, []( std::uint32_t const offset ) { return offset < sizeof( N ); } ) );
-        auto const & node{ this->template node<N>( slot ) };
+        auto const & nd{ this->template node<N>( slot ) };
         std::size_t live_offset{ 0 };
-        if constexpr ( prefetch_follows_start<N> ) { live_offset = std::size_t{ node.live_start() } * sizeof( Key ); }
-        prefetch_offsets_from<N>( reinterpret_cast<std::byte const *>( &node ), live_offset, std::make_index_sequence<prefetch_offsets<N>.size()>{} );
+        if constexpr ( prefetch_follows_start<N> ) { live_offset = std::size_t{ nd.live_start() } * sizeof( Key ); }
+        prefetch_offsets_from<N>( reinterpret_cast<std::byte const *>( &nd ), live_offset, std::make_index_sequence<prefetch_offsets<N>.size()>{} );
     }
     // Start fetching the child a descent is about to search, from its slot
     // (PSI_VM_BT_PREFETCH_LINES).
@@ -571,13 +571,13 @@ protected:
             node_size_type right_turn_pos{};
             for ( auto level{ 0 }; level < depth - 1; ++level )
             {
-                auto const & node{ this->inner( current_node ) };
-                auto const   pos { upper_bound( node, key ) };
+                auto const & nd{ this->inner( current_node ) };
+                auto const   pos { upper_bound( nd, key ) };
                 // selects rather than a branch: pos is zero about once per
                 // node fanout, often enough to cost mispredictions
                 right_turn_node = pos ? current_node : right_turn_node;
                 right_turn_pos  = pos ? pos          : right_turn_pos;
-                current_node = node.children_[ pos ];
+                current_node = nd.children_[ pos ];
                 // the child is itself an inner node until the last inner level
                 prefetch_child( current_node, level + 2 < depth );
             }
@@ -596,8 +596,8 @@ protected:
         {
             for ( auto level{ 0 }; level < depth - 1; ++level )
             {
-                auto const & node{ this->inner( current_node ) };
-                auto const [pos, exact_find]{ lower_bound( node, key ) };
+                auto const & nd{ this->inner( current_node ) };
+                auto const [pos, exact_find]{ lower_bound( nd, key ) };
                 if ( exact_find ) [[ unlikely ]] // "most keys are in leaves"
                 {
                     // separator key: the first key of the right child's subtree
@@ -611,24 +611,24 @@ protected:
                     // turn out to be smaller, the leaf level resolves to the
                     // right sibling (whose first key is this separator).
                 }
-                current_node = node.children_[ pos ];
+                current_node = nd.children_[ pos ];
                 // the child is itself an inner node until the last inner level
                 prefetch_child( current_node, level + 2 < depth );
             }
         }
-        auto & leaf{ this->leaf( current_node ) };
+        auto & lf{ this->leaf( current_node ) };
         if ( BOOST_LIKELY( !separator_key_node ) )
-            return { leaf, lower_bound( leaf, key ), {}, {} };
+            return { lf, lower_bound( lf, key ), {}, {} };
         if ( unique && upper_bound_descent ) // short circuit since we know separator keys only exist for first keys
-            return { leaf, find_pos{ 0, true }, separator_key_offset, separator_key_node };
+            return { lf, find_pos{ 0, true }, separator_key_offset, separator_key_node };
         // lower bound descent: the last separator equivalent to the key is the
         // one of the leaf following the one reached (if the key is not found in
         // the latter)
-        auto const leaf_pos{ lower_bound( leaf, key ) };
-        if ( leaf_pos.pos != leaf.num_vals )
-            return { leaf, leaf_pos, {}, {} };
-        BOOST_ASSUME( !!leaf.right );
-        return { this->leaf( leaf.right ), find_pos{ 0, true }, separator_key_offset, separator_key_node };
+        auto const leaf_pos{ lower_bound( lf, key ) };
+        if ( leaf_pos.pos != lf.num_vals )
+            return { lf, leaf_pos, {}, {} };
+        BOOST_ASSUME( !!lf.right );
+        return { this->leaf( lf.right ), find_pos{ 0, true }, separator_key_offset, separator_key_node };
     }
     auto find_nodes_for( Key const & key, bool const unique ) noexcept { return find_nodes_for<false, Key>( key, unique ); }
 
@@ -648,9 +648,9 @@ protected:
                 auto const pos{ upper_bound( *p_node, key ) };
                 p_node = &this->template node<parent_node>( p_node->children_[ std::min( pos, static_cast<node_size_type>( p_node->num_vals ) ) ] );
             }
-            auto & leaf{ base::template as<leaf_node>( *p_node ) };
-            auto const leaf_pos{ upper_bound( leaf, key ) };
-            return { const_cast<leaf_node *>( &leaf ), { leaf_pos, false } };
+            auto & lf{ base::template as<leaf_node>( *p_node ) };
+            auto const leaf_pos{ upper_bound( lf, key ) };
+            return { const_cast<leaf_node *>( &lf ), { leaf_pos, false } };
         }
     }
 
@@ -744,10 +744,10 @@ protected:
 
 #if !( defined( _MSC_VER ) && !defined( __clang__ ) )
     // ambiguous call w/ VS 17.11, 17.12
-    void verify( auto const & node ) const noexcept
+    void verify( auto const & nd ) const noexcept
     {
-        BOOST_ASSERT( std::ranges::is_sorted( node.keys(), comp() ) );
-        base::verify( node );
+        BOOST_ASSERT( std::ranges::is_sorted( nd.keys(), comp() ) );
+        base::verify( nd );
     }
 #endif
     using base::verify_min_max;
@@ -1423,8 +1423,8 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
         if ( unique ) {
             auto const deduped_end
             {
-                std::unique( sort_begin, sort_end, [this]( auto const & left, auto const & right ) noexcept
-                    { return this->eq( left, right ); } )
+                std::unique( sort_begin, sort_end, [this]( auto const & lhs, auto const & rhs ) noexcept
+                    { return this->eq( lhs, rhs ); } )
             };
             auto const deduped_size{ static_cast<size_type>( deduped_end - sort_begin ) };
             if ( deduped_size != total_size ) {
