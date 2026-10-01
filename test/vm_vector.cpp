@@ -74,6 +74,36 @@ TEST( vm_vector, first_growth_attaches_anonymous_memory )
     EXPECT_EQ( reserved.mapped_size(), mapped );
 }
 
+// A first growth of at least a PMD span (2 MiB with the 4 KiB granule) through
+// the amortized append entry maps the whole request in the one call and, on
+// Linux, ends on a PMD boundary like every later growth: filling what it
+// reserved then neither grows nor moves the mapping.
+TEST( vm_vector, first_amortized_growth_maps_whole_pmd_spans )
+{
+    std::size_t constexpr pmd_span{ std::size_t{ page_size } * ( page_size / sizeof( std::uint64_t ) ) };
+    std::uint32_t constexpr request{ static_cast<std::uint32_t>( 3 * pmd_span / 2 / sizeof( std::uint32_t ) ) }; // 1.5 spans
+
+    psi::vm::vm_vector<std::uint32_t, std::uint32_t> vec;
+    vec.grow_by_amortized( request, no_init );
+    ASSERT_EQ( vec.size(), request );
+    ASSERT_GE( vec.capacity(), request );
+    EXPECT_GE( vec.mapped_size(), std::size_t{ request } * sizeof( std::uint32_t ) );
+#if defined( __linux__ ) && !defined( __ANDROID__ )
+    EXPECT_EQ( vec.mapped_size() % pmd_span, 0U ) << "the first growth left its last span in small pages";
+#endif
+    auto const * const first_data{ vec.data() };
+    auto const mapped  { vec.mapped_size() };
+    auto const capacity{ vec.capacity() };
+    for ( std::uint32_t i{ 0 }; i < request; ++i )
+        vec[ i ] = i;
+    while ( vec.size() < capacity )
+        vec.push_back( vec.size() );
+    EXPECT_EQ( vec.data(), first_data );
+    EXPECT_EQ( vec.mapped_size(), mapped );
+    for ( std::uint32_t i{ 0 }; i < vec.size(); ++i )
+        ASSERT_EQ( vec[ i ], i );
+}
+
 // A 32 bit counter of 8 byte elements counts more elements than 32 bits of
 // bytes hold: the storage's byte counts must not be narrowed to the counter
 // (only address space is taken: nothing past two pages is written).
