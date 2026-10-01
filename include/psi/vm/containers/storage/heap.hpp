@@ -425,11 +425,39 @@ public:
             }
         }
         else
+        if constexpr ( is_trivially_moveable<T> )
         {
+            // May move the block (realloc): a bitwise relocation is fine here.
             if constexpr ( std::is_void_v<Allocator> )
                 p_array_ = shell_shrink_to( p_array_, size_, target_size );
             else
                 p_array_ = alloc().template shrink_to<alignment>( p_array_, size_, target_size );
+        }
+        else
+        {
+            // A realloc may move the block on a shrink too (mimalloc does when
+            // more than half of it would be left unused), and moves it bitwise,
+            // which a T that is not trivially moveable does not survive. So,
+            // as growth does: in place where the allocator can release the
+            // tail there, else the elements are moved into a block of the
+            // target size.
+            if ( !target_size )
+            {
+                storage_free();
+                return data();
+            }
+            auto const old_capacity{ capacity() };
+            if ( shrink_block_in_place( target_size ) )
+            {
+                storage_shrink_size_to( target_size );
+                update_capacity       ( target_size );
+                if ( capacity() < old_capacity ) // (an in-place "success" may release nothing - mi_expand)
+                    return data();
+            }
+            // Non-binding (this cannot report a failure): if the allocation or
+            // a move throws, the block is kept as it is.
+            try { relocate_to( target_size, capacity(), target_size ); }
+            catch ( ... ) { storage_shrink_size_to( target_size ); return data(); }
         }
         BOOST_ASSUME( p_array_ || !target_size );
         BOOST_ASSUME( is_aligned( p_array_, alignment ) );
@@ -542,7 +570,10 @@ private:
     // Only called for non-trivially-moveable T (realloc is unsafe for them).
     // Exception-safe: uninitialized_move_n destroys partially-constructed
     // destination elements on exception; unique_ptr frees the new allocation.
-    void relocate_to( size_type const new_cap, size_type const old_cap )
+    void relocate_to( size_type const new_cap, size_type const old_cap ) { relocate_to( new_cap, old_cap, size_ ); }
+    // ...moving the first `count` elements (the rest, if any, already
+    // destroyed by the caller - a shrink).
+    void relocate_to( size_type const new_cap, size_type const old_cap, size_type const count )
     {
         value_type * new_ptr;
         if constexpr ( std::is_void_v<Allocator> )
@@ -557,15 +588,41 @@ private:
                 alloc().template deallocate<alignment>( p, new_cap );
         } };
         std::unique_ptr<value_type, decltype( free_new )> guard{ new_ptr, free_new };
-        std::uninitialized_move_n( p_array_, size_, guard.get() );
+        std::uninitialized_move_n( p_array_, count, guard.get() );
         auto * const relocated{ guard.release() }; // move succeeded, take ownership
         if constexpr ( !trivially_destructible_after_move_assignment<T> )
-            std::destroy_n( p_array_, size_ );
+            std::destroy_n( p_array_, count );
         if constexpr ( std::is_void_v<Allocator> )
             shell_deallocate( p_array_, options.cache_capacity ? old_cap : size_type{} );
         else
             alloc().template deallocate<alignment>( p_array_, options.cache_capacity ? old_cap : size_type{} );
         p_array_ = relocated;
+    }
+
+    // Shrinks the block without moving it, through the allocator's in-place
+    // shrink, or its in-place expansion (try_expand never moves a block, and
+    // to a smaller size it is an in-place shrink); false if it has neither or
+    // it refused.
+    bool shrink_block_in_place( [[ maybe_unused ]] size_type const target_size ) noexcept
+    {
+        if constexpr ( al::in_place_ops_require_default_alignment && ( alignment > detail::guaranteed_alignment ) )
+            return false;
+        else if constexpr ( has_try_shrink_in_place<al> )
+        {
+            if constexpr ( std::is_void_v<Allocator> )
+                return shell().try_shrink_in_place( reinterpret_cast<typename shell_t::pointer>( p_array_ ), shell_byte_count( size_ ), shell_byte_count( target_size ) );
+            else
+                return alloc().try_shrink_in_place( p_array_, size_, target_size );
+        }
+        else if constexpr ( has_try_expand<al> )
+        {
+            if constexpr ( std::is_void_v<Allocator> )
+                return shell_try_expand( p_array_, target_size );
+            else
+                return alloc().try_expand( p_array_, target_size );
+        }
+        else
+            return false;
     }
 
     void update_capacity( [[ maybe_unused ]] size_type const requested_capacity ) noexcept

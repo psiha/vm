@@ -466,6 +466,9 @@ public:
     //!   T's constructor/assignment from dereferencing InpIt throws.
     //!
     //! <b>Complexity</b>: Linear to n.
+    //!
+    //! A shorter range releases the capacity past the new size, as
+    //! shrink_to_fit() does.
     template <std::input_iterator It, typename Sentinel = It>
     requires std::sentinel_for<Sentinel, It>
     void assign( It first, Sentinel const last )
@@ -705,6 +708,16 @@ public:
     }
 
     //! <b>Effects</b>: Releases capacity beyond size() back to the storage.
+    //!
+    //! Of the verbs that reduce size() this is the one that promises to
+    //! release memory (with assign() from a shorter range, which also hands
+    //! the block back to the storage at the new size); resize() down,
+    //! shrink_to()/shrink_by(), erase(), pop_back() and clear() keep the
+    //! capacity, as std::vector's do. A storage honours the request as growth
+    //! does: in place where it can, otherwise by moving the elements into a
+    //! block of the new size (bitwise only for trivially moveable types). It
+    //! cannot report a failure, so if that move cannot be made (no memory, a
+    //! throwing move) the capacity is kept.
     //!
     //! Storages whose spare capacity is a resource in its own right - a
     //! file-backed mapping, whose capacity is file length - opt in with an

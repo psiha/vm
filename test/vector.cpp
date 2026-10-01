@@ -3,12 +3,17 @@
 #include <psi/vm/containers/fc_vector.hpp>
 #include <psi/vm/containers/small_vector.hpp>
 #include <psi/vm/containers/heap_vector.hpp>
+#include <psi/vm/allocators/crt.hpp>
+#if PSI_VM_HAS_MIMALLOC
+#   include <psi/vm/allocators/mimalloc.hpp>
+#endif
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <list>
 #include <numeric>
 #include <ranges>
@@ -1669,6 +1674,62 @@ TEST( heap_vector_nontrivial, growth_calls_move_ctor_and_destroys_old )
     // After vector destruction, all remaining elements should be destroyed too
     EXPECT_GE( destroy_count, 50 );
 }
+
+namespace
+{
+    // An allocator whose shrink always moves the block bitwise (as a realloc
+    // may, e.g. mimalloc's shrinking below half the block).
+    template <typename T>
+    struct moving_shrink_allocator : crt_allocator<T>
+    {
+        using base = crt_allocator<T>;
+        template <std::uint8_t alignment = detail::safe_alignof_v<T>>
+        [[ nodiscard ]] static T * shrink_to( T * const p, std::size_t const current_size, std::size_t const target_size ) noexcept
+        {
+            BOOST_ASSUME( target_size <= current_size );
+            auto * const moved{ base::template allocate<alignment>( target_size ) };
+            std::memcpy( static_cast<void *>( moved ), p, target_size * sizeof( T ) );
+            base::template deallocate<alignment>( p, current_size );
+            return moved;
+        }
+    };
+} // anon
+
+// shrink_to_fit() releases the spare capacity of a type that is not
+// trivially moveable without relocating it bitwise, whatever the allocator
+// does on a shrink: moves the block (as the first one here always does),
+// shrinks it in place, or keeps it (mi_expand) - then the elements are moved
+// into a smaller block.
+template <typename Allocator>
+void shrink_keeps_a_self_pointing_type_valid()
+{
+    vector<heap_storage<address_tracker, std::size_t, Allocator>> v;
+    for ( int i{ 0 }; i < 1000; ++i )
+        v.emplace_back( i );
+    v.resize( 10 );
+    EXPECT_GE( v.capacity(), 1000U ) << "resize() down released capacity";
+    v.shrink_to_fit();
+    ASSERT_EQ( v.size(), 10 );
+    EXPECT_LT( v.capacity(), 100U ) << "shrink_to_fit() kept the capacity";
+    for ( std::uint32_t i{ 0 }; i < 10; ++i )
+    {
+        ASSERT_TRUE( v[ i ].valid() ) << "Element " << i << " was bitwise-relocated by shrink_to_fit()";
+        EXPECT_EQ( v[ i ].value, static_cast<int>( i ) );
+    }
+    for ( int i{ 10 }; i < 100; ++i ) // and the vector stays usable
+        v.emplace_back( i );
+    for ( std::uint32_t i{ 0 }; i < 100; ++i )
+        ASSERT_TRUE( v[ i ].valid() && ( v[ i ].value == static_cast<int>( i ) ) );
+    v.clear();
+    v.shrink_to_fit();
+    EXPECT_EQ( v.capacity(), 0U );
+}
+TEST( heap_vector_nontrivial, shrink_moves_not_memcpy_moving_allocator ) { shrink_keeps_a_self_pointing_type_valid<moving_shrink_allocator<address_tracker>>(); }
+TEST( heap_vector_nontrivial, shrink_moves_not_memcpy_crt              ) { shrink_keeps_a_self_pointing_type_valid<crt_allocator<address_tracker>>(); }
+#if PSI_VM_HAS_MIMALLOC
+TEST( heap_vector_nontrivial, shrink_moves_not_memcpy_mimalloc         ) { shrink_keeps_a_self_pointing_type_valid<mimalloc_allocator<address_tracker>>(); }
+#endif
+TEST( heap_vector_nontrivial, shrink_moves_not_memcpy_default          ) { shrink_keeps_a_self_pointing_type_valid<void>(); }
 
 TEST( heap_vector_nontrivial, copy_constructor )
 {
