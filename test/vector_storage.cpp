@@ -1020,6 +1020,109 @@ TEST( vector_storage, a_fixed_capacity_container_keeps_its_own_overflow_policy )
 }
 
 
+////////////////////////////////////////////////////////////////////////////////
+// Byte typed allocators take the byte shell path
+////////////////////////////////////////////////////////////////////////////////
+
+// The default storage stays trivially moveable (relocated by memcpy, passed
+// in registers): the trait follows the shell allocator.
+static_assert( is_trivially_moveable<heap_storage<int>> );
+static_assert( is_trivially_moveable<heap_vector<int>> );
+static_assert( is_trivially_moveable<heap_storage<int, std::uint32_t, crt_allocator<std::byte, std::uint32_t>>> );
+
+namespace
+{
+    // A stateful byte allocator recording what heap_storage asks of it.
+    struct byte_allocator_log
+    {
+        std::size_t allocated     {}; // bytes asked of the last allocate()
+        std::size_t size_requested{}; // the hint size() last got
+        std::size_t shrink_current{}; // the current size shrink_to() last got
+        std::size_t deallocated   {}; // bytes deallocate() last got
+        int         blocks        {}; // live blocks
+    };
+
+    struct logging_byte_allocator
+    {
+        using value_type    = std::byte;
+        using pointer       = std::byte *;
+        using const_pointer = std::byte const *;
+        using size_type     = std::uint32_t;
+        using base          = crt_allocator<std::byte, size_type>;
+
+        static bool constexpr guaranteed_in_place_shrink            { false };
+        static bool constexpr in_place_ops_require_default_alignment{ false };
+        static bool constexpr size_reports_usable_capacity          { true  }; // (and reports exactly the request)
+
+        byte_allocator_log * log;
+
+        template <std::uint8_t alignment> pointer allocate( size_type const n ) { log->allocated = n; ++log->blocks; return base::allocate<alignment>( n ); }
+        template <std::uint8_t alignment> void deallocate( pointer const p, size_type const n ) noexcept { log->deallocated = n; --log->blocks; base::deallocate<alignment>( p, n ); }
+        template <std::uint8_t alignment> pointer grow_to  ( pointer const p, size_type const current, size_type const target )          { log->allocated = target; return base::grow_to  <alignment>( p, current, target ); }
+        template <std::uint8_t alignment> pointer shrink_to( pointer const p, size_type const current, size_type const target ) noexcept { log->shrink_current = current; return base::shrink_to<alignment>( p, current, target ); }
+        size_type size( const_pointer, size_type const requested ) const noexcept { log->size_requested = requested; return requested; }
+    };
+
+    template <typename Storage>
+    concept has_external_allocation = requires( typename Storage::pointer p ) { Storage::allocate_external( 1 ); Storage::deallocate_external( p, 1 ); };
+} // anonymous namespace
+
+static_assert(  is_trivially_moveable<heap_storage<std::uint64_t, std::uint32_t, logging_byte_allocator>> ); // a pointer
+static_assert(  has_external_allocation<heap_storage<int>> );
+static_assert(  has_external_allocation<heap_storage<int, std::uint32_t, crt_allocator<std::byte, std::uint32_t>>> );
+// Static, so they could only ever use the default state of a stateful allocator.
+static_assert( !has_external_allocation<heap_storage<std::uint64_t, std::uint32_t, logging_byte_allocator>> );
+
+// A byte typed allocator counts the block in bytes, gets the storage's own
+// state (not a default constructed allocator), the cached capacity as the
+// block's current size when it shrinks, and the requested capacity as a hint
+// when it is asked for the block's size.
+TEST( vector_storage, a_byte_typed_allocator_counts_bytes_and_keeps_its_state )
+{
+    using storage = heap_storage<std::uint64_t, std::uint32_t, logging_byte_allocator>;
+    byte_allocator_log log;
+    {
+        storage initial{ logging_byte_allocator{ &log } };
+        EXPECT_EQ( initial.get_allocator().log, &log );
+        vector<storage> vec{ std::move( initial ) };
+
+        vec.reserve( 100 );
+        EXPECT_EQ( log.allocated     , 100 * sizeof( std::uint64_t ) );
+        EXPECT_EQ( log.size_requested, 100 * sizeof( std::uint64_t ) );
+        EXPECT_EQ( log.blocks, 1 );
+        EXPECT_EQ( vec.capacity(), 100u );
+
+        for ( std::uint64_t i{ 0 }; i < 10; ++i )
+            vec.push_back( i );
+        vec.shrink_to_fit();
+        EXPECT_EQ( log.shrink_current, 100 * sizeof( std::uint64_t ) ) << "shrink got the live length, not the block's size";
+        EXPECT_EQ( log.size_requested,  10 * sizeof( std::uint64_t ) );
+        EXPECT_EQ( vec.capacity(), 10u );
+        EXPECT_TRUE( std::ranges::equal( vec, std::views::iota( std::uint64_t{ 0 }, std::uint64_t{ 10 } ) ) );
+    }
+    EXPECT_EQ( log.deallocated, 10 * sizeof( std::uint64_t ) );
+    EXPECT_EQ( log.blocks, 0 );
+}
+
+// A byte typed default allocator behaves like the default storage: the same
+// path, the same block.
+TEST( vector_storage, a_byte_typed_allocator_matches_the_default_storage )
+{
+    using byte_shell = heap_storage<std::uint32_t, std::uint32_t, crt_allocator<std::byte, std::uint32_t>>;
+    static_assert( sizeof( byte_shell ) == sizeof( heap_storage<std::uint32_t, std::uint32_t> ) );
+    vector<byte_shell> vec;
+    for ( std::uint32_t i{ 0 }; i < 10000; ++i )
+        vec.push_back( i );
+    EXPECT_TRUE( std::ranges::equal( vec, std::views::iota( 0U, 10000U ) ) );
+    vec.resize( 10 );
+    vec.shrink_to_fit();
+    EXPECT_TRUE( std::ranges::equal( vec, std::views::iota( 0U, 10U ) ) );
+    auto * const p{ byte_shell::allocate_external( 7 ) };
+    p[ 6 ] = 6;
+    byte_shell::deallocate_external( p, 7 );
+}
+
+
 //------------------------------------------------------------------------------
 } // namespace psi::vm
 //------------------------------------------------------------------------------

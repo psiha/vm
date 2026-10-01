@@ -103,7 +103,7 @@ struct tcmalloc_allocator
 
     template <std::uint8_t alignment = detail::safe_alignof_v<T>>
     [[ gnu::pure ]]
-    static size_type size( const_pointer const ptr ) noexcept
+    static size_type size( const_pointer const ptr, size_type /*requested*/ = 0 ) noexcept
     {
         return static_cast<size_type>( ::tc_malloc_size( ptr ) / sizeof( T ) );
     }

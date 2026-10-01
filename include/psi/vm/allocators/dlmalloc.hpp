@@ -125,7 +125,7 @@ struct dlmalloc_allocator
 
     /// Query the actual usable size of the allocation.
     [[ gnu::pure ]]
-    static size_type size( const_pointer const ptr ) noexcept
+    static size_type size( const_pointer const ptr, size_type /*requested*/ = 0 ) noexcept
     {
         return static_cast<size_type>( ::boost_cont_size( ptr ) / sizeof( T ) );
     }

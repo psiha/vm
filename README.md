@@ -78,6 +78,8 @@ All heap-based storage uses allocators derived from the `allocator_base<Derived,
 | `jemalloc_allocator` | [jemalloc](https://github.com/jemalloc/jemalloc) | `je_xallocx` | Optional |
 | `tcmalloc_allocator` | [tcmalloc](https://github.com/google/tcmalloc) | `tc_realloc` | Optional |
 
+`heap_storage<T, sz_t, Allocator>` takes an allocator either typed for `T` (it then counts elements) or typed for `std::byte` (it then counts bytes, like the default allocator: one allocator type serves every element type, `T` may be incomplete, and a stateful allocator's state is kept per storage). Every call that names a block's current size passes the capacity the storage caches for it, and `size( p, requested )` also gets the capacity the storage just asked for, which an allocator may use to bound its answer. The static `allocate_external` / `deallocate_external` exist only for stateless allocators.
+
 ### Type traits
 
 | Trait | Header | Description |

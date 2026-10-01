@@ -99,7 +99,7 @@ struct mimalloc_allocator
     }
 
     [[ gnu::pure ]]
-    static size_type size( const_pointer const ptr ) noexcept
+    static size_type size( const_pointer const ptr, size_type /*requested*/ = 0 ) noexcept
     {
         return static_cast<size_type>( ::mi_usable_size( ptr ) / sizeof( T ) );
     }

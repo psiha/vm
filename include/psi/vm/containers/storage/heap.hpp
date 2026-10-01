@@ -120,17 +120,29 @@ namespace detail
         else
             return heap_default_alignment<U>();
     }
+
+    // Whether a heap_storage counts its block in BYTES through a byte shell
+    // allocator (the shell_* members) rather than in elements through the
+    // Allocator itself, and which allocator that is: the default one (void)
+    // or any byte typed Allocator. Counting bytes is what lets T be
+    // incomplete, and what lets one allocator serve every element type.
+    template <typename Allocator>
+    bool constexpr heap_shell_path{ [] {
+        if constexpr ( std::is_void_v<Allocator> )
+            return true;
+        else
+            return std::is_same_v<typename Allocator::value_type, std::byte>;
+    }() };
+    template <typename Allocator, typename sz_t>
+    using heap_shell_t = std::conditional_t<std::is_void_v<Allocator>, heap_shell_allocator<sz_t>, Allocator>;
 } // namespace detail
 
 template <typename T, typename sz_t = std::size_t, typename Allocator = void, heap_options options = {}>
 class [[ nodiscard, clang::trivial_abi ]] heap_storage
-    : private std::conditional_t<
-        std::is_void_v<Allocator>,
-        detail::heap_shell_allocator<sz_t>,
-        Allocator
-    >
+    : private detail::heap_shell_t<Allocator, sz_t>
 {
-    using shell_t = std::conditional_t<std::is_void_v<Allocator>, detail::heap_shell_allocator<sz_t>, Allocator>;
+    static bool constexpr shell_path{ detail::heap_shell_path<Allocator> };
+    using shell_t = detail::heap_shell_t<Allocator, sz_t>;
 
 public:
     // Use alignof(T) when T is complete; fall back to max_align_t for incomplete
@@ -147,11 +159,7 @@ public:
     using value_type     = T;
     using pointer        = value_type *;
     using const_pointer  = value_type const *;
-    using allocator_type = std::conditional_t<
-        std::is_void_v<Allocator>,
-        detail::heap_shell_allocator<sz_t>,
-        Allocator
-    >;
+    using allocator_type = shell_t;
 
 private:
     using al = shell_t; // trait checks (has_try_expand, guaranteed_in_place_shrink, ...)
@@ -220,15 +228,15 @@ private:
     constexpr shell_t const & shell() const noexcept { return static_cast<shell_t const &>( *this ); }
 
     // Custom Allocator path: delegate to user allocator (element-count semantics).
-    constexpr allocator_type       & alloc()       noexcept requires ( !std::is_void_v<Allocator> ) { return static_cast<allocator_type       &>( *this ); }
-    constexpr allocator_type const & alloc() const noexcept requires ( !std::is_void_v<Allocator> ) { return static_cast<allocator_type const &>( *this ); }
+    constexpr allocator_type       & alloc()       noexcept requires ( !shell_path ) { return static_cast<allocator_type       &>( *this ); }
+    constexpr allocator_type const & alloc() const noexcept requires ( !shell_path ) { return static_cast<allocator_type const &>( *this ); }
 
     // Void-Allocator path: shell_* forward typed element ops to the byte shell (see above).
     [[ nodiscard ]] pointer shell_allocate( size_type const element_count ) { return reinterpret_cast<pointer>( shell().template allocate<alignment>( shell_byte_count( element_count ) ) ); }
     void shell_deallocate( pointer const ptr, size_type const element_capacity ) noexcept { shell().template deallocate<alignment>( reinterpret_cast<typename shell_t::pointer>( ptr ), shell_byte_count( element_capacity ) ); }
     [[ nodiscard ]] pointer shell_grow_to( pointer const ptr, size_type const current_capacity, size_type const target_capacity ) { return reinterpret_cast<pointer>( shell().template grow_to<alignment>( reinterpret_cast<typename shell_t::pointer>( ptr ), shell_byte_count( current_capacity ), shell_byte_count( target_capacity ) ) ); }
     [[ nodiscard ]] pointer shell_shrink_to( pointer const ptr, size_type const current_size, size_type const target_size ) noexcept { return reinterpret_cast<pointer>( shell().template shrink_to<alignment>( reinterpret_cast<typename shell_t::pointer>( ptr ), shell_byte_count( current_size ), shell_byte_count( target_size ) ) ); }
-    [[ nodiscard ]] size_type shell_capacity( pointer const ptr ) const noexcept { return static_cast<size_type>( shell().size( reinterpret_cast<typename shell_t::const_pointer>( ptr ) ) / sizeof( value_type ) ); }
+    [[ nodiscard ]] size_type shell_capacity( pointer const ptr, size_type const requested ) const noexcept { return static_cast<size_type>( shell().size( reinterpret_cast<typename shell_t::const_pointer>( ptr ), static_cast<typename shell_t::size_type>( byte_count( requested ) ) ) / sizeof( value_type ) ); }
     // A query, so it never throws: a length past max_size() is an expansion
     // this storage cannot get, answered with `false` before the byte conversion
     // would refuse it by throwing. A caller that must have the length then
@@ -290,10 +298,10 @@ public:
         }
         else
         {
-            if constexpr ( std::is_void_v<Allocator> )
-                return empty() ? size_type{} : shell_capacity( p_array_ );
+            if constexpr ( shell_path )
+                return empty() ? size_type{} : shell_capacity( p_array_, size_ );
             else
-                return empty() ? 0 : alloc().size( p_array_ );
+                return empty() ? 0 : alloc().size( p_array_, size_ );
         }
     }
 
@@ -310,13 +318,7 @@ public:
         }
     }
 
-    constexpr allocator_type get_allocator() const noexcept
-    {
-        if constexpr ( std::is_void_v<Allocator> )
-            return allocator_type{};
-        else
-            return alloc();
-    }
+    constexpr allocator_type get_allocator() const noexcept { return shell(); }
 
     auto release() noexcept { auto d{ p_array_ }; mark_freed(); return d; }
 
@@ -330,26 +332,27 @@ public:
     }
 
     // Raw element-count allocate/deallocate for external owners (backing stores, etc.).
-    // Void-Allocator path uses the byte shell; custom-Allocator path uses element semantics.
-    [[nodiscard]] static pointer allocate_external( size_type const element_count )
+    // The shell path counts bytes; an element typed Allocator counts elements.
+    // Static, so they cannot know an instance's allocator state: they exist
+    // only for a stateless (empty) allocator, which every instance shares.
+    [[nodiscard]] static pointer allocate_external( size_type const element_count ) requires std::is_empty_v<shell_t>
     {
-        if constexpr ( std::is_void_v<Allocator> )
+        if constexpr ( shell_path )
             // shell_byte_count (not a raw narrowing cast): same size-ceiling
             // guard as every other allocating path.
-            return reinterpret_cast<pointer>(
-                detail::heap_shell_allocator<sz_t>::template allocate<alignment>( shell_byte_count( element_count ) ) );
+            return reinterpret_cast<pointer>( shell_t{}.template allocate<alignment>( shell_byte_count( element_count ) ) );
         else
-            return allocator_type::template allocate<alignment>( element_count );
+            return shell_t{}.template allocate<alignment>( element_count );
     }
 
-    static void deallocate_external( pointer const ptr, size_type const element_count ) noexcept
+    static void deallocate_external( pointer const ptr, size_type const element_count ) noexcept requires std::is_empty_v<shell_t>
     {
-        if constexpr ( std::is_void_v<Allocator> )
-            detail::heap_shell_allocator<sz_t>::template deallocate<alignment>(
-                reinterpret_cast<typename detail::heap_shell_allocator<sz_t>::pointer>( ptr ),
-                static_cast<typename detail::heap_shell_allocator<sz_t>::size_type>( byte_count( element_count ) ) );
+        if constexpr ( shell_path )
+            shell_t{}.template deallocate<alignment>(
+                reinterpret_cast<typename shell_t::pointer>( ptr ),
+                static_cast<typename shell_t::size_type>( byte_count( element_count ) ) );
         else
-            allocator_type::template deallocate<alignment>( ptr, element_count );
+            shell_t{}.template deallocate<alignment>( ptr, element_count );
     }
 
     // --- storage_* interface for vector<> ---
@@ -358,7 +361,7 @@ public:
     {
         if ( initial_size )
         {
-            if constexpr ( std::is_void_v<Allocator> )
+            if constexpr ( shell_path )
                 p_array_ = shell_allocate( initial_size );
             else
                 p_array_ = alloc().template allocate<alignment>( initial_size );
@@ -418,20 +421,20 @@ public:
             // trailing pages but the pointer is stable.
             if constexpr ( has_try_shrink_in_place<al> )
             {
-                if constexpr ( std::is_void_v<Allocator> )
-                    BOOST_VERIFY( shell().try_shrink_in_place( reinterpret_cast<typename shell_t::pointer>( p_array_ ), shell_byte_count( size_ ), shell_byte_count( target_size ) ) );
+                if constexpr ( shell_path )
+                    BOOST_VERIFY( shell().try_shrink_in_place( reinterpret_cast<typename shell_t::pointer>( p_array_ ), shell_byte_count( known_capacity() ), shell_byte_count( target_size ) ) );
                 else
-                    BOOST_VERIFY( alloc().try_shrink_in_place( p_array_, size_, target_size ) );
+                    BOOST_VERIFY( alloc().try_shrink_in_place( p_array_, known_capacity(), target_size ) );
             }
         }
         else
         if constexpr ( is_trivially_moveable<T> )
         {
             // May move the block (realloc): a bitwise relocation is fine here.
-            if constexpr ( std::is_void_v<Allocator> )
-                p_array_ = shell_shrink_to( p_array_, size_, target_size );
+            if constexpr ( shell_path )
+                p_array_ = shell_shrink_to( p_array_, known_capacity(), target_size );
             else
-                p_array_ = alloc().template shrink_to<alignment>( p_array_, size_, target_size );
+                p_array_ = alloc().template shrink_to<alignment>( p_array_, known_capacity(), target_size );
         }
         else
         {
@@ -475,9 +478,9 @@ public:
 
 #ifdef _MSC_VER
     bool storage_try_expand_capacity( size_type const target_capacity ) noexcept
-    requires( options.cache_capacity && ( !al::in_place_ops_require_default_alignment || alignment <= detail::guaranteed_alignment ) )
+    requires( options.cache_capacity && ( !shell_path || has_try_expand<al> ) && ( !al::in_place_ops_require_default_alignment || alignment <= detail::guaranteed_alignment ) )
     {
-        if constexpr ( std::is_void_v<Allocator> )
+        if constexpr ( shell_path )
         {
             if ( shell_try_expand( p_array_, target_capacity ) )
             {
@@ -507,7 +510,7 @@ public:
 
     void storage_free() noexcept
     {
-        if constexpr ( std::is_void_v<Allocator> )
+        if constexpr ( shell_path )
             shell_deallocate( data(), options.cache_capacity ? capacity() : size_type{} );
         else
             alloc().template deallocate<alignment>( data(), options.cache_capacity ? capacity() : 0 );
@@ -524,7 +527,7 @@ private:
         if ( !p_array_ ) [[ unlikely ]]
         {
             BOOST_ASSUME( !size_ );
-            if constexpr ( std::is_void_v<Allocator> )
+            if constexpr ( shell_path )
                 p_array_ = shell_allocate( new_capacity );
             else
                 p_array_ = alloc().template allocate<alignment>( new_capacity );
@@ -541,7 +544,7 @@ private:
         if constexpr ( is_trivially_moveable<T> )
         {
             // Safe to use realloc (bitwise relocation)
-            if constexpr ( std::is_void_v<Allocator> )
+            if constexpr ( shell_path )
                 p_array_ = shell_grow_to( p_array_, cached_current_capacity, new_capacity );
             else
                 p_array_ = alloc().template grow_to<alignment>( p_array_, cached_current_capacity, new_capacity );
@@ -551,7 +554,7 @@ private:
             if constexpr ( can_try_expand )
             {
                 bool expanded{ false };
-                if constexpr ( std::is_void_v<Allocator> )
+                if constexpr ( shell_path )
                     expanded = shell_try_expand( p_array_, new_capacity );
                 else
                     expanded = alloc().try_expand( p_array_, new_capacity );
@@ -576,13 +579,13 @@ private:
     void relocate_to( size_type const new_cap, size_type const old_cap, size_type const count )
     {
         value_type * new_ptr;
-        if constexpr ( std::is_void_v<Allocator> )
+        if constexpr ( shell_path )
             new_ptr = shell_allocate( new_cap );
         else
             new_ptr = alloc().template allocate<alignment>( new_cap );
 
         auto const free_new{ [ this, new_cap ]( value_type * p ) noexcept {
-            if constexpr ( std::is_void_v<Allocator> )
+            if constexpr ( shell_path )
                 shell_deallocate( p, new_cap );
             else
                 alloc().template deallocate<alignment>( p, new_cap );
@@ -592,7 +595,7 @@ private:
         auto * const relocated{ guard.release() }; // move succeeded, take ownership
         if constexpr ( !trivially_destructible_after_move_assignment<T> )
             std::destroy_n( p_array_, count );
-        if constexpr ( std::is_void_v<Allocator> )
+        if constexpr ( shell_path )
             shell_deallocate( p_array_, options.cache_capacity ? old_cap : size_type{} );
         else
             alloc().template deallocate<alignment>( p_array_, options.cache_capacity ? old_cap : size_type{} );
@@ -609,14 +612,14 @@ private:
             return false;
         else if constexpr ( has_try_shrink_in_place<al> )
         {
-            if constexpr ( std::is_void_v<Allocator> )
-                return shell().try_shrink_in_place( reinterpret_cast<typename shell_t::pointer>( p_array_ ), shell_byte_count( size_ ), shell_byte_count( target_size ) );
+            if constexpr ( shell_path )
+                return shell().try_shrink_in_place( reinterpret_cast<typename shell_t::pointer>( p_array_ ), shell_byte_count( known_capacity() ), shell_byte_count( target_size ) );
             else
-                return alloc().try_shrink_in_place( p_array_, size_, target_size );
+                return alloc().try_shrink_in_place( p_array_, known_capacity(), target_size );
         }
         else if constexpr ( has_try_expand<al> )
         {
-            if constexpr ( std::is_void_v<Allocator> )
+            if constexpr ( shell_path )
                 return shell_try_expand( p_array_, target_size );
             else
                 return alloc().try_expand( p_array_, target_size );
@@ -649,19 +652,24 @@ private:
                 // carries it past that type's range (a request at max_size()
                 // over a narrow counter) reads back WRAPPED, i.e. smaller than
                 // the request. Caching that would break capacity() >= size().
-                if constexpr ( std::is_void_v<Allocator> )
-                    capacity_ = std::max<size_type>( requested_capacity, shell_capacity( p_array_ ) );
+                if constexpr ( shell_path )
+                    capacity_ = std::max<size_type>( requested_capacity, shell_capacity( p_array_, requested_capacity ) );
                 else
-                    capacity_ = std::max<size_type>( requested_capacity, alloc().size( p_array_ ) );
+                    capacity_ = std::max<size_type>( requested_capacity, alloc().size( p_array_, requested_capacity ) );
             } else {
-                if constexpr ( std::is_void_v<Allocator> )
-                    BOOST_ASSERT( !requested_capacity || ( shell_capacity( p_array_ ) >= requested_capacity ) );
+                if constexpr ( shell_path )
+                    BOOST_ASSERT( !requested_capacity || ( shell_capacity( p_array_, requested_capacity ) >= requested_capacity ) );
                 else
-                    BOOST_ASSERT( !requested_capacity || ( alloc().size( p_array_ ) >= requested_capacity ) );
+                    BOOST_ASSERT( !requested_capacity || ( alloc().size( p_array_, requested_capacity ) >= requested_capacity ) );
                 capacity_ = requested_capacity;
             }
         }
     }
+
+    // The block's current capacity as far as it is known without asking the
+    // allocator: the cached one, else the live length (a lower bound). This
+    // is what the allocator calls take as the block's current size.
+    size_type known_capacity() const noexcept { return options.cache_capacity ? capacity() : size_; }
 
     // Zero only the data members, preserving the allocator subobject (EBO).
     void mark_freed() noexcept
@@ -682,13 +690,9 @@ private:
     std::conditional_t<options.cache_capacity, sz_t, decltype( std::ignore )> capacity_;
 }; // class heap_storage
 
-// heap_storage is trivially moveable when the EBO shell allocator is trivially copyable.
+// heap_storage is trivially moveable when the EBO shell allocator is.
 template <typename T, typename sz_t, typename Allocator, heap_options options>
-bool constexpr is_trivially_moveable<heap_storage<T, sz_t, Allocator, options>>{
-    std::is_trivially_copyable_v<
-        std::conditional_t<std::is_void_v<Allocator>, detail::heap_shell_allocator<sz_t>, Allocator>
-    >
-};
+bool constexpr is_trivially_moveable<heap_storage<T, sz_t, Allocator, options>>{ is_trivially_moveable<detail::heap_shell_t<Allocator, sz_t>> };
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm
