@@ -439,6 +439,20 @@ public:
         BOOST_ASSUME( this->size() == count );
     }
 
+    // The sizing verbs refuse, at compile time, an unsigned count wider than
+    // size_type (see narrowing_size): the narrowing would happen at the call,
+    // where nothing could check it. The storage's reserve() does the same.
+    explicit vector( narrowing_size<size_type> auto, auto && ... ) = delete;
+    void assign( narrowing_size<size_type> auto, param_const_ref ) = delete;
+    void resize( narrowing_size<size_type> auto, auto && ... ) = delete;
+    iterator insert( const_iterator, narrowing_size<size_type> auto, param_const_ref ) = delete;
+    bool stable_reserve( narrowing_size<size_type> auto ) = delete;
+    value_type * grow_to          ( narrowing_size<size_type> auto, auto && ) = delete;
+    value_type * grow_by          ( narrowing_size<size_type> auto, auto && ) = delete;
+    value_type * grow_by_amortized( narrowing_size<size_type> auto, auto && ) = delete;
+    void shrink_to( narrowing_size<size_type> auto ) = delete;
+    void shrink_by( narrowing_size<size_type> auto ) = delete;
+
     template <std::input_iterator It>
     constexpr vector( It const first, It const last ) noexcept( noexcept_storage() && noexcept_sizing() && std::is_nothrow_copy_constructible_v<value_type> )
         : storage_t{}

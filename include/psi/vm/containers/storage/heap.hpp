@@ -317,6 +317,7 @@ public:
             do_grow( new_capacity, current_cap );
         }
     }
+    void reserve( narrowing_size<size_type> auto ) = delete; // see narrowing_size
 
     constexpr allocator_type get_allocator() const noexcept { return shell(); }
 

@@ -151,6 +151,7 @@ public:
             self.grow_heap( new_capacity );
         }
     }
+    void reserve( this auto &, narrowing_size<size_type> auto ) = delete; // see narrowing_size
 
     // --- storage_* interface for vector<> ---
 

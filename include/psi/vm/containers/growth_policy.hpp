@@ -60,6 +60,17 @@ struct geometric_growth
     [[ nodiscard ]] explicit constexpr operator bool() const noexcept { return num != den; }
 };
 
+//! An unsigned integer type wider than a container's `size_type`. A sizing
+//! verb (a counted constructor, resize(), reserve(), grow_to()...) takes
+//! `size_type`, so such an argument would be narrowed at the call - before
+//! the container could see, let alone refuse, the value. The containers
+//! declare an overload for it as deleted, which turns that silent narrowing
+//! into a compile error: the caller narrows explicitly (with a check where the
+//! value can exceed size_type) or counts in size_type to begin with. Signed
+//! arguments (and so plain integer literals) are not matched.
+template <typename N, typename size_type>
+concept narrowing_size = std::unsigned_integral<N> && ( sizeof( N ) > sizeof( size_type ) );
+
 //------------------------------------------------------------------------------
 } // namespace psi::vm
 //------------------------------------------------------------------------------
