@@ -55,6 +55,7 @@ endif()
 
 set( vm_test_sources
     "${CMAKE_CURRENT_SOURCE_DIR}/allocation.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/allocation.win32.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/b+tree.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/b+tree_space.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/cow.cpp"
@@ -66,6 +67,7 @@ set( vm_test_sources
     "${CMAKE_CURRENT_SOURCE_DIR}/guarded_operation.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/handle_release.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/lookup_threshold.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/mmap_threshold.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/reserving_mapped_view.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/small_vector.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/sort.cpp"
