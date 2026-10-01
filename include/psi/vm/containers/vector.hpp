@@ -1440,6 +1440,7 @@ public:
     // (B) Non-copyable storage (heap_storage, fixed_storage, sbo_hybrid):
     //     element-level copy semantics live here at the vector level.
     constexpr vector( vector const & other ) requires ( !std::is_copy_constructible_v<storage_t> )
+        : storage_t{} // empty: the copy below fills it
     {
         if constexpr ( !support_incomplete_types )
             static_assert( complete<value_type>, "vector copy requires a complete value_type" );

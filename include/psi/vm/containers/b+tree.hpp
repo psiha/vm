@@ -96,7 +96,7 @@ public:
     // where the per-comparator instantiation bloat lives; lookups, iteration
     // and the container type itself stay unaffected/shared.
     template <comparator_erasure Erasure = Komparator<Comparator>::erasure, std::input_iterator InIter>
-    size_type insert( InIter const begin, InIter const end ) { return impl_base::template insert<Erasure>( this->bulk_insert_prepare( std::ranges::subrange( begin, end ) ), unique ); }
+    size_type insert( InIter const first, InIter const last ) { return impl_base::template insert<Erasure>( this->bulk_insert_prepare( std::ranges::subrange( first, last ) ), unique ); }
     template <comparator_erasure Erasure = Komparator<Comparator>::erasure, std::convertible_to<Key> T>
     size_type insert( std::initializer_list<T> const  keys ) { return impl_base::template insert<Erasure>( this->bulk_insert_prepare( std::ranges::subrange( keys       ) ), unique ); }
     template <comparator_erasure Erasure = Komparator<Comparator>::erasure>
@@ -125,9 +125,9 @@ public:
         if ( !location.leaf_offset.exact_find ) [[ unlikely ]]
             return false;
 
-        leaf_node & leaf{ location.leaf };
+        leaf_node & found_leaf{ location.leaf };
         if ( this->hdr().depth_ != 1 ) // i.e. leaf is not the root
-            this->verify_min_max( leaf );
+            this->verify_min_max( found_leaf );
 
         return this->erase_single( location );
     }
@@ -143,7 +143,7 @@ public:
         if ( !location.leaf_offset.exact_find ) [[ unlikely ]]
             return 0;
 
-        leaf_node & leaf{ location.leaf };
+        leaf_node & found_leaf{ location.leaf };
         auto const leaf_key_offset{ location.leaf_offset.pos };
         // Complex check to see if there is only one key to erase, i.e. expect
         // nonunique keys to be an unlikely occurrence: the key that follows -
@@ -152,9 +152,9 @@ public:
         // TODO measure if this is worth it.
         if
         (
-            ( ( leaf_key_offset + 1 ) < leaf.num_vals )
-                ? lt( key, leaf.key( leaf_key_offset + 1 ) )
-                : ( !leaf.right || lt( key, this->right( leaf ).key( 0 ) ) )
+            ( ( leaf_key_offset + 1 ) < found_leaf.num_vals )
+                ? lt( key, found_leaf.key( leaf_key_offset + 1 ) )
+                : ( !found_leaf.right || lt( key, this->right( found_leaf ).key( 0 ) ) )
         ) [[ likely ]]
         {
             return this->erase_single( location );
@@ -162,7 +162,7 @@ public:
 
         // try and efficiently handle multiple erased values: leaf by leaf, a
         // whole leaf at a time where the run covers it
-        auto p_node{ &leaf };
+        auto p_node{ &found_leaf };
         auto node_offset{ leaf_key_offset };
         size_type count{ 0 };
         for ( ; ; )
@@ -217,8 +217,8 @@ public:
         // same-valued nodes (in case there are any) and then the starting and
         // ending, potentially partially erased, leaves are handled for possible
         // underflow
-        if ( leaf.num_vals ) // first check for deletion of the starting node
-            this->check_and_handle_bulk_erase_underflow( leaf );
+        if ( found_leaf.num_vals ) // first check for deletion of the starting node
+            this->check_and_handle_bulk_erase_underflow( found_leaf );
 
         this->hdr().size_ -= count;
         return count;

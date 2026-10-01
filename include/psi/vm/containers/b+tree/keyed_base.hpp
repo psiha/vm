@@ -270,7 +270,11 @@ protected: // node types
         struct no_own_start {}; // nothing, where the leaf has no gap or the spare byte holds start
         PSI_NO_UNIQUE_ADDRESS std::conditional_t<own_start_byte, std::uint8_t, no_own_start> own_start{};
 
-        [[ gnu::pure ]] constexpr std::uint8_t start() const noexcept requires front_gap
+        // auto: where one of the two bytes does not exist, its branch names
+        // an empty member. A deduced return type leaves that discarded branch
+        // unchecked; with a declared std::uint8_t, GCC checks the conversion
+        // in the template definition already and rejects it.
+        [[ gnu::pure ]] constexpr auto start() const noexcept requires front_gap
         {
             // the member itself rather than through start_byte(): read through
             // a deducing-this reference, clang allocates the handover paths'
