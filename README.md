@@ -54,6 +54,7 @@ The container system is built on a single **`vector<Storage, Growth>`** class te
 | `fixed_storage<T, N>` | Inline (stack) array with compile-time capacity bound. Configurable overflow handler |
 | `sbo_hybrid<T, N>` | Small Buffer Optimization: inline stack buffer with automatic heap spill on overflow. Three compile-time union-based layout modes (*embedded*, *compact*, *compact_lsb*). All layouts are trivially relocatable when T is |
 | `vm_storage<T>` | Persistent storage via memory-mapped files or shared memory, with configurable headers, COW cloning, and kernel-level in-place expansion |
+| `mmap_threshold_storage<T, sz_t, threshold>` | A `heap_storage` while the elements take fewer than `threshold` bytes (128 KiB by default), an anonymous `vm_storage` once it grows to it (one copy), which it keeps until freed: shrinking releases pages of the mapping, it never moves back to the heap. For a container that should grow without copying and release its memory immediately once large, under an allocator that does neither for such blocks (mimalloc's realloc always copies; it purges freed blocks of up to 32 MiB only after a delay). Data, size and capacity are cached in the storage itself, so the hot path does not depend on which storage is active. Requires trivially moveable `T`; is trivially moveable itself |
 
 ### Convenience aliases
 
@@ -62,6 +63,7 @@ The container system is built on a single **`vector<Storage, Growth>`** class te
 | `heap_vector<T>` | `= vector<heap_storage<T>>` | Heap-allocated vector. Unlike `std::vector`, supports in-place expansion via allocator `expand` / `_expand` / `mi_expand` — avoids the double-allocation + element-wise move inherent to `std::vector`'s limited allocator interface. Works with all element types |
 | `fc_vector<T, N>` | `= vector<fixed_storage<T, N>>` | Fixed-capacity inline vector (`inplace_vector`-like) |
 | `vm_vector<T>` | `= vector<vm_storage<T>>` | VM-backed persistent vector with exact-fit growth (`{1,1}`). Supports file-backed and anonymous mappings, COW cloning, and kernel-level in-place expansion via `mremap` / placeholders / `mach_vm_remap` |
+| `mmap_threshold_vector<T, sz_t, threshold>` | `= vector<mmap_threshold_storage<T, sz_t, threshold>>` | Heap block below the threshold, its own mapping above it (see `storage/mmap_threshold.hpp` for when that pays) |
 | `small_vector<T, N>` | `= vector<sbo_hybrid<T, N>>` | Inline (stack) buffer with heap spill. Three layout modes: *embedded* (default, sz_ packed inside union), *compact* (MSB tag), *compact_lsb* (LSB tag, optimal LE addressing). Layout auto-selected or explicitly configured via `sbo_options` |
 | `strided_vector<T, MaxStride>` | — | Vector of runtime-fixed-extent entries: each entry is `stride` consecutive `T`s in a flat contiguous buffer, exposed via a deep-copy proxy reference. `MaxStride` (default 64) bounds the stride at compile time, from which the stride integer type and value_type storage are derived automatically. Supports `std::sort`, `std::reverse`, `std::rotate`, and other permuting algorithms via `iter_swap` / `iter_move` customization points |
 
@@ -206,6 +208,7 @@ include/psi/vm/
 ├── containers/
 │   ├── storage/            Storage backends for vector<Storage>
 │   │   ├── heap.hpp        heap_storage (heap-allocated, pluggable allocator)
+│   │   ├── mmap_threshold.hpp mmap_threshold_storage (heap block below a size threshold, a mapping above)
 │   │   ├── fixed.hpp       fixed_storage (inline, compile-time capacity)
 │   │   └── sbo_hybrid.hpp  sbo_hybrid (inline buffer + heap spill, 3 layout modes)
 │   ├── vector.hpp          vector<Storage, Growth> unified template
