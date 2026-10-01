@@ -691,6 +691,7 @@ public:
     [[ nodiscard, gnu::pure ]] sz_t capacity() const noexcept { return static_cast<sz_t>( base::vm_capacity() / sizeof( T ) ); }
 
     void reserve( sz_t const new_capacity ) { base::reserve( to_byte_sz( new_capacity ), data_alignment ); }
+    void reserve( narrowing_size<sz_t> auto ) = delete; // see narrowing_size
 
     // Compatibility aliases for boost::container::flat_* and generic code
     using allocator_type = std::allocator<T>;

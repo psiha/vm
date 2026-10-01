@@ -7,10 +7,12 @@
 #if PSI_VM_HAS_MIMALLOC
 #   include <psi/vm/allocators/mimalloc.hpp>
 #endif
+#include <psi/vm/containers/vm_vector.hpp>
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -2179,6 +2181,90 @@ TYPED_TEST( storage_lifecycle, shrink_to_destroys_excess )
     v.resize( 5 );
     EXPECT_EQ( this->live_count(), 5 );
     EXPECT_EQ( v.size(), 5u );
+}
+
+// The sizing verbs refuse an unsigned count wider than size_type at compile
+// time; a signed count (a plain literal included), a same-width and a
+// narrower unsigned one still bind. A signed wide count is deliberately not
+// matched.
+namespace narrowing_size_guard {
+template <typename Vec, typename N>
+concept sizes_with = requires( Vec v, Vec const & cv, N const n, typename Vec::value_type const x )
+{
+    Vec( n );
+    Vec( n, default_init );
+    Vec( n, x );
+    v.assign( n, x );
+    v.resize( n );
+    v.resize( n, value_init );
+    v.resize( n, x );
+    v.insert( cv.begin(), n, x );
+    v.reserve( n );
+    v.stable_reserve( n );
+    v.grow_to( n, no_init );
+    v.grow_to( n, x );
+    v.grow_by( n, default_init );
+    v.grow_by_amortized( n, default_init );
+    v.shrink_to( n );
+    v.shrink_by( n );
+};
+template <typename N, typename Vec>
+concept rejects = requires( Vec v, Vec const & cv, N const n, typename Vec::value_type const x )
+{
+    requires !requires { Vec( n ); };
+    requires !requires { Vec( n, default_init ); };
+    requires !requires { Vec( n, x ); };
+    requires !requires { v.assign( n, x ); };
+    requires !requires { v.resize( n ); };
+    requires !requires { v.resize( n, value_init ); };
+    requires !requires { v.resize( n, x ); };
+    requires !requires { v.insert( cv.begin(), n, x ); };
+    requires !requires { v.reserve( n ); };
+    requires !requires { v.stable_reserve( n ); };
+    requires !requires { v.grow_to( n, no_init ); };
+    requires !requires { v.grow_to( n, x ); };
+    requires !requires { v.grow_by( n, default_init ); };
+    requires !requires { v.grow_by_amortized( n, default_init ); };
+    requires !requires { v.shrink_to( n ); };
+    requires !requires { v.shrink_by( n ); };
+};
+template <typename Vec, typename Same, typename Wide>
+bool constexpr guarded
+{
+    sizes_with<Vec, int> && sizes_with<Vec, std::int64_t> && sizes_with<Vec, Same> && sizes_with<Vec, std::uint8_t> &&
+    rejects<Wide, Vec>
+};
+static_assert( guarded<heap_vector <std::uint64_t, std::uint32_t>, std::uint32_t, std::uint64_t> );
+static_assert( guarded<heap_vector <std::uint64_t, std::uint16_t>, std::uint16_t, std::uint32_t> );
+static_assert( guarded<small_vector<std::uint64_t, 4             >, std::uint32_t, std::uint64_t> );
+static_assert( guarded<small_vector<std::uint64_t, 4, std::uint16_t>, std::uint16_t, std::uint32_t> );
+static_assert( guarded<fc_vector   <std::uint64_t, 1000          >, std::uint16_t, std::uint32_t> );
+static_assert( guarded<vm_vector   <std::uint64_t, std::uint32_t>, std::uint32_t, std::uint64_t> );
+// Nothing is wider than std::size_t: a default-sized vector takes every count.
+static_assert( sizes_with<heap_vector<int>, std::uint64_t> && sizes_with<heap_vector<int>, std::size_t> );
+// The deleted counted constructor is explicit, so a wide integer does not
+// become implicitly convertible to the vector.
+static_assert( !std::is_convertible_v<std::uint64_t, heap_vector<int, std::uint32_t>> );
+} // namespace narrowing_size_guard
+
+TEST( vector_append, append_range_amortized_grows_geometrically )
+{
+    heap_vector<int, std::uint32_t> v;
+    std::array<int, 3> const chunk{ 1, 2, 3 };
+    std::uint32_t reallocations{ 0 };
+    auto const * data{ v.data() };
+    for ( int i{ 0 }; i < 1000; ++i )
+    {
+        v.append_range_amortized( chunk );
+        if ( v.data() != data ) { ++reallocations; data = v.data(); }
+    }
+    ASSERT_EQ( v.size(), 3000u );
+    for ( std::uint32_t i{ 0 }; i < v.size(); ++i )
+        ASSERT_EQ( v[ i ], chunk[ i % chunk.size() ] );
+    EXPECT_GT( v.capacity(), v.size() );
+    // 1.5x geometric growth: ~log_1.5( 1000 ) reallocations, against one per
+    // append under exact fit.
+    EXPECT_LT( reallocations, 40u );
 }
 
 //------------------------------------------------------------------------------

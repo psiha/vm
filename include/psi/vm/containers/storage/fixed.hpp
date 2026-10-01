@@ -141,6 +141,7 @@ public:
     [[ nodiscard, gnu::const ]] constexpr value_type const * data() const noexcept { return array_.data; }
 
     void reserve( size_type const new_capacity ) const noexcept { BOOST_ASSUME( new_capacity <= static_capacity ); }
+    void reserve( narrowing_size<size_type> auto ) const = delete; // see narrowing_size
 
     // --- storage_* interface for vector<> ---
     constexpr value_type * storage_init   ( size_type const initial_size ) noexcept( noexcept( overflow_handler() ) ) { return storage_grow_to( initial_size ); }

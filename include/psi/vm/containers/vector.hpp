@@ -439,6 +439,20 @@ public:
         BOOST_ASSUME( this->size() == count );
     }
 
+    // The sizing verbs refuse, at compile time, an unsigned count wider than
+    // size_type (see narrowing_size): the narrowing would happen at the call,
+    // where nothing could check it. The storage's reserve() does the same.
+    explicit vector( narrowing_size<size_type> auto, auto && ... ) = delete;
+    void assign( narrowing_size<size_type> auto, param_const_ref ) = delete;
+    void resize( narrowing_size<size_type> auto, auto && ... ) = delete;
+    iterator insert( const_iterator, narrowing_size<size_type> auto, param_const_ref ) = delete;
+    bool stable_reserve( narrowing_size<size_type> auto ) = delete;
+    value_type * grow_to          ( narrowing_size<size_type> auto, auto && ) = delete;
+    value_type * grow_by          ( narrowing_size<size_type> auto, auto && ) = delete;
+    value_type * grow_by_amortized( narrowing_size<size_type> auto, auto && ) = delete;
+    void shrink_to( narrowing_size<size_type> auto ) = delete;
+    void shrink_by( narrowing_size<size_type> auto ) = delete;
+
     template <std::input_iterator It>
     constexpr vector( It const first, It const last ) noexcept( noexcept_storage() && noexcept_sizing() && std::is_nothrow_copy_constructible_v<value_type> )
         : storage_t{}
@@ -1170,6 +1184,14 @@ public:
     // Unconditional: a braced-init-list cannot deduce the Rng of the template
     // above, whether or not std::span can be built from an initializer_list.
     void append_range( std::initializer_list<value_type> const rng ) { append_range( std::span{ rng.begin(), rng.end() } ); }
+
+    //! <b>Effects</b>: append_range() with the container's geometric Growth
+    //! policy (as emplace_back) instead of exact fit: for a loop of appends
+    //! whose final size cannot be reserved up front.
+    //! <b>Requires</b>: rng does not alias this vector's elements (growth
+    //! happens before the copy, as with append_range()).
+    template <std::ranges::sized_range Rng>
+    void append_range_amortized( Rng && __restrict rng ) { append_range<true>( std::forward<Rng>( rng ) ); }
 
     //! <b>Effects</b>: Removes the last element from the container.
     //!

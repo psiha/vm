@@ -845,7 +845,7 @@ namespace
     // Up to three words of a four-letter alphabet, so that equal sequences,
     // and sequences that are prefixes of one another, are frequent.
     template <typename Sequences>
-    Sequences make_sequences( std::size_t const n )
+    Sequences make_sequences( typename Sequences::size_type const n )
     {
         std::mt19937 rng{ 11 };
         Sequences sequences( n );
