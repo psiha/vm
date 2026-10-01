@@ -128,7 +128,14 @@ concept has_try_shrink_in_place = requires( A a, typename A::pointer p, typename
 ///   void      deallocate( pointer ptr, size_type size = 0 ) noexcept;
 ///   pointer   grow_to   ( pointer cur, size_type cur_sz, size_type tgt_sz );
 ///   pointer   shrink_to ( pointer cur, size_type cur_sz, size_type tgt_sz ) noexcept;
-///   size_type size      ( const_pointer ptr ) noexcept;
+///   size_type size      ( const_pointer ptr, size_type requested = 0 ) noexcept;
+///
+/// cur_sz is the block's current capacity as the caller knows it: what it
+/// allocated or what size() reported for the block (a caller that caches no
+/// capacity passes the count of live elements, a lower bound). size()'s
+/// `requested` is a lower bound of the block's capacity the caller knows (the
+/// count it just allocated, grew or shrank the block to; 0 when it knows
+/// none): an allocator may use it to bound its answer, or ignore it.
 ///
 /// Optionally:
 ///   bool try_expand( pointer ptr, size_type target_size ) noexcept;
