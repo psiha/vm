@@ -11,6 +11,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -2179,6 +2180,26 @@ TYPED_TEST( storage_lifecycle, shrink_to_destroys_excess )
     v.resize( 5 );
     EXPECT_EQ( this->live_count(), 5 );
     EXPECT_EQ( v.size(), 5u );
+}
+
+TEST( vector_append, append_range_amortized_grows_geometrically )
+{
+    heap_vector<int, std::uint32_t> v;
+    std::array<int, 3> const chunk{ 1, 2, 3 };
+    std::uint32_t reallocations{ 0 };
+    auto const * data{ v.data() };
+    for ( int i{ 0 }; i < 1000; ++i )
+    {
+        v.append_range_amortized( chunk );
+        if ( v.data() != data ) { ++reallocations; data = v.data(); }
+    }
+    ASSERT_EQ( v.size(), 3000u );
+    for ( std::uint32_t i{ 0 }; i < v.size(); ++i )
+        ASSERT_EQ( v[ i ], chunk[ i % chunk.size() ] );
+    EXPECT_GT( v.capacity(), v.size() );
+    // 1.5x geometric growth: ~log_1.5( 1000 ) reallocations, against one per
+    // append under exact fit.
+    EXPECT_LT( reallocations, 40u );
 }
 
 //------------------------------------------------------------------------------

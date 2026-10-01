@@ -1171,6 +1171,14 @@ public:
     // above, whether or not std::span can be built from an initializer_list.
     void append_range( std::initializer_list<value_type> const rng ) { append_range( std::span{ rng.begin(), rng.end() } ); }
 
+    //! <b>Effects</b>: append_range() with the container's geometric Growth
+    //! policy (as emplace_back) instead of exact fit: for a loop of appends
+    //! whose final size cannot be reserved up front.
+    //! <b>Requires</b>: rng does not alias this vector's elements (growth
+    //! happens before the copy, as with append_range()).
+    template <std::ranges::sized_range Rng>
+    void append_range_amortized( Rng && __restrict rng ) { append_range<true>( std::forward<Rng>( rng ) ); }
+
     //! <b>Effects</b>: Removes the last element from the container.
     //!
     //! <b>Throws</b>: Nothing.
