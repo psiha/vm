@@ -55,6 +55,7 @@ endif()
 
 set( vm_test_sources
     "${CMAKE_CURRENT_SOURCE_DIR}/allocation.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/allocation.win32.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/b+tree.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/b+tree_space.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/cow.cpp"

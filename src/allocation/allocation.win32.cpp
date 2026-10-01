@@ -103,6 +103,20 @@ WIN32_MEMORY_REGION_INFORMATION mem_info( void * const address ) noexcept
 }
 std::size_t mem_region_size( void * const address ) noexcept { return mem_info( address ).RegionSize; }
 
+namespace
+{
+    //! The run of pages starting at address (a page boundary) that share their
+    //! state, protection and allocation: it never crosses into another
+    //! allocation, unlike a range grown by appending one.
+    MEMORY_BASIC_INFORMATION page_run( void * const address ) noexcept
+    {
+        MEMORY_BASIC_INFORMATION info;
+        BOOST_VERIFY( nt::NtQueryVirtualMemory( nt::current_process, address, nt::MemoryBasicInformation, &info, sizeof( info ), nullptr ) == nt::STATUS_SUCCESS );
+        BOOST_ASSUME( info.BaseAddress == address );
+        return info;
+    }
+} // anonymous namespace
+
 void * allocate( std::size_t & size ) noexcept { using namespace nt; void * address{ nullptr }; BOOST_VERIFY( alloc( address, size, allocation_type( std::to_underlying( allocation_type::reserve ) | std::to_underlying( allocation_type::commit ) ) ) == STATUS_SUCCESS || !address ); return address; }
 void * reserve ( std::size_t & size ) noexcept { using namespace nt; void * address{ nullptr }; BOOST_VERIFY( alloc( address, size,                                      allocation_type::reserve                                                     ) == STATUS_SUCCESS || !address ); return address; }
 
@@ -119,9 +133,9 @@ bool commit( void * const desired_location, std::size_t const size ) noexcept
         final_size = 0;
         while ( final_size != size )
         {
-            auto const info{ mem_info( final_address ) };
+            auto const info{ page_run( final_address ) };
             BOOST_ASSUME( info.AllocationProtect == PAGE_READWRITE );
-            BOOST_ASSUME( info.Private                             );
+            BOOST_ASSUME( info.Type              == MEM_PRIVATE    );
             auto region_size{ std::min( static_cast<std::size_t>( info.RegionSize ), size - final_size ) };
             auto const partial_result{ alloc( final_address, region_size, allocation_type::commit ) };
             if ( partial_result != STATUS_SUCCESS )
@@ -145,11 +159,27 @@ bool commit( void * const desired_location, std::size_t const size ) noexcept
 
 void decommit( void * const address, std::size_t const size ) noexcept
 {
-    auto final_address{ address };
-    auto final_size   { size    };
-    dealloc( final_address, final_size, deallocation_type::decommit );
-    BOOST_ASSUME( final_address == address );
-    BOOST_ASSUME( final_size    == size    );
+    // emulate support for adjacent/concatenated regions (as supported by mmap),
+    // as commit() and free() do: a range grown in place by appending a new
+    // allocation spans several, and one MEM_DECOMMIT call cannot cross them.
+    // (A query's region never does: its pages share the allocation base.)
+    auto * region   { static_cast<std::byte *>( address ) };
+    auto   remaining{ size };
+    while ( remaining )
+    {
+        auto const info{ page_run( region ) };
+        auto const region_size{ std::min( static_cast<std::size_t>( info.RegionSize ), remaining ) };
+        if ( info.State == MEM_COMMIT )
+        {
+            void * final_address{ region      };
+            auto   final_size   { region_size };
+            dealloc( final_address, final_size, deallocation_type::decommit );
+            BOOST_ASSUME( final_address == region      );
+            BOOST_ASSUME( final_size    == region_size );
+        }
+        region    += region_size;
+        remaining -= region_size;
+    }
 }
 BOOST_NOINLINE
 void free( void * address, std::size_t size ) noexcept
