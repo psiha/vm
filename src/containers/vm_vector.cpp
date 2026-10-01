@@ -218,7 +218,7 @@ void * mem_mapping::expand_capacity( std::size_t target_capacity )
     if ( private_view ) [[ unlikely ]]
     {
         if ( grow_privately( target_capacity ) ) [[ likely ]]
-            return data();
+            return attached_data();
         move_into_memory( mapped_size() );
     }
     // Exact-size expansion only. Geometric growth is the vector's responsibility.
@@ -242,7 +242,7 @@ void * mem_mapping::expand_view( std::size_t const target_size )
 {
     BOOST_ASSERT( get_size( mapping_ ) >= target_size );
     view_.expand( target_size, mapping_ );
-    return data();
+    return attached_data();
 }
 
 [[ gnu::noinline ]]
@@ -253,7 +253,7 @@ void * mem_mapping::shrink_to_slow( std::size_t const target_size ) noexcept( ma
     if ( views_privately() ) [[ unlikely ]]
     {
         shrink_privately( storage_size );
-        return data();
+        return attached_data();
     }
     auto const current_file_length{ this->storage_size() };
     // Keep the on-disk EOF page-aligned here too - a file that shrank to an
@@ -279,7 +279,7 @@ void * mem_mapping::shrink_to_slow( std::size_t const target_size ) noexcept( ma
         if ( do_unmap )
             view_ = extendable_mapped_view::map( mapping_, 0, storage_size );
     }
-    return data();
+    return attached_data();
 }
 
 void mem_mapping::shrink_mapped_size_to( std::size_t const target_size ) noexcept( mapping::views_downsizeable )
@@ -298,12 +298,33 @@ void mem_mapping::shrink_mapped_size_to( std::size_t const target_size ) noexcep
 
 void mem_mapping::shrink_to_fit() noexcept
 {
-    shrink_to_slow( live_size() );
+    if ( has_attached_storage() )
+        shrink_to_slow( live_size() );
 }
 
-void mem_mapping::reserve( size_type const new_capacity )
+void mem_mapping::reserve( size_type const new_capacity, header_info::align_t const data_alignment )
 {
-    if ( new_capacity > vm_capacity() ) [[ unlikely ]]
+    if ( !has_attached_storage() ) [[ unlikely ]]
+    {
+        // The first growth of storage nothing was mapped for: anonymous
+        // memory, so a container can be used without an explicit map_memory().
+        // Mapped at the requested capacity in the one call, not mapped empty
+        // and then grown. Unattached storage has a zero live length (default
+        // construction, close() and a move all leave it so), and fresh
+        // anonymous memory reads as zeros, so the persisted length in the new
+        // header already is zero too: only the layout fields are written.
+        BOOST_ASSUME( live_size() == 0 );
+        auto const hdr{ unpack( header_info{}.with_final_alignment( data_alignment ) ) };
+        if ( !map( {}, memory_storage_size( hdr.total_hdr_size() + new_capacity, huge_pages::no ) ) ) [[ unlikely ]]
+            detail::throw_bad_alloc();
+        auto & sizes{ get_sizes() };
+        BOOST_ASSUME( sizes.data_size == 0 );
+        sizes.data_offset = hdr.data_offset;
+        sizes.hdr_size    = hdr.hdr_size;
+        sizes.hdr_offset  = hdr.hdr_offset;
+        return;
+    }
+    if ( new_capacity > attached_vm_capacity() ) [[ unlikely ]]
         expand_capacity( client_to_storage_size( new_capacity ) );
 }
 
@@ -316,7 +337,7 @@ void * mem_mapping::shrink_to( size_type const target_size ) noexcept
 
     if ( align_down( sz, commit_granularity ) == align_down( target_size, commit_granularity ) ) {
         sz = target_size;
-        return data();
+        return attached_data();
     }
 
     sz = target_size;
