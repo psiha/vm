@@ -315,7 +315,17 @@ void mem_mapping::reserve( size_type const new_capacity, header_info::align_t co
         // header already is zero too: only the layout fields are written.
         BOOST_ASSUME( live_size() == 0 );
         auto const hdr{ unpack( header_info{}.with_final_alignment( data_alignment ) ) };
-        if ( !map( {}, memory_storage_size( hdr.total_hdr_size() + new_capacity, huge_pages::no ) ) ) [[ unlikely ]]
+        auto storage_size{ hdr.total_hdr_size() + new_capacity };
+#if defined( __linux__ ) && !defined( __ANDROID__ ) // server Linux
+        // A growth like any other, so it ends on a PMD boundary like the ones
+        // expand_capacity() makes: otherwise a first growth of at least a
+        // pmd_span leaves its last span in small pages for good. The mapping
+        // is a new one, so its phase is taken as zero: kernels since 6.7
+        // place an anonymous mapping of whole PMD spans on a PMD boundary.
+        if ( storage_size >= detail::pmd_span )
+            storage_size = align_up( storage_size, detail::pmd_span );
+#endif
+        if ( !map( {}, memory_storage_size( storage_size, huge_pages::no ) ) ) [[ unlikely ]]
             detail::throw_bad_alloc();
         auto & sizes{ get_sizes() };
         BOOST_ASSUME( sizes.data_size == 0 );
