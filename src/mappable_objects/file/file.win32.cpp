@@ -23,6 +23,8 @@
 
 #include <winioctl.h>
 
+#include <algorithm>
+
 #include <psi/err/win32.hpp>
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -102,6 +104,22 @@ bool make_sparse( file_handle::reference const file_handle ) noexcept
 {
     DWORD bytes_returned;
     return ::DeviceIoControl( file_handle, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &bytes_returned, nullptr ) != false;
+}
+
+
+bool punch_hole( file_handle::reference const file_handle, std::uint64_t const offset, std::uint64_t const length ) noexcept
+{
+    auto const size{ get_size( file_handle ) };
+    if ( offset >= size || length == 0 )
+        return true; // nothing to deallocate: the (clamped) range is empty
+    auto const end{ offset + std::min( length, size - offset ) };
+    FILE_ZERO_DATA_INFORMATION const range
+    {
+        .FileOffset      = { .QuadPart = static_cast<LONGLONG>( offset ) },
+        .BeyondFinalZero = { .QuadPart = static_cast<LONGLONG>( end    ) }
+    };
+    DWORD bytes_returned;
+    return ::DeviceIoControl( file_handle, FSCTL_SET_ZERO_DATA, const_cast<FILE_ZERO_DATA_INFORMATION *>( &range ), sizeof( range ), nullptr, 0, &bytes_returned, nullptr ) != false;
 }
 
 

@@ -15,6 +15,12 @@
 #include <print>
 #include <system_error>
 #include <vector>
+
+#ifdef _WIN32
+#   include <windows.h>
+#else
+#   include <sys/stat.h>
+#endif
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -261,6 +267,129 @@ TEST( vm_vector, sparse_file_allocates_only_what_is_written )
         EXPECT_EQ( vec.back (), 2U );
     }
     std::filesystem::remove( test_vec, ec );
+}
+
+namespace
+{
+    // Disk space the file occupies (what a punched hole gives back).
+    std::uint64_t allocated_size( char const * const path )
+    {
+#   ifdef _WIN32
+        DWORD high{};
+        DWORD const low{ ::GetCompressedFileSizeA( path, &high ) };
+        return ( std::uint64_t{ high } << 32 ) | low;
+#   else
+        struct stat info{};
+        EXPECT_EQ( ::stat( path, &info ), 0 );
+        return static_cast<std::uint64_t>( info.st_blocks ) * 512;
+#   endif
+    }
+
+    using byte_vector = psi::vm::vm_vector<std::uint8_t, std::uint32_t>;
+    std::uint32_t constexpr punch_file_size{ 48U << 20 };
+    std::uint8_t  constexpr pattern( std::uint32_t const i ) noexcept { return static_cast<std::uint8_t>( i % 251 + 1 ); } // never zero
+
+    // Fills a new file-backed container with the (non-zero) pattern, flushed.
+    void fill( byte_vector & vec, char const * const path )
+    {
+        std::error_code ec;
+        std::filesystem::remove( path, ec );
+        EXPECT_TRUE( vec.map_file( path, flags::named_object_construction_policy::create_new_or_truncate_existing )() );
+        vec.make_sparse(); // required on Windows for the punch to deallocate; no-op elsewhere
+        vec.grow_to( punch_file_size, default_init );
+        for ( std::uint32_t i{ 0 }; i < punch_file_size; ++i )
+            vec[ i ] = pattern( i );
+        EXPECT_TRUE( vec.flush_blocking()() );
+    }
+
+    // The file offset of the first element (the container keeps a header in front of the data).
+    std::uint64_t data_offset( byte_vector const & vec, char const * const path )
+    {
+        return std::filesystem::file_size( path ) - vec.fs_capacity();
+    }
+
+    void expect_punched( byte_vector const & vec, std::uint32_t const begin, std::uint32_t const end )
+    {
+        ASSERT_EQ( vec.size(), punch_file_size );
+        std::uint32_t wrong{ 0 };
+        for ( std::uint32_t i{ 0 }; i < punch_file_size; ++i )
+            wrong += ( vec[ i ] != ( ( i >= begin && i < end ) ? std::uint8_t{ 0 } : pattern( i ) ) );
+        EXPECT_EQ( wrong, 0U ) << "bytes that are not zero inside the range or changed outside it";
+    }
+} // anonymous namespace
+
+// Punching a hole in the backing file of a mapped container: the range reads
+// back as zeros through the mapping (and after a reopen), the rest is intact,
+// the file size is unchanged and the range stops occupying disk space.
+TEST( vm_vector, punch_hole_deallocates_a_page_aligned_range )
+{
+    auto const test_vec{ "test_punch.vec" };
+    std::uint32_t begin{}, end{}; // element indices of the range, chosen to be file offsets 16 MiB .. 32 MiB
+    {
+        byte_vector vec;
+        fill( vec, test_vec );
+        auto const offset{ data_offset( vec, test_vec ) };
+        begin = static_cast<std::uint32_t>( ( 16U << 20 ) - offset );
+        end   = static_cast<std::uint32_t>( ( 32U << 20 ) - offset );
+        auto const file_size{ std::filesystem::file_size( test_vec ) };
+        auto const before{ allocated_size( test_vec ) };
+        ASSERT_GE( before, punch_file_size );
+        if ( !vec.punch_hole( offset + begin, end - begin ) )
+            GTEST_SKIP() << "the file system does not support punching holes";
+        expect_punched( vec, begin, end );
+        EXPECT_TRUE( vec.flush_blocking()() );
+        EXPECT_EQ( std::filesystem::file_size( test_vec ), file_size );
+        auto const after{ allocated_size( test_vec ) };
+        std::uint64_t constexpr slack{ 128U << 10 };
+        EXPECT_LT( after, before - ( end - begin ) + slack ) << "the range was not deallocated";
+        EXPECT_GT( after, before - ( end - begin ) - slack ) << "more than the range was deallocated";
+    }
+    {
+        byte_vector vec;
+        ASSERT_TRUE( vec.map_file( test_vec, flags::named_object_construction_policy::open_existing )() );
+        expect_punched( vec, begin, end );
+    }
+    std::error_code ec;
+    std::filesystem::remove( test_vec, ec );
+}
+
+// The edges of a range that is not block aligned are zeroed, the content
+// right outside them is untouched; whole blocks inside are deallocated.
+TEST( vm_vector, punch_hole_zeroes_the_unaligned_edges )
+{
+    auto const test_vec{ "test_punch_unaligned.vec" };
+    std::uint32_t begin{}, end{}; // file offsets 16 MiB + 100 .. 32 MiB + 57
+    {
+        byte_vector vec;
+        fill( vec, test_vec );
+        auto const offset{ data_offset( vec, test_vec ) };
+        begin = static_cast<std::uint32_t>( ( 16U << 20 ) + 100 - offset );
+        end   = static_cast<std::uint32_t>( ( 32U << 20 ) +  57 - offset );
+        auto const file_size{ std::filesystem::file_size( test_vec ) };
+        auto const before{ allocated_size( test_vec ) };
+        if ( !vec.punch_hole( offset + begin, end - begin ) )
+            GTEST_SKIP() << "the file system does not support punching holes";
+        expect_punched( vec, begin, end );
+        EXPECT_TRUE( vec.flush_blocking()() );
+        EXPECT_EQ( std::filesystem::file_size( test_vec ), file_size );
+        EXPECT_LT( allocated_size( test_vec ), before - ( 15U << 20 ) ) << "the whole blocks inside the range were not deallocated";
+    }
+    {
+        byte_vector vec;
+        ASSERT_TRUE( vec.map_file( test_vec, flags::named_object_construction_policy::open_existing )() );
+        expect_punched( vec, begin, end );
+    }
+    std::error_code ec;
+    std::filesystem::remove( test_vec, ec );
+}
+
+// Memory-backed storage has no file to punch.
+TEST( vm_vector, punch_hole_is_unsupported_for_memory_backed_storage )
+{
+    byte_vector vec;
+    vec.map_memory();
+    vec.grow_by( 1U << 20, default_init );
+    EXPECT_FALSE( vec.punch_hole( 0, 4096 ) );
 }
 
 // The persisted length denotes the last COMMITTED extent, not an in-flight

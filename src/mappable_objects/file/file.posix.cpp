@@ -14,6 +14,10 @@
 ///
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
+#if defined( __linux__ ) && !defined( _GNU_SOURCE )
+#   define _GNU_SOURCE // fallocate() is a GNU extension
+#endif
+
 #include <psi/vm/mappable_objects/file/file.hpp>
 
 #if __has_include( <unistd.h> )
@@ -29,8 +33,11 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
+
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -86,6 +93,51 @@ std::uint64_t get_size( file_handle::const_reference const file_handle ) noexcep
     return static_cast<std::uint64_t>( file_info.st_size );
 #if defined( __clang__ ) || defined( __GNUC__ )
 #   pragma GCC diagnostic pop
+#endif
+}
+
+bool punch_hole( file_handle::reference const file_handle, std::uint64_t const offset, std::uint64_t length ) noexcept
+{
+    auto const size{ get_size( file_handle ) };
+    if ( offset >= size || length == 0 )
+        return true; // nothing to deallocate: the (clamped) range is empty
+    length = std::min( length, size - offset );
+#if defined( __linux__ ) && defined( FALLOC_FL_PUNCH_HOLE )
+    return ::fallocate( file_handle, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, static_cast<off_t>( offset ), static_cast<off_t>( length ) ) == 0;
+#elif defined( __APPLE__ ) && defined( F_PUNCHHOLE )
+    // F_PUNCHHOLE requires block aligned arguments: punch the aligned interior
+    // and zero the (less than a block long) edges with ordinary writes.
+    struct stat info;
+    if ( ::fstat( file_handle, &info ) != 0 || info.st_blksize <= 0 )
+        return false;
+    auto const block{ static_cast<std::uint64_t>( info.st_blksize ) };
+    auto const end  { offset + length };
+    auto const first{ ( offset + block - 1 ) / block * block }; // align_up
+    auto const last { end / block * block                    }; // align_down
+
+    auto const zero = [ & ]( std::uint64_t from, std::uint64_t const to ) noexcept
+    {
+        char const zeros[ 4096 ]{};
+        while ( from < to )
+        {
+            auto const chunk{ std::min<std::uint64_t>( to - from, sizeof( zeros ) ) };
+            auto const written{ ::pwrite( file_handle, zeros, static_cast<std::size_t>( chunk ), static_cast<off_t>( from ) ) };
+            if ( written <= 0 )
+                return false;
+            from += static_cast<std::uint64_t>( written );
+        }
+        return true;
+    };
+
+    if ( first >= last ) // no whole block inside the range
+        return zero( offset, end );
+    // Punch first: a filesystem without support must leave the file unchanged.
+    fpunchhole_t hole{ .fp_flags = 0, .reserved = 0, .fp_offset = static_cast<off_t>( first ), .fp_length = static_cast<off_t>( last - first ) };
+    if ( ::fcntl( file_handle, F_PUNCHHOLE, &hole ) != 0 )
+        return false;
+    return zero( offset, first ) && zero( last, end );
+#else
+    return false;
 #endif
 }
 
