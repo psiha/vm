@@ -12,6 +12,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 //------------------------------------------------------------------------------
 #include "allocation.impl.hpp"
+#include <psi/vm/align.hpp>
 #include <psi/vm/allocation.hpp>
 #include <psi/vm/detail/nt.hpp>
 #include <psi/vm/detail/win32.hpp>
@@ -23,6 +24,17 @@
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
+//------------------------------------------------------------------------------
+
+// Nothing populates committed memory that was never touched here:
+// PrefetchVirtualMemory leaves such pages non-resident (measured).
+bool populate( void * const address, std::size_t const size, populate_access ) noexcept
+{
+    auto const begin{ align_up  ( reinterpret_cast<std::uintptr_t>( address )       , std::uintptr_t{ page_size } ) };
+    auto const end  { align_down( reinterpret_cast<std::uintptr_t>( address ) + size, std::uintptr_t{ page_size } ) };
+    return end <= begin; // (no whole page: nothing to do)
+}
+
 //------------------------------------------------------------------------------
 
 enum class deallocation_type : std::uint32_t

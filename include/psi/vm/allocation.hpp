@@ -19,6 +19,7 @@
 #include <sys/mman.h>
 #endif // OS
 
+#include <psi/vm/populate.hpp>
 #include <psi/vm/span.hpp>
 
 #include <cstddef>

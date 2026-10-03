@@ -57,6 +57,32 @@ void * mmap( void * const target_address, std::size_t const size, int const prot
 }
 
 
+#if defined( __linux__ )
+#   ifndef MADV_POPULATE_READ // Linux 5.14
+#       define MADV_POPULATE_READ  22
+#       define MADV_POPULATE_WRITE 23
+#   endif
+#endif
+
+bool populate( [[ maybe_unused ]] void * const address, [[ maybe_unused ]] std::size_t const size, [[ maybe_unused ]] populate_access const access ) noexcept
+{
+    auto const begin{ align_up  ( reinterpret_cast<std::uintptr_t>( address )       , std::uintptr_t{ page_size } ) };
+    auto const end  { align_down( reinterpret_cast<std::uintptr_t>( address ) + size, std::uintptr_t{ page_size } ) };
+    if ( end <= begin )
+        return true;
+#if defined( __linux__ ) && !defined( __ANDROID__ )
+    auto const advice{ ( access == populate_access::write ) ? MADV_POPULATE_WRITE : MADV_POPULATE_READ };
+    // (EINTR: a signal arrived, what was done stays done: go on)
+    while ( ::madvise( reinterpret_cast<void *>( begin ), end - begin, advice ) != 0 )
+        if ( errno != EINTR )
+            return false; // ENOMEM: no memory or a hole in the range, EFAULT/EINVAL: a mapping that cannot be populated
+    return true;
+#else
+    return false;
+#endif
+}
+
+
 void * allocate( std::size_t & size ) noexcept
 {
     size = align_up( size, reserve_granularity );
