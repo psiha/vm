@@ -68,6 +68,7 @@ set( vm_test_sources
     "${CMAKE_CURRENT_SOURCE_DIR}/handle_release.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/lookup_threshold.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/mmap_threshold.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/populate.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/reserving_mapped_view.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/small_vector.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/sort.cpp"

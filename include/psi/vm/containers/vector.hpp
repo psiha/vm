@@ -33,6 +33,7 @@
 #include <psi/vm/containers/growth_policy.hpp>
 #include <psi/vm/containers/is_trivially_moveable.hpp>
 #include <psi/vm/containers/trivially_destructible_after_move.hpp>
+#include <psi/vm/populate.hpp>
 
 #include <psi/build/disable_warnings.hpp>
 
@@ -746,6 +747,27 @@ public:
             this->storage_shrink_to_fit();
         else
             this->storage_shrink_to( this->size() );
+    }
+
+    //! Faults in the pages of the memory of the elements [ first, first + count )
+    //! now, before they are written: see psi::vm::populate() for what that buys
+    //! (a bulk fill of memory that is about to be written whole), what it costs
+    //! (a populated page is resident, used or not) and where it does anything.
+    //! The range has to lie within the capacity, not the size: it is for
+    //! memory the container has reserved or grown into and is going to fill.
+    //! Works on any storage, being memory like any other; for a mapping of a
+    //! file it reads (and, to write, dirties) the file's pages, and for a
+    //! copy-on-write clone it copies them. Returns whether the pages are
+    //! populated, false where nothing was done (can_populate()).
+    bool populate( size_type const first, size_type const count, populate_access const access = populate_access::write ) noexcept
+    {
+        BOOST_ASSERT( std::size_t{ first } + count <= std::size_t{ this->capacity() } );
+        return ::psi::vm::populate( this->data() + first, std::size_t{ count } * sizeof( value_type ), access );
+    }
+    //! populate() of the spare capacity: the elements past size(), up to capacity().
+    bool populate_spare_capacity( populate_access const access = populate_access::write ) noexcept
+    {
+        return populate( this->size(), static_cast<size_type>( this->capacity() - this->size() ), access );
     }
 
     //////////////////////////////////////////////
