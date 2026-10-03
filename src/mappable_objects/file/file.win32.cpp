@@ -21,6 +21,8 @@
 
 #include <boost/assert.hpp>
 
+#include <winioctl.h>
+
 #include <psi/err/win32.hpp>
 //------------------------------------------------------------------------------
 namespace psi::vm
@@ -93,6 +95,13 @@ err::fallible_result<void, error> set_size( file_handle::reference const file_ha
     if ( success ) [[ unlikely ]]
         return err::success;
     return error{};
+}
+
+
+bool make_sparse( file_handle::reference const file_handle ) noexcept
+{
+    DWORD bytes_returned;
+    return ::DeviceIoControl( file_handle, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &bytes_returned, nullptr ) != false;
 }
 
 

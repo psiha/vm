@@ -41,6 +41,26 @@ bool        delete_file( wchar_t const * file_name                 ) noexcept;
 err::fallible_result<void, error> set_size( file_handle::      reference, std::uint64_t desired_size ) noexcept;
 std::uint64_t                     get_size( file_handle::const_reference                             ) noexcept;
 
+// Marks the file sparse (FSCTL_SET_SPARSE), so that ranges it is extended by
+// afterwards - with set_size() or by growing a mapping of it - stay
+// unallocated holes until they are written. NTFS and ReFS otherwise allocate
+// (reserve) the whole extended range right away, while POSIX filesystems leave
+// a hole for a plain extension anyway. Only extensions made after the call
+// are affected; space that is already allocated stays allocated.
+//
+// Opt-in rather than the default, because it changes behaviour beyond space:
+// - writing into a hole needs free space at that moment: on a full volume the
+//   page fault raises EXCEPTION_IN_PAGE_ERROR (as SIGBUS does on POSIX)
+//   instead of the extension failing up front;
+// - on NTFS, page faults on a mapped view of a sparse file are slower even
+//   where the file is fully allocated, so re-reading it through a mapping
+//   costs more;
+// - FSCTL_DUPLICATE_EXTENTS_TO_FILE (ReFS block cloning) requires the target
+//   of a sparse source to be sparse as well.
+// Returns false where the filesystem has no sparse files (e.g. FAT, exFAT);
+// the file is then simply extended as before.
+bool make_sparse( file_handle::reference ) noexcept;
+
 // https://msdn.microsoft.com/en-us/library/ms810613.aspx Managing Memory-Mapped Files
 
 mapping create_mapping( file_handle && file, flags::mapping, std::uint64_t maximum_size, char const * name ) noexcept;

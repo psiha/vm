@@ -60,6 +60,11 @@ err::fallible_result<void, error> set_size( file_handle::reference      , std::u
 #endif // POSIX impl level
 std::uint64_t                     get_size( file_handle::const_reference                             ) noexcept;
 
+// Extending a file with set_size() already leaves a hole wherever the
+// filesystem supports them, so there is nothing to mark (see the Win32
+// counterpart).
+inline bool make_sparse( file_handle::reference ) noexcept { return true; }
+
 
 #if __has_include( <unistd.h> )
 mapping create_mapping

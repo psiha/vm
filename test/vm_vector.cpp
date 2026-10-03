@@ -223,6 +223,46 @@ TEST( vm_vector, file_length_stays_page_aligned_across_growth_and_shrink )
 }
 
 
+// A container whose file was made sparse takes disk space only for what is
+// written: a large extension stays a hole, on Windows too, where a plain one
+// reserves the whole range. The contents read back unchanged across a reopen,
+// the never-written range as zeros.
+TEST( vm_vector, sparse_file_allocates_only_what_is_written )
+{
+    auto const test_vec{ "test_sparse.vec" };
+    std::error_code ec;
+    std::filesystem::remove( test_vec, ec );
+
+    using element = std::uint64_t;
+    std::uint32_t constexpr count{ ( 1U << 30 ) / sizeof( element ) }; // 1 GiB of elements
+    {
+        psi::vm::vm_vector<element, std::uint32_t> vec;
+        vec.map_file( test_vec, flags::named_object_construction_policy::create_new_or_truncate_existing );
+        ASSERT_TRUE( vec.make_sparse() );
+        vec.grow_to( count, default_init );
+        vec.front() = 1;
+        vec.back () = 2;
+        EXPECT_TRUE( vec.flush_blocking()() );
+
+        EXPECT_GE( std::filesystem::file_size( test_vec ), count * sizeof( element ) );
+#   ifdef _WIN32
+        DWORD high{};
+        DWORD const low{ ::GetCompressedFileSizeA( test_vec, &high ) };
+        std::uint64_t const allocated{ ( std::uint64_t{ high } << 32 ) | low };
+        EXPECT_LT( allocated, 16U << 20 ) << "the unwritten range was allocated";
+#   endif
+    }
+    {
+        psi::vm::vm_vector<element, std::uint32_t> vec;
+        vec.map_file( test_vec, flags::named_object_construction_policy::open_existing );
+        ASSERT_EQ( vec.size(), count );
+        EXPECT_EQ( vec.front(), 1U );
+        EXPECT_EQ( vec[ count / 2 ], 0U );
+        EXPECT_EQ( vec.back (), 2U );
+    }
+    std::filesystem::remove( test_vec, ec );
+}
+
 // The persisted length denotes the last COMMITTED extent, not an in-flight
 // cursor: growth alone must not move it - only a header-covering flush (or an
 // orderly detach) publishes it.
