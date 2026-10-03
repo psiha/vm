@@ -61,6 +61,25 @@ std::uint64_t                     get_size( file_handle::const_reference        
 // the file is then simply extended as before.
 bool make_sparse( file_handle::reference ) noexcept;
 
+// Deallocates the byte range [offset, offset + length) of the file: it reads
+// back as zeros, occupies no disk space (nor page cache) and the file size is
+// unchanged, so it can be used to give back the backing store of data that is
+// no longer needed while the file stays mapped and addressable. The range is
+// clamped to the current file size.
+//
+// Whole filesystem blocks (clusters) inside the range are freed, partial ones
+// at its edges are zeroed (they stay allocated). Mapped views of the file
+// observe the zeros afterwards.
+//
+// Implemented with FSCTL_SET_ZERO_DATA, which deallocates only on a file
+// marked sparse (see make_sparse(), call it before the file is filled): on a
+// non-sparse file the range is zero-filled, which is equally correct to read
+// but does not give any space back (and allocates if it was a hole).
+//
+// Returns false where the filesystem cannot do it (the file is then
+// unchanged); never throws.
+bool punch_hole( file_handle::reference, std::uint64_t offset, std::uint64_t length ) noexcept;
+
 // https://msdn.microsoft.com/en-us/library/ms810613.aspx Managing Memory-Mapped Files
 
 mapping create_mapping( file_handle && file, flags::mapping, std::uint64_t maximum_size, char const * name ) noexcept;

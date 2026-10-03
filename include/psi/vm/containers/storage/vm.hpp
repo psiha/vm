@@ -345,6 +345,15 @@ public:
     //! for memory-backed storage and on filesystems without sparse files.
     bool make_sparse() noexcept { return file_backed() && vm::make_sparse( mapping_.underlying_file() ); }
 
+    //! Deallocates the byte range [offset, offset + length) of the backing file
+    //! (see vm::punch_hole()): it reads back as zeros through the mapping,
+    //! takes no disk space and the container's size is unchanged. Only whole
+    //! filesystem blocks are freed, partial ones at the edges are zeroed. On
+    //! Windows space is given back only if make_sparse() was called before the
+    //! file was filled. False for memory-backed storage and on filesystems
+    //! without support (the contents are then unchanged).
+    bool punch_hole( std::uint64_t const offset, std::uint64_t const length ) noexcept { return file_backed() && vm::punch_hole( mapping_.underlying_file(), offset, length ); }
+
     err::fallible_result<void, error>
     map_file( auto const * const file_name, flags::named_object_construction_policy const policy, header_info const hdr_info ) noexcept
     {
