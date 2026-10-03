@@ -338,6 +338,13 @@ public:
 
     auto underlying_file() const noexcept { return mapping_.underlying_file(); }
 
+    //! Makes the backing file sparse (see vm::make_sparse()): capacity the
+    //! container grows by afterwards occupies no disk space until written.
+    //! Call it right after map_file(), before the container grows. A no-op
+    //! that reports success on POSIX, where extensions are holes anyway; false
+    //! for memory-backed storage and on filesystems without sparse files.
+    bool make_sparse() noexcept { return file_backed() && vm::make_sparse( mapping_.underlying_file() ); }
+
     err::fallible_result<void, error>
     map_file( auto const * const file_name, flags::named_object_construction_policy const policy, header_info const hdr_info ) noexcept
     {
