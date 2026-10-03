@@ -16,10 +16,15 @@
 /// footprint, whether it is used or not) and where huge pages do not already
 /// make the fault per 2 MiB.
 ///
-/// Where it is available: Linux 5.14+ (MADV_POPULATE_READ/WRITE). Elsewhere
+/// Where it is available: Linux (MADV_POPULATE_READ/WRITE, Linux 5.14; the
+/// library assumes a 6.x kernel, so there is nothing to detect). Elsewhere
 /// it does nothing and says so: Windows has no call that populates committed,
 /// never touched memory (PrefetchVirtualMemory leaves it non-resident, which
 /// was measured), and macOS has none for anonymous memory.
+///
+/// On memory backed by transparent huge pages the kernel populates the whole
+/// huge page that a populated page lies in, so more than the range can
+/// become resident.
 ///
 /// Copyright (c) Domagoj Saric 2026.
 ///
@@ -47,15 +52,21 @@ namespace psi::vm
 enum class populate_access : bool { read, write };
 
 //! Whether populate() can do anything on this system (see the file comment).
-//! Decided once, by trying on a scratch page, so a kernel that backports the
-//! call is found as well as one that has it by version.
-[[ nodiscard ]] bool can_populate() noexcept;
+[[ nodiscard ]] constexpr bool can_populate() noexcept
+{
+#if defined( __linux__ ) && !defined( __ANDROID__ )
+    return true;
+#else
+    return false;
+#endif
+}
 
 //! Faults in the whole pages that lie inside [ address, address + size ) - the
 //! range is rounded inwards to page boundaries, so a neighbour's page is never
 //! touched - and returns whether they all are populated: false where
 //! can_populate() is false, or where the system refused part of the range (no
-//! memory, a hole in the mapping; the pages done before that stay populated),
+//! memory, a hole in the mapping, a mapping that cannot be populated; the
+//! pages done before that stay populated),
 //! true for a range that holds no whole page. It reports nothing else and
 //! never throws: the pages fault in on first touch as they would have.
 bool populate( void * address, std::size_t size, populate_access = populate_access::write ) noexcept;

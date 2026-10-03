@@ -28,7 +28,6 @@ namespace psi::vm
 
 // Nothing populates committed memory that was never touched here:
 // PrefetchVirtualMemory leaves such pages non-resident (measured).
-bool can_populate() noexcept { return false; }
 bool populate( void * const address, std::size_t const size, populate_access ) noexcept
 {
     auto const begin{ align_up  ( reinterpret_cast<std::uintptr_t>( address )       , std::uintptr_t{ page_size } ) };

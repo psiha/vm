@@ -64,33 +64,13 @@ void * mmap( void * const target_address, std::size_t const size, int const prot
 #   endif
 #endif
 
-bool can_populate() noexcept
-{
-#if defined( __linux__ )
-    static bool const available{ []() noexcept
-    {
-        auto * const page{ posix::mmap( nullptr, page_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0 ) };
-        if ( page == MAP_FAILED )
-            return false;
-        auto const works{ ::madvise( page, page_size, MADV_POPULATE_WRITE ) == 0 };
-        BOOST_VERIFY( ::munmap( page, page_size ) == 0 );
-        return works;
-    }() };
-    return available;
-#else
-    return false;
-#endif
-}
-
 bool populate( [[ maybe_unused ]] void * const address, [[ maybe_unused ]] std::size_t const size, [[ maybe_unused ]] populate_access const access ) noexcept
 {
     auto const begin{ align_up  ( reinterpret_cast<std::uintptr_t>( address )       , std::uintptr_t{ page_size } ) };
     auto const end  { align_down( reinterpret_cast<std::uintptr_t>( address ) + size, std::uintptr_t{ page_size } ) };
     if ( end <= begin )
         return true;
-#if defined( __linux__ )
-    if ( !can_populate() )
-        return false;
+#if defined( __linux__ ) && !defined( __ANDROID__ )
     auto const advice{ ( access == populate_access::write ) ? MADV_POPULATE_WRITE : MADV_POPULATE_READ };
     // (EINTR: a signal arrived, what was done stays done: go on)
     while ( ::madvise( reinterpret_cast<void *>( begin ), end - begin, advice ) != 0 )

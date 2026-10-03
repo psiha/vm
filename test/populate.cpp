@@ -21,6 +21,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+
+#ifndef _WIN32
+#   include <sys/mman.h>
+#endif
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -36,10 +40,21 @@ namespace
         return { static_cast<std::byte const *>( address ), size };
     }
 
-    // a fresh anonymous block of 'pages' pages, of which nothing is resident
+    // a fresh anonymous block of 'pages' pages, of which nothing is resident,
+    // and which huge pages never back: with them (the system setting "always")
+    // the kernel populates the whole 2 MiB page around a populated one, which
+    // would hide what these tests ask about, single pages
     struct block
     {
-        block() noexcept { std::size_t size{ bytes }; address = allocate( size ); }
+        block() noexcept
+        {
+            std::size_t size{ bytes };
+            address = allocate( size );
+#       if defined( MADV_NOHUGEPAGE )
+            if ( address )
+                (void)::madvise( address, bytes, MADV_NOHUGEPAGE );
+#       endif
+        }
         ~block() { free( address, bytes ); }
         void * address;
     };
@@ -128,7 +143,8 @@ TEST( populate, vector_spare_capacity )
         auto const last_page { end & ~std::uintptr_t{ page_size - 1 } };
         auto const whole{ ( last_page - first_page ) / page_size };
         auto const resident{ resident_pages( as_bytes( reinterpret_cast<void const *>( first_page ), last_page - first_page ) ) };
-        ASSERT_TRUE( resident );
+        if ( !resident )
+            return; // (residency cannot be asked here)
         if ( can_populate() )
         {
             EXPECT_TRUE( done );
