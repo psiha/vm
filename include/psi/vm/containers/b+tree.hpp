@@ -77,7 +77,12 @@ public:
     // must not be less than the element at pos) - in a non-unique tree the
     // first of a run of equivalent elements that starts after pos. Returns
     // end() only when key > all elements from pos on.
-    [[ nodiscard ]] const_iterator lower_bound_from( const_iterator const pos, LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return impl_base::lower_bound_from_impl( pos.base().pos(), pass_in_reg{ key }, unique ); }
+    // The Search parameter selects, PER CALL, how the rest of the leaf at pos
+    // is searched (see forward_search; the same holds for every forward
+    // search below: replace_keys_inplace, erase_sorted*, and the insertion
+    // point search of the bulk inserts and merge).
+    template <forward_search Search = forward_search::automatic, LookupType<transparent_comparator, Key> K>
+    [[ nodiscard ]] const_iterator lower_bound_from( const_iterator const pos, K const & key ) const noexcept { return impl_base::template lower_bound_from_impl<Search>( pos.base().pos(), pass_in_reg{ key }, unique ); }
 
     const_iterator insert( const_iterator const pos_hint, InsertableType<transparent_comparator, Key> auto const & key ) { return impl_base::insert_impl( pos_hint, pass_in_reg{ key }, unique ); }
     auto           insert(                                InsertableType<transparent_comparator, Key> auto const & key )
@@ -100,24 +105,29 @@ public:
     // CALL (default: the comparator-derived policy) — the bulk-load sort is
     // where the per-comparator instantiation bloat lives; lookups, iteration
     // and the container type itself stay unaffected/shared.
-    template <comparator_erasure Erasure = Komparator<Comparator>::erasure, std::input_iterator InIter>
-    size_type insert( InIter const first, InIter const last ) { return impl_base::template insert<Erasure>( this->bulk_insert_prepare( std::ranges::subrange( first, last ) ), unique ); }
-    template <comparator_erasure Erasure = Komparator<Comparator>::erasure, std::convertible_to<Key> T>
-    size_type insert( std::initializer_list<T> const  keys ) { return impl_base::template insert<Erasure>( this->bulk_insert_prepare( std::ranges::subrange( keys       ) ), unique ); }
-    template <comparator_erasure Erasure = Komparator<Comparator>::erasure>
-    size_type insert( std::ranges::range auto const & keys ) { return impl_base::template insert<Erasure>( this->bulk_insert_prepare( std::ranges::subrange( keys       ) ), unique ); }
+    // The Search parameter: see lower_bound_from.
+    template <comparator_erasure Erasure = Komparator<Comparator>::erasure, forward_search Search = forward_search::automatic, std::input_iterator InIter>
+    size_type insert( InIter const first, InIter const last ) { return impl_base::template insert<Erasure, Search>( this->bulk_insert_prepare( std::ranges::subrange( first, last ) ), unique ); }
+    template <comparator_erasure Erasure = Komparator<Comparator>::erasure, forward_search Search = forward_search::automatic, std::convertible_to<Key> T>
+    size_type insert( std::initializer_list<T> const  keys ) { return impl_base::template insert<Erasure, Search>( this->bulk_insert_prepare( std::ranges::subrange( keys       ) ), unique ); }
+    template <comparator_erasure Erasure = Komparator<Comparator>::erasure, forward_search Search = forward_search::automatic>
+    size_type insert( std::ranges::range auto const & keys ) { return impl_base::template insert<Erasure, Search>( this->bulk_insert_prepare( std::ranges::subrange( keys       ) ), unique ); }
 
-    size_type insert_presorted       ( std::span<Key const> const presorted_input ) { return impl_base::insert_presorted       ( presorted_input, unique ); }
-    size_type insert_presorted_unique( std::span<Key const> const presorted_input ) { return impl_base::insert_presorted_unique( presorted_input, unique ); }
+    template <forward_search Search = forward_search::automatic>
+    size_type insert_presorted       ( std::span<Key const> const presorted_input ) { return impl_base::template insert_presorted       <Search>( presorted_input, unique ); }
+    template <forward_search Search = forward_search::automatic>
+    size_type insert_presorted_unique( std::span<Key const> const presorted_input ) { return impl_base::template insert_presorted_unique<Search>( presorted_input, unique ); }
     // Any sorted input range (unique: also duplicate-free) - e.g. a merge of
     // sorted sequences or a view - inserted without materialising it first.
-    template <std::ranges::input_range R> requires std::convertible_to<std::ranges::range_reference_t<R>, Key>
-    size_type insert_presorted       ( R && presorted_input ) { return impl_base::template insert_presorted_range<true >( std::forward<R>( presorted_input ), unique ); }
-    template <std::ranges::input_range R> requires std::convertible_to<std::ranges::range_reference_t<R>, Key>
-    size_type insert_presorted_unique( R && presorted_input ) { return impl_base::template insert_presorted_range<false>( std::forward<R>( presorted_input ), unique ); }
+    template <forward_search Search = forward_search::automatic, std::ranges::input_range R> requires std::convertible_to<std::ranges::range_reference_t<R>, Key>
+    size_type insert_presorted       ( R && presorted_input ) { return impl_base::template insert_presorted_range<true , Search>( std::forward<R>( presorted_input ), unique ); }
+    template <forward_search Search = forward_search::automatic, std::ranges::input_range R> requires std::convertible_to<std::ranges::range_reference_t<R>, Key>
+    size_type insert_presorted_unique( R && presorted_input ) { return impl_base::template insert_presorted_range<false, Search>( std::forward<R>( presorted_input ), unique ); }
 
-    size_type merge( bp_tree       && other ) { return impl_base::merge( std::move( other ), unique ); }
-    size_type merge( bp_tree const &  other ) { return impl_base::merge(            other  , unique ); }
+    template <forward_search Search = forward_search::automatic>
+    size_type merge( bp_tree       && other ) { return impl_base::template merge<Search>( std::move( other ), unique ); }
+    template <forward_search Search = forward_search::automatic>
+    size_type merge( bp_tree const &  other ) { return impl_base::template merge<Search>(            other  , unique ); }
 
     [[ gnu::sysv_abi, gnu::noinline ]]
     bool erase( key_const_arg key ) noexcept
@@ -229,9 +239,12 @@ public:
         return count;
     }
 
-    size_type replace_keys_inplace( std::span<Key const> const old_keys, std::span<Key const> const new_keys ) noexcept { return impl_base::replace_keys_inplace( old_keys, new_keys, unique ); }
-    size_type erase_sorted        ( std::span<Key const> const keys_to_remove ) noexcept { return impl_base::erase_sorted( keys_to_remove, unique ); }
-    size_type erase_sorted_exact  ( std::span<Key const> const keys_to_remove ) noexcept { return impl_base::erase_sorted_exact( keys_to_remove, unique ); }
+    template <forward_search Search = forward_search::automatic>
+    size_type replace_keys_inplace( std::span<Key const> const old_keys, std::span<Key const> const new_keys ) noexcept { return impl_base::template replace_keys_inplace<Search>( old_keys, new_keys, unique ); }
+    template <forward_search Search = forward_search::automatic>
+    size_type erase_sorted        ( std::span<Key const> const keys_to_remove ) noexcept { return impl_base::template erase_sorted      <Search>( keys_to_remove, unique ); }
+    template <forward_search Search = forward_search::automatic>
+    size_type erase_sorted_exact  ( std::span<Key const> const keys_to_remove ) noexcept { return impl_base::template erase_sorted_exact<Search>( keys_to_remove, unique ); }
 
 private:
     [[ using gnu: pure, sysv_abi ]]

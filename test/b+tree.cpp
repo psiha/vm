@@ -39,6 +39,18 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
+namespace
+{
+    // Calls f once for each forward_search policy, with the policy as a
+    // std::integral_constant and with its name.
+    void for_each_forward_search( auto const & f )
+    {
+        f( std::integral_constant<forward_search, forward_search::automatic>{}, "automatic" );
+        f( std::integral_constant<forward_search, forward_search::gallop   >{}, "gallop"    );
+        f( std::integral_constant<forward_search, forward_search::bisect   >{}, "bisect"    );
+    }
+} // anonymous namespace
+
 #ifdef NDEBUG // bench only release builds
 
 // A/B arms are separately built binaries and have to see the same shuffle, so
@@ -313,6 +325,177 @@ TEST( bp_tree, benchmark_indirect_comparator )
         insert, best, double( bytes ) / test_size
     );
 } // bp_tree.benchmark_indirect_comparator
+
+namespace
+{
+    // Forward searches - lower_bound_from and replace_keys_inplace - over a
+    // sweep of ascending keys, with the next key a given number of slots on,
+    // under each forward_search policy.  Two comparators: the keys themselves
+    // (std::less), and an ordering by a column of wide rows, in which
+    // neighbouring keys are far-apart rows - once with a column much larger
+    // than the cache and every pass starting cold, so that nearly every row a
+    // comparison reads is a cache miss, and once with a column that stays
+    // cached.  The search inside a leaf is what changes with the distance and
+    // the policy; both its time and its comparison count are reported per
+    // probe.
+    struct sweep_row { std::uint32_t value; std::uint32_t payload[ 7 ]; }; // 32 bytes
+    inline std::uint64_t volatile sweep_comparisons{ 0 }; // volatile: the node searches are gnu::pure
+    template <bool counting>
+    struct sweep_column_less
+    {
+        sweep_row const * rows;
+        bool operator()( std::uint32_t const left, std::uint32_t const right ) const noexcept
+        {
+            if constexpr ( counting ) { sweep_comparisons = sweep_comparisons + 1; }
+            return rows[ left ].value < rows[ right ].value;
+        }
+    };
+    struct sweep_counting_less
+    {
+        using is_transparent = std::true_type;
+        bool operator()( std::uint32_t const left, std::uint32_t const right ) const noexcept { sweep_comparisons = sweep_comparisons + 1; return left < right; }
+    };
+} // anonymous namespace
+// == stands for equivalence wherever a sweep compares a key with itself (as
+// for indirect_less above); the counting twin of std::less searches the same
+// way (directly)
+template <bool counting> inline constexpr bool is_simple_comparator<sweep_column_less<counting>>{ true };
+template <> inline constexpr bool is_simple_comparator<sweep_counting_less>{ true };
+template <typename Key> inline constexpr bool is_direct_comparator<sweep_counting_less, Key>{ true };
+
+namespace
+{
+    // Reads through a buffer larger than the last-level cache so that every
+    // pass starts cold (the best of several passes is reported).
+    void evict_caches() noexcept
+    {
+        static std::vector<std::uint64_t> buffer( std::size_t{ 64 } << 20 >> 3 ); // 64 MB
+        std::uint64_t sum{ 0 };
+        for ( std::size_t i{ 0 }; i < buffer.size(); i += 8 ) { buffer[ i ] += 1; sum += buffer[ i ]; }
+        [[ maybe_unused ]] static std::uint64_t volatile sink; sink = sum;
+    }
+
+    // ns per probe (best of lookup_passes) and comparisons per probe
+    struct sweep_result { double ns; double comparisons; };
+
+    template <forward_search Search, typename Tree, typename CountingTree>
+    std::pair<sweep_result, sweep_result> time_sweep( Tree & tree, CountingTree & counting_tree, std::span<std::uint32_t const> const keys, std::span<std::uint32_t const> const replacements, bool const cold )
+    {
+        auto const lower_bound_from_pass{ [&]( auto & t ) noexcept {
+            std::uint64_t sum{ 0 };
+            auto pos{ t.begin() };
+            for ( auto const key : keys ) { pos = t.template lower_bound_from<Search>( pos, key ); sum += *pos; }
+            return sum;
+        } };
+        // replaces the keys and then puts them back, so that every pass finds them
+        auto const replace_pass{ [&]( auto & t, bool const back ) noexcept {
+            return back ? t.template replace_keys_inplace<Search>( replacements, keys ) : t.template replace_keys_inplace<Search>( keys, replacements );
+        } };
+        sweep_result lbf{ duration::max().count(), 0 }, rpl{ duration::max().count(), 0 };
+        [[ maybe_unused ]] std::uint64_t volatile sink{ 0 };
+        // a cold pass is one sweep (a second one would find the rows cached); a
+        // cached one repeats the sweep - replacing and putting back in turn -
+        // until it is long enough to time
+        auto const sweeps{ cold ? 1U : std::max( 1U, static_cast<unsigned>( ( 1U << 20 ) / keys.size() ) ) };
+        for ( auto pass{ 0 }; pass < 2 * lookup_passes; ++pass )
+        {
+            if ( cold ) { evict_caches(); }
+            auto const start{ timer::now() };
+            for ( auto sweep{ 0U }; sweep < sweeps; ++sweep )
+            {
+                if ( pass % 2 == 0 ) { sink = lower_bound_from_pass( tree ); }
+                else                 { EXPECT_EQ( replace_pass( tree, sweep % 2 != 0 ), keys.size() ); }
+            }
+            auto const elapsed{ duration{ timer::now() - start }.count() / double( keys.size() ) / sweeps };
+            ( pass % 2 == 0 ? lbf : rpl ).ns = std::min( ( pass % 2 == 0 ? lbf : rpl ).ns, elapsed );
+            if ( ( pass % 2 != 0 ) && ( sweeps % 2 != 0 ) ) { EXPECT_EQ( replace_pass( tree, true ), keys.size() ); }
+        }
+        sweep_comparisons = 0; sink = lower_bound_from_pass( counting_tree ); lbf.comparisons = double( sweep_comparisons ) / double( keys.size() );
+        sweep_comparisons = 0; EXPECT_EQ( replace_pass( counting_tree, false ), keys.size() ); rpl.comparisons = double( sweep_comparisons ) / double( keys.size() );
+        EXPECT_EQ( replace_pass( counting_tree, true ), keys.size() );
+        return { lbf, rpl };
+    }
+
+    // the slots a sweep visits: every `gap`-th, or (gap == 0) gaps drawn from a
+    // geometric distribution with a mean of 16
+    std::vector<std::uint32_t> sweep_slots( std::uint32_t const size, std::uint32_t const gap, std::mt19937 & rng )
+    {
+        auto constexpr max_probes{ 200000U };
+        std::geometric_distribution<std::uint32_t> geometric{ 1.0 / 16 };
+        std::vector<std::uint32_t> slots;
+        for ( std::uint32_t slot{ 1 }; ( slot < size ) && ( slots.size() < max_probes ); slot += ( gap ? gap : 1 + geometric( rng ) ) )
+            slots.push_back( slot );
+        return slots;
+    }
+} // anonymous namespace
+
+TEST( bp_tree, benchmark_forward_search )
+{
+    auto constexpr test_size{ std::uint32_t{ 1 } << 22 };
+    std::mt19937 rng{ PSI_VM_BENCH_SEED };
+    // gaps in slots; 0 draws them from a geometric distribution with a mean of 16
+    std::array<std::uint32_t, 9> constexpr gaps{ 1, 3, 6, 12, 48, 200, 700, 1500, 0 };
+
+    auto const report{ [&]( char const * const label, std::uint32_t const size, bool const cold, bool const linear, bool const direct, auto & tree, auto & counting_tree, auto const & slot_key, auto const & slot_replacement ) {
+        using tree_t = std::remove_cvref_t<decltype( tree )>;
+        std::println
+        (
+            "forward search, {}: {} keys, {}-byte nodes, {} values/leaf, leaf search {}, automatic = {}\n"
+            "\t gap [slots]\t policy\t lower_bound_from [ns, comparisons]\t replace_keys_inplace [ns, comparisons]",
+            label, size, tree_t::node_byte_size(), tree_t::max_values_per_leaf(),
+            linear ? "LINEAR" : "binary", direct ? "gallop" : "bisect"
+        );
+        for ( auto const gap : gaps )
+        {
+            auto const slots{ sweep_slots( size, gap, rng ) };
+            std::vector<std::uint32_t> keys( slots.size() ), replacements( slots.size() );
+            for ( std::size_t i{ 0 }; i < slots.size(); ++i ) { keys[ i ] = slot_key( slots[ i ] ); replacements[ i ] = slot_replacement( slots[ i ] ); }
+            // an untimed sweep first: whichever policy was timed first over a
+            // new set of probes came out slower than the same search timed later
+            std::ignore = time_sweep<forward_search::bisect>( tree, counting_tree, keys, replacements, cold );
+            for_each_forward_search( [&]( auto policy, char const * const name ) {
+                auto const [lbf, rpl]{ time_sweep<decltype( policy )::value>( tree, counting_tree, keys, replacements, cold ) };
+                std::println( "\t {}\t {}\t {:.1f}\t{:.1f}\t {:.1f}\t{:.1f}", gap ? std::to_string( gap ) : std::string{ "~16" }, name, lbf.ns, lbf.comparisons, rpl.ns, rpl.comparisons );
+            } );
+        }
+    } };
+
+    // the keys themselves: 0, 2, 4, ...
+    {
+        psi::vm::bp_tree<std::uint32_t, true, std::less<>        > tree         ; tree         .map_memory();
+        psi::vm::bp_tree<std::uint32_t, true, sweep_counting_less> counting_tree; counting_tree.map_memory();
+        auto const keys{ std::ranges::to<std::vector>( std::views::iota( 0U, test_size ) | std::views::transform( []( std::uint32_t const i ) { return 2 * i; } ) ) };
+        tree.insert_presorted( keys ); counting_tree.insert_presorted( keys );
+        report
+        (
+            "the keys", test_size, true,
+            use_linear_search_for_sorted_array<std::less<>, std::uint32_t, decltype( tree )::max_values_per_leaf()>, is_direct_comparator<std::less<>, std::uint32_t>,
+            tree, counting_tree, []( std::uint32_t const slot ) { return 2 * slot; }, []( std::uint32_t const slot ) { return 2 * slot; }
+        );
+    }
+    // rows [0, size) hold a random permutation of the values and row size + r
+    // is r's twin (the same value): a replacement key
+    auto const column{ [&]( char const * const label, std::uint32_t const size, bool const cold ) {
+        std::vector<sweep_row> rows( std::size_t{ 2 } * size );
+        std::vector<std::uint32_t> by_value( size ); // the row holding each value, i.e. the tree's slots
+        {
+            auto values{ std::ranges::to<std::vector>( std::views::iota( 0U, size ) ) };
+            std::ranges::shuffle( values, rng );
+            for ( std::uint32_t row{ 0 }; row < size; ++row ) { rows[ row ].value = rows[ size + row ].value = values[ row ]; by_value[ values[ row ] ] = row; }
+        }
+        psi::vm::bp_tree<std::uint32_t, true, sweep_column_less<false>> tree         { sweep_column_less<false>{ rows.data() } }; tree         .map_memory();
+        psi::vm::bp_tree<std::uint32_t, true, sweep_column_less<true >> counting_tree{ sweep_column_less<true >{ rows.data() } }; counting_tree.map_memory();
+        tree.insert_presorted( by_value ); counting_tree.insert_presorted( by_value );
+        report
+        (
+            label, size, cold,
+            use_linear_search_for_sorted_array<sweep_column_less<false>, std::uint32_t, decltype( tree )::max_values_per_leaf()>, is_direct_comparator<sweep_column_less<false>, std::uint32_t>,
+            tree, counting_tree, [&]( std::uint32_t const slot ) { return by_value[ slot ]; }, [&]( std::uint32_t const slot ) { return by_value[ slot ] + size; }
+        );
+    } };
+    column( "a column of 32-byte rows (256 MB), cold", test_size, true );
+    column( "a column of 32-byte rows (16 MB), cached", test_size >> 4, false );
+} // bp_tree.benchmark_forward_search
 
 namespace
 {
@@ -1871,6 +2054,47 @@ TEST( bp_tree, replace_keys_inplace_basic )
     indirect_values.clear();
 }
 
+// Replacing every k-th key of a tree that spans many leaves walks forward to
+// keys at that distance - the next slot, every distance up to a few dozen
+// slots on, the last slot of a leaf, the first slots of the next one, many
+// leaves on - and replaces exactly them, under every forward_search policy.
+TEST( bp_tree, replace_keys_inplace_strided )
+{
+    using tree_type = psi::vm::bp_tree<unsigned, true, indirect_comparator>;
+    auto constexpr rows{ 20000U };
+    auto constexpr leaf{ static_cast<unsigned>( tree_type::max_values_per_leaf() ) };
+    std::vector<unsigned> strides( 40 );
+    std::iota( strides.begin(), strides.end(), 1U );
+    strides.insert( strides.end(), { 65U, 66U, 67U, 100U, 700U, leaf - 1, leaf, leaf + 1, 2 * leaf + 1, 5000U } );
+    for_each_forward_search( [&]( auto policy, char const * const name ) {
+        for ( auto const stride : strides ) {
+            tree_type bpt;
+            bpt.map_memory();
+            indirect_values.assign( 2 * rows, 0 );
+            std::vector<unsigned> row_indices( rows );
+            for ( auto i{ 0U }; i < rows; ++i ) {
+                indirect_values[ i ] = static_cast<int>( i * 10 );
+                row_indices    [ i ] = i;
+            }
+            bpt.insert( row_indices );
+            std::vector<unsigned> old_rows, new_rows;
+            for ( auto i{ 0U }; i < rows; i += stride ) {
+                old_rows.push_back( i );
+                new_rows.push_back( rows + i );
+                indirect_values[ rows + i ] = indirect_values[ i ];
+            }
+            EXPECT_EQ( bpt.template replace_keys_inplace<decltype( policy )::value>( old_rows, new_rows ), old_rows.size() ) << name << " stride " << stride;
+            auto i{ 0U };
+            for ( auto const key : bpt ) {
+                EXPECT_EQ( key, ( i % stride == 0 ) ? rows + i : i ) << name << " stride " << stride << " slot " << i;
+                ++i;
+            }
+            EXPECT_EQ( i, rows );
+        }
+    } );
+    indirect_values.clear();
+}
+
 TEST( bp_tree, replace_keys_inplace_empty_input )
 {
     bptree_set<int> bpt;
@@ -3201,7 +3425,7 @@ namespace
     // keys up to three leaves on and past the end.  class_of maps a key of the
     // tree to its equivalence class (an ordinal) and lookup_of a class to a
     // lookup that is equivalent to its keys.
-    template <typename Tree>
+    template <forward_search Search = forward_search::automatic, typename Tree>
     void check_lower_bound_from_runs( Tree const & bpt, auto const class_of, auto const lookup_of )
     {
         auto constexpr leaf{ static_cast<unsigned>( Tree::max_values_per_leaf() ) };
@@ -3222,7 +3446,7 @@ namespace
             auto const last_class{ classes[ std::min( i + 3 * leaf, n - 1 ) ] + 1 };
             for ( auto cls{ classes[ i ] }; cls <= last_class; ++cls ) {
                 auto const expected{ ( cls == classes[ i ] ) ? start : bpt.lower_bound( lookup_of( cls ) ) };
-                ASSERT_EQ( bpt.lower_bound_from( start, lookup_of( cls ) ), expected ) << "start " << i << " class " << cls;
+                ASSERT_EQ( bpt.template lower_bound_from<Search>( start, lookup_of( cls ) ), expected ) << "start " << i << " class " << cls;
             }
         }
     }
@@ -3350,6 +3574,314 @@ TEST( bp_tree, bulk_operations_reach_the_first_of_a_run_of_equal_keys )
         EXPECT_EQ( bpt.size(), expected.size() );
         EXPECT_TRUE( std::ranges::equal( bpt, expected ) );
     }
+}
+
+namespace
+{
+    // std::less for the tree's ordering, but comparators the leaf search
+    // cannot scan with (neither is a simple comparator), so their leaves are
+    // bisected at any node size and on any target - the search a forward
+    // search gallops in - where a bptree_set<unsigned> leaf may be scanned.
+    // bisected_less states nothing, so it counts as an indirect comparator
+    // (forward_search::automatic bisects with it); direct_less claims to read
+    // nothing but the keys (automatic gallops with it).
+    struct bisected_less
+    {
+        bool operator()( unsigned const left, unsigned const right ) const noexcept { return left < right; }
+    };
+    struct direct_less
+    {
+        bool operator()( unsigned const left, unsigned const right ) const noexcept { return left < right; }
+    };
+} // anonymous namespace
+template <typename Key> inline constexpr bool is_direct_comparator<direct_less, Key>{ true };
+
+namespace
+{
+    template <bool unique> using bisected_tree        = psi::vm::bp_tree<unsigned, unique, bisected_less>;
+    template <bool unique> using direct_bisected_tree = psi::vm::bp_tree<unsigned, unique, direct_less  >;
+    static_assert( !use_linear_search_for_sorted_array<bisected_less, unsigned, bisected_tree       <true >::max_values_per_leaf()> );
+    static_assert( !use_linear_search_for_sorted_array<bisected_less, unsigned, bisected_tree       <false>::max_values_per_leaf()> );
+    static_assert( !use_linear_search_for_sorted_array<direct_less  , unsigned, direct_bisected_tree<true >::max_values_per_leaf()> );
+    static_assert( !use_linear_search_for_sorted_array<direct_less  , unsigned, direct_bisected_tree<false>::max_values_per_leaf()> );
+
+    // lower_bound_from( start, key ) against a search from the root: from start
+    // positions next to every leaf boundary and at a stride elsewhere, for every
+    // key - present and absent - from the start's own to `reach` slots past it
+    // (and past the end of the tree).  The values must be 2, 4, 6, ...
+    template <forward_search Search, typename Tree>
+    void check_lower_bound_from_every_start( Tree const & bpt, unsigned const reach )
+    {
+        auto const n{ static_cast<unsigned>( bpt.size() ) };
+        std::vector<std::uint32_t> leaf_of; // the leaf holding each slot
+        for ( auto it{ bpt.begin() }; it != bpt.end(); ++it ) { leaf_of.push_back( *it.base().pos().node ); }
+        auto const near_boundary{ [&]( unsigned const i ) {
+            for ( auto j{ i >= 2 ? i - 2 : 0U }; j + 1 < std::min( i + 3, n ); ++j ) { if ( leaf_of[ j ] != leaf_of[ j + 1 ] ) return true; }
+            return false;
+        } };
+        auto const stride{ std::max( 1U, static_cast<unsigned>( Tree::max_values_per_leaf() ) / 32 ) };
+        auto start{ bpt.begin() };
+        for ( auto i{ 0U }; i < n; ++i, ++start ) {
+            ASSERT_EQ( *start, 2 * ( i + 1 ) );
+            if ( ( i % stride != 0 ) && ( i + 1 != n ) && !near_boundary( i ) ) continue;
+            for ( auto key{ *start }; key <= std::min( 2 * ( i + reach + 1 ), 2 * n + 1 ); ++key ) {
+                ASSERT_EQ( bpt.template lower_bound_from<Search>( start, key ), bpt.lower_bound( key ) ) << "size " << n << " start " << i << " key " << key;
+            }
+        }
+    }
+
+    template <typename Tree, forward_search Search>
+    void check_lower_bound_from_every_start_and_distance()
+    {
+        auto constexpr leaf{ static_cast<unsigned>( Tree::max_values_per_leaf() ) };
+        for ( auto const size : { 1U, 2U, 3U, leaf - 1, leaf, 3 * leaf + 5 } ) {
+            Tree bpt;
+            bpt.map_memory();
+            std::vector<unsigned> keys( size );
+            for ( auto i{ 0U }; i < size; ++i ) { keys[ i ] = 2 * ( i + 1 ); }
+            bpt.insert_presorted( keys );
+            check_lower_bound_from_every_start<Search>( bpt, leaf + 4 );
+        }
+        // leaves that are not full: random insertion order
+        Tree bpt;
+        bpt.map_memory();
+        std::vector<unsigned> keys( 4 * leaf );
+        for ( auto i{ 0U }; i < keys.size(); ++i ) { keys[ i ] = 2 * ( i + 1 ); }
+        std::mt19937 rng{ 1234 };
+        std::ranges::shuffle( keys, rng );
+        for ( auto const k : keys ) { bpt.insert( k ); }
+        check_lower_bound_from_every_start<Search>( bpt, leaf + 4 );
+    }
+
+    template <typename Tree, forward_search Search>
+    void check_lower_bound_from_at_any_distance()
+    {
+        Tree bpt;
+        bpt.map_memory();
+        auto constexpr size{ 20000U };
+        auto constexpr leaf{ static_cast<unsigned>( Tree::max_values_per_leaf() ) };
+        std::vector<unsigned> keys( size );
+        for ( auto i{ 0U }; i < size; ++i ) { keys[ i ] = 2 * i; }
+        bpt.insert_presorted( keys );
+        // in key units (two per slot): every distance up to 40 slots, and
+        // further, around and past a leaf's length
+        std::vector<unsigned> strides( 80 );
+        std::iota( strides.begin(), strides.end(), 1U );
+        strides.insert( strides.end(), { 333U, 2 * leaf - 1, 2 * leaf, 2 * leaf + 1, 1500U, 7001U } );
+        for ( auto const stride : strides ) {
+            auto pos{ bpt.begin() };
+            for ( auto key{ 0U }; key < 2 * size + 3; key += stride ) {
+                pos = bpt.template lower_bound_from<Search>( pos, key );
+                ASSERT_EQ( pos, bpt.lower_bound( key ) ) << "stride " << stride << " key " << key;
+                if ( pos == bpt.end() ) { break; }
+            }
+        }
+    }
+
+    // A tree with runs of equal values - of one value, a few, half a leaf,
+    // over a leaf, two leaves - from every start, to every key up to the end
+    // of the tree.
+    template <typename Tree, forward_search Search>
+    void check_lower_bound_from_with_equal_values()
+    {
+        Tree bpt;
+        bpt.map_memory();
+        auto constexpr leaf{ static_cast<unsigned>( Tree::max_values_per_leaf() ) };
+        std::vector<unsigned> keys;
+        auto value{ 2U };
+        for ( auto const run : { 1U, 2U, 3U, 1U, 7U, leaf / 2, 1U, leaf + 3, 2U, 1U, 2 * leaf, 1U, 5U } ) {
+            keys.insert( keys.end(), run, value );
+            value += 2;
+        }
+        bpt.insert_presorted( keys );
+        ASSERT_EQ( bpt.size(), keys.size() );
+        auto start{ bpt.begin() };
+        for ( auto i{ 0U }; i < keys.size(); ++i, ++start ) {
+            ASSERT_EQ( *start, keys[ i ] );
+            for ( auto key{ keys[ i ] }; key <= value; ++key ) {
+                auto const expected{ ( key == keys[ i ] ) ? start : bpt.lower_bound( key ) };
+                ASSERT_EQ( bpt.template lower_bound_from<Search>( start, key ), expected ) << "start " << i << " key " << key;
+            }
+        }
+    }
+} // anonymous namespace
+
+// A forward sweep of lower_bound_from lands, for keys at every distance from
+// its position - present and absent, the next slot to many leaves on - where a
+// search from the root does, under every forward_search policy: in leaves that
+// are scanned (where the target and node size make them so) and in leaves that
+// are bisected, with a direct and with an indirect comparator.
+TEST( bp_tree, lower_bound_from_at_any_distance )
+{
+    for_each_forward_search( []( auto policy, char const * ) {
+        check_lower_bound_from_at_any_distance<bptree_set<unsigned>   , decltype( policy )::value>();
+        check_lower_bound_from_at_any_distance<bisected_tree<true>       , decltype( policy )::value>();
+        check_lower_bound_from_at_any_distance<direct_bisected_tree<true>, decltype( policy )::value>();
+    } );
+}
+
+// Starts at and next to every leaf boundary, in single-leaf trees - one value,
+// two, a full leaf - and in trees of several full or partly filled leaves, to
+// every key from the start's own through the next slot, the last slot of its
+// leaf and the first slots of the next one, and past the end of the tree,
+// under every forward_search policy.
+TEST( bp_tree, lower_bound_from_every_start_and_distance )
+{
+    for_each_forward_search( []( auto policy, char const * ) {
+        check_lower_bound_from_every_start_and_distance<bptree_set<unsigned>      , decltype( policy )::value>();
+        check_lower_bound_from_every_start_and_distance<bisected_tree<true>       , decltype( policy )::value>();
+        check_lower_bound_from_every_start_and_distance<direct_bisected_tree<true>, decltype( policy )::value>();
+    } );
+}
+
+// In a tree with equivalent values lower_bound_from( start, key ) is the first
+// value not less than key at or after start: start itself for a key equal to
+// its value - even inside a run of equal values - and otherwise the first of
+// the run of the next greater or equal value, under every forward_search
+// policy - in the start's leaf (where the policy selects the search) as well
+// as further on.
+TEST( bp_tree, lower_bound_from_with_equal_values )
+{
+    for_each_forward_search( []( auto policy, char const * ) {
+        check_lower_bound_from_with_equal_values<bptree_multiset<unsigned>  , decltype( policy )::value>();
+        check_lower_bound_from_with_equal_values<bisected_tree<false>       , decltype( policy )::value>();
+        check_lower_bound_from_with_equal_values<direct_bisected_tree<false>, decltype( policy )::value>();
+        auto const identity{ []( unsigned const key ) { return key; } };
+        using runs = straddling_runs<bisected_tree<false>>;
+        std::vector<unsigned> keys( runs::size );
+        for ( auto i{ 0U }; i < runs::size; ++i ) { keys[ i ] = 2 * ( i / runs::run + 1 ); }
+        bisected_tree<false>        bisected; bisected.map_memory(); bisected.insert_presorted( keys );
+        direct_bisected_tree<false> direct  ; direct  .map_memory(); direct  .insert_presorted( keys );
+        check_lower_bound_from_runs<decltype( policy )::value>( bisected, identity, identity );
+        check_lower_bound_from_runs<decltype( policy )::value>( direct  , identity, identity );
+    } );
+}
+
+namespace
+{
+    inline std::uint64_t volatile forward_search_comparisons{ 0 }; // volatile: the node searches are gnu::pure
+    // bisected (not a simple comparator) and, for direct, claiming to read
+    // nothing but the keys
+    template <bool direct>
+    struct counting_less
+    {
+        bool operator()( unsigned const left, unsigned const right ) const noexcept { forward_search_comparisons = forward_search_comparisons + 1; return left < right; }
+    };
+} // anonymous namespace
+template <typename Key> inline constexpr bool is_direct_comparator<counting_less<true>, Key>{ true };
+
+namespace
+{
+    // The comparisons lower_bound_from and replace_keys_inplace make for a key
+    // right next to where the leaf search starts, at the beginning of a full
+    // leaf: a gallop stops after its first probe, a bisection of the rest of
+    // the leaf takes about log2 of its length.
+    template <forward_search Search, typename Tree>
+    std::pair<std::uint64_t, std::uint64_t> comparisons_next_to_the_position( Tree & bpt )
+    {
+        auto const start{ bpt.begin() };
+        auto const next { std::next( start ) };
+        forward_search_comparisons = 0;
+        EXPECT_EQ( bpt.template lower_bound_from<Search>( start, *next ), next );
+        std::uint64_t const lbf{ forward_search_comparisons };
+        // the second key is two slots on, i.e. right where the leaf search
+        // starts (find_from tests the slot after the first one itself)
+        std::array<unsigned, 2> const keys{ *start, *std::next( next ) };
+        forward_search_comparisons = 0;
+        EXPECT_EQ( bpt.template replace_keys_inplace<Search>( keys, keys ), keys.size() );
+        std::uint64_t const rpl{ forward_search_comparisons };
+        return { lbf, rpl };
+    }
+
+    template <bool direct>
+    void check_forward_search_policies()
+    {
+        using tree_t = bptree_set<unsigned, counting_less<direct>>;
+        static_assert( !use_linear_search_for_sorted_array<counting_less<direct>, unsigned, tree_t::max_values_per_leaf()> );
+        static_assert( is_direct_comparator<counting_less<direct>, unsigned> == direct );
+        tree_t bpt;
+        bpt.map_memory();
+        std::vector<unsigned> keys( 4 * tree_t::max_values_per_leaf() );
+        std::iota( keys.begin(), keys.end(), 0U );
+        bpt.insert_presorted( keys );
+        auto const automatic{ comparisons_next_to_the_position<forward_search::automatic>( bpt ) };
+        auto const gallop   { comparisons_next_to_the_position<forward_search::gallop   >( bpt ) };
+        auto const bisect   { comparisons_next_to_the_position<forward_search::bisect   >( bpt ) };
+        EXPECT_LT( gallop.first , bisect.first  ) << "direct " << direct;
+        EXPECT_LT( gallop.second, bisect.second ) << "direct " << direct;
+        EXPECT_EQ( automatic, direct ? gallop : bisect ) << "direct " << direct;
+    }
+} // anonymous namespace
+
+// forward_search::automatic gallops for a direct comparator and bisects for
+// any other, and the explicit policies do what they say whatever the
+// comparator: a counting comparator tells a gallop from a bisection by the
+// number of comparisons for a key next to the position.
+TEST( bp_tree, forward_search_policy_selects_the_leaf_search )
+{
+    check_forward_search_policies<true >();
+    check_forward_search_policies<false>();
+}
+
+namespace
+{
+    template <typename Tree, forward_search Search>
+    void check_bulk_operations()
+    {
+        auto constexpr size{ 6000U };
+        std::vector<unsigned> evens( size );
+        for ( auto i{ 0U }; i < size; ++i ) { evens[ i ] = 2 * i; }
+        for ( auto const stride : { 1U, 2U, 3U, 5U, 9U, 17U, 31U, 40U, 77U, 1000U } ) {
+            std::set<unsigned> model( evens.begin(), evens.end() );
+            std::vector<unsigned> odds, more_odds;
+            for ( auto i{ 1U }; i < 2 * size; i += 2 * stride ) { odds.push_back( i ); }
+            for ( auto i{ 3U }; i < 2 * size; i += 2 * stride + 4 ) { if ( !std::ranges::binary_search( odds, i ) ) { more_odds.push_back( i ); } }
+            Tree bpt;
+            bpt.map_memory();
+            bpt.insert_presorted( std::span<unsigned const>{ evens } );
+            EXPECT_EQ( bpt.template insert_presorted<Search>( std::span<unsigned const>{ odds } ), odds.size() ) << "stride " << stride;
+            model.insert( odds.begin(), odds.end() );
+            EXPECT_EQ( ( bpt.template insert<comparator_erasure::never, Search>( more_odds ) ), more_odds.size() ) << "stride " << stride;
+            model.insert( more_odds.begin(), more_odds.end() );
+            {
+                // the odd keys again (already present) and keys past the end
+                Tree other;
+                other.map_memory();
+                std::vector<unsigned> merged{ odds }, beyond;
+                for ( auto i{ 2 * size }; i < 2 * size + 3 * stride; ++i ) { beyond.push_back( i ); }
+                merged.insert( merged.end(), beyond.begin(), beyond.end() );
+                other.insert_presorted( merged );
+                EXPECT_EQ( bpt.template merge<Search>( other ), beyond.size() ) << "stride " << stride;
+                model.insert( beyond.begin(), beyond.end() );
+            }
+            ASSERT_TRUE( std::ranges::equal( bpt, model ) ) << "stride " << stride;
+            // every (stride + 1)-th key: half by equivalence, half by identity
+            std::vector<unsigned> first_half, second_half;
+            auto slot{ 0U };
+            for ( auto const key : model ) {
+                if ( slot++ % ( stride + 1 ) == 0 ) { ( slot <= model.size() / 2 ? first_half : second_half ).push_back( key ); }
+            }
+            EXPECT_EQ( bpt.template erase_sorted      <Search>( first_half  ), first_half .size() ) << "stride " << stride;
+            EXPECT_EQ( bpt.template erase_sorted_exact<Search>( second_half ), second_half.size() ) << "stride " << stride;
+            for ( auto const key : first_half  ) { model.erase( key ); }
+            for ( auto const key : second_half ) { model.erase( key ); }
+            ASSERT_TRUE( std::ranges::equal( bpt, model ) ) << "stride " << stride;
+        }
+    }
+} // anonymous namespace
+
+// The bulk operations that search forward from the previous key's position -
+// insert_presorted, insert of a range, merge, erase_sorted and
+// erase_sorted_exact - give the same tree under every forward_search policy,
+// with keys at every distance up to 40 slots from the previous one, and
+// further.
+TEST( bp_tree, forward_search_policies_in_bulk_operations )
+{
+    for_each_forward_search( []( auto policy, char const * ) {
+        check_bulk_operations<bptree_set<unsigned>      , decltype( policy )::value>();
+        check_bulk_operations<bisected_tree<true>       , decltype( policy )::value>();
+        check_bulk_operations<direct_bisected_tree<true>, decltype( policy )::value>();
+    } );
 }
 
 TEST( bp_tree, find_from_fast_path )
