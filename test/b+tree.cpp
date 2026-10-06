@@ -3177,6 +3177,181 @@ TEST( bp_tree, lower_bound_from )
     }
 }
 
+namespace
+{
+    // Runs of equivalent keys that straddle leaf boundaries at every offset
+    // and, in a tree three levels deep, inner node boundaries too: key i of a
+    // tree is ordered as i / run, and run is not a multiple of a leaf's
+    // length.  The size is capped for large nodes, whose trees are then
+    // shallower.
+    template <typename Tree>
+    struct straddling_runs
+    {
+        static constexpr auto     leaf{ static_cast<unsigned>( Tree::max_values_per_leaf() ) };
+        static constexpr unsigned run { leaf + leaf / 2 + 1 };
+        static constexpr unsigned size{ std::min( 3 * leaf * static_cast<unsigned>( Tree::max_values_per_inner() + 1 ), 1U << 16 ) };
+    };
+
+    // lower_bound_from( start, key ) is the first key not less than key at or
+    // after start: start itself for a key equivalent to it, and otherwise the
+    // first of the keys equivalent to key (or, for an absent key, of the next
+    // greater ones) - where lower_bound( key ) lands - also where those begin
+    // in an earlier leaf than the leaf whose separator is equivalent to key.
+    // From starts next to every leaf boundary and at a stride elsewhere, to the
+    // keys up to three leaves on and past the end.  class_of maps a key of the
+    // tree to its equivalence class (an ordinal) and lookup_of a class to a
+    // lookup that is equivalent to its keys.
+    template <typename Tree>
+    void check_lower_bound_from_runs( Tree const & bpt, auto const class_of, auto const lookup_of )
+    {
+        auto constexpr leaf{ static_cast<unsigned>( Tree::max_values_per_leaf() ) };
+        std::vector<std::uint32_t> leaf_of; // the leaf holding each slot
+        std::vector<unsigned>      classes;
+        for ( auto it{ bpt.begin() }; it != bpt.end(); ++it ) {
+            leaf_of.push_back( *it.base().pos().node );
+            classes.push_back( class_of( *it ) );
+        }
+        auto const n{ static_cast<unsigned>( classes.size() ) };
+        auto const near_boundary{ [&]( unsigned const i ) {
+            for ( auto j{ i >= 2 ? i - 2 : 0U }; j + 1 < std::min( i + 3, n ); ++j ) { if ( leaf_of[ j ] != leaf_of[ j + 1 ] ) return true; }
+            return false;
+        } };
+        auto start{ bpt.begin() };
+        for ( auto i{ 0U }; i < n; ++i, ++start ) {
+            if ( ( i % 7 != 0 ) && !near_boundary( i ) ) continue;
+            auto const last_class{ classes[ std::min( i + 3 * leaf, n - 1 ) ] + 1 };
+            for ( auto cls{ classes[ i ] }; cls <= last_class; ++cls ) {
+                auto const expected{ ( cls == classes[ i ] ) ? start : bpt.lower_bound( lookup_of( cls ) ) };
+                ASSERT_EQ( bpt.lower_bound_from( start, lookup_of( cls ) ), expected ) << "start " << i << " class " << cls;
+            }
+        }
+    }
+} // anonymous namespace
+
+// In a non-unique tree a run of equal keys can begin in an earlier leaf than
+// the one whose separator equals them, and a forward search that starts left
+// of the run lands on its first key all the same - in a tree of full leaves
+// (insert_presorted) and in one of partly filled ones (inserted one by one in
+// a shuffled order).  A unique tree, with runs of one, alongside.
+TEST( bp_tree, lower_bound_from_lands_on_the_first_of_a_run_of_equal_keys )
+{
+    auto const identity{ []( unsigned const key ) { return key; } };
+    {
+        using tree_t = bptree_multiset<unsigned>;
+        using runs   = straddling_runs<tree_t>;
+        // 2, 2, ... 4, 4, ...: the odd keys are absent
+        std::vector<unsigned> keys( runs::size );
+        for ( auto i{ 0U }; i < runs::size; ++i ) { keys[ i ] = 2 * ( i / runs::run + 1 ); }
+        {
+            tree_t bpt;
+            bpt.map_memory();
+            bpt.insert_presorted( keys );
+            check_lower_bound_from_runs( bpt, identity, identity );
+        }
+        {
+            tree_t bpt;
+            bpt.map_memory();
+            auto shuffled{ keys };
+            std::mt19937 rng{ 4321 };
+            std::ranges::shuffle( shuffled, rng );
+            for ( auto const key : shuffled ) { bpt.insert( key ); }
+            ASSERT_TRUE( std::ranges::equal( bpt, keys ) );
+            check_lower_bound_from_runs( bpt, identity, identity );
+        }
+    }
+    {
+        using tree_t = bptree_set<unsigned>;
+        using runs   = straddling_runs<tree_t>;
+        std::vector<unsigned> keys( runs::size );
+        for ( auto i{ 0U }; i < runs::size; ++i ) { keys[ i ] = 2 * ( i + 1 ); }
+        tree_t bpt;
+        bpt.map_memory();
+        bpt.insert_presorted( keys );
+        check_lower_bound_from_runs( bpt, identity, identity );
+    }
+}
+
+// A heterogeneous lookup through a transparent comparator can be equivalent to
+// several keys of a unique tree (see
+// heterogeneous_lookup_lands_on_the_first_equivalent_key): lower_bound_from
+// lands on the first of them too, where they begin left of the leaf whose
+// separator is equivalent to the lookup.
+TEST( bp_tree, heterogeneous_lower_bound_from_lands_on_the_first_equivalent_key )
+{
+    using tree_t = bptree_set<int, bucketing_comparator>;
+    using runs   = straddling_runs<tree_t>;
+    bucketing_comparator const comparator{ static_cast<int>( runs::run ) };
+    tree_t bpt{ comparator };
+    bpt.map_memory( runs::size );
+    std::vector<int> keys( runs::size );
+    std::iota( keys.begin(), keys.end(), 0 );
+    bpt.insert_presorted( keys );
+    check_lower_bound_from_runs
+    (
+        bpt,
+        [&]( int const key ) { return static_cast<unsigned>( key / comparator.width ); },
+        []( unsigned const b ) { return bucket{ static_cast<int>( b ) }; }
+    );
+}
+
+// replace_keys_inplace, erase_sorted_exact and erase_sorted in a non-unique
+// tree, each over whole runs of equivalent keys - every third run - that
+// straddle leaf and inner node boundaries: the forward search from one run
+// reaches the next at its first key, also where that lies in an earlier leaf
+// than the one whose separator is equivalent to it, so every key of every
+// selected run is replaced or erased, and nothing else.
+TEST( bp_tree, bulk_operations_reach_the_first_of_a_run_of_equal_keys )
+{
+    using indirect_tree = bp_tree<unsigned, false, indirect_comparator>;
+    using runs          = straddling_runs<indirect_tree>;
+    auto const run_of{ []( unsigned const slot ) { return slot / runs::run; } };
+    std::vector<unsigned> rows( runs::size ); // row r holds the value r / run: the rows in tree order
+    std::iota( rows.begin(), rows.end(), 0U );
+    indirect_values.resize( 2 * runs::size ); // row size + r is r's twin (the same value)
+    for ( auto const r : rows ) { indirect_values[ r ] = indirect_values[ runs::size + r ] = static_cast<int>( run_of( r ) ); }
+
+    // replace the rows of runs 1, 4, 7... by their twins
+    {
+        indirect_tree bpt;
+        bpt.map_memory();
+        bpt.insert_presorted( rows );
+        std::vector<unsigned> old_rows, new_rows, expected;
+        for ( auto const r : rows ) {
+            bool const selected{ run_of( r ) % 3 == 1 };
+            if ( selected ) { old_rows.push_back( r ); new_rows.push_back( runs::size + r ); }
+            expected.push_back( selected ? runs::size + r : r );
+        }
+        EXPECT_EQ( bpt.replace_keys_inplace( old_rows, new_rows ), old_rows.size() );
+        EXPECT_TRUE( std::ranges::equal( bpt, expected ) );
+    }
+    // erase the rows of runs 2, 5, 8... (by identity)
+    {
+        indirect_tree bpt;
+        bpt.map_memory();
+        bpt.insert_presorted( rows );
+        std::vector<unsigned> erased, expected;
+        for ( auto const r : rows ) { ( run_of( r ) % 3 == 2 ? erased : expected ).push_back( r ); }
+        EXPECT_EQ( bpt.erase_sorted_exact( erased ), erased.size() );
+        EXPECT_EQ( bpt.size(), expected.size() );
+        EXPECT_TRUE( std::ranges::equal( bpt, expected ) );
+    }
+    indirect_values.clear();
+    // erase every copy of the values of runs 1, 4, 7... (by equivalence)
+    {
+        bptree_multiset<unsigned> bpt;
+        bpt.map_memory();
+        std::vector<unsigned> keys( runs::size ), erased, expected;
+        for ( auto i{ 0U }; i < runs::size; ++i ) {
+            keys[ i ] = run_of( i );
+            ( run_of( i ) % 3 == 1 ? erased : expected ).push_back( keys[ i ] );
+        }
+        bpt.insert_presorted( keys );
+        EXPECT_EQ( bpt.erase_sorted( erased ), erased.size() );
+        EXPECT_EQ( bpt.size(), expected.size() );
+        EXPECT_TRUE( std::ranges::equal( bpt, expected ) );
+    }
+}
+
 TEST( bp_tree, find_from_fast_path )
 {
     // Test find_from fast path + binary search fallback:

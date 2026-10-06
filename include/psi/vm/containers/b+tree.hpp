@@ -73,6 +73,11 @@ public:
     [[ nodiscard ]] const_iterator lower_bound( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return impl_base::lower_bound_impl( pass_in_reg{ key }, unique ); }
     [[ nodiscard ]] auto           equal_range( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return            equal_range_impl( pass_in_reg{ key } ); }
     [[ nodiscard ]] bool           contains   ( LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return impl_base::contains_impl   ( pass_in_reg{ key }, unique ); }
+    // Forward-only lower_bound: the first element >= key at or after pos (key
+    // must not be less than the element at pos) - in a non-unique tree the
+    // first of a run of equivalent elements that starts after pos. Returns
+    // end() only when key > all elements from pos on.
+    [[ nodiscard ]] const_iterator lower_bound_from( const_iterator const pos, LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return impl_base::lower_bound_from_impl( pos.base().pos(), pass_in_reg{ key }, unique ); }
 
     const_iterator insert( const_iterator const pos_hint, InsertableType<transparent_comparator, Key> auto const & key ) { return impl_base::insert_impl( pos_hint, pass_in_reg{ key }, unique ); }
     auto           insert(                                InsertableType<transparent_comparator, Key> auto const & key )
