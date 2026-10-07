@@ -132,10 +132,6 @@ public:
     [[ gnu::pure ]] const_ra_iterator ra_begin() const noexcept { return static_cast<ra_iterator &&>( mutable_this().base::ra_begin() ); }
     [[ gnu::pure ]] const_ra_iterator ra_end  () const noexcept { return static_cast<ra_iterator &&>( mutable_this().base::ra_end  () ); }
 
-    // Forward-only lower_bound: returns the first element >= key, starting from pos.
-    // Returns end() only when key > all elements.
-    [[ nodiscard ]] const_iterator lower_bound_from( const_iterator const pos, LookupType<transparent_comparator, Key> auto const & key ) const noexcept { return lower_bound_from_impl( pos.base().pos(), pass_in_reg{ key } ); }
-
     size_type merge( bp_tree_impl       && other, bool unique );
     size_type merge( bp_tree_impl const &  other, bool unique );
 
@@ -179,7 +175,7 @@ protected: // pass-in-reg public function overloads/impls
     // `starting_leaf != containing_leaf || pos.pos == num_vals` assumption inside
     // `find_from` with no caller context.
     [[ using gnu: pure, sysv_abi ]]
-    const_iterator lower_bound_from_impl( iter_pos const pos, Reg auto const key ) const noexcept
+    const_iterator lower_bound_from_impl( iter_pos const pos, Reg auto const key, bool const unique ) const noexcept
     {
         BOOST_ASSUME( !empty() );
         auto const & starting_leaf{ leaf( pos.node ) };
@@ -189,7 +185,7 @@ protected: // pass-in-reg public function overloads/impls
             !lt( key, starting_leaf.keys()[ pos.value_offset ] ),
             "lower_bound_from() contract violation: 'key' is smaller than the key at the given position"
         );
-        auto const [p_leaf, next_pos]{ find_from( starting_leaf, pos.value_offset, key ) };
+        auto const [p_leaf, next_pos]{ find_from( starting_leaf, pos.value_offset, key, unique ) };
         // next_pos.pos is the insertion point (first element >= key) regardless of exact_find
         if ( next_pos.pos < p_leaf->num_vals ) {
             return base::make_iter( *p_leaf, next_pos.pos );
@@ -512,6 +508,24 @@ private:
     }
 
 protected:
+    // Whether a lookup of type K is equivalent to at most one key of a unique
+    // tree: a lookup of the tree's own Key type, any lookup through a
+    // comparator that is not transparent (it compares the lookup as a Key), or
+    // one through a comparator that declares that its heterogeneous lookups
+    // match at most one key (strictly_unique_heterogeneous_lookup).  A search
+    // for the first key equivalent to such a lookup, in a unique tree, can
+    // take the right child of a separator equivalent to it: no key left of
+    // that separator is equivalent too.  Any other search for the first
+    // equivalent key - every one in a non-unique tree - has to look left of
+    // it (see find_nodes_for and find_from_climb).
+    template <typename K>
+    static constexpr bool single_equivalent_lookup
+    {
+        !transparent_comparator ||
+        std::is_same_v<reg_value_t<K>, Key> ||
+        detail::strictly_unique_heterogeneous_lookup<Comparator>
+    };
+
     // any_equivalent: the caller takes any key equivalent to the searched
     // one (find, contains) rather than the first of them (lower_bound,
     // equal_range, erase)
@@ -542,13 +556,7 @@ protected:
         // operation that has to land on the first equivalent key takes the
         // lower bound descent instead, the one non-unique trees take for
         // their runs of copies.
-        constexpr bool single_equivalent
-        {
-            !transparent_comparator ||
-            std::is_same_v<reg_value_t<decltype( key )>, Key> ||
-            detail::strictly_unique_heterogeneous_lookup<Comparator>
-        };
-        constexpr bool upper_bound_descent{ single_equivalent || any_equivalent };
+        constexpr bool upper_bound_descent{ single_equivalent_lookup<decltype( key )> || any_equivalent };
         if ( unique && upper_bound_descent ) [[ likely ]]
         {
             // Descend by upper bound.  With unique separators the first key
@@ -656,7 +664,7 @@ protected:
 
     insertion_point_t find_next_insertion_point( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, Reg auto const key, bool const unique ) const noexcept
     {
-        if ( unique ) return find_from          ( starting_leaf, starting_leaf_offset, key );
+        if ( unique ) return find_from          ( starting_leaf, starting_leaf_offset, key, unique );
         else          return find_from_nonunique( starting_leaf, starting_leaf_offset, key );
     }
 
@@ -753,20 +761,46 @@ protected:
     using base::verify_min_max;
 
 private:
+    // Where find_from_climb's descent goes at a separator equivalent to the
+    // key - the one choice that differs between the searches it serves:
+    //  * right_child - the first equivalent key, where no key left of the
+    //    separator can be equivalent too (a single_equivalent_lookup in a
+    //    unique tree): the separator is that key, the first of its right
+    //    subtree.
+    //  * left_child - the first equivalent key, where keys left of the
+    //    separator can be equivalent too (any lookup in a non-unique tree):
+    //    a run of them may start anywhere in the left subtree's last leaf,
+    //    or span several leaves and inner nodes, so the left subtree is
+    //    searched and, should all of its keys turn out to be smaller, the
+    //    answer is the first key of the leaf that follows (the separator) -
+    //    the lower bound descent of find_nodes_for.
+    //  * past - after every equivalent key (the insertion point of a
+    //    non-unique tree): keys equivalent to the key can continue past such
+    //    a separator, even across whole leaves and into another subtree, so
+    //    the climb goes on past it and the descent takes the rightmost child
+    //    whose separator is not greater than the key - the choice the
+    //    root-to-leaf descent of find_insertion_point makes for a non-unique
+    //    tree.
+    enum struct equal_separator : std::uint8_t { right_child, left_child, past };
+
+    struct climb_result
+    {
+        leaf_node * leaf;
+        // the descent went left of a separator equivalent to the key (only
+        // ever with equal_separator::left_child): the leaf that follows the
+        // one reached starts with an equivalent key
+        bool        equivalent_follows;
+    };
+
     // Shared tree-climbing middle used by find_from and find_from_nonunique.
-    // Precondition: key > starting_leaf.back() (>= for find_from_nonunique)
+    // Precondition: key > starting_leaf.back() (>= for equal_separator::past)
     // AND starting_leaf.right != null.
     // Climbs the parent chain until a node whose key range contains key, then
     // descends back to the containing leaf. Returns that leaf for the caller to
     // apply its own lower_bound / upper_bound epilogue.
-    // after_equal_keys selects the upper_bound semantics of a non-unique tree,
-    // where keys equal to key can continue past a separator equal to it, even
-    // across whole leaves and into another subtree: the climb then goes on
-    // past such a separator and the descent takes the rightmost child whose
-    // separator is not greater than key - the same choice the root-to-leaf
-    // descent of find_insertion_point makes for a non-unique tree.
-    leaf_node & find_from_climb( leaf_node const & starting_leaf, Reg auto const key, bool const after_equal_keys ) const noexcept
+    climb_result find_from_climb( leaf_node const & starting_leaf, Reg auto const key, equal_separator const rule ) const noexcept
     {
+        bool const after_equal_keys{ rule == equal_separator::past };
         // Key in tree but not in starting leaf - go up the tree:
         auto const * prnt{ &parent( starting_leaf ) };
         auto         parent_offset{ starting_leaf.parent_child_idx };
@@ -800,6 +834,7 @@ private:
         }
         BOOST_ASSUME( parent_offset < prnt->num_vals );
         // descend to the leaf containing the key
+        bool equivalent_follows{ false };
         for ( ; level < depth; ++level )
         {
             node_size_type pos;
@@ -815,21 +850,31 @@ private:
                 // insert_presorted method it started failing (when this function
                 // was called from within it) - TODO investigate
                 //BOOST_ASSUME( !exact_find );
-                pos = lb_pos + exact_find; // traverse to the right child for separator keys
+                // Once left of an equivalent separator every key below is not
+                // greater than the key, so each level further down either
+                // takes the left child of another equivalent separator or the
+                // last child: the leaf reached is followed by one starting
+                // with an equivalent key.
+                bool const right_of_equivalent{ exact_find && ( rule == equal_separator::right_child ) };
+                equivalent_follows = equivalent_follows || ( exact_find && !right_of_equivalent );
+                pos = static_cast<node_size_type>( lb_pos + right_of_equivalent );
             }
             prnt = &base::inner( prnt->children()[ pos ] );
             parent_offset = 0;
         }
         BOOST_ASSUME( parent_offset == 0 );
-        return const_cast<leaf_node &>( this->template as<leaf_node>( *prnt ) );
+        return { const_cast<leaf_node *>( &this->template as<leaf_node>( *prnt ) ), equivalent_follows };
     }
 
-    // Forward-only insertion-point search for unique trees (lower_bound semantics).
+    // Forward-only lower_bound search: the first key not less than key at or
+    // after the starting position - the insertion point of a unique tree, and
+    // the first of several equivalent keys in a non-unique one (unique selects
+    // which, see equal_separator).
     // Exploits sorted-input invariant to avoid repeated root-to-leaf traversals.
     // starting_leaf_offset must be <= num_vals. When == num_vals (past-the-end,
     // e.g. after merge fills a leaf), the caller guarantees key > back() so the
     // in-leaf fast path is never taken and no OOB access occurs.
-    insertion_point_t find_from( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, Reg auto const key ) const noexcept
+    insertion_point_t find_from( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, Reg auto const key, bool const unique ) const noexcept
     {
         BOOST_ASSUME( starting_leaf_offset <= starting_leaf.num_vals );
         if ( le( key, starting_leaf.keys().back() ) )
@@ -869,7 +914,9 @@ private:
         }
 #   endif
 
-        auto const & containing_leaf{ find_from_climb( starting_leaf, key, false ) };
+        auto const rule{ ( unique && single_equivalent_lookup<decltype( key )> ) ? equal_separator::right_child : equal_separator::left_child };
+        auto const [p_containing_leaf, equivalent_follows]{ find_from_climb( starting_leaf, key, rule ) };
+        auto const & containing_leaf{ *p_containing_leaf };
         auto const pos{ lower_bound( containing_leaf, key ) };
         BOOST_ASSUME
         (
@@ -878,6 +925,10 @@ private:
             // will land on the starting node again - TODO insert a new node
             ( pos.pos == containing_leaf.num_vals )
         );
+        // the run of equivalent keys starts with the next leaf (whose
+        // separator the descent went left of)
+        if ( equivalent_follows && ( pos.pos == containing_leaf.num_vals ) )
+            return { const_cast<leaf_node *>( &this->leaf( containing_leaf.right ) ), find_pos{ 0, true } };
         return { const_cast<leaf_node *>( &containing_leaf ), pos };
     }
 
@@ -904,7 +955,7 @@ private:
         if ( !starting_leaf.right ) [[ unlikely ]] // we are at the end of the tree/leaf level
             return { const_cast<leaf_node *>( &starting_leaf ), find_pos{ starting_leaf.num_vals, false } };
 
-        auto const & containing_leaf{ find_from_climb( starting_leaf, key, true ) };
+        auto const & containing_leaf{ *find_from_climb( starting_leaf, key, equal_separator::past ).leaf };
         auto const pos{ upper_bound( containing_leaf, key ) };
         BOOST_ASSUME
         (
@@ -1009,7 +1060,7 @@ bp_tree_impl<Key, Comparator>::replace_keys_inplace( std::span<Key const> const 
         }
 
         // Find next key using find_from (O(1) quick-probe + in-leaf binary search + tree climbing)
-        auto const [next_leaf, next_pos]{ find_from( *p_leaf, next_offset, old_keys[ key_idx ] ) };
+        auto const [next_leaf, next_pos]{ find_from( *p_leaf, next_offset, old_keys[ key_idx ], unique ) };
         if ( !next_pos.exact_find ) [[ unlikely ]] {
             BOOST_ASSUME( !this->all_bulk_erase_keys_must_exist );
             break; // Key not found
@@ -1071,7 +1122,7 @@ bp_tree_impl<Key, Comparator>::erase_sorted_impl( std::span<Key const> const key
     {
         while ( key_idx < keys_to_remove.size() )
         {
-            auto [next_leaf, found_pos]{ find_from( *lf, off, keys_to_remove[ key_idx ] ) };
+            auto [next_leaf, found_pos]{ find_from( *lf, off, keys_to_remove[ key_idx ], unique ) };
             if ( found_pos.exact_find && ( !require_exact_equality || next_leaf->key( found_pos.pos ) == keys_to_remove[ key_idx ] ) )
             {
                 lf  = next_leaf;
@@ -1139,7 +1190,7 @@ bp_tree_impl<Key, Comparator>::erase_sorted_impl( std::span<Key const> const key
             continue;
 
         // Use find_from to locate the next key
-        auto [next_leaf, found_pos]{ find_from( *p_leaf, offset, keys_to_remove[ key_idx ] ) };
+        auto [next_leaf, found_pos]{ find_from( *p_leaf, offset, keys_to_remove[ key_idx ], unique ) };
         if ( !found_pos.exact_find || ( require_exact_equality && next_leaf->key( found_pos.pos ) != keys_to_remove[ key_idx ] ) ) [[ unlikely ]]
         {
             if ( !find_next_match( p_leaf, offset ) )
