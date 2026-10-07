@@ -153,6 +153,17 @@ public:
     }
     void reserve( this auto &, narrowing_size<size_type> auto ) = delete; // see narrowing_size
 
+    //! The heap block has to be expressible in BYTES in the size type as well
+    //! (heap_storage::max_size() does the same), so a narrow counter over a wide
+    //! element caps the spill below what the layout's size field can hold: a
+    //! 16-byte element over a uint8_t counter reaches 15 elements, not 127.
+    //! A function rather than a constant: sizeof( T ) is only needed on use.
+    [[ nodiscard ]] static constexpr sz_t bounded_by_block_bytes( sz_t const layout_max ) noexcept
+    {
+        auto const bytes_max{ al::max_size() };
+        return ( bytes_max < layout_max ) ? bytes_max : layout_max;
+    }
+
     // --- storage_* interface for vector<> ---
 
     // No __declspec( noalias ): clang derives nounwind from it, and the throws
@@ -339,7 +350,7 @@ public:
     // the size type alone would allow. Without this the generic fallback in
     // `vector` reports the size type's full range and growth runs past what the
     // layout can represent.
-    [[ nodiscard ]] static constexpr sz_t max_size() noexcept { return max_size_val; }
+    [[ nodiscard ]] static constexpr sz_t max_size() noexcept { return mixin::bounded_by_block_bytes( max_size_val ); }
 
 private:
 
@@ -479,7 +490,7 @@ public:
     // the size type alone would allow. Without this the generic fallback in
     // `vector` reports the size type's full range and growth runs past what the
     // layout can represent.
-    [[ nodiscard ]] static constexpr sz_t max_size() noexcept { return max_size_val; }
+    [[ nodiscard ]] static constexpr sz_t max_size() noexcept { return mixin::bounded_by_block_bytes( max_size_val ); }
 
 private:
 
@@ -651,7 +662,7 @@ public:
     // the size type alone would allow. Without this the generic fallback in
     // `vector` reports the size type's full range and growth runs past what the
     // layout can represent.
-    [[ nodiscard ]] static constexpr sz_t max_size() noexcept { return max_size_val; }
+    [[ nodiscard ]] static constexpr sz_t max_size() noexcept { return mixin::bounded_by_block_bytes( max_size_val ); }
 
 private:
 
