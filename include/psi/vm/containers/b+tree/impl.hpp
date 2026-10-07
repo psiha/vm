@@ -42,6 +42,52 @@ PSI_WARNING_MSVC_DISABLE( 4127 ) // conditional expression is constant
 PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
 
 
+/// How a forward search searches the rest of the leaf it starts in.  A forward
+/// search starts from a position the caller already holds and only moves
+/// forward: lower_bound_from, replace_keys_inplace, erase_sorted and
+/// erase_sorted_exact, and the search for the next insertion point of the bulk
+/// inserts (insert of a range, insert_presorted*) and merge into a unique tree.
+/// It is chosen per call, as a template argument of each of those operations,
+/// not per tree type.
+///  * bisect    - the leaf is searched from the position on as a lookup from
+///                the root searches a leaf: about log2( num_vals - offset ) + 2
+///                comparisons wherever in the rest of the leaf the key is.
+///  * gallop    - exponential search from the position: the keys 1, 2, 4, 8...
+///                slots on are compared until one is not less than the key,
+///                and only that last stride is bisected.  A key d slots on
+///                takes at most 2 ceil( log2( d + 1 ) ) + 3 comparisons and
+///                only the first 2d + 1 slots are read; a key near the end of a
+///                full leaf takes up to about twice the comparisons of bisect.
+///  * automatic - gallop for a direct comparator (is_direct_comparator: a
+///                comparison reads nothing but the two keys it is handed and
+///                costs about the same wherever the key is, so the search costs
+///                what its comparisons cost); bisect for any other.
+/// A leaf that the tree scans (use_linear_search_for_sorted_array) is scanned
+/// from the position under every policy: a scan already costs what the
+/// distance costs.  The insertion point of a non-unique tree (an upper bound,
+/// past the keys equivalent to the inserted one) is searched as before under
+/// every policy.
+/// An indirect comparator - one that reads what orders a key from somewhere
+/// else - pays for each comparison with a load that may miss the cache, and
+/// gallop then trades the fewer comparisons it makes for a near key against
+/// the more it makes for a far one: opt in with gallop when the keys a caller
+/// searches for usually lie a few slots past the previous position and a
+/// measurement of its own searches agrees.  benchmark_forward_search
+/// (test/b+tree.cpp) measured, with 4096-byte nodes (1020 keys a leaf) on an
+/// AMD EPYC 9B45, counting a difference smaller than the spread between
+/// identical searches as none: with the keys themselves gallop was 1.3-3.1x
+/// faster for keys 1 to 48 slots on and at gaps averaging 16 slots; with a
+/// comparator that reads a 32-byte row of a column per key it was 8-18% faster
+/// in a cached column for keys 1 to 6 slots on and at gaps averaging 16, and
+/// 1.1-1.5x slower 48 to 200 slots on, while in a column that misses the cache
+/// it was 10-27% slower 3, 6, 48 and 200 slots on and level 1 and 12 slots on.
+enum struct forward_search : std::uint8_t
+{
+    automatic,
+    gallop,
+    bisect
+}; // enum struct forward_search
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // \class bp_tree_impl
@@ -132,7 +178,9 @@ public:
     [[ gnu::pure ]] const_ra_iterator ra_begin() const noexcept { return static_cast<ra_iterator &&>( mutable_this().base::ra_begin() ); }
     [[ gnu::pure ]] const_ra_iterator ra_end  () const noexcept { return static_cast<ra_iterator &&>( mutable_this().base::ra_end  () ); }
 
+    template <forward_search Search = forward_search::automatic>
     size_type merge( bp_tree_impl       && other, bool unique );
+    template <forward_search Search = forward_search::automatic>
     size_type merge( bp_tree_impl const &  other, bool unique );
 
     void swap( bp_tree_impl & other ) noexcept { base::swap( other ); }
@@ -174,8 +222,9 @@ protected: // pass-in-reg public function overloads/impls
     // `find_from`'s one-leaf fast path doesn't support and which later trips the
     // `starting_leaf != containing_leaf || pos.pos == num_vals` assumption inside
     // `find_from` with no caller context.
+    template <forward_search Search, Reg K>
     [[ using gnu: pure, sysv_abi ]]
-    const_iterator lower_bound_from_impl( iter_pos const pos, Reg auto const key, bool const unique ) const noexcept
+    const_iterator lower_bound_from_impl( iter_pos const pos, K const key, bool const unique ) const noexcept
     {
         BOOST_ASSUME( !empty() );
         auto const & starting_leaf{ leaf( pos.node ) };
@@ -185,7 +234,7 @@ protected: // pass-in-reg public function overloads/impls
             !lt( key, starting_leaf.keys()[ pos.value_offset ] ),
             "lower_bound_from() contract violation: 'key' is smaller than the key at the given position"
         );
-        auto const [p_leaf, next_pos]{ find_from( starting_leaf, pos.value_offset, key, unique ) };
+        auto const [p_leaf, next_pos]{ find_from<Search>( starting_leaf, pos.value_offset, key, unique ) };
         // next_pos.pos is the insertion point (first element >= key) regardless of exact_find
         if ( next_pos.pos < p_leaf->num_vals ) {
             return base::make_iter( *p_leaf, next_pos.pos );
@@ -369,14 +418,64 @@ private:
         return result;
     }
 
+    // Whether a forward search with the given policy gallops a bisected leaf
+    // (see forward_search).
+    template <forward_search Search>
+    static constexpr bool gallops
+    {
+        ( Search == forward_search::gallop ) ||
+        ( ( Search == forward_search::automatic ) && is_direct_comparator<Comparator, Key> )
+    };
+
+    // The in-node step of a forward search (find_from), which already stands
+    // at `offset`: the value is not greater than the node's last one and may
+    // lie any distance d slots past `offset`.  A node that is scanned needs
+    // nothing more under any policy: its scan starts at the offset and stops
+    // at the value, so it costs what the distance costs.  A bisected node is
+    // either bisected from the offset on (forward_search::bisect) or galloped
+    // (forward_search::gallop): the values 1, 2, 4, 8... slots past the offset
+    // are compared until one is not less than the value, and only that last
+    // stride is bisected.  The gallop takes at most 2 ceil( log2( d + 1 ) ) + 3
+    // comparisons and reads only the first 2d + 1 slots; the bisection takes
+    // about log2( num_vals - offset ) + 2 wherever the value is, so for a value
+    // near the end of a full node the gallop takes up to about twice as many.
+    template <forward_search Search, typename Node, Reg K>
+    [[ using gnu: pure, hot, sysv_abi ]]
+    find_pos lower_bound_near( Node const & nd, node_size_type const offset, K const value ) const noexcept
+    {
+        auto constexpr capacity{ bptree_base::node_capacity<Node const &> };
+        if constexpr ( !gallops<Search> || use_linear_search_for_sorted_array<Comparator, Key, capacity> )
+        {
+            return lower_bound( nd, offset, value );
+        }
+        else
+        {
+            BOOST_ASSUME( offset < nd.num_vals );
+            auto const keys{ &nd.key( offset ) };
+            auto const size{ static_cast<std::uint32_t>( nd.num_vals - offset ) };
+            std::uint32_t bound{ 1 }; // wider than a slot index: doubling past the node must not wrap
+            while ( ( bound < size ) && lt( keys[ bound - 1 ], value ) )
+                bound *= 2;
+            // keys[ bound / 2 - 1 ] < value (when bound > 1) and the value lies
+            // below keys[ bound ] (or the end of the node)
+            auto const first{ bound / 2 };
+            auto result{ lower_bound<capacity>( keys + first, static_cast<node_size_type>( std::min( bound, size ) - first ), value ) };
+            result.pos = static_cast<node_size_type>( result.pos + offset + first );
+            return result;
+        }
+    }
+
 protected:
+    template <forward_search Search>
     size_type replace_keys_inplace( std::span<Key const> old_keys, std::span<Key const> new_keys, bool unique ) noexcept;
-    template <bool require_exact_equality = false>
+    template <bool require_exact_equality, forward_search Search>
     size_type erase_sorted_impl   ( std::span<Key const> keys_to_remove                         , bool unique ) noexcept;
-    size_type erase_sorted        ( std::span<Key const> keys_to_remove                         , bool unique ) noexcept { return erase_sorted_impl<false>( keys_to_remove, unique ); }
+    template <forward_search Search>
+    size_type erase_sorted        ( std::span<Key const> keys_to_remove                         , bool unique ) noexcept { return erase_sorted_impl<false, Search>( keys_to_remove, unique ); }
     // Like erase_sorted, but requires exact key equality (==) not just equivalence by comparator.
     // Useful when keys are indirect indices and comparison is by looked-up values.
-    size_type erase_sorted_exact  ( std::span<Key const> keys_to_remove                         , bool unique ) noexcept { return erase_sorted_impl<true >( keys_to_remove, unique ); }
+    template <forward_search Search>
+    size_type erase_sorted_exact  ( std::span<Key const> keys_to_remove                         , bool unique ) noexcept { return erase_sorted_impl<true , Search>( keys_to_remove, unique ); }
 
     // upper_bound find >limited to/within a node<
     template <node_size_type maximum_values>
@@ -662,27 +761,33 @@ protected:
         }
     }
 
-    insertion_point_t find_next_insertion_point( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, Reg auto const key, bool const unique ) const noexcept
+    // Search selects how find_from searches a unique tree's leaf (see
+    // forward_search); a non-unique tree's insertion point is an upper bound,
+    // searched the same way under every policy.
+    template <forward_search Search, Reg K>
+    insertion_point_t find_next_insertion_point( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, K const key, bool const unique ) const noexcept
     {
-        if ( unique ) return find_from          ( starting_leaf, starting_leaf_offset, key, unique );
+        if ( unique ) return find_from<Search>  ( starting_leaf, starting_leaf_offset, key, unique );
         else          return find_from_nonunique( starting_leaf, starting_leaf_offset, key );
     }
 
-    template <comparator_erasure Erasure = Komp::erasure>
+    template <comparator_erasure Erasure = Komp::erasure, forward_search Search = forward_search::automatic>
     size_type insert( typename base::bulk_copied_input, bool unique );
 
     // dedup_source: when true and unique, inline-deduplicates the presorted
     // input at each copy/merge point (empty-tree bulk, append, interleaved merge).
-    template <bool dedup_source = false>
+    template <bool dedup_source, forward_search Search>
     size_type insert_presorted_impl( std::span<Key const> presorted_input, bool unique );
 
     // Handles possibly non-unique presorted input (deduplicates inline for unique trees).
-    size_type insert_presorted       ( std::span<Key const> input, bool unique ) { return insert_presorted_impl<true >( input, unique ); }
+    template <forward_search Search>
+    size_type insert_presorted       ( std::span<Key const> input, bool unique ) { return insert_presorted_impl<true, Search>( input, unique ); }
     // Assumes all keys in presorted_input are distinct (faster for unique trees).
+    template <forward_search Search>
     size_type insert_presorted_unique( std::span<Key const> input, bool unique )
     {
         BOOST_ASSERT( std::ranges::adjacent_find( input, [this]( auto const & a, auto const & b ) noexcept { return this->eq( a, b ); } ) == input.end() );
-        return insert_presorted_impl<false>( input, unique );
+        return insert_presorted_impl<false, Search>( input, unique );
     }
 
     // Presorted input that is not a contiguous array of Key (a merge of sorted
@@ -695,13 +800,13 @@ protected:
         std::max<size_type>( ( 16 * 1024 / sizeof( Key ) ) / leaf_node::max_values, 1 ) * leaf_node::max_values
     };
 
-    template <bool dedup_source, std::ranges::input_range R>
+    template <bool dedup_source, forward_search Search, std::ranges::input_range R>
     size_type insert_presorted_range( R && input, bool const unique )
     {
         using value_t = std::remove_cv_t<std::ranges::range_value_t<R>>;
         auto const span_path{ [this, unique]( std::span<Key const> const chunk ) {
-            if constexpr ( dedup_source ) return insert_presorted       ( chunk, unique );
-            else                          return insert_presorted_unique( chunk, unique );
+            if constexpr ( dedup_source ) return insert_presorted       <Search>( chunk, unique );
+            else                          return insert_presorted_unique<Search>( chunk, unique );
         } };
 
         if constexpr ( std::ranges::contiguous_range<R> && std::ranges::sized_range<R> && std::is_same_v<value_t, Key> )
@@ -874,7 +979,8 @@ private:
     // starting_leaf_offset must be <= num_vals. When == num_vals (past-the-end,
     // e.g. after merge fills a leaf), the caller guarantees key > back() so the
     // in-leaf fast path is never taken and no OOB access occurs.
-    insertion_point_t find_from( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, Reg auto const key, bool const unique ) const noexcept
+    template <forward_search Search, Reg K>
+    insertion_point_t find_from( leaf_node const & starting_leaf, node_size_type const starting_leaf_offset, K const key, bool const unique ) const noexcept
     {
         BOOST_ASSUME( starting_leaf_offset <= starting_leaf.num_vals );
         if ( le( key, starting_leaf.keys().back() ) )
@@ -887,9 +993,10 @@ private:
             auto const leaf_keys{ starting_leaf.keys() };
             if ( le( key, leaf_keys[ starting_leaf_offset ] ) ) // key <= keys[offset]
                 return { const_cast<leaf_node *>( &starting_leaf ), find_pos{ starting_leaf_offset, eq( key, leaf_keys[ starting_leaf_offset ] ) } };
-            // Fall back to binary search within the leaf, skipping the tested slot
+            // Fall back to a search of the rest of the leaf, one that starts
+            // next to the tested slot (see lower_bound_near)
             auto const search_from{ static_cast<node_size_type>( starting_leaf_offset + 1 ) };
-            auto const pos{ lower_bound( starting_leaf, search_from, key ) };
+            auto const pos{ lower_bound_near<Search>( starting_leaf, search_from, key ) };
             BOOST_ASSUME( pos.pos != starting_leaf.num_vals );
             BOOST_ASSUME( pos.pos >= starting_leaf_offset   );
             return { const_cast<leaf_node *>( &starting_leaf ), pos };
@@ -1007,6 +1114,7 @@ private:
 //--------------------------------------------------------------------------
 
 template <typename Key, typename Comparator>
+template <forward_search Search>
 bp_tree_impl<Key, Comparator>::size_type
 bp_tree_impl<Key, Comparator>::replace_keys_inplace( std::span<Key const> const old_keys, std::span<Key const> const new_keys, bool const unique ) noexcept
 {
@@ -1060,7 +1168,7 @@ bp_tree_impl<Key, Comparator>::replace_keys_inplace( std::span<Key const> const 
         }
 
         // Find next key using find_from (O(1) quick-probe + in-leaf binary search + tree climbing)
-        auto const [next_leaf, next_pos]{ find_from( *p_leaf, next_offset, old_keys[ key_idx ], unique ) };
+        auto const [next_leaf, next_pos]{ find_from<Search>( *p_leaf, next_offset, old_keys[ key_idx ], unique ) };
         if ( !next_pos.exact_find ) [[ unlikely ]] {
             BOOST_ASSUME( !this->all_bulk_erase_keys_must_exist );
             break; // Key not found
@@ -1091,7 +1199,7 @@ bp_tree_impl<Key, Comparator>::replace_keys_inplace( std::span<Key const> const 
 //--------------------------------------------------------------------------
 
 template <typename Key, typename Comparator>
-template <bool require_exact_equality>
+template <bool require_exact_equality, forward_search Search>
 bp_tree_impl<Key, Comparator>::size_type
 bp_tree_impl<Key, Comparator>::erase_sorted_impl( std::span<Key const> const keys_to_remove, bool const unique ) noexcept
 {
@@ -1122,7 +1230,7 @@ bp_tree_impl<Key, Comparator>::erase_sorted_impl( std::span<Key const> const key
     {
         while ( key_idx < keys_to_remove.size() )
         {
-            auto [next_leaf, found_pos]{ find_from( *lf, off, keys_to_remove[ key_idx ], unique ) };
+            auto [next_leaf, found_pos]{ find_from<Search>( *lf, off, keys_to_remove[ key_idx ], unique ) };
             if ( found_pos.exact_find && ( !require_exact_equality || next_leaf->key( found_pos.pos ) == keys_to_remove[ key_idx ] ) )
             {
                 lf  = next_leaf;
@@ -1190,7 +1298,7 @@ bp_tree_impl<Key, Comparator>::erase_sorted_impl( std::span<Key const> const key
             continue;
 
         // Use find_from to locate the next key
-        auto [next_leaf, found_pos]{ find_from( *p_leaf, offset, keys_to_remove[ key_idx ], unique ) };
+        auto [next_leaf, found_pos]{ find_from<Search>( *p_leaf, offset, keys_to_remove[ key_idx ], unique ) };
         if ( !found_pos.exact_find || ( require_exact_equality && next_leaf->key( found_pos.pos ) != keys_to_remove[ key_idx ] ) ) [[ unlikely ]]
         {
             if ( !find_next_match( p_leaf, offset ) )
@@ -1443,7 +1551,7 @@ bp_tree_impl<Key, Comparator>::merge_interleaved_values
 
 
 template <typename Key, typename Comparator>
-template <comparator_erasure Erasure>
+template <comparator_erasure Erasure, forward_search Search>
 bp_tree_impl<Key, Comparator>::size_type
 bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, bool const unique )
 {
@@ -1645,7 +1753,7 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
         // fact that we are using presorted data) rather than starting every
         // time from scratch (using find_insertion_point)
         std::tie( tgt_leaf, tgt_leaf_next_pos ) =
-            find_next_insertion_point( *tgt_leaf, tgt_leaf_next_pos.pos, key_const_arg{ src_leaf->key( source_slot_offset ) }, unique );
+            find_next_insertion_point<Search>( *tgt_leaf, tgt_leaf_next_pos.pos, key_const_arg{ src_leaf->key( source_slot_offset ) }, unique );
     }
 
     BOOST_ASSUME( inserted <= total_size );
@@ -1654,7 +1762,7 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
 } // bp_tree_impl::insert()
 
 template <typename Key, typename Comparator>
-template <bool dedup_source>
+template <bool dedup_source, forward_search Search>
 bp_tree_impl<Key, Comparator>::size_type
 bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const presorted_input, bool const unique )
 {
@@ -1867,7 +1975,7 @@ bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const
 
         // Find next insertion point, leveraging sorted input
         std::tie( tgt_leaf, tgt_leaf_next_pos ) =
-            find_next_insertion_point( *tgt_leaf, tgt_leaf_next_pos.pos, key_const_arg{ presorted_input[ input_offset ] }, unique );
+            find_next_insertion_point<Search>( *tgt_leaf, tgt_leaf_next_pos.pos, key_const_arg{ presorted_input[ input_offset ] }, unique );
     }
 
     BOOST_ASSUME( inserted <= total_size );
@@ -1876,6 +1984,7 @@ bp_tree_impl<Key, Comparator>::insert_presorted_impl( std::span<Key const> const
 } // bp_tree_impl::insert_presorted_impl()
 
 template <typename Key, typename Comparator>
+template <forward_search Search>
 bp_tree_impl<Key, Comparator>::size_type
 bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const unique )
 {
@@ -1969,7 +2078,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
         source_slot_offset = new_pos.value_offset;
         BOOST_ASSUME( src_leaf->num_vals );
         std::tie( tgt_leaf, tgt_leaf_next_pos ) =
-            find_next_insertion_point( *tgt_leaf, tgt_start, key_const_arg{ src_leaf->key( source_slot_offset ) }, unique );
+            find_next_insertion_point<Search>( *tgt_leaf, tgt_start, key_const_arg{ src_leaf->key( source_slot_offset ) }, unique );
         return true;
     } };
 
@@ -2106,6 +2215,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl const & other, bool const uni
 } // bp_tree_impl::merge()
 
 template <typename Key, typename Comparator>
+template <forward_search Search>
 bp_tree_impl<Key, Comparator>::size_type
 bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
 {
@@ -2116,7 +2226,7 @@ bp_tree_impl<Key, Comparator>::merge( bp_tree_impl && other, bool const unique )
 
     // does not actually move-out values - makes no difference currently (with
     // only trivial types support) - TODO
-    auto const inserted{ merge( std::as_const( other ), unique ) };
+    auto const inserted{ merge<Search>( std::as_const( other ), unique ) };
     // TODO significant modifications will be required here when adding support
     // for non trivial types: avoid redundant destruction of moved out values -
     // make sure all are moved out or in-situ reset/destroyed (in case of
