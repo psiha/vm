@@ -1036,6 +1036,29 @@ TEST( SmallVectorNarrowSize, appendingPastTheRepresentableMaximumIsRefused )
     EXPECT_THROW( v.push_back( 1 ), std::length_error );
     EXPECT_EQ( v.size(), sv8::max_size() );
 }
+
+TEST( SmallVectorNarrowSize, aWideElementIsCappedByWhatTheCounterExpressesInBytes )
+{
+    // The heap block has to be expressible in bytes in the counter's type, so a
+    // 16-byte element over a uint8_t counter tops out at 15 elements - well
+    // below what the size field itself can hold. Growing past that is reported
+    // on every growth verb instead of overflowing the block.
+    struct wide { void const * p; bool b; };
+    static_assert( sizeof( wide ) == 16 );
+    using sv = sized_small_vector<wide, 4, std::uint8_t>;
+    auto constexpr bytes_max{ std::numeric_limits<std::uint8_t>::max() / sizeof( wide ) };
+    static_assert( sv::max_size() == bytes_max );
+
+    sv v;
+    for ( auto i{ 0uz }; i < bytes_max; ++i )
+        v.push_back( wide{ nullptr, true } );
+    EXPECT_EQ( v.size(), bytes_max );
+    EXPECT_THROW( v.push_back( wide{} )         , std::length_error );
+    EXPECT_THROW( v.resize   ( static_cast<std::uint8_t>( bytes_max + 1 ) ), std::length_error );
+    EXPECT_THROW( v.reserve  ( static_cast<std::uint8_t>( bytes_max + 1 ) ), std::length_error );
+    EXPECT_EQ( v.size(), bytes_max );
+    EXPECT_TRUE( v.back().b ); // the filled block is intact
+}
 #endif
 
 //------------------------------------------------------------------------------
