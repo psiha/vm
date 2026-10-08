@@ -76,11 +76,16 @@ namespace detail {
     // the indirection for inlined Reg types; non-transparent + non-trivial
     // key_type arrives as key_type const & which is not Reg).
 
+    // The searches below go through binary_lower_bound/binary_upper_bound (lookup.hpp), so
+    // PSI_VM_BRANCHLESS_BINARY_SEARCH selects their form for the flat containers the same way
+    // it does for the b+tree: a branching search over narrow integer keys mispredicts about
+    // half of its steps, and what that costs varies with the surrounding code layout.
+
     [[nodiscard, gnu::sysv_abi, gnu::pure]] constexpr
     auto lower_bound_iter( auto const & keys, Reg auto const comparator, Reg auto const key ) noexcept {
         decltype( auto ) comp { unwrap  ( comparator ) };
         decltype( auto ) value{ prefetch( comp, key ) };
-        return std::lower_bound( keys.begin(), keys.end(), value, make_trivially_copyable_predicate( comp ) );
+        return binary_lower_bound( keys.begin(), keys.end(), value, make_trivially_copyable_predicate( comp ) );
     }
 
     // lower_bound over the [first, last) subrange.  Named-parameter key/comparator
@@ -92,14 +97,14 @@ namespace detail {
     auto lower_bound_iter_in( auto const first, auto const last, Reg auto const comparator, Reg auto const key ) noexcept {
         decltype( auto ) comp { unwrap  ( comparator ) };
         decltype( auto ) value{ prefetch( comp, key ) };
-        return std::lower_bound( first, last, value, make_trivially_copyable_predicate( comp ) );
+        return binary_lower_bound( first, last, value, make_trivially_copyable_predicate( comp ) );
     }
 
     [[nodiscard, gnu::sysv_abi, gnu::pure]] constexpr
     auto upper_bound_iter( auto const & keys, Reg auto const comparator, Reg auto const key ) noexcept {
         decltype( auto ) comp { unwrap  ( comparator ) };
         decltype( auto ) value{ prefetch( comp, key ) };
-        return std::upper_bound( keys.begin(), keys.end(), value, make_trivially_copyable_predicate( comp ) );
+        return binary_upper_bound( keys.begin(), keys.end(), value, make_trivially_copyable_predicate( comp ) );
     }
 
     [[nodiscard, gnu::sysv_abi, gnu::pure]] constexpr
@@ -107,9 +112,9 @@ namespace detail {
         decltype( auto ) comp { unwrap  ( comparator ) };
         decltype( auto ) value{ prefetch( comp, key ) };
         auto const wrappedComp{ make_trivially_copyable_predicate( comp ) };
-        auto const lb{ std::lower_bound( keys.begin(), keys.end(), value, wrappedComp ) };
+        auto const lb{ binary_lower_bound( keys.begin(), keys.end(), value, wrappedComp ) };
         // upper_bound search starts from lb -- no redundant traversal of [begin, lb)
-        auto const ub{ std::upper_bound( lb, keys.end(), value, wrappedComp ) };
+        auto const ub{ binary_upper_bound( lb, keys.end(), value, wrappedComp ) };
         return std::pair{ lb, ub };
     }
 
