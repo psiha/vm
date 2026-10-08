@@ -797,13 +797,20 @@ std::uint32_t bptree_base::release_free_nodes()
 
     // Which release units - pages, or PMD spans of a huge page backed pool
     // (see mem_mapping::release_granularity()) - are entirely free, by
-    // address: the pool is aligned to a node but not necessarily to a unit
-    // (the header shares the first one with the leading nodes), and a node is
-    // either a whole number of units or a whole fraction of one.
+    // address: the pool is page aligned but not necessarily aligned to a unit
+    // (the header shares the first one with the leading nodes) or to a node
+    // (when a node spans several pages), and a node is either a whole number
+    // of units or a whole fraction of one.  A unit is a run of nodes_per_page
+    // nodes starting at an address that is a multiple of the granularity; when
+    // the nodes cannot be laid out so (a pool that is not aligned to a node
+    // smaller than a unit), no unit is made of whole nodes: nothing is released.
     auto const granularity   { nodes_.release_granularity() };
-    auto const nodes_per_page{ std::max<std::size_t>( 1, granularity / node_size ) };
+    auto const nodes_per_page{ static_cast<node_slot::value_type>( std::max<std::size_t>( 1, granularity / node_size ) ) };
     auto const pool_begin    { reinterpret_cast<std::uintptr_t>( nodes_.data() ) };
-    auto const first_whole   { static_cast<node_slot::value_type>( ( align_up( pool_begin, granularity ) - pool_begin ) / node_size ) };
+    auto const lead_bytes    { align_up( pool_begin, granularity ) - pool_begin };
+    if ( lead_bytes % node_size )
+        return 0;
+    auto const first_whole   { static_cast<node_slot::value_type>( lead_bytes / node_size ) };
     auto const node_count    { static_cast<node_slot::value_type>( nodes_.size() ) };
 
     // allocations first: nothing below may fail half way through the list
@@ -844,12 +851,12 @@ std::uint32_t bptree_base::release_free_nodes()
     }
     // ...and only then drop their pages, which takes their links with them -
     // coalesced into runs of neighbouring pages, all handed over at once
-    auto const page_bytes{ std::max<std::size_t>( granularity, node_size ) };
+    auto const page_bytes{ std::size_t{ nodes_per_page } * node_size };
     auto * const pool{ reinterpret_cast<std::byte *>( nodes_.data() ) };
     heap_vector<mem_mapping::page_range> runs;
     for ( auto const n : newly_released )
     {
-        auto * const page{ pool + ( align_down( std::size_t{ *n } * node_size + pool_begin, page_bytes ) - pool_begin ) };
+        auto * const page{ pool + std::size_t{ first_whole + ( *n - first_whole ) / nodes_per_page * nodes_per_page } * node_size };
         if ( !runs.empty() && ( page < runs.back().first + runs.back().size ) ) // another node on a page already in the run
             continue;
         if ( !runs.empty() && ( page == runs.back().first + runs.back().size ) )
