@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <format>
 #include <forward_list>
+#include <list>
 #include <fstream>
 #include <numeric>
 #include <optional>
@@ -2599,6 +2600,32 @@ TEST( bp_tree, erase_sorted_single_leaf_tree )
     std::array<int, 3> remaining{ 1, 3, 5 };
     EXPECT_EQ( bpt.erase_sorted( remaining ), 3 );
     EXPECT_TRUE( bpt.empty() );
+}
+
+// Bulk erasure hands the pages of the nodes it frees back to the OS, and only
+// those: the pool is page aligned but not aligned to a node (which spans
+// several pages in large-node builds), and the trees are kept side by side so
+// that their pools start at different offsets from a node boundary.
+TEST( bp_tree, erase_sorted_keeps_the_nodes_it_does_not_free )
+{
+    using tree_t = inspectable<bptree_set<unsigned>>;
+    auto constexpr leaf{ static_cast<unsigned>( tree_t::max_values_per_leaf() ) };
+    std::list<tree_t> trees;
+    for ( auto const size : { leaf + 1, 3 * leaf + 7 } )
+    for ( auto const stride : { 1U, 7U, 1000U } )
+    for ( auto const phase : { 0U, 1U } )
+    for ( auto repeat{ 0 }; repeat < 8; ++repeat )
+    {
+        std::vector<unsigned> keys( size ), erased, kept;
+        std::iota( keys.begin(), keys.end(), 0U );
+        for ( auto const key : keys ) { ( ( key % ( stride + 1 ) == phase ) ? erased : kept ).push_back( key ); }
+        auto & bpt{ trees.emplace_back() };
+        bpt.map_memory();
+        bpt.insert_presorted( keys );
+        EXPECT_EQ( bpt.erase_sorted( erased ), erased.size() ) << "size " << size << " stride " << stride << " phase " << phase;
+        EXPECT_TRUE( bpt.structure_is_sound() );
+        EXPECT_TRUE( std::ranges::equal( bpt, kept ) ) << "size " << size << " stride " << stride << " phase " << phase;
+    }
 }
 
 //------------------------------------------------------------------------------
