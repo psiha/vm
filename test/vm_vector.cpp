@@ -175,6 +175,29 @@ TEST( vm_vector, flush_after_in_place_growth )
     }
 }
 
+// flush_async() on a file-backed container only starts writing the dirty
+// pages (on Linux through sync_file_range): the contents stay intact, here
+// and after a reopen. (That the write actually starts early is not asserted:
+// the page cache counters are too noisy for a stable check.)
+TEST( vm_vector, flush_async_keeps_contents )
+{
+    auto const test_vec{ "test_flush_async.vec" };
+    {
+        psi::vm::vm_vector<std::uint32_t, std::uint32_t> vec;
+        vec.map_file( test_vec, flags::named_object_construction_policy::create_new_or_truncate_existing );
+        vec.grow_by( 4 * 1024 * 1024, default_init );
+        for ( std::uint32_t i{ 0 }; i < vec.size(); ++i ) { vec[ i ] = i * 7; }
+        vec.flush_async();
+        for ( std::uint32_t i{ 0 }; i < vec.size(); ++i ) { ASSERT_EQ( vec[ i ], i * 7 ); }
+    }
+    {
+        psi::vm::vm_vector<std::uint32_t, std::uint32_t> vec;
+        vec.map_file( test_vec, flags::named_object_construction_policy::open_existing );
+        ASSERT_EQ( vec.size(), 4u * 1024 * 1024 );
+        for ( std::uint32_t i{ 0 }; i < vec.size(); ++i ) { ASSERT_EQ( vec[ i ], i * 7 ); }
+    }
+}
+
 // A file-backed container keeps its on-disk EOF page aligned, on both the
 // growth and the shrink path, so that an extending resize never has to flush
 // and wait for a dirty tail block (see file_length_for in vm_vector.cpp). The
