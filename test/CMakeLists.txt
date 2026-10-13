@@ -62,6 +62,7 @@ set( vm_test_sources
     "${CMAKE_CURRENT_SOURCE_DIR}/detail_namespace.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/discard.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/strided_view.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/file_allocated_size.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/flat_map.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/flat_set.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/guarded_operation.cpp"

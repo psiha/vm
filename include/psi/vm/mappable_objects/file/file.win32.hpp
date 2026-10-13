@@ -40,6 +40,8 @@ bool        delete_file( wchar_t const * file_name                 ) noexcept;
 
 err::fallible_result<void, error> set_size( file_handle::      reference, std::uint64_t desired_size ) noexcept;
 std::uint64_t                     get_size( file_handle::const_reference                             ) noexcept;
+// The bytes the filesystem has allocated to the file (AllocationSize): less than get_size() when the file is sparse and has holes.
+std::uint64_t           get_allocated_size( file_handle::const_reference                             ) noexcept;
 
 // Marks the file sparse (FSCTL_SET_SPARSE), so that ranges it is extended by
 // afterwards - with set_size() or by growing a mapping of it - stay

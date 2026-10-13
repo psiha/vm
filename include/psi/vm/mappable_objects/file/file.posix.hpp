@@ -59,6 +59,8 @@ bool delete_file( wchar_t const * path ) noexcept;
 err::fallible_result<void, error> set_size( file_handle::reference      , std::uint64_t desired_size ) noexcept;
 #endif // POSIX impl level
 std::uint64_t                     get_size( file_handle::const_reference                             ) noexcept;
+// The bytes the filesystem has allocated to the file (st_blocks): less than get_size() when the file has holes.
+std::uint64_t           get_allocated_size( file_handle::const_reference                             ) noexcept;
 
 // Extending a file with set_size() already leaves a hole wherever the
 // filesystem supports them, so there is nothing to mark (see the Win32
