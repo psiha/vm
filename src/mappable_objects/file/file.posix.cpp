@@ -96,6 +96,13 @@ std::uint64_t get_size( file_handle::const_reference const file_handle ) noexcep
 #endif
 }
 
+std::uint64_t get_allocated_size( file_handle::const_reference const file_handle ) noexcept
+{
+    struct stat file_info{}; // ensure zero is returned for invalid handles (in unchecked/release builds)
+    BOOST_VERIFY( ( ::fstat( file_handle.value, &file_info ) == 0 ) || ( file_handle == handle_traits::invalid_value ) );
+    return static_cast<std::uint64_t>( file_info.st_blocks ) * 512; // st_blocks counts 512 byte units on every POSIX
+}
+
 bool punch_hole( file_handle::reference const file_handle, std::uint64_t const offset, std::uint64_t length ) noexcept
 {
     auto const size{ get_size( file_handle ) };

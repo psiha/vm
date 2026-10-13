@@ -131,6 +131,14 @@ std::uint64_t get_size( file_handle::const_reference const file_handle ) noexcep
 }
 
 
+std::uint64_t get_allocated_size( file_handle::const_reference const file_handle ) noexcept
+{
+    FILE_STANDARD_INFO info{}; // simplify user code: return zero for closed/default constructed handles
+    BOOST_VERIFY( ::GetFileInformationByHandleEx( file_handle.value, FileStandardInfo, &info, sizeof( info ) ) || ( file_handle == handle_traits::invalid_value ) );
+    return static_cast<std::uint64_t>( info.AllocationSize.QuadPart );
+}
+
+
 namespace impl
 {
     std::uint64_t get_section_size( HANDLE const mapping_handle ) noexcept { return get_size( mapping::const_handle{ mapping_handle } ); }
