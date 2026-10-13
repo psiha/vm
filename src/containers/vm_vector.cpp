@@ -121,14 +121,12 @@ void mem_mapping::flush_async( std::size_t const beginning, std::size_t const si
     // MS_ASYNC does nothing on Linux (dirty pages of shared mappings are
     // already tracked by the kernel and written when it decides);
     // sync_file_range starts the writeback now without waiting. The view
-    // maps the file from offset 0, so view offsets are file offsets.
-    if ( file_backed() )
-    {
-        ::sync_file_range( mapping_.underlying_file().value, static_cast<off_t>( beginning ), static_cast<off_t>( size ), SYNC_FILE_RANGE_WRITE ); // fire-and-forget, like msync( MS_ASYNC )
-        return;
-    }
-#endif
+    // maps the file from offset 0, so view offsets are file offsets. For a
+    // mapping without a file the call just fails (or has nothing to write).
+    ::sync_file_range( mapping_.underlying_file().value, static_cast<off_t>( beginning ), static_cast<off_t>( size ), SYNC_FILE_RANGE_WRITE ); // fire-and-forget, like msync( MS_ASYNC )
+#else
     vm::flush_async( mapped_span({ view_.subspan( beginning, size ) }) );
+#endif
 }
 err::fallible_result<void, error> mem_mapping::flush_blocking( std::size_t const beginning, std::size_t const size )       noexcept { if ( beginning == 0 ) { publish_size(); } return vm::flush_blocking( mapped_span({ view_.subspan( beginning, size ) }), mapping_.underlying_file() ); }
 [[ gnu::pure ]]
