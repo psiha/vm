@@ -129,6 +129,11 @@ public:
 
     const_iterator erase( const_iterator iter ) noexcept;
     const_iterator erase( const_iterator first, const_iterator last ) noexcept;
+    // Erases every element in one step: each node is handed to the free list
+    // (and marked dirty) as the range erase would, without moving a key, so a
+    // copy-on-write clone's commit_to() carries the empty tree to its target.
+    // Unlike clear() it keeps the storage attached. Invalidates every iterator.
+    void erase_all() noexcept;
 
     // optimized version of std::copy( bpt.begin(), bpt.end(), vec.begin() )
     template <typename Proj = std::identity>
@@ -2223,6 +2228,36 @@ bptree_base_wkey<Key, leaf_gap>::erase( const_iterator const first, const_iterat
     this->hdr().size_ -= erased_count;
     this->note_bulk_free( free_nodes_before ); // (releases only free nodes: 'result' stays valid)
     return make_iter( result );
+}
+
+template <typename Key, bool leaf_gap>
+void bptree_base_wkey<Key, leaf_gap>::erase_all() noexcept
+{
+    if ( this->empty() )
+        return;
+    auto & hdr{ this->hdr() };
+    auto const free_nodes_before{ hdr.free_node_count_ };
+    auto const depth            { hdr.depth_ };
+    auto const root             { hdr.root_  };
+    // The header first: free() expects the nodes it is given to be neither the
+    // first nor the last leaf.
+    hdr.root_  = hdr.first_leaf_ = hdr.last_leaf_ = {};
+    hdr.depth_ = 0;
+    hdr.size_  = 0;
+    // Depth first through the children - which every tree has, however it was
+    // built - children before their parent, leaving the parent to be read
+    // until it is freed itself.
+    auto const free_subtree{ [ this ]( this auto const & self, node_slot const slot, depth_t const levels_below ) noexcept -> void {
+        if ( levels_below ) {
+            for ( auto const child : inner( slot ).children() )
+                self( child, static_cast<depth_t>( levels_below - 1 ) );
+        }
+        auto & node{ static_cast<node_header &>( this->node( slot ) ) };
+        node.left = node.right = {}; // free() wants no sibling still linking to it
+        bptree_base::free( node );
+    } };
+    free_subtree( root, static_cast<depth_t>( depth - 1 ) );
+    this->note_bulk_free( free_nodes_before );
 }
 
 template <typename Key, bool leaf_gap>

@@ -894,6 +894,67 @@ TEST( bptree_cow, commit_to_memory_backed )
     EXPECT_TRUE ( has( src, N + 1 ) );
 }
 
+// erase_all() in a copy-on-write clone: the source keeps every element until
+// the commit, which leaves it empty with all of its nodes free (and so their
+// pages releasable once no clone shares them); the emptied tree takes new
+// elements; on an empty tree it does nothing.
+TEST( bptree_cow, erase_all_in_a_clone_empties_the_target_on_commit )
+{
+    auto constexpr N{ 200'000 }; // a tree of three levels
+    bptree_set<int> src;
+    src.map_cow_memory();
+    std::vector<int> values( N );
+    std::iota( values.begin(), values.end(), 0 );
+    src.insert( values );
+
+    {
+        bptree_set<int> clone{ src };
+        clone.erase_all();
+        EXPECT_TRUE( clone.empty() );
+        EXPECT_EQ( clone.size(), 0U );
+        EXPECT_EQ( clone.begin(), clone.end() );
+        EXPECT_TRUE( std::ranges::equal( src, values ) ) << "the source saw the clone's erase";
+
+        clone.commit_to( src );
+    }
+    EXPECT_TRUE( src.empty() );
+    EXPECT_EQ( src.size(), 0U );
+    EXPECT_EQ( src.begin(), src.end() );
+    EXPECT_FALSE( has( src, 0 ) );
+    EXPECT_EQ( src.nodes_used(), 0U );
+    // the clone is gone, so the target may hand the freed nodes' pages back
+    (void)src.release_free_nodes_if_due();
+#ifndef __APPLE__
+    EXPECT_GT( src.nodes_released(), 0U );
+#endif
+
+    // the emptied tree takes elements again
+    src.insert( values );
+    EXPECT_TRUE( std::ranges::equal( src, values ) );
+    for ( auto const v : { 0, N / 2, N - 1 } ) { EXPECT_TRUE( has( src, v ) ); }
+
+    // ...and erases them all again, now without a clone
+    src.erase_all();
+    EXPECT_TRUE( src.empty() );
+    src.erase_all(); // an empty tree: nothing to do
+    EXPECT_TRUE( src.empty() );
+    EXPECT_TRUE( src.insert( 42 ).second );
+    EXPECT_EQ( src.size(), 1U );
+}
+
+TEST( bptree_cow, erase_all_of_a_single_leaf_tree )
+{
+    bptree_set<int> src;
+    src.map_memory();
+    for ( int i{ 0 }; i < 5; ++i ) src.insert( i );
+    bptree_set<int> clone{ src };
+    clone.erase_all();
+    clone.commit_to( src );
+    EXPECT_TRUE( src.empty() );
+    EXPECT_TRUE( src.insert( 7 ).second );
+    EXPECT_TRUE( has( src, 7 ) );
+}
+
 TEST( bptree_cow, commit_clone_grows_beyond_source )
 {
     // Verify correctness when the clone's node pool grows past the source's
