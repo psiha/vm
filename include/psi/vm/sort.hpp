@@ -264,10 +264,34 @@ template <comparator_erasure Erasure = comparator_erasure::never, sort_partition
     if ( first == last )
         return last;
     auto kept{ first };
-    for ( auto next{ std::next( first ) }; next != last; ++next )
+    using value_t = std::iter_value_t<It>;
+    if constexpr ( std::is_trivially_copyable_v<value_t> && sizeof( value_t ) <= 2 * sizeof( void * ) )
     {
-        if ( comp( *kept, *next ) && ++kept != next )
-            *kept = std::move( *next );
+        // The last kept element held as a value: comparing against *kept
+        // would read back the element just written, and through a proxy
+        // iterator that writes an element as several pieces (packed records
+        // of an odd width) such a load spans more than one store still in
+        // flight and cannot be forwarded from them - it waits until they
+        // reach the cache.
+        value_t kept_value( *kept );
+        for ( auto next{ std::next( first ) }; next != last; ++next )
+        {
+            value_t const value( *next );
+            if ( comp( kept_value, value ) )
+            {
+                if ( ++kept != next )
+                    *kept = std::move( *next );
+                kept_value = value;
+            }
+        }
+    }
+    else
+    {
+        for ( auto next{ std::next( first ) }; next != last; ++next )
+        {
+            if ( comp( *kept, *next ) && ++kept != next )
+                *kept = std::move( *next );
+        }
     }
     return std::next( kept );
 }
