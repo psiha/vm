@@ -94,9 +94,20 @@ template <typename C> inline constexpr bool is_simple_comparator<erasure_opt_out
 /// the same container two definitions.
 namespace detail
 {
+    // A scalar key, the 128-bit integers included: the standard library counts
+    // them as integral only in GNU modes (libstdc++ with -std=gnu++NN), not in
+    // strict -std=c++NN nor with the Microsoft one, though they compare and
+    // move like the other integers.
+    template <typename Key> constexpr bool is_scalar_key{ std::is_scalar_v<Key> };
+#ifdef __SIZEOF_INT128__
+    template <> inline constexpr bool is_scalar_key<  signed __int128>{ true };
+    template <> inline constexpr bool is_scalar_key<unsigned __int128>{ true };
+#endif
+    template <typename Key> constexpr bool is_scalar_key<Key const>{ is_scalar_key<Key> };
+
     // the key half of the question, for the comparators that delegate to the
     // key's own ordering
-    template <typename Key> constexpr bool key_orders_directly{ std::is_scalar_v<Key> || std::is_same_v<Key, void> };
+    template <typename Key> constexpr bool key_orders_directly{ is_scalar_key<Key> || std::is_same_v<Key, void> };
     template <typename Key> requires requires { { Key::orders_directly } -> std::convertible_to<bool>; }
     constexpr bool key_orders_directly<Key>{ Key::orders_directly };
 } // namespace detail
