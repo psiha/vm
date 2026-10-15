@@ -110,6 +110,20 @@ namespace detail
     template <typename Key> constexpr bool key_orders_directly{ is_scalar_key<Key> || std::is_same_v<Key, void> };
     template <typename Key> requires requires { { Key::orders_directly } -> std::convertible_to<bool>; }
     constexpr bool key_orders_directly<Key>{ Key::orders_directly };
+    // a key that states its comparison is branch-free (see key_states_branchless)
+    // states that it reads only the key too
+    template <typename Key> requires( !requires { Key::orders_directly; } && requires { { Key::is_branchless } -> std::convertible_to<bool>; } )
+    constexpr bool key_orders_directly<Key>{ Key::is_branchless };
+
+    // Does a key type state that comparing two of it is one branch-free compare
+    // of values that are cheap to move, with a member
+    //     static constexpr bool is_branchless{ true };
+    // e.g. a wrapper around a single integer with a defaulted <=>? Nothing can
+    // tell such a wrapper from a key of several members compared in turn, so
+    // it is stated, not deduced; sort() then partitions it as it does a scalar.
+    template <typename Key> constexpr bool key_states_branchless{ false };
+    template <typename Key> requires requires { { Key::is_branchless } -> std::convertible_to<bool>; }
+    constexpr bool key_states_branchless<Key>{ Key::is_branchless };
 } // namespace detail
 
 template <typename Comparator, typename Key = void> constexpr bool is_direct_comparator{ false };

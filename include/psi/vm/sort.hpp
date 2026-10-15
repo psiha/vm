@@ -187,8 +187,13 @@ namespace key_sort_detail
     // compare equal without being the same - a floating-point -0.0 and +0.0 -
     // is unspecified with either, and the two can leave them in different
     // orders.
+    // A class key that is a single integer in a struct (a strong typedef, a
+    // word-sized view of packed bytes) therefore gets the BRANCHING partition
+    // unless it says otherwise: it states `static constexpr bool
+    // is_branchless{ true };` (detail::key_states_branchless), or the call
+    // passes sort_partitioning::branchless, or the comparator states it.
     template <typename Comparator, typename Key>
-    bool constexpr branchless_by_default{ is_direct_comparator<Comparator, Key> && detail::is_scalar_key<Key> };
+    bool constexpr branchless_by_default{ is_direct_comparator<Comparator, Key> && ( detail::is_scalar_key<Key> || detail::key_states_branchless<Key> ) };
 
     // Boost.Sort's pdqsort partitions branchlessly by itself for std::less and
     // std::greater over an arithmetic key; a predicate of any other type keeps

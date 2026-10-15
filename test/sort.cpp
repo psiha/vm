@@ -736,6 +736,20 @@ namespace
     static_assert( !key_sort_detail::branchless_by_default<std::less<plain_key>  , plain_key                 > );
     static_assert( !key_sort_detail::branchless_by_default<std::ranges::less     , plain_key                 > );
     static_assert( !key_sort_detail::branchless_by_default<std::greater<>        , std::pair<int, int>       > );
+    // unless the key states that its comparison is branch-free: a single
+    // integer in a struct, compared through the transparent comparators too
+    struct branchless_key
+    {
+        std::uint64_t word;
+
+        static constexpr bool is_branchless{ true };
+
+        friend constexpr auto operator<=>( branchless_key, branchless_key ) noexcept = default;
+    };
+    static_assert( key_sort_detail::branchless_by_default<std::less   <>           , branchless_key> );
+    static_assert( key_sort_detail::branchless_by_default<std::ranges::less        , branchless_key> );
+    static_assert( key_sort_detail::branchless_by_default<std::less<branchless_key>, branchless_key> );
+    static_assert( key_sort_detail::branchless_by_default<std::greater<>           , branchless_key> );
     // nor a comparator that is not a standard one
     static_assert( !key_sort_detail::branchless_by_default<decltype( int_lambda ), int                       > );
 
@@ -762,6 +776,7 @@ namespace
     auto constexpr as_ticket       { []( std::uint32_t const v ) noexcept { return ticket{ v }; } };
     auto constexpr as_two_field_key{ []( std::uint32_t const v ) noexcept { return two_field_key{ v >> 2, v & 3 }; } };
     auto constexpr as_wide_key     { []( std::uint32_t const v ) noexcept { wide_key key; std::ranges::fill( key.words, v ); return key; } };
+    auto constexpr as_branchless_key{ []( std::uint32_t const v ) noexcept { return branchless_key{ v }; } };
 } // anonymous namespace
 
 template <typename Key, sort_partitioning Partitioning = sort_partitioning::automatic, typename Comparator, typename MakeKey>
@@ -802,6 +817,8 @@ TEST( sort, agrees_with_std_stable_sort_whichever_partitioning_it_picks_or_is_to
     check_every_partitioning<ticket       >( std::greater<>{}, as_ticket );
     check_every_partitioning<int const *  >( std::less<>{}, as_pointer );
     check_every_partitioning<int const *  >( std::ranges::greater{}, as_pointer );
+    check_every_partitioning<branchless_key>( std::less<>{}, as_branchless_key );
+    check_every_partitioning<branchless_key>( std::ranges::greater{}, as_branchless_key );
 }
 
 // The containers' sorts go through Komparator::sort with the partitioning the
