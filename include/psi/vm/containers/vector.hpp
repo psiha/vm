@@ -240,11 +240,51 @@ concept psi_vm_vector = requires { typename std::remove_cvref_t<T>::psi_vm_vecto
 ///
 ////////////////////////////////////////////////////////////////////////////////
 
+// Destroys elements only when they have a destructor. A user-provided
+// vector destructor would make fc_vector<trivial T> non-trivial even though
+// destroy_n is a no-op; this base is trivial in that case, so the vector is
+// too. Incomplete element types skip the trait (it requires a complete type)
+// and always destroy. The destructor runs before Storage frees the buffer.
+template <typename T, bool support_incomplete_types>
+consteval bool vector_destroys_elements() noexcept {
+    // The trait needs a complete T. An incomplete element (the class is
+    // instantiated before the type is finished) always destroys, which is
+    // what a user-provided destructor did. A later complete trivial T in a
+    // different instantiation still gets the trivial destructor.
+    if constexpr ( support_incomplete_types ) { return true; }
+    else if constexpr ( requires { sizeof( T ); } ) { return !std::is_trivially_destructible_v<T>; }
+    else { return true; }
+}
+
+template <typename Storage, bool destroy_elements>
+struct vector_storage : Storage {
+    constexpr vector_storage() noexcept = default;
+    constexpr explicit vector_storage( Storage && init ) noexcept( std::is_nothrow_move_constructible_v<Storage> )
+        : Storage{ std::move( init ) } {}
+    constexpr explicit vector_storage( Storage const & init ) noexcept( std::is_nothrow_copy_constructible_v<Storage> )
+        requires std::is_copy_constructible_v<Storage>
+        : Storage{ init } {}
+    constexpr ~vector_storage() = default;
+};
+
+template <typename Storage>
+struct vector_storage<Storage, true> : Storage {
+    constexpr vector_storage() noexcept = default;
+    constexpr explicit vector_storage( Storage && init ) noexcept( std::is_nothrow_move_constructible_v<Storage> )
+        : Storage{ std::move( init ) } {}
+    constexpr explicit vector_storage( Storage const & init ) noexcept( std::is_nothrow_copy_constructible_v<Storage> )
+        requires std::is_copy_constructible_v<Storage>
+        : Storage{ init } {}
+    constexpr ~vector_storage() noexcept {
+        std::destroy_n( this->data(), this->size() );
+    }
+};
+
 template <typename Storage, geometric_growth Growth = geometric_growth{}, bool support_incomplete_types = false>
 class [[ nodiscard, clang::trivial_abi ]] vector
-    :
-    public Storage
+    : public vector_storage<Storage, vector_destroys_elements<typename Storage::value_type, support_incomplete_types>()>
 {
+    using storage_base = vector_storage<Storage, vector_destroys_elements<typename Storage::value_type, support_incomplete_types>()>;
     using storage_t = Storage;
     using value_types = detail::vector_value_types<support_incomplete_types, typename storage_t::value_type>;
 
@@ -427,13 +467,13 @@ public:
     // non standard default: default-initialization
     constexpr explicit vector( size_type const initial_size ) noexcept( noexcept_storage() && std::is_nothrow_default_constructible_v<value_type> ) : vector( initial_size, default_init ) {}
     constexpr vector( size_type const initial_size, init_policy auto const policy ) noexcept( noexcept_storage() && std::is_nothrow_default_constructible_v<value_type> )
-        : storage_t{}
+        : storage_base{}
     {
         initialized_impl( initial_size, policy );
     }
 
     constexpr vector( size_type const count, param_const_ref const value ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
-        : storage_t{}
+        : storage_base{}
     {
         initialized_impl( count, no_init );
         std::uninitialized_fill_n( gcc_dse_workaround( this->data() ), count, value );
@@ -456,7 +496,7 @@ public:
 
     template <std::input_iterator It>
     constexpr vector( It const first, It const last ) noexcept( noexcept_storage() && noexcept_sizing() && std::is_nothrow_copy_constructible_v<value_type> )
-        : storage_t{}
+        : storage_base{}
     {
         if constexpr ( std::random_access_iterator<It> )
         {
@@ -1474,15 +1514,11 @@ public:
 
     // --- construct from pre-configured storage (for stateful allocators) ---
     constexpr explicit vector( storage_t && init ) noexcept( std::is_nothrow_move_constructible_v<storage_t> )
-        : storage_t{ std::move( init ) }
+        : storage_base{ std::move( init ) }
     {}
 
-    constexpr ~vector() noexcept
-    {
-        if constexpr ( !support_incomplete_types )
-            static_assert( complete<value_type>, "vector destructor requires a complete value_type" );
-        std::destroy_n( this->data(), this->size() );
-    }
+    // Element destruction is vector_storage's destructor, so a vector of a
+    // trivially destructible type stays trivially destructible.
 
     // --- copy constructor ---
     // Two overloads depending on whether the storage manages its own copy:
@@ -1491,13 +1527,13 @@ public:
     //     entirely to storage's copy constructor — no element-level copy.
     constexpr vector( vector const & other ) noexcept( std::is_nothrow_copy_constructible_v<storage_t> )
         requires std::is_copy_constructible_v<storage_t>
-        : storage_t{ static_cast<storage_t const &>( other ) }
+        : storage_base{ static_cast<storage_t const &>( other ) }
     {}
 
     // (B) Non-copyable storage (heap_storage, fixed_storage, sbo_hybrid):
     //     element-level copy semantics live here at the vector level.
     constexpr vector( vector const & other ) requires ( !std::is_copy_constructible_v<storage_t> )
-        : storage_t{} // empty: the copy below fills it
+        : storage_base{} // empty: the copy below fills it
     {
         if constexpr ( !support_incomplete_types )
             static_assert( complete<value_type>, "vector copy requires a complete value_type" );
@@ -1520,7 +1556,7 @@ public:
     // Delegate to storage's move ctor (heap_storage: steal pointer;
     // fixed_storage: memcpy or element-wise move)
     constexpr vector( vector && other ) noexcept( std::is_nothrow_move_constructible_v<storage_t> )
-        : storage_t{ std::move( static_cast<storage_t &>( other ) ) }
+        : storage_base{ std::move( static_cast<storage_t &>( other ) ) }
     {}
 
     // --- copy assignment (copy-and-swap) ---
