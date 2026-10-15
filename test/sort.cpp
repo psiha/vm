@@ -717,6 +717,13 @@ namespace
     static_assert( key_sort_detail::branchless_by_default<std::greater<>       , colour       > );
     static_assert( key_sort_detail::branchless_by_default<std::less   <>       , int const *  > );
     static_assert( key_sort_detail::branchless_by_default<erasure_opt_in<std::ranges::less>, std::uint64_t> );
+#ifdef __SIZEOF_INT128__
+    // the 128-bit integers, which the standard library counts as integral only in GNU modes
+    static_assert( key_sort_detail::branchless_by_default<std::less   <>       , unsigned __int128> );
+    static_assert( key_sort_detail::branchless_by_default<std::ranges::less    , unsigned __int128> );
+    static_assert( key_sort_detail::branchless_by_default<std::greater<>       ,   signed __int128> );
+    static_assert( key_sort_detail::branchless_by_default<std::less<unsigned __int128>, unsigned __int128> );
+#endif
 
     // never a class key, not even one whose comparison reads only itself:
     // orders_directly says where a comparison reads, not that it is free of

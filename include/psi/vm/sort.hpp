@@ -174,7 +174,8 @@ namespace key_sort_detail
 {
     // What sort_partitioning::automatic picks: the branchless partitioning for
     // one of the standard comparators (is_direct_comparator) over a scalar key
-    // - arithmetic, enumeration, pointer. That extends Boost.Sort's own rule,
+    // - arithmetic (the 128-bit integers too, see detail::is_scalar_key),
+    // enumeration, pointer. That extends Boost.Sort's own rule,
     // std::less and std::greater over an arithmetic key, to std::ranges::less
     // and greater, to enumeration and pointer keys, and to the erasure
     // adapters around any of those. A class key does not get it, not even one
@@ -187,7 +188,7 @@ namespace key_sort_detail
     // is unspecified with either, and the two can leave them in different
     // orders.
     template <typename Comparator, typename Key>
-    bool constexpr branchless_by_default{ is_direct_comparator<Comparator, Key> && std::is_scalar_v<Key> };
+    bool constexpr branchless_by_default{ is_direct_comparator<Comparator, Key> && detail::is_scalar_key<Key> };
 
     // Boost.Sort's pdqsort partitions branchlessly by itself for std::less and
     // std::greater over an arithmetic key; a predicate of any other type keeps
