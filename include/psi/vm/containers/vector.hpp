@@ -285,8 +285,8 @@ class [[ nodiscard, clang::trivial_abi ]] vector
     : public vector_storage<Storage, vector_destroys_elements<typename Storage::value_type, support_incomplete_types>()>
 {
     using storage_base = vector_storage<Storage, vector_destroys_elements<typename Storage::value_type, support_incomplete_types>()>;
-    using storage_t = Storage;
-    using value_types = detail::vector_value_types<support_incomplete_types, typename storage_t::value_type>;
+    using storage_t    = Storage;
+    using value_types  = detail::vector_value_types<support_incomplete_types, typename storage_t::value_type>;
 
 public:
     using psi_vm_vector_tag      = void; // tag for constraining free comparison operators
