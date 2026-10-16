@@ -212,42 +212,75 @@ namespace key_sort_detail
 /// pointers for contiguous ranges -- so one worker instantiation serves all
 /// callers; otherwise fully-typed pdqsort with the trivially-copyable
 /// predicate wrapper. Partitioning picks between pdqsort's branchless and
-/// branching variants (see sort_partitioning).
-template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::random_access_iterator It, typename Comparator = std::ranges::less>
-constexpr void sort( It const first, It const last, Comparator const & __restrict comp = {} ) noexcept
+/// branching variants (see sort_partitioning). A range is sorted in place.
+/// A projection, a member pointer in the form std::ranges::sort takes,
+/// is applied before the comparator. The identity projection is not wrapped,
+/// so a scalar key compared by std::ranges::less still partitions branchlessly.
+namespace detail
 {
-    using key_t = std::iter_value_t<It>;
-    bool constexpr branchless
+    template <typename Comparator, typename Projection>
+    struct projected_predicate
     {
-        Partitioning == sort_partitioning::branchless ||
-        ( Partitioning == sort_partitioning::automatic && key_sort_detail::branchless_by_default<Comparator, key_t> )
-    };
-    if constexpr ( Erasure == comparator_erasure::allowed && detail::erasure_applies<Comparator, key_t> )
-    {
-        if !consteval
+        Comparator comparator;
+        Projection projection;
+
+        constexpr bool operator()( auto const & left, auto const & right ) const
+            noexcept( noexcept( comparator( std::invoke( projection, left ), std::invoke( projection, right ) ) ) )
         {
-            if constexpr ( std::contiguous_iterator<It> )
-                detail::erased_ptr_sort<branchless>( std::to_address( first ), std::to_address( last ), erased_ref_predicate<key_t>::bind( comp ) );
-            else
-                detail::erased_iter_sort<branchless>( first, last, erased_ref_predicate<key_t>::bind( comp ) );
-            return;
+            return comparator( std::invoke( projection, left ), std::invoke( projection, right ) );
         }
-    }
-    if constexpr ( branchless )
+    };
+} // namespace detail
+
+template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::random_access_iterator It, typename Comparator = std::ranges::less, typename Projection = std::identity>
+constexpr void sort( It const first, It const last, Comparator const & __restrict comp = {}, [[ maybe_unused ]] Projection const & proj = {} ) noexcept
+{
+    if constexpr ( !std::same_as<std::remove_cvref_t<Projection>, std::identity> )
     {
-        PSI_VM_PDQSORT_BRANCHLESS( first, last, make_trivially_copyable_predicate( comp ) );
-    }
-    else if constexpr ( Partitioning == sort_partitioning::branching )
-    {
-        using predicate_t = std::remove_cvref_t<decltype( make_trivially_copyable_predicate( comp ) )>;
-        PSI_VM_PDQSORT( first, last, key_sort_detail::branching_predicate<predicate_t>{ make_trivially_copyable_predicate( comp ) } );
+        sort<Erasure, Partitioning>( first, last, detail::projected_predicate<Comparator, Projection>{ comp, proj } );
     }
     else
     {
-        // automatic, where Boost.Sort's own rule never picks the branchless
-        // partitioning either (see branchless_by_default)
-        PSI_VM_PDQSORT( first, last, make_trivially_copyable_predicate( comp ) );
+        using key_t = std::iter_value_t<It>;
+        bool constexpr branchless
+        {
+            Partitioning == sort_partitioning::branchless ||
+            ( Partitioning == sort_partitioning::automatic && key_sort_detail::branchless_by_default<Comparator, key_t> )
+        };
+        if constexpr ( Erasure == comparator_erasure::allowed && detail::erasure_applies<Comparator, key_t> )
+        {
+            if !consteval
+            {
+                if constexpr ( std::contiguous_iterator<It> )
+                    detail::erased_ptr_sort<branchless>( std::to_address( first ), std::to_address( last ), erased_ref_predicate<key_t>::bind( comp ) );
+                else
+                    detail::erased_iter_sort<branchless>( first, last, erased_ref_predicate<key_t>::bind( comp ) );
+                return;
+            }
+        }
+        if constexpr ( branchless )
+        {
+            PSI_VM_PDQSORT_BRANCHLESS( first, last, make_trivially_copyable_predicate( comp ) );
+        }
+        else if constexpr ( Partitioning == sort_partitioning::branching )
+        {
+            using predicate_t = std::remove_cvref_t<decltype( make_trivially_copyable_predicate( comp ) )>;
+            PSI_VM_PDQSORT( first, last, key_sort_detail::branching_predicate<predicate_t>{ make_trivially_copyable_predicate( comp ) } );
+        }
+        else
+        {
+            // automatic, where Boost.Sort's own rule never picks the branchless
+            // partitioning either (see branchless_by_default)
+            PSI_VM_PDQSORT( first, last, make_trivially_copyable_predicate( comp ) );
+        }
     }
+}
+
+template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::ranges::random_access_range Range, typename Comparator = std::ranges::less, typename Projection = std::identity>
+requires std::same_as<std::ranges::iterator_t<Range>, std::ranges::sentinel_t<Range>>
+constexpr void sort( Range && range, Comparator const & comp = {}, Projection const & proj = {} ) noexcept
+{
+    sort<Erasure, Partitioning>( std::ranges::begin( range ), std::ranges::end( range ), comp, proj );
 }
 
 /// Sorts the range by comp, as sort() does, and moves the first of each run of
@@ -263,43 +296,50 @@ constexpr void sort( It const first, It const last, Comparator const & __restric
 /// sort is not stable, so of a run of equivalent elements that are not
 /// identical which one is kept is unspecified. noexcept as sort() is: a
 /// comparator or an element move that throws terminates.
-template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::random_access_iterator It, typename Comparator = std::ranges::less>
-[[ nodiscard ]] constexpr It sort_unique( It const first, It const last, Comparator const & comp = {} ) noexcept
+template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::random_access_iterator It, typename Comparator = std::ranges::less, typename Projection = std::identity>
+[[ nodiscard ]] constexpr It sort_unique( It const first, It const last, Comparator const & comp = {}, [[ maybe_unused ]] Projection const & proj = {} ) noexcept
 {
-    vm::sort<Erasure, Partitioning>( first, last, comp );
-    if ( first == last )
-        return last;
-    auto kept{ first };
-    using value_t = std::iter_value_t<It>;
-    if constexpr ( std::is_trivially_copyable_v<value_t> && sizeof( value_t ) <= 2 * sizeof( void * ) )
+    if constexpr ( !std::same_as<std::remove_cvref_t<Projection>, std::identity> )
     {
-        // The last kept element held as a value: comparing against *kept
-        // would read back the element just written, and through a proxy
-        // iterator that writes an element as several pieces (packed records
-        // of an odd width) such a load spans more than one store still in
-        // flight and cannot be forwarded from them - it waits until they
-        // reach the cache.
-        value_t kept_value( *kept );
-        for ( auto next{ std::next( first ) }; next != last; ++next )
-        {
-            value_t const value( *next );
-            if ( comp( kept_value, value ) )
-            {
-                if ( ++kept != next )
-                    *kept = std::move( *next );
-                kept_value = value;
-            }
-        }
+        return sort_unique<Erasure, Partitioning>( first, last, detail::projected_predicate<Comparator, Projection>{ comp, proj } );
     }
     else
     {
-        for ( auto next{ std::next( first ) }; next != last; ++next )
+        vm::sort<Erasure, Partitioning>( first, last, comp );
+        if ( first == last )
+            return last;
+        auto kept{ first };
+        using value_t = std::iter_value_t<It>;
+        if constexpr ( std::is_trivially_copyable_v<value_t> && sizeof( value_t ) <= 2 * sizeof( void * ) )
         {
-            if ( comp( *kept, *next ) && ++kept != next )
-                *kept = std::move( *next );
+            // The last kept element held as a value: comparing against *kept
+            // would read back the element just written, and through a proxy
+            // iterator that writes an element as several pieces (packed records
+            // of an odd width) such a load spans more than one store still in
+            // flight and cannot be forwarded from them - it waits until they
+            // reach the cache.
+            value_t kept_value( *kept );
+            for ( auto next{ std::next( first ) }; next != last; ++next )
+            {
+                value_t const value( *next );
+                if ( comp( kept_value, value ) )
+                {
+                    if ( ++kept != next )
+                        *kept = std::move( *next );
+                    kept_value = value;
+                }
+            }
         }
+        else
+        {
+            for ( auto next{ std::next( first ) }; next != last; ++next )
+            {
+                if ( comp( *kept, *next ) && ++kept != next )
+                    *kept = std::move( *next );
+            }
+        }
+        return std::next( kept );
     }
-    return std::next( kept );
 }
 
 /// Sorts and deduplicates a container as the iterator overload does and
@@ -308,12 +348,12 @@ template <comparator_erasure Erasure = comparator_erasure::never, sort_partition
 /// standard and psi::vm containers, whose shrinking resize neither allocates
 /// nor constructs, but a property of the container rather than one checked
 /// here - resize() is noexcept for none of them, as growing allocates.
-template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::ranges::random_access_range Container, typename Comparator = std::ranges::less>
+template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::ranges::random_access_range Container, typename Comparator = std::ranges::less, typename Projection = std::identity>
 requires requires( Container & container ) { container.resize( std::ranges::size( container ) ); }
-constexpr void sort_unique( Container & container, Comparator const & comp = {} ) noexcept
+constexpr void sort_unique( Container & container, Comparator const & comp = {}, Projection const & proj = {} ) noexcept
 {
     auto const first{ std::ranges::begin( container ) };
-    auto const kept { vm::sort_unique<Erasure, Partitioning>( first, std::ranges::end( container ), comp ) };
+    auto const kept { vm::sort_unique<Erasure, Partitioning>( first, std::ranges::end( container ), comp, proj ) };
     container.resize( static_cast<std::ranges::range_size_t<Container>>( kept - first ) );
 }
 
