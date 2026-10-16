@@ -28,6 +28,13 @@ namespace psi::vm
 {
 //------------------------------------------------------------------------------
 
+namespace {
+struct nontrivial_element { ~nontrivial_element() noexcept; };
+}
+static_assert(  std::is_trivially_destructible_v<fc_vector<std::uint32_t, 4>> );
+static_assert( !std::is_trivially_destructible_v<fc_vector<nontrivial_element, 4>> );
+static_assert( !std::is_trivially_destructible_v<heap_vector<std::uint32_t>> );
+
 // Regression harness: stress heap_vector growth/relocation with variant payloads.
 // This guards the fast relocation path used when the trait marks the variant
 // as trivially moveable on a given STL/toolchain.

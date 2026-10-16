@@ -31,6 +31,8 @@ namespace psi::vm
 template <typename T, std::uint32_t capacity_param, auto overflow_handler = assert_on_overflow{}>
 using fc_vector = vector<fixed_storage<T, capacity_param, overflow_handler>>;
 
+static_assert( std::is_trivially_destructible_v<fc_vector<std::uint32_t, 1>> );
+
 //------------------------------------------------------------------------------
 } // namespace psi::vm
 //------------------------------------------------------------------------------

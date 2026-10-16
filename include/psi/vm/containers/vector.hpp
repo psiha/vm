@@ -240,12 +240,28 @@ concept psi_vm_vector = requires { typename std::remove_cvref_t<T>::psi_vm_vecto
 ///
 ////////////////////////////////////////////////////////////////////////////////
 
+// Destroys elements only when they are not trivial. The destroying destructor
+// is constrained to that case and the other is defaulted, so a vector of a
+// trivial element stays trivially destructible. Incomplete element types skip
+// the trait (it requires a complete type) and always destroy. The body runs
+// before Storage frees the buffer.
+template <typename T, bool support_incomplete_types>
+consteval bool vector_destroys_elements() noexcept {
+    // The trait needs a complete T. An incomplete element (the class is
+    // instantiated before the type is finished) always destroys, which is
+    // what a user-provided destructor did. A later complete trivial T in a
+    // different instantiation still gets the trivial destructor.
+    if constexpr ( support_incomplete_types ) { return true; }
+    else if constexpr ( requires { sizeof( T ); } ) { return !std::is_trivially_destructible_v<T>; }
+    else { return true; }
+}
+
 template <typename Storage, geometric_growth Growth = geometric_growth{}, bool support_incomplete_types = false>
 class [[ nodiscard, clang::trivial_abi ]] vector
     :
     public Storage
 {
-    using storage_t = Storage;
+    using storage_t   = Storage;
     using value_types = detail::vector_value_types<support_incomplete_types, typename storage_t::value_type>;
 
 public:
@@ -1478,11 +1494,13 @@ public:
     {}
 
     constexpr ~vector() noexcept
+        requires ( vector_destroys_elements<value_type, support_incomplete_types>() )
     {
         if constexpr ( !support_incomplete_types )
             static_assert( complete<value_type>, "vector destructor requires a complete value_type" );
         std::destroy_n( this->data(), this->size() );
     }
+    constexpr ~vector() noexcept = default;
 
     // --- copy constructor ---
     // Two overloads depending on whether the storage manages its own copy:
