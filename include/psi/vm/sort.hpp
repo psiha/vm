@@ -213,8 +213,8 @@ namespace key_sort_detail
 /// callers; otherwise fully-typed pdqsort with the trivially-copyable
 /// predicate wrapper. Partitioning picks between pdqsort's branchless and
 /// branching variants (see sort_partitioning).
-template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::random_access_iterator It, typename Comparator>
-constexpr void sort( It const first, It const last, Comparator const & __restrict comp ) noexcept
+template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::random_access_iterator It, typename Comparator = std::ranges::less>
+constexpr void sort( It const first, It const last, Comparator const & __restrict comp = {} ) noexcept
 {
     using key_t = std::iter_value_t<It>;
     bool constexpr branchless

@@ -800,6 +800,15 @@ void check_every_partitioning( Comparator const comp, MakeKey const make_key_of 
     check_sort<Key, sort_partitioning::branching >( comp, make_key_of );
 }
 
+TEST( sort, the_default_comparator_orders_ascending )
+{
+    std::vector<int> values{ 3, 1, 4, 1, 5 };
+    sort( values.begin(), values.end() );
+    EXPECT_TRUE( std::ranges::is_sorted( values ) );
+    sort<comparator_erasure::never, sort_partitioning::branchless>( values.begin(), values.end() );
+    EXPECT_TRUE( std::ranges::is_sorted( values ) );
+}
+
 TEST( sort, agrees_with_std_stable_sort_whichever_partitioning_it_picks_or_is_told )
 {
     std::vector<int> const pointees( sizes[ std::size( sizes ) - 1 ] / 2 + 1 );
