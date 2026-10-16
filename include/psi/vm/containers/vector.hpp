@@ -284,7 +284,7 @@ template <typename Storage, geometric_growth Growth = geometric_growth{}, bool s
 class [[ nodiscard, clang::trivial_abi ]] vector
     : public vector_storage<Storage, vector_destroys_elements<typename Storage::value_type, support_incomplete_types>()>
 {
-    using storage_base = vector_storage<Storage, vector_destroys_elements<typename Storage::value_type, support_incomplete_types>()>;
+    using element_base = vector_storage<Storage, vector_destroys_elements<typename Storage::value_type, support_incomplete_types>()>;
     using storage_t    = Storage;
     using value_types  = detail::vector_value_types<support_incomplete_types, typename storage_t::value_type>;
 
@@ -467,13 +467,13 @@ public:
     // non standard default: default-initialization
     constexpr explicit vector( size_type const initial_size ) noexcept( noexcept_storage() && std::is_nothrow_default_constructible_v<value_type> ) : vector( initial_size, default_init ) {}
     constexpr vector( size_type const initial_size, init_policy auto const policy ) noexcept( noexcept_storage() && std::is_nothrow_default_constructible_v<value_type> )
-        : storage_base{}
+        : element_base{}
     {
         initialized_impl( initial_size, policy );
     }
 
     constexpr vector( size_type const count, param_const_ref const value ) noexcept( noexcept_storage() && std::is_nothrow_copy_constructible_v<value_type> )
-        : storage_base{}
+        : element_base{}
     {
         initialized_impl( count, no_init );
         std::uninitialized_fill_n( gcc_dse_workaround( this->data() ), count, value );
@@ -496,7 +496,7 @@ public:
 
     template <std::input_iterator It>
     constexpr vector( It const first, It const last ) noexcept( noexcept_storage() && noexcept_sizing() && std::is_nothrow_copy_constructible_v<value_type> )
-        : storage_base{}
+        : element_base{}
     {
         if constexpr ( std::random_access_iterator<It> )
         {
@@ -1514,7 +1514,7 @@ public:
 
     // --- construct from pre-configured storage (for stateful allocators) ---
     constexpr explicit vector( storage_t && init ) noexcept( std::is_nothrow_move_constructible_v<storage_t> )
-        : storage_base{ std::move( init ) }
+        : element_base{ std::move( init ) }
     {}
 
     // Element destruction is vector_storage's destructor, so a vector of a
@@ -1527,13 +1527,13 @@ public:
     //     entirely to storage's copy constructor — no element-level copy.
     constexpr vector( vector const & other ) noexcept( std::is_nothrow_copy_constructible_v<storage_t> )
         requires std::is_copy_constructible_v<storage_t>
-        : storage_base{ static_cast<storage_t const &>( other ) }
+        : element_base{ static_cast<storage_t const &>( other ) }
     {}
 
     // (B) Non-copyable storage (heap_storage, fixed_storage, sbo_hybrid):
     //     element-level copy semantics live here at the vector level.
     constexpr vector( vector const & other ) requires ( !std::is_copy_constructible_v<storage_t> )
-        : storage_base{} // empty: the copy below fills it
+        : element_base{} // empty: the copy below fills it
     {
         if constexpr ( !support_incomplete_types )
             static_assert( complete<value_type>, "vector copy requires a complete value_type" );
@@ -1556,7 +1556,7 @@ public:
     // Delegate to storage's move ctor (heap_storage: steal pointer;
     // fixed_storage: memcpy or element-wise move)
     constexpr vector( vector && other ) noexcept( std::is_nothrow_move_constructible_v<storage_t> )
-        : storage_base{ std::move( static_cast<storage_t &>( other ) ) }
+        : element_base{ std::move( static_cast<storage_t &>( other ) ) }
     {}
 
     // --- copy assignment (copy-and-swap) ---
