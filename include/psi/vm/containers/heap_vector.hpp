@@ -37,6 +37,8 @@ using heap_vector = vector<
     heap_storage<T, sz_t, void, heap_options{ options.alignment, options.cache_capacity, options.defer_alignment || support_incomplete_types }>,
     growth, support_incomplete_types>;
 
+static_assert( !std::is_trivially_destructible_v<heap_vector<std::uint32_t>> );
+
 // Generic erase_if / erase are provided in vector.hpp for all psi_vm_vector types.
 
 //------------------------------------------------------------------------------
