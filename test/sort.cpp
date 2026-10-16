@@ -800,6 +800,38 @@ void check_every_partitioning( Comparator const comp, MakeKey const make_key_of 
     check_sort<Key, sort_partitioning::branching >( comp, make_key_of );
 }
 
+TEST( sort, the_default_comparator_orders_ascending )
+{
+    std::vector<int> values{ 3, 1, 4, 1, 5 };
+    // Qualified: an unqualified sort(begin, end) is also std::sort by ADL.
+    vm::sort( values.begin(), values.end() );
+    EXPECT_TRUE( std::ranges::is_sorted( values ) );
+    vm::sort( values );
+    EXPECT_TRUE( std::ranges::is_sorted( values ) );
+    vm::sort<comparator_erasure::never, sort_partitioning::branchless>( values.begin(), values.end() );
+    EXPECT_TRUE( std::ranges::is_sorted( values ) );
+}
+
+TEST( sort, a_projection_orders_by_the_projected_value )
+{
+    struct item { int key; int payload; };
+    std::vector<item> items{ { 2, 9 }, { 1, 8 }, { 3, 7 } };
+    vm::sort( items, {}, &item::key );
+    EXPECT_TRUE( std::ranges::is_sorted( items, {}, &item::key ) );
+    vm::sort( items, std::ranges::greater{}, &item::key );
+    EXPECT_TRUE( std::ranges::is_sorted( items, std::ranges::greater{}, &item::key ) );
+
+    auto const by_payload{ []( item const & it ) noexcept { return it.payload; } };
+    vm::sort( items.begin(), items.end(), {}, by_payload );
+    EXPECT_TRUE( std::ranges::is_sorted( items, {}, by_payload ) );
+
+    std::vector<item> duplicates{ { 1, 9 }, { 2, 8 }, { 1, 7 } };
+    vm::sort_unique( duplicates, {}, &item::key );
+    ASSERT_EQ( duplicates.size(), 2u );
+    EXPECT_EQ( duplicates[ 0 ].key, 1 );
+    EXPECT_EQ( duplicates[ 1 ].key, 2 );
+}
+
 TEST( sort, agrees_with_std_stable_sort_whichever_partitioning_it_picks_or_is_told )
 {
     std::vector<int> const pointees( sizes[ std::size( sizes ) - 1 ] / 2 + 1 );
