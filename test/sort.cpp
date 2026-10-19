@@ -830,6 +830,56 @@ TEST( sort, a_projection_orders_by_the_projected_value )
     ASSERT_EQ( duplicates.size(), 2u );
     EXPECT_EQ( duplicates[ 0 ].key, 1 );
     EXPECT_EQ( duplicates[ 1 ].key, 2 );
+
+    // allowed still orders by the projection. The projected predicate is
+    // register-sized, so the erasure heuristic does not take that path.
+    vm::sort<comparator_erasure::allowed>( items, {}, &item::key );
+    EXPECT_TRUE( std::ranges::is_sorted( items, {}, &item::key ) );
+}
+
+constexpr int first_of_a_sorted_array() noexcept
+{
+    int values[]{ 3, 1, 2 };
+    vm::sort( values );
+    return values[ 0 ];
+}
+static_assert( first_of_a_sorted_array() == 1 );
+
+TEST( sort, a_range_can_name_erasure_and_partitioning )
+{
+    std::vector<int> values{ 3, 1, 4, 1, 5 };
+    vm::sort<comparator_erasure::never, sort_partitioning::branchless>( values );
+    EXPECT_TRUE( std::ranges::is_sorted( values ) );
+    vm::sort<comparator_erasure::allowed, sort_partitioning::branching>( values );
+    EXPECT_TRUE( std::ranges::is_sorted( values ) );
+}
+
+TEST( sort, an_array_and_its_end_pointer_stay_an_iterator_pair )
+{
+    int values[]{ 3, 1, 4, 1, 5 };
+    vm::sort( values, values + std::size( values ) );
+    EXPECT_TRUE( std::ranges::is_sorted( values ) );
+    vm::sort( values, values + std::size( values ), std::ranges::greater{} );
+    EXPECT_TRUE( std::ranges::is_sorted( values, std::ranges::greater{} ) );
+    int * const end{ values + std::size( values ) };
+    vm::sort( values, end );
+    EXPECT_TRUE( std::ranges::is_sorted( values ) );
+}
+
+TEST( sort, a_move_only_comparator_is_not_copied_for_a_projection )
+{
+    struct move_only_less
+    {
+        int payload[ 8 ]{};
+        move_only_less() = default;
+        move_only_less( move_only_less && ) noexcept = default;
+        move_only_less( move_only_less const & ) = delete;
+        constexpr bool operator()( int const left, int const right ) const noexcept { return left < right; }
+    };
+    struct item { int key; };
+    std::vector<item> items{ { 2 }, { 1 } };
+    vm::sort( items.begin(), items.end(), move_only_less{}, &item::key );
+    EXPECT_TRUE( std::ranges::is_sorted( items, {}, &item::key ) );
 }
 
 TEST( sort, agrees_with_std_stable_sort_whichever_partitioning_it_picks_or_is_told )

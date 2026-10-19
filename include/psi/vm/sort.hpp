@@ -29,9 +29,11 @@
 //------------------------------------------------------------------------------
 #pragma once
 
-#include "containers/abi.hpp" // can_be_passed_in_reg, make_trivially_copyable_predicate
+#include "containers/abi.hpp" // can_be_passed_in_reg, make_trivially_copyable_predicate, optimal_const_ref
 #include "containers/comparator_traits.hpp" // is_direct_comparator
 #include "erased_ref_predicate.hpp"
+
+#include <psi/build/no_unique_address.hpp>
 
 #if __has_include( <boost/sort/pdqsort/pdqsort.hpp> )
 #include <boost/sort/pdqsort/pdqsort.hpp>
@@ -43,6 +45,7 @@
 #define PSI_VM_PDQSORT_BRANCHLESS( first, last, comp ) boost::movelib::pdqsort( first, last, comp )
 #endif
 
+#include <algorithm>
 #include <functional>
 #include <iterator>
 #include <memory>
@@ -168,6 +171,34 @@ namespace detail
         else
             PSI_VM_PDQSORT( first, last, comp );
     }
+
+    // A register-sized part is held by value, so an empty comparator and the
+    // identity projection take no space. Anything larger is an
+    // optimal_const_ref (a const reference, or a view): the predicate stays
+    // trivially copyable, and make_trivially_copyable_predicate passes it on
+    // unchanged. Not pass_in_reg -- that wrapper is for a value parameter at
+    // a function boundary, and pdqsort already receives the predicate through
+    // make_trivially_copyable_predicate.
+    template <typename T>
+    using projected_part = std::conditional_t<can_be_passed_in_reg<T>, T, typename optimal_const_ref<T>::type>;
+
+    template <typename Comparator, typename Projection>
+    struct projected_predicate
+    {
+        PSI_NO_UNIQUE_ADDRESS projected_part<Comparator> comparator;
+        PSI_NO_UNIQUE_ADDRESS projected_part<Projection> projection;
+
+        constexpr bool operator()( auto const & left, auto const & right ) const
+            noexcept( noexcept( comparator( std::invoke( projection, left ), std::invoke( projection, right ) ) ) )
+        {
+            return comparator( std::invoke( projection, left ), std::invoke( projection, right ) );
+        }
+    };
+
+    struct projected_size_probe { int field; };
+    static_assert( sizeof( projected_predicate<std::ranges::less, std::identity> ) == 1 );
+    static_assert( std::is_trivially_copyable_v<projected_predicate<std::ranges::less, std::identity>> );
+    static_assert( sizeof( projected_predicate<std::ranges::less, int projected_size_probe::*> ) == sizeof( int projected_size_probe::* ) );
 } // namespace detail
 
 namespace key_sort_detail
@@ -212,35 +243,32 @@ namespace key_sort_detail
 /// pointers for contiguous ranges -- so one worker instantiation serves all
 /// callers; otherwise fully-typed pdqsort with the trivially-copyable
 /// predicate wrapper. Partitioning picks between pdqsort's branchless and
-/// branching variants (see sort_partitioning). A range is sorted in place.
-/// A projection, a member pointer in the form std::ranges::sort takes,
+/// branching variants (see sort_partitioning). The range overload sorts that
+/// same range. A projection -- a member pointer, as std::ranges::sort takes --
 /// is applied before the comparator. The identity projection is not wrapped,
 /// so a scalar key compared by std::ranges::less still partitions branchlessly.
-namespace detail
-{
-    template <typename Comparator, typename Projection>
-    struct projected_predicate
-    {
-        Comparator comparator;
-        Projection projection;
-
-        constexpr bool operator()( auto const & left, auto const & right ) const
-            noexcept( noexcept( comparator( std::invoke( projection, left ), std::invoke( projection, right ) ) ) )
-        {
-            return comparator( std::invoke( projection, left ), std::invoke( projection, right ) );
-        }
-    };
-} // namespace detail
-
+/// A projection that throws terminates, as a throwing comparator does.
 template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::random_access_iterator It, typename Comparator = std::ranges::less, typename Projection = std::identity>
 constexpr void sort( It const first, It const last, Comparator const & __restrict comp = {}, [[ maybe_unused ]] Projection const & proj = {} ) noexcept
 {
     if constexpr ( !std::same_as<std::remove_cvref_t<Projection>, std::identity> )
     {
-        sort<Erasure, Partitioning>( first, last, detail::projected_predicate<Comparator, Projection>{ comp, proj } );
+        vm::sort<Erasure, Partitioning>( first, last, detail::projected_predicate<Comparator, Projection>{ comp, proj } );
     }
     else
     {
+        // pdqsort is not a constant expression. A compile-time call over an
+        // arithmetic key uses std::sort. Not every iterator this function
+        // accepts can be handed to std::sort, so the others have no
+        // compile-time path.
+        if constexpr ( std::is_arithmetic_v<std::remove_cv_t<std::iter_value_t<It>>> )
+        {
+            if consteval
+            {
+                std::sort( first, last, comp );
+                return;
+            }
+        }
         using key_t = std::iter_value_t<It>;
         bool constexpr branchless
         {
@@ -278,9 +306,10 @@ constexpr void sort( It const first, It const last, Comparator const & __restric
 
 template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::ranges::random_access_range Range, typename Comparator = std::ranges::less, typename Projection = std::identity>
 requires std::same_as<std::ranges::iterator_t<Range>, std::ranges::sentinel_t<Range>>
+      && std::indirect_strict_weak_order<Comparator, std::projected<std::ranges::iterator_t<Range>, Projection>>
 constexpr void sort( Range && range, Comparator const & comp = {}, Projection const & proj = {} ) noexcept
 {
-    sort<Erasure, Partitioning>( std::ranges::begin( range ), std::ranges::end( range ), comp, proj );
+    vm::sort<Erasure, Partitioning>( std::ranges::begin( range ), std::ranges::end( range ), comp, proj );
 }
 
 /// Sorts the range by comp, as sort() does, and moves the first of each run of
@@ -294,14 +323,17 @@ constexpr void sort( Range && range, Comparator const & comp = {}, Projection co
 /// one comparison per element, and no equality operator needed (std::unique
 /// would want an equivalence relation, which that one-sided test is not). The
 /// sort is not stable, so of a run of equivalent elements that are not
-/// identical which one is kept is unspecified. noexcept as sort() is: a
-/// comparator or an element move that throws terminates.
+/// identical which one is kept is unspecified. A projection, when one is
+/// passed, is applied before the comparator, so those runs are runs of equal
+/// projected keys and an unspecified element of each run is kept. noexcept
+/// as sort() is: a comparator, a projection or an element move that throws
+/// terminates.
 template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::random_access_iterator It, typename Comparator = std::ranges::less, typename Projection = std::identity>
 [[ nodiscard ]] constexpr It sort_unique( It const first, It const last, Comparator const & comp = {}, [[ maybe_unused ]] Projection const & proj = {} ) noexcept
 {
     if constexpr ( !std::same_as<std::remove_cvref_t<Projection>, std::identity> )
     {
-        return sort_unique<Erasure, Partitioning>( first, last, detail::projected_predicate<Comparator, Projection>{ comp, proj } );
+        return vm::sort_unique<Erasure, Partitioning>( first, last, detail::projected_predicate<Comparator, Projection>{ comp, proj } );
     }
     else
     {
