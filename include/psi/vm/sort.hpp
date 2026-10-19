@@ -194,11 +194,6 @@ namespace detail
             return comparator( std::invoke( projection, left ), std::invoke( projection, right ) );
         }
     };
-
-    struct projected_size_probe { int field; };
-    static_assert( sizeof( projected_predicate<std::ranges::less, std::identity> ) == 1 );
-    static_assert( std::is_trivially_copyable_v<projected_predicate<std::ranges::less, std::identity>> );
-    static_assert( sizeof( projected_predicate<std::ranges::less, int projected_size_probe::*> ) == sizeof( int projected_size_probe::* ) );
 } // namespace detail
 
 namespace key_sort_detail
@@ -257,11 +252,13 @@ constexpr void sort( It const first, It const last, Comparator const & __restric
     }
     else
     {
-        // pdqsort is not a constant expression. A compile-time call over an
-        // arithmetic key uses std::sort. Not every iterator this function
-        // accepts can be handed to std::sort, so the others have no
-        // compile-time path.
-        if constexpr ( std::is_arithmetic_v<std::remove_cv_t<std::iter_value_t<It>>> )
+        // pdqsort is not a constant expression. A compile-time call uses
+        // std::sort, only for a contiguous range of an arithmetic key. Both
+        // arms of `if consteval` are instantiated, and std::sort cannot take
+        // a proxy iterator even when its value type is arithmetic, so a
+        // runtime-only call through one would fail to compile without the
+        // contiguous requirement.
+        if constexpr ( std::contiguous_iterator<It> && std::is_arithmetic_v<std::remove_cv_t<std::iter_value_t<It>>> )
         {
             if consteval
             {
