@@ -29,9 +29,11 @@
 //------------------------------------------------------------------------------
 #pragma once
 
-#include "containers/abi.hpp" // can_be_passed_in_reg, make_trivially_copyable_predicate
+#include "containers/abi.hpp" // can_be_passed_in_reg, make_trivially_copyable_predicate, optimal_const_ref
 #include "containers/comparator_traits.hpp" // is_direct_comparator
 #include "erased_ref_predicate.hpp"
+
+#include <psi/build/no_unique_address.hpp>
 
 #if __has_include( <boost/sort/pdqsort/pdqsort.hpp> )
 #include <boost/sort/pdqsort/pdqsort.hpp>
@@ -43,6 +45,7 @@
 #define PSI_VM_PDQSORT_BRANCHLESS( first, last, comp ) boost::movelib::pdqsort( first, last, comp )
 #endif
 
+#include <algorithm>
 #include <functional>
 #include <iterator>
 #include <memory>
@@ -168,6 +171,29 @@ namespace detail
         else
             PSI_VM_PDQSORT( first, last, comp );
     }
+
+    // A register-sized part is held by value, so an empty comparator and the
+    // identity projection take no space. Anything larger is an
+    // optimal_const_ref (a const reference, or a view): the predicate stays
+    // trivially copyable, and make_trivially_copyable_predicate passes it on
+    // unchanged. Not pass_in_reg -- that wrapper is for a value parameter at
+    // a function boundary, and pdqsort already receives the predicate through
+    // make_trivially_copyable_predicate.
+    template <typename T>
+    using projected_part = std::conditional_t<can_be_passed_in_reg<T>, T, typename optimal_const_ref<T>::type>;
+
+    template <typename Comparator, typename Projection>
+    struct projected_predicate
+    {
+        PSI_NO_UNIQUE_ADDRESS projected_part<Comparator> comparator;
+        PSI_NO_UNIQUE_ADDRESS projected_part<Projection> projection;
+
+        constexpr bool operator()( auto const & left, auto const & right ) const
+            noexcept( noexcept( comparator( std::invoke( projection, left ), std::invoke( projection, right ) ) ) )
+        {
+            return comparator( std::invoke( projection, left ), std::invoke( projection, right ) );
+        }
+    };
 } // namespace detail
 
 namespace key_sort_detail
@@ -212,42 +238,75 @@ namespace key_sort_detail
 /// pointers for contiguous ranges -- so one worker instantiation serves all
 /// callers; otherwise fully-typed pdqsort with the trivially-copyable
 /// predicate wrapper. Partitioning picks between pdqsort's branchless and
-/// branching variants (see sort_partitioning).
-template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::random_access_iterator It, typename Comparator>
-constexpr void sort( It const first, It const last, Comparator const & __restrict comp ) noexcept
+/// branching variants (see sort_partitioning). The range overload sorts that
+/// same range. A projection -- a member pointer, as std::ranges::sort takes --
+/// is applied before the comparator. The identity projection is not wrapped,
+/// so a scalar key compared by std::ranges::less still partitions branchlessly.
+/// A projection that throws terminates, as a throwing comparator does.
+template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::random_access_iterator It, typename Comparator = std::ranges::less, typename Projection = std::identity>
+constexpr void sort( It const first, It const last, Comparator const & __restrict comp = {}, [[ maybe_unused ]] Projection const & proj = {} ) noexcept
 {
-    using key_t = std::iter_value_t<It>;
-    bool constexpr branchless
+    if constexpr ( !std::same_as<std::remove_cvref_t<Projection>, std::identity> )
     {
-        Partitioning == sort_partitioning::branchless ||
-        ( Partitioning == sort_partitioning::automatic && key_sort_detail::branchless_by_default<Comparator, key_t> )
-    };
-    if constexpr ( Erasure == comparator_erasure::allowed && detail::erasure_applies<Comparator, key_t> )
-    {
-        if !consteval
-        {
-            if constexpr ( std::contiguous_iterator<It> )
-                detail::erased_ptr_sort<branchless>( std::to_address( first ), std::to_address( last ), erased_ref_predicate<key_t>::bind( comp ) );
-            else
-                detail::erased_iter_sort<branchless>( first, last, erased_ref_predicate<key_t>::bind( comp ) );
-            return;
-        }
-    }
-    if constexpr ( branchless )
-    {
-        PSI_VM_PDQSORT_BRANCHLESS( first, last, make_trivially_copyable_predicate( comp ) );
-    }
-    else if constexpr ( Partitioning == sort_partitioning::branching )
-    {
-        using predicate_t = std::remove_cvref_t<decltype( make_trivially_copyable_predicate( comp ) )>;
-        PSI_VM_PDQSORT( first, last, key_sort_detail::branching_predicate<predicate_t>{ make_trivially_copyable_predicate( comp ) } );
+        vm::sort<Erasure, Partitioning>( first, last, detail::projected_predicate<Comparator, Projection>{ comp, proj } );
     }
     else
     {
-        // automatic, where Boost.Sort's own rule never picks the branchless
-        // partitioning either (see branchless_by_default)
-        PSI_VM_PDQSORT( first, last, make_trivially_copyable_predicate( comp ) );
+        // pdqsort is not a constant expression. A compile-time call uses
+        // std::sort, only for a contiguous range of an arithmetic key. Both
+        // arms of `if consteval` are instantiated, and std::sort cannot take
+        // a proxy iterator even when its value type is arithmetic, so a
+        // runtime-only call through one would fail to compile without the
+        // contiguous requirement.
+        if constexpr ( std::contiguous_iterator<It> && std::is_arithmetic_v<std::remove_cv_t<std::iter_value_t<It>>> )
+        {
+            if consteval
+            {
+                std::sort( first, last, comp );
+                return;
+            }
+        }
+        using key_t = std::iter_value_t<It>;
+        bool constexpr branchless
+        {
+            Partitioning == sort_partitioning::branchless ||
+            ( Partitioning == sort_partitioning::automatic && key_sort_detail::branchless_by_default<Comparator, key_t> )
+        };
+        if constexpr ( Erasure == comparator_erasure::allowed && detail::erasure_applies<Comparator, key_t> )
+        {
+            if !consteval
+            {
+                if constexpr ( std::contiguous_iterator<It> )
+                    detail::erased_ptr_sort<branchless>( std::to_address( first ), std::to_address( last ), erased_ref_predicate<key_t>::bind( comp ) );
+                else
+                    detail::erased_iter_sort<branchless>( first, last, erased_ref_predicate<key_t>::bind( comp ) );
+                return;
+            }
+        }
+        if constexpr ( branchless )
+        {
+            PSI_VM_PDQSORT_BRANCHLESS( first, last, make_trivially_copyable_predicate( comp ) );
+        }
+        else if constexpr ( Partitioning == sort_partitioning::branching )
+        {
+            using predicate_t = std::remove_cvref_t<decltype( make_trivially_copyable_predicate( comp ) )>;
+            PSI_VM_PDQSORT( first, last, key_sort_detail::branching_predicate<predicate_t>{ make_trivially_copyable_predicate( comp ) } );
+        }
+        else
+        {
+            // automatic, where Boost.Sort's own rule never picks the branchless
+            // partitioning either (see branchless_by_default)
+            PSI_VM_PDQSORT( first, last, make_trivially_copyable_predicate( comp ) );
+        }
     }
+}
+
+template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::ranges::random_access_range Range, typename Comparator = std::ranges::less, typename Projection = std::identity>
+requires std::same_as<std::ranges::iterator_t<Range>, std::ranges::sentinel_t<Range>>
+      && std::indirect_strict_weak_order<Comparator, std::projected<std::ranges::iterator_t<Range>, Projection>>
+constexpr void sort( Range && range, Comparator const & comp = {}, Projection const & proj = {} ) noexcept
+{
+    vm::sort<Erasure, Partitioning>( std::ranges::begin( range ), std::ranges::end( range ), comp, proj );
 }
 
 /// Sorts the range by comp, as sort() does, and moves the first of each run of
@@ -261,45 +320,55 @@ constexpr void sort( It const first, It const last, Comparator const & __restric
 /// one comparison per element, and no equality operator needed (std::unique
 /// would want an equivalence relation, which that one-sided test is not). The
 /// sort is not stable, so of a run of equivalent elements that are not
-/// identical which one is kept is unspecified. noexcept as sort() is: a
-/// comparator or an element move that throws terminates.
-template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::random_access_iterator It, typename Comparator = std::ranges::less>
-[[ nodiscard ]] constexpr It sort_unique( It const first, It const last, Comparator const & comp = {} ) noexcept
+/// identical which one is kept is unspecified. A projection, when one is
+/// passed, is applied before the comparator, so those runs are runs of equal
+/// projected keys and an unspecified element of each run is kept. noexcept
+/// as sort() is: a comparator, a projection or an element move that throws
+/// terminates.
+template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::random_access_iterator It, typename Comparator = std::ranges::less, typename Projection = std::identity>
+[[ nodiscard ]] constexpr It sort_unique( It const first, It const last, Comparator const & comp = {}, [[ maybe_unused ]] Projection const & proj = {} ) noexcept
 {
-    vm::sort<Erasure, Partitioning>( first, last, comp );
-    if ( first == last )
-        return last;
-    auto kept{ first };
-    using value_t = std::iter_value_t<It>;
-    if constexpr ( std::is_trivially_copyable_v<value_t> && sizeof( value_t ) <= 2 * sizeof( void * ) )
+    if constexpr ( !std::same_as<std::remove_cvref_t<Projection>, std::identity> )
     {
-        // The last kept element held as a value: comparing against *kept
-        // would read back the element just written, and through a proxy
-        // iterator that writes an element as several pieces (packed records
-        // of an odd width) such a load spans more than one store still in
-        // flight and cannot be forwarded from them - it waits until they
-        // reach the cache.
-        value_t kept_value( *kept );
-        for ( auto next{ std::next( first ) }; next != last; ++next )
-        {
-            value_t const value( *next );
-            if ( comp( kept_value, value ) )
-            {
-                if ( ++kept != next )
-                    *kept = std::move( *next );
-                kept_value = value;
-            }
-        }
+        return vm::sort_unique<Erasure, Partitioning>( first, last, detail::projected_predicate<Comparator, Projection>{ comp, proj } );
     }
     else
     {
-        for ( auto next{ std::next( first ) }; next != last; ++next )
+        vm::sort<Erasure, Partitioning>( first, last, comp );
+        if ( first == last )
+            return last;
+        auto kept{ first };
+        using value_t = std::iter_value_t<It>;
+        if constexpr ( std::is_trivially_copyable_v<value_t> && sizeof( value_t ) <= 2 * sizeof( void * ) )
         {
-            if ( comp( *kept, *next ) && ++kept != next )
-                *kept = std::move( *next );
+            // The last kept element held as a value: comparing against *kept
+            // would read back the element just written, and through a proxy
+            // iterator that writes an element as several pieces (packed records
+            // of an odd width) such a load spans more than one store still in
+            // flight and cannot be forwarded from them - it waits until they
+            // reach the cache.
+            value_t kept_value( *kept );
+            for ( auto next{ std::next( first ) }; next != last; ++next )
+            {
+                value_t const value( *next );
+                if ( comp( kept_value, value ) )
+                {
+                    if ( ++kept != next )
+                        *kept = std::move( *next );
+                    kept_value = value;
+                }
+            }
         }
+        else
+        {
+            for ( auto next{ std::next( first ) }; next != last; ++next )
+            {
+                if ( comp( *kept, *next ) && ++kept != next )
+                    *kept = std::move( *next );
+            }
+        }
+        return std::next( kept );
     }
-    return std::next( kept );
 }
 
 /// Sorts and deduplicates a container as the iterator overload does and
@@ -308,12 +377,12 @@ template <comparator_erasure Erasure = comparator_erasure::never, sort_partition
 /// standard and psi::vm containers, whose shrinking resize neither allocates
 /// nor constructs, but a property of the container rather than one checked
 /// here - resize() is noexcept for none of them, as growing allocates.
-template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::ranges::random_access_range Container, typename Comparator = std::ranges::less>
+template <comparator_erasure Erasure = comparator_erasure::never, sort_partitioning Partitioning = sort_partitioning::automatic, std::ranges::random_access_range Container, typename Comparator = std::ranges::less, typename Projection = std::identity>
 requires requires( Container & container ) { container.resize( std::ranges::size( container ) ); }
-constexpr void sort_unique( Container & container, Comparator const & comp = {} ) noexcept
+constexpr void sort_unique( Container & container, Comparator const & comp = {}, Projection const & proj = {} ) noexcept
 {
     auto const first{ std::ranges::begin( container ) };
-    auto const kept { vm::sort_unique<Erasure, Partitioning>( first, std::ranges::end( container ), comp ) };
+    auto const kept { vm::sort_unique<Erasure, Partitioning>( first, std::ranges::end( container ), comp, proj ) };
     container.resize( static_cast<std::ranges::range_size_t<Container>>( kept - first ) );
 }
 

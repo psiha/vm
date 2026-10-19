@@ -800,6 +800,155 @@ void check_every_partitioning( Comparator const comp, MakeKey const make_key_of 
     check_sort<Key, sort_partitioning::branching >( comp, make_key_of );
 }
 
+TEST( sort, the_default_comparator_orders_ascending )
+{
+    std::vector<int> values{ 3, 1, 4, 1, 5 };
+    // Qualified: an unqualified sort(begin, end) is also std::sort by ADL.
+    vm::sort( values.begin(), values.end() );
+    EXPECT_TRUE( std::ranges::is_sorted( values ) );
+    vm::sort( values );
+    EXPECT_TRUE( std::ranges::is_sorted( values ) );
+    vm::sort<comparator_erasure::never, sort_partitioning::branchless>( values.begin(), values.end() );
+    EXPECT_TRUE( std::ranges::is_sorted( values ) );
+}
+
+TEST( sort, a_projection_orders_by_the_projected_value )
+{
+    struct item { int key; int payload; };
+    std::vector<item> items{ { 2, 9 }, { 1, 8 }, { 3, 7 } };
+    vm::sort( items, {}, &item::key );
+    EXPECT_TRUE( std::ranges::is_sorted( items, {}, &item::key ) );
+    vm::sort( items, std::ranges::greater{}, &item::key );
+    EXPECT_TRUE( std::ranges::is_sorted( items, std::ranges::greater{}, &item::key ) );
+
+    auto const by_payload{ []( item const & it ) noexcept { return it.payload; } };
+    vm::sort( items.begin(), items.end(), {}, by_payload );
+    EXPECT_TRUE( std::ranges::is_sorted( items, {}, by_payload ) );
+
+    std::vector<item> duplicates{ { 1, 9 }, { 2, 8 }, { 1, 7 } };
+    vm::sort_unique( duplicates, {}, &item::key );
+    ASSERT_EQ( duplicates.size(), 2u );
+    EXPECT_EQ( duplicates[ 0 ].key, 1 );
+    EXPECT_EQ( duplicates[ 1 ].key, 2 );
+
+    // allowed still orders by the projection. The projected predicate is
+    // register-sized, so the erasure heuristic does not take that path.
+    vm::sort<comparator_erasure::allowed>( items, {}, &item::key );
+    EXPECT_TRUE( std::ranges::is_sorted( items, {}, &item::key ) );
+}
+
+constexpr int first_of_a_sorted_array() noexcept
+{
+    int values[]{ 3, 1, 2 };
+    vm::sort( values );
+    return values[ 0 ];
+}
+static_assert( first_of_a_sorted_array() == 1 );
+
+struct projected_size_probe { int field; };
+static_assert( sizeof( detail::projected_predicate<std::ranges::less, std::identity> ) == 1 );
+static_assert( std::is_trivially_copyable_v<detail::projected_predicate<std::ranges::less, std::identity>> );
+static_assert( sizeof( detail::projected_predicate<std::ranges::less, int projected_size_probe::*> ) == sizeof( int projected_size_probe::* ) );
+
+// A proxy whose value type is arithmetic. std::sort cannot be instantiated
+// on it; the compile-time path must not try.
+struct int_proxy
+{
+    int * p;
+    constexpr operator int() const noexcept { return *p; }
+    constexpr int_proxy & operator=( int const value ) noexcept { *p = value; return *this; }
+    constexpr int_proxy & operator=( int_proxy const other ) noexcept { return *this = int{ other }; }
+
+    friend constexpr void swap( int_proxy a, int_proxy b ) noexcept
+    {
+        int const tmp{ a };
+        a = int{ b };
+        b = tmp;
+    }
+};
+
+struct proxy_int_iterator
+{
+    using iterator_concept  = std::random_access_iterator_tag;
+    using iterator_category = std::random_access_iterator_tag;
+    using value_type        = int;
+    using difference_type   = std::ptrdiff_t;
+    using reference         = int_proxy;
+    using pointer           = void;
+
+    int * p_{};
+
+    constexpr proxy_int_iterator() noexcept = default;
+    constexpr explicit proxy_int_iterator( int * const p ) noexcept : p_{ p } {}
+
+    constexpr int_proxy operator*() const noexcept { return { p_ }; }
+    constexpr int_proxy operator[]( difference_type const n ) const noexcept { return { p_ + n }; }
+
+    constexpr proxy_int_iterator & operator++() noexcept { ++p_; return *this; }
+    constexpr proxy_int_iterator   operator++( int ) noexcept { auto const tmp{ *this }; ++*this; return tmp; }
+    constexpr proxy_int_iterator & operator--() noexcept { --p_; return *this; }
+    constexpr proxy_int_iterator   operator--( int ) noexcept { auto const tmp{ *this }; --*this; return tmp; }
+
+    constexpr proxy_int_iterator & operator+=( difference_type const n ) noexcept { p_ += n; return *this; }
+    constexpr proxy_int_iterator & operator-=( difference_type const n ) noexcept { p_ -= n; return *this; }
+
+    constexpr friend proxy_int_iterator operator+( proxy_int_iterator it, difference_type const n ) noexcept { return it += n; }
+    constexpr friend proxy_int_iterator operator+( difference_type const n, proxy_int_iterator it ) noexcept { return it += n; }
+    constexpr friend proxy_int_iterator operator-( proxy_int_iterator it, difference_type const n ) noexcept { return it -= n; }
+    constexpr friend difference_type operator-( proxy_int_iterator const a, proxy_int_iterator const b ) noexcept { return a.p_ - b.p_; }
+
+    constexpr friend bool operator==( proxy_int_iterator const a, proxy_int_iterator const b ) noexcept { return a.p_ == b.p_; }
+    constexpr friend std::strong_ordering operator<=>( proxy_int_iterator const a, proxy_int_iterator const b ) noexcept { return a.p_ <=> b.p_; }
+};
+
+static_assert( std::random_access_iterator<proxy_int_iterator> );
+static_assert( std::is_arithmetic_v<std::iter_value_t<proxy_int_iterator>> );
+static_assert( !std::contiguous_iterator<proxy_int_iterator> );
+
+TEST( sort, a_proxy_over_an_arithmetic_value_sorts_without_std_sort )
+{
+    int values[]{ 3, 1, 4, 1, 5 };
+    vm::sort( proxy_int_iterator{ values }, proxy_int_iterator{ values + std::size( values ) } );
+    EXPECT_TRUE( std::ranges::is_sorted( values ) );
+}
+
+TEST( sort, a_range_can_name_erasure_and_partitioning )
+{
+    std::vector<int> values{ 3, 1, 4, 1, 5 };
+    vm::sort<comparator_erasure::never, sort_partitioning::branchless>( values );
+    EXPECT_TRUE( std::ranges::is_sorted( values ) );
+    vm::sort<comparator_erasure::allowed, sort_partitioning::branching>( values );
+    EXPECT_TRUE( std::ranges::is_sorted( values ) );
+}
+
+TEST( sort, an_array_and_its_end_pointer_stay_an_iterator_pair )
+{
+    int values[]{ 3, 1, 4, 1, 5 };
+    vm::sort( values, values + std::size( values ) );
+    EXPECT_TRUE( std::ranges::is_sorted( values ) );
+    vm::sort( values, values + std::size( values ), std::ranges::greater{} );
+    EXPECT_TRUE( std::ranges::is_sorted( values, std::ranges::greater{} ) );
+    int * const end{ values + std::size( values ) };
+    vm::sort( values, end );
+    EXPECT_TRUE( std::ranges::is_sorted( values ) );
+}
+
+TEST( sort, a_move_only_comparator_is_not_copied_for_a_projection )
+{
+    struct move_only_less
+    {
+        int payload[ 8 ]{};
+        move_only_less() = default;
+        move_only_less( move_only_less && ) noexcept = default;
+        move_only_less( move_only_less const & ) = delete;
+        constexpr bool operator()( int const left, int const right ) const noexcept { return left < right; }
+    };
+    struct item { int key; };
+    std::vector<item> items{ { 2 }, { 1 } };
+    vm::sort( items.begin(), items.end(), move_only_less{}, &item::key );
+    EXPECT_TRUE( std::ranges::is_sorted( items, {}, &item::key ) );
+}
+
 TEST( sort, agrees_with_std_stable_sort_whichever_partitioning_it_picks_or_is_told )
 {
     std::vector<int> const pointees( sizes[ std::size( sizes ) - 1 ] / 2 + 1 );
