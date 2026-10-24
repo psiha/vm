@@ -871,6 +871,33 @@ TEST( bp_tree, insert_range_with_equivalent_keys_multiset_keeps_them )
     EXPECT_EQ( bpt.size()         , input.size() );
 }
 
+// Unsorted keys known to be distinct: sorted as insert() sorts them, into an
+// empty tree and into one that already holds some of them.
+TEST( bp_tree, insert_unique )
+{
+    auto const count{ 4096 };
+    std::vector<int> keys;
+    keys.reserve( static_cast<std::size_t>( count ) );
+    for ( int i{ 0 }; i < count; ++i ) {
+        keys.push_back( ( i * 389 ) % count ); // a permutation: 389 and 4096 are coprime
+    }
+    std::vector<int> evens;
+    for ( int key{ 0 }; key < count; key += 2 ) {
+        evens.push_back( key );
+    }
+
+    bptree_set<int> bpt;
+    bpt.map_memory( keys.size() );
+    EXPECT_EQ( bpt.insert_unique( keys ), static_cast<std::size_t>( count ) );
+    EXPECT_TRUE( std::ranges::equal( bpt, std::views::iota( 0, count ) ) );
+
+    bptree_set<int> half;
+    half.map_memory( keys.size() );
+    EXPECT_EQ( half.insert_unique( evens ), evens.size() );
+    EXPECT_EQ( half.insert_unique( keys  ), static_cast<std::size_t>( count ) - evens.size() );
+    EXPECT_TRUE( std::ranges::equal( half, std::views::iota( 0, count ) ) );
+}
+
 TEST( bp_tree, insert_presorted )
 {
 #ifdef NDEBUG

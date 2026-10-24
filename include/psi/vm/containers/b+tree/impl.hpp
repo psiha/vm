@@ -771,8 +771,11 @@ protected:
         else          return find_from_nonunique( starting_leaf, starting_leaf_offset, key );
     }
 
+    // dedup_source: as for insert_presorted_impl - false for input the caller
+    // knows to be distinct (or checks itself afterwards), which a unique tree
+    // then does not search for equivalent keys.
     template <comparator_erasure Erasure = Komp::erasure, forward_search Search = forward_search::automatic>
-    size_type insert( typename base::bulk_copied_input, bool unique );
+    size_type insert( typename base::bulk_copied_input, bool unique, bool dedup_source = true );
 
     // dedup_source: when true and unique, inline-deduplicates the presorted
     // input at each copy/merge point (empty-tree bulk, append, interleaved merge).
@@ -1553,7 +1556,7 @@ bp_tree_impl<Key, Comparator>::merge_interleaved_values
 template <typename Key, typename Comparator>
 template <comparator_erasure Erasure, forward_search Search>
 bp_tree_impl<Key, Comparator>::size_type
-bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, bool const unique )
+bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, bool const unique, bool const dedup_source )
 {
     // https://www.sciencedirect.com/science/article/abs/pii/S0020025502002025 On batch-constructing B+-trees: algorithm and its performance
     // https://www.vldb.org/conf/2001/P461.pdf An Evaluation of Generic Bulk Loading Techniques
@@ -1579,7 +1582,13 @@ bp_tree_impl<Key, Comparator>::insert( typename base::bulk_copied_input input, b
         // inserted. Doing it here, once, on the just-sorted input, is what
         // makes every one of those paths correct - and it is the same thing
         // insert_presorted has always done for its own (contiguous) input.
-        if ( unique ) {
+        // Unless the caller takes that on (dedup_source false): then equivalent
+        // keys of the input all land in the tree.
+        if
+        (
+            unique &&
+            dedup_source
+        ) {
             auto const deduped_end
             {
                 std::unique( sort_begin, sort_end, [this]( auto const & lhs, auto const & rhs ) noexcept

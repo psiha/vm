@@ -112,6 +112,12 @@ public:
     size_type insert( std::initializer_list<T> const  keys ) { return impl_base::template insert<Erasure, Search>( this->bulk_insert_prepare( std::ranges::subrange( keys       ) ), unique ); }
     template <comparator_erasure Erasure = Komparator<Comparator>::erasure, forward_search Search = forward_search::automatic>
     size_type insert( std::ranges::range auto const & keys ) { return impl_base::template insert<Erasure, Search>( this->bulk_insert_prepare( std::ranges::subrange( keys       ) ), unique ); }
+    // Keys the caller knows to be distinct, or checks for itself afterwards
+    // (cf. insert_presorted_unique): a unique tree sorts them as insert() does
+    // but does not search them for keys equivalent to one another: such keys
+    // all land in it (one the tree already holds is skipped, as by insert()).
+    template <comparator_erasure Erasure = Komparator<Comparator>::erasure, forward_search Search = forward_search::automatic>
+    size_type insert_unique( std::ranges::range auto const & keys ) { return impl_base::template insert<Erasure, Search>( this->bulk_insert_prepare( std::ranges::subrange( keys ) ), unique, false ); }
 
     template <forward_search Search = forward_search::automatic>
     size_type insert_presorted       ( std::span<Key const> const presorted_input ) { return impl_base::template insert_presorted       <Search>( presorted_input, unique ); }
