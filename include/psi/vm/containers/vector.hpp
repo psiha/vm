@@ -27,6 +27,7 @@
 #pragma once
 
 #include <psi/vm/align.hpp>
+#include <psi/vm/checked_iterator.hpp>
 #include <psi/vm/allocators/allocator_base.hpp> // detail::length_error
 #include <psi/vm/containers/abi.hpp>
 #include <psi/vm/containers/complete.hpp>
@@ -73,16 +74,8 @@ namespace detail
     {
         // Default path: pass_in_reg (works for complete T).
         using param_const_ref = pass_in_reg<value_type>;
-#if defined( _LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR )
-        using       iterator         = std::__bounded_iter<value_type *>;
-        using const_iterator         = std::basic_const_iterator<iterator>;
-#elif defined( _ITERATOR_DEBUG_LEVEL ) && _ITERATOR_DEBUG_LEVEL
-        using       iterator         = std::_Span_iterator<value_type>;
-        using const_iterator         = std::basic_const_iterator<iterator>;
-#else
-        using       iterator         = value_type *;
-        using const_iterator         = value_type const *;
-#endif
+        using       iterator         = checked_iterator      <value_type>;
+        using const_iterator         = checked_const_iterator<value_type>;
     };
 
     template <typename value_type>
@@ -94,19 +87,6 @@ namespace detail
         using       iterator         = value_type *;
         using const_iterator         = value_type const *;
     };
-
-    template <typename T>
-    constexpr T * mutable_iter( T const * const ptr ) noexcept { return const_cast<T *>( ptr ); }
-
-    template <typename Base>
-    constexpr Base mutable_iter( std::basic_const_iterator<Base> const iter ) noexcept { return iter.base(); }
-#if defined( _LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR )
-    template <typename T>
-    auto mutable_iter( std::__bounded_iter<T const *> const iter ) noexcept { return reinterpret_cast<std::__bounded_iter<T *> const &>( iter ); }
-#elif defined( _ITERATOR_DEBUG_LEVEL ) && _ITERATOR_DEBUG_LEVEL
-    template <typename T>
-    auto mutable_iter( std::_Span_iterator<T const> const iter ) noexcept { return reinterpret_cast<std::_Span_iterator<T> const &>( iter ); }
-#endif
 
     struct init_policy_tag{};
 
@@ -341,16 +321,8 @@ private:
     {
         if constexpr ( support_incomplete_types )
             return ptr;
-#   if defined( _LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR )
-        else if constexpr ( true )
-            return std::__make_bounded_iter( ptr, begin_ptr(), end_ptr() );
-#   elif defined( _ITERATOR_DEBUG_LEVEL ) && _ITERATOR_DEBUG_LEVEL
-        else if constexpr ( true )
-            return std::_Span_iterator{ ptr, begin_ptr(), end_ptr() };
-#   else
         else
-            return ptr;
-#   endif
+            return detail::make_checked_iterator( ptr, begin_ptr(), end_ptr() );
     }
     constexpr iterator make_iterator( size_type const offset ) noexcept
     {
