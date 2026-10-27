@@ -86,6 +86,18 @@ TEST( attributed_span, is_two_registers_and_converts_to_and_from_std_span )
     EXPECT_FALSE( view.may_destroy() );
 }
 
+TEST( attributed_span, is_a_borrowed_view )
+{
+    static_assert( std::ranges::view<attributed_span<std::uint32_t>> );
+    static_assert( std::ranges::borrowed_range<attributed_span<std::uint32_t>> );
+    static_assert( std::ranges::contiguous_range<attributed_span<std::uint32_t>> );
+    static_assert( std::ranges::sized_range<attributed_span<std::uint32_t const>> );
+
+    std::vector<std::uint32_t> values{ 3, 1, 2 };
+    auto const found{ std::ranges::find( attributed_span{ values }, 1u ) };
+    EXPECT_EQ( *found, 1u );
+}
+
 TEST( attributed_span, a_const_view_cannot_be_permuted_or_destroyed )
 {
     std::vector<std::uint32_t> values{ 1, 2, 3 };

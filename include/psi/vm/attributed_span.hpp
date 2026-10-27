@@ -349,3 +349,10 @@ sorted_range( Range &&, Comparator ) -> sorted_range<Range, false, Comparator>;
 //------------------------------------------------------------------------------
 } // namespace psi::vm
 //------------------------------------------------------------------------------
+
+// Like std::span: a view (cheap to copy) that does not own its elements, so an
+// iterator into a temporary one stays valid.
+template <typename T, typename Comparator>
+inline constexpr bool std::ranges::enable_borrowed_range<psi::vm::attributed_span<T, Comparator>>{ true };
+template <typename T, typename Comparator>
+inline constexpr bool std::ranges::enable_view<psi::vm::attributed_span<T, Comparator>>{ true };
