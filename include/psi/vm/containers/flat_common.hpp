@@ -108,6 +108,13 @@ namespace detail {
     }
 
     [[nodiscard, gnu::sysv_abi, gnu::pure]] constexpr
+    auto upper_bound_iter_in( auto const first, auto const last, Reg auto const comparator, Reg auto const key ) noexcept {
+        decltype( auto ) comp { unwrap  ( comparator ) };
+        decltype( auto ) value{ prefetch( comp, key ) };
+        return binary_upper_bound( first, last, value, make_trivially_copyable_predicate( comp ) );
+    }
+
+    [[nodiscard, gnu::sysv_abi, gnu::pure]] constexpr
     auto equal_range_iter( auto const & keys, Reg auto const comparator, Reg auto const key ) noexcept {
         decltype( auto ) comp { unwrap  ( comparator ) };
         decltype( auto ) value{ prefetch( comp, key ) };
@@ -281,7 +288,22 @@ namespace detail {
             unique_truncate( keys, komp.comp() );
     }
 
+    // unique_truncate_tail -- dedup only the sorted tail [oldSize, size()), which
+    // is already known to sort after the (unique) prefix
+    template <typename KC, typename Comp>
+    constexpr void unique_truncate_tail( KC & keys, typename KC::size_type const oldSize, Comp const & comp ) noexcept {
+        auto const tail  { std::ranges::subrange( keys.begin() + static_cast<std::ptrdiff_t>( oldSize ), keys.end() ) };
+        auto const newEnd{ std::ranges::unique( tail, key_equiv( comp ) ).begin() };
+        truncate_to( keys, static_cast<typename KC::size_type>( newEnd - keys.begin() ) );
+    }
+
     // sort_merge_storage -- sort appended tail, merge with sorted prefix, conditional dedup
+    //
+    // One call costs the tail plus the part of the prefix the tail interleaves
+    // with, not the whole prefix: the merge (and the dedup against the prefix)
+    // starts at the position of the tail's first element, found by binary
+    // search, and a tail that sorts entirely after the prefix is left where it
+    // is. A run of small inserts into a large set is therefore not quadratic.
     template <bool Unique, bool WasSorted, comparator_erasure Erasure, typename KC, typename Komp>
     constexpr void sort_merge_storage( KC & keys, Komp const & komp, typename KC::size_type const oldSize ) {
         using key_sz_t = typename KC::size_type;
@@ -293,21 +315,36 @@ namespace detail {
         if constexpr ( !WasSorted )
             komp.template sort<Erasure>( appendStart, keys.end() );
 
-        if constexpr ( Unique && use_set_difference_dedup ) {
-            // Filter tail against prefix: removes (a) elements already in prefix,
-            // (b) adjacent duplicates within tail. Result: tail is unique and
-            // disjoint from prefix, so no final unique pass needed after merge.
-            if ( oldSize > 0 ) {
-                auto const newTailEnd{ inplace_set_unique_difference( appendStart, keys.end(), keys.begin(), appendStart, enreg( comp ) ) };
-                truncate_to( keys, static_cast<key_sz_t>( newTailEnd - keys.begin() ) );
-                if ( static_cast<key_sz_t>( keys.size() ) > oldSize )
-                    vm::inplace_merge<Erasure>( keys, oldSize, comp );
-            } else {
+        if ( oldSize == 0 ) {
+            if constexpr ( Unique )
                 unique_truncate( keys, comp );
-            }
+            return;
+        }
+
+        auto const & tailFront  { *appendStart };
+        auto const & prefixBack { *( appendStart - 1 ) };
+        // Non-unique: elements equivalent to the prefix's last stay after it.
+        bool const tailFollowsPrefix{ Unique ? comp( prefixBack, tailFront ) : !comp( tailFront, prefixBack ) };
+        if ( tailFollowsPrefix ) {
+            if constexpr ( Unique )
+                unique_truncate_tail( keys, oldSize, comp );
+            return;
+        }
+
+        if constexpr ( Unique && use_set_difference_dedup ) {
+            // Filter tail against the prefix part it interleaves with: removes
+            // (a) elements already in the prefix, (b) adjacent duplicates within
+            // the tail. Result: tail is unique and disjoint from prefix, so no
+            // final unique pass needed after merge.
+            auto const mergeStart{ lower_bound_iter_in( keys.begin(), appendStart, enreg( comp ), enreg( tailFront ) ) };
+            auto const mergeStartIdx{ static_cast<key_sz_t>( mergeStart - keys.begin() ) };
+            auto const newTailEnd{ inplace_set_unique_difference( appendStart, keys.end(), mergeStart, appendStart, enreg( comp ) ) };
+            truncate_to( keys, static_cast<key_sz_t>( newTailEnd - keys.begin() ) );
+            if ( static_cast<key_sz_t>( keys.size() ) > oldSize )
+                vm::inplace_merge<Erasure>( keys, mergeStartIdx, oldSize, comp );
         } else {
-            if ( oldSize > 0 )
-                vm::inplace_merge<Erasure>( keys, oldSize, comp );
+            auto const mergeStart{ upper_bound_iter_in( keys.begin(), appendStart, enreg( comp ), enreg( tailFront ) ) };
+            vm::inplace_merge<Erasure>( keys, static_cast<key_sz_t>( mergeStart - keys.begin() ), oldSize, comp );
             if constexpr ( Unique )
                 unique_truncate( keys, comp );
         }
@@ -332,6 +369,22 @@ namespace detail {
             c.append_range( std::forward<R>( rg ) );
         else
             c.insert( c.end(), std::ranges::begin( rg ), std::ranges::end( rg ) );
+    }
+
+    // storage_append_range_amortized -- the same, but an append onto a non-empty container grows
+    // through the container's own (geometric) growth policy where it has one, as the standard
+    // implementations do for a range insert into a vector; the first fill of an empty container
+    // stays exact-fit. For appends repeated on one container whose final size cannot be reserved
+    // up front (exact-fit growth would reallocate and copy on every call).
+    template <typename KC, typename R>
+    constexpr void storage_append_range_amortized( KC & c, R && rg ) {
+        if constexpr ( requires { c.append_range_amortized( std::forward<R>( rg ) ); } ) {
+            if ( keys_of( c ).size() != 0 ) {
+                c.append_range_amortized( std::forward<R>( rg ) );
+                return;
+            }
+        }
+        storage_append_range( c, std::forward<R>( rg ) );
     }
 
     // storage_move_append -- move all elements from source into dest
@@ -897,7 +950,7 @@ protected:
     template <bool WasSorted, comparator_erasure Erasure = comparator_erasure_of<Compare>, typename InputIt, typename Sentinel = InputIt>
     constexpr void bulk_insert( this auto && self, InputIt const first, Sentinel const last ) {
         auto const oldSize{ self.size() };
-        detail::storage_append_range( self.storage_, std::ranges::subrange( first, last ) );
+        detail::storage_append_range_amortized( self.storage_, std::ranges::subrange( first, last ) );
         try {
             self.template init_sort_merge<WasSorted, Erasure>( oldSize );
         } catch ( ... ) {

@@ -16,7 +16,9 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <array>
 #include <deque>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -482,6 +484,88 @@ TYPED_TEST( flat_set_typed, insert_range_sorted )
     EXPECT_EQ( s.size(), 5u );
 }
 
+// insert_range merges the appended tail with the part of the set it interleaves
+// with: the cases below pin each way the tail can sit relative to the set.
+template <typename Set>
+void expect_keys( Set const & s, std::vector<int> const & expected )
+{
+    EXPECT_TRUE( std::ranges::equal( s, expected ) );
+}
+
+TYPED_TEST( flat_set_typed, insert_range_tail_after_set )
+{
+    typename TypeParam::set_type s{ 1, 2, 3 };
+    s.insert_range( std::vector<int>{ 5, 7 } );
+    expect_keys( s, { 1, 2, 3, 5, 7 } );
+}
+
+TYPED_TEST( flat_set_typed, insert_range_tail_after_set_with_duplicates_inside_tail )
+{
+    typename TypeParam::set_type s{ 1, 2, 3 };
+    s.insert_range( std::vector<int>{ 7, 5, 7, 5, 9 } );
+    expect_keys( s, { 1, 2, 3, 5, 7, 9 } );
+}
+
+TYPED_TEST( flat_set_typed, insert_range_tail_starting_at_last_element )
+{
+    typename TypeParam::set_type s{ 1, 2, 3 };
+    s.insert_range( std::vector<int>{ 3, 4, 4 } );
+    expect_keys( s, { 1, 2, 3, 4 } );
+}
+
+TYPED_TEST( flat_set_typed, insert_range_tail_before_set )
+{
+    typename TypeParam::set_type s{ 10, 20, 30 };
+    s.insert_range( std::vector<int>{ 3, 1, 2 } );
+    expect_keys( s, { 1, 2, 3, 10, 20, 30 } );
+}
+
+TYPED_TEST( flat_set_typed, insert_range_tail_overlapping_set_with_duplicates )
+{
+    typename TypeParam::set_type s{ 10, 20, 30, 40, 50 };
+    s.insert_range( std::vector<int>{ 60, 25, 5, 25, 40, 20, 5 } );
+    expect_keys( s, { 5, 10, 20, 25, 30, 40, 50, 60 } );
+}
+
+TYPED_TEST( flat_set_typed, insert_range_tail_entirely_duplicates )
+{
+    typename TypeParam::set_type s{ 10, 20, 30, 40 };
+    s.insert_range( std::vector<int>{ 40, 20, 30, 20 } );
+    expect_keys( s, { 10, 20, 30, 40 } );
+}
+
+TYPED_TEST( flat_set_typed, insert_range_tail_inside_gap )
+{
+    typename TypeParam::set_type s{ 10, 20, 30, 40 };
+    s.insert_range( std::vector<int>{ 22, 21 } );
+    expect_keys( s, { 10, 20, 21, 22, 30, 40 } );
+}
+
+TYPED_TEST( flat_set_typed, insert_range_into_empty_set_dedups )
+{
+    typename TypeParam::set_type s;
+    s.insert_range( std::vector<int>{ 3, 1, 3, 2, 1 } );
+    expect_keys( s, { 1, 2, 3 } );
+}
+
+TYPED_TEST( flat_set_typed, repeated_single_element_insert_range_matches_reference )
+{
+    typename TypeParam::set_type s;
+    std::set<int> reference;
+    std::uint32_t rng{ 12345 };
+    for ( int i{ 0 }; i < 3000; ++i )
+    {
+        rng = rng * 1664525u + 1013904223u;
+        // a mix of ascending keys (tail after the set) and random ones (tail inside it, duplicates)
+        int const key{ ( i % 3 == 0 ) ? 100000 + i : static_cast<int>( ( rng >> 8 ) % 1500 ) };
+        s.insert_range( std::array{ key } );
+        reference.insert( key );
+        if ( i % 251 == 0 )
+            ASSERT_TRUE( std::ranges::equal( s, reference ) ) << "after " << i << " inserts";
+    }
+    EXPECT_TRUE( std::ranges::equal( s, reference ) );
+}
+
 TYPED_TEST( flat_set_typed, keys_returns_sorted )
 {
     typename TypeParam::set_type s{ 5, 3, 1, 4, 2 };
@@ -545,6 +629,26 @@ TEST( flat_set, sequence_alias )
 TEST( flat_set, heap_vector_size_type )
 {
     static_assert( std::is_same_v<tr_vec_set::size_type, std::uint32_t> );
+}
+
+// A run of small insert_range calls grows the storage geometrically: the
+// number of reallocations is logarithmic in the final size, not linear.
+TEST( flat_set, repeated_small_insert_range_grows_storage_amortized )
+{
+    flat_set<int, std::less<int>, heap_vector<int, std::uint32_t>> s;
+    std::size_t reallocations{ 0 };
+    auto capacity{ s.capacity() };
+    for ( int i{ 0 }; i < 4096; ++i )
+    {
+        s.insert_range( std::array{ i } );
+        if ( s.capacity() != capacity )
+        {
+            ++reallocations;
+            capacity = s.capacity();
+        }
+    }
+    EXPECT_EQ( s.size(), 4096u );
+    EXPECT_LT( reallocations, 64u );
 }
 
 TEST( flat_set, heap_vector_reserve_capacity )
@@ -950,6 +1054,24 @@ TEST( flat_multiset, bulk_insert_keeps_duplicates )
     std::vector<int> more{ 2, 3, 3 };
     s.insert( more.begin(), more.end() );
     EXPECT_EQ( s.size(), 5u ); // 1, 2, 2, 3, 3
+}
+
+TEST( flat_multiset, bulk_insert_tail_relative_to_set )
+{
+    FMS after{ 1, 2, 3 };
+    std::vector<int> const equalToLast{ 3, 4, 3 };
+    after.insert( equalToLast.begin(), equalToLast.end() );
+    expect_keys( after, { 1, 2, 3, 3, 3, 4 } );
+
+    FMS overlapping{ 10, 20, 30 };
+    std::vector<int> const more{ 25, 5, 20, 35, 10 };
+    overlapping.insert( more.begin(), more.end() );
+    expect_keys( overlapping, { 5, 10, 10, 20, 20, 25, 30, 35 } );
+
+    FMS before{ 10, 20 };
+    std::vector<int> const lower{ 2, 1 };
+    before.insert( lower.begin(), lower.end() );
+    expect_keys( before, { 1, 2, 10, 20 } );
 }
 
 TEST( flat_multiset, comparison )

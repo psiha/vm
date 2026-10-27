@@ -257,6 +257,19 @@ struct paired_storage
         append_ranges( rg | std::views::keys, rg | std::views::values );
     }
 
+    // The same with the containers' amortized growth (see detail::storage_append_range_amortized).
+    template <std::ranges::input_range R>
+    constexpr void append_range_amortized( R && rg ) {
+        auto const oldSize{ keys.size() };
+        detail::storage_append_range_amortized( keys, rg | std::views::keys );
+        try {
+            detail::storage_append_range_amortized( values, rg | std::views::values );
+        } catch ( ... ) {
+            truncate_to( oldSize );
+            throw;
+        }
+    }
+
     //--------------------------------------------------------------------------
     // Reserve / Shrink
     //--------------------------------------------------------------------------
@@ -389,15 +402,28 @@ constexpr void sort_merge_storage( paired_storage<KC,MC> & storage, Comp const &
     if constexpr ( !WasSorted )
         std::ranges::sort( appendStart, zv.end(), comp, key_proj() );
 
-    if ( oldSize > 0 )
-#   ifdef __GLIBCXX__
-        proxy_inplace_merge( zv.begin(), appendStart, zv.end(), comp, key_proj() );
-#   else
-        std::ranges::inplace_merge( zv.begin(), appendStart, zv.end(), comp, key_proj() );
-#   endif
+    // Only the part of the prefix the tail interleaves with is merged (and
+    // deduplicated): everything in front of the tail's first key stays put, and a
+    // tail sorting after the prefix needs no merge (see the set overload).
+    auto mergeStart{ appendStart };
+    if ( oldSize > 0 ) {
+        auto const & tailFront { storage.keys[ oldSize     ] };
+        auto const & prefixBack{ storage.keys[ oldSize - 1 ] };
+        if constexpr ( Unique )
+            mergeStart = comp( prefixBack, tailFront ) ? appendStart : std::ranges::lower_bound( zv.begin(), appendStart, tailFront, comp, key_proj() );
+        else
+            mergeStart = comp( tailFront, prefixBack ) ? std::ranges::upper_bound( zv.begin(), appendStart, tailFront, comp, key_proj() ) : appendStart;
+        if ( mergeStart != appendStart )
+#       ifdef __GLIBCXX__
+            proxy_inplace_merge( mergeStart, appendStart, zv.end(), comp, key_proj() );
+#       else
+            std::ranges::inplace_merge( mergeStart, appendStart, zv.end(), comp, key_proj() );
+#       endif
+    }
 
     if constexpr ( Unique ) {
-        auto const newEnd{ std::ranges::unique( zv, key_equiv( comp ), key_proj() ).begin() };
+        // The prefix is unique: duplicates can only be within the merged range or the tail.
+        auto const newEnd{ std::ranges::unique( mergeStart, zv.end(), key_equiv( comp ), key_proj() ).begin() };
         storage.truncate_to( static_cast<typename paired_storage<KC,MC>::size_type>( newEnd - zv.begin() ) );
     }
 }
