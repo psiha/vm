@@ -208,14 +208,14 @@ public:
     constexpr attributed_span( attributed_span<U, OtherComparator> const other ) noexcept
         : attributed_span( other.data(), other.size(), span_facts{ .mutability = other.facts().mutability }, unchecked ) {}
 
-    [[ nodiscard ]] constexpr operator std::span<T>() const noexcept { return { data_, size_ }; }
+    [[ nodiscard, gnu::pure ]] constexpr operator std::span<T>() const noexcept { return { data_, size_ }; }
 
-    [[ nodiscard ]] constexpr span_facts facts() const noexcept { return facts_; }
+    [[ nodiscard, gnu::pure ]] constexpr span_facts facts() const noexcept { return facts_; }
 
-    [[ nodiscard ]] constexpr bool is_sorted  () const noexcept { return facts_.sorted; }
-    [[ nodiscard ]] constexpr bool is_unique  () const noexcept { return facts_.unique; }
-    [[ nodiscard ]] constexpr bool may_permute() const noexcept { return facts_.mutability >= span_mutability::permutable ; }
-    [[ nodiscard ]] constexpr bool may_destroy() const noexcept { return facts_.mutability >= span_mutability::destroyable; }
+    [[ nodiscard, gnu::pure ]] constexpr bool is_sorted  () const noexcept { return facts_.sorted; }
+    [[ nodiscard, gnu::pure ]] constexpr bool is_unique  () const noexcept { return facts_.unique; }
+    [[ nodiscard, gnu::pure ]] constexpr bool may_permute() const noexcept { return facts_.mutability >= span_mutability::permutable ; }
+    [[ nodiscard, gnu::pure ]] constexpr bool may_destroy() const noexcept { return facts_.mutability >= span_mutability::destroyable; }
 
     /// The elements as a span that may be reordered / left with any value: the
     /// producer stated it does not depend on their order / their values. The
@@ -224,45 +224,45 @@ public:
     /// it cannot assume anything; a consumer that reorders or consumes the
     /// elements takes them from here, which checks (in debug builds) and
     /// assumes (in release builds) that the level allows it.
-    [[ nodiscard ]] constexpr std::span<T> permutable_span() const noexcept requires( !std::is_const_v<T> )
+    [[ nodiscard, gnu::pure ]] constexpr std::span<T> permutable_span() const noexcept requires( !std::is_const_v<T> )
     {
         BOOST_ASSUME( facts_.mutability >= span_mutability::permutable );
         return { data_, size_ };
     }
-    [[ nodiscard ]] constexpr std::span<T> destroyable_span() const noexcept requires( !std::is_const_v<T> )
+    [[ nodiscard, gnu::pure ]] constexpr std::span<T> destroyable_span() const noexcept requires( !std::is_const_v<T> )
     {
         BOOST_ASSUME( facts_.mutability >= span_mutability::destroyable );
         return { data_, size_ };
     }
 
     /// The same elements with only the facts that `limit` states as well kept.
-    [[ nodiscard ]] constexpr attributed_span restricted( span_facts const limit ) const noexcept
+    [[ nodiscard, gnu::pure ]] constexpr attributed_span restricted( span_facts const limit ) const noexcept
     {
         return { data_, size_, facts_ & limit, unchecked };
     }
 
-    [[ nodiscard ]] constexpr T *               data  () const noexcept { return data_; }
-    [[ nodiscard ]] constexpr size_type         size  () const noexcept { return size_; }
-    [[ nodiscard ]] constexpr bool              empty () const noexcept { return size_ == 0; }
-    [[ nodiscard ]] constexpr iterator          begin () const noexcept { return detail::make_checked_iterator( data_, data_, data_ + size_ ); }
-    [[ nodiscard ]] constexpr iterator          end   () const noexcept { return detail::make_checked_iterator( data_ + size_, data_, data_ + size_ ); }
-    [[ nodiscard ]] constexpr reverse_iterator  rbegin() const noexcept { return reverse_iterator{ end  () }; }
-    [[ nodiscard ]] constexpr reverse_iterator  rend  () const noexcept { return reverse_iterator{ begin() }; }
-    [[ nodiscard ]] constexpr T &               front () const noexcept { BOOST_ASSERT( !empty() ); return data_[ 0 ]; }
-    [[ nodiscard ]] constexpr T &               back  () const noexcept { BOOST_ASSERT( !empty() ); return data_[ size_ - 1 ]; }
-    [[ nodiscard ]] constexpr T &               operator[]( size_type const index ) const noexcept { BOOST_ASSERT( index < size_ ); return data_[ index ]; }
+    [[ nodiscard, gnu::pure ]] constexpr T *               data  () const noexcept { return data_; }
+    [[ nodiscard, gnu::pure ]] constexpr size_type         size  () const noexcept { return size_; }
+    [[ nodiscard, gnu::pure ]] constexpr bool              empty () const noexcept { return size_ == 0; }
+    [[ nodiscard, gnu::pure ]] constexpr iterator          begin () const noexcept { return detail::make_checked_iterator( data_, data_, data_ + size_ ); }
+    [[ nodiscard, gnu::pure ]] constexpr iterator          end   () const noexcept { return detail::make_checked_iterator( data_ + size_, data_, data_ + size_ ); }
+    [[ nodiscard, gnu::pure ]] constexpr reverse_iterator  rbegin() const noexcept { return reverse_iterator{ end  () }; }
+    [[ nodiscard, gnu::pure ]] constexpr reverse_iterator  rend  () const noexcept { return reverse_iterator{ begin() }; }
+    [[ nodiscard, gnu::pure ]] constexpr T &               front () const noexcept { BOOST_ASSERT( !empty() ); return data_[ 0 ]; }
+    [[ nodiscard, gnu::pure ]] constexpr T &               back  () const noexcept { BOOST_ASSERT( !empty() ); return data_[ size_ - 1 ]; }
+    [[ nodiscard, gnu::pure ]] constexpr T &               operator[]( size_type const index ) const noexcept { BOOST_ASSERT( index < size_ ); return data_[ index ]; }
 
     /// Any run of the elements keeps every fact: a run of sorted elements is
     /// sorted, of unique ones unique, and what may be done with all of the
     /// elements may be done with some.
-    [[ nodiscard ]] constexpr attributed_span first( size_type const count ) const noexcept { BOOST_ASSERT( count <= size_ ); return { data_, count, facts_, unchecked }; }
-    [[ nodiscard ]] constexpr attributed_span last ( size_type const count ) const noexcept { BOOST_ASSERT( count <= size_ ); return { data_ + ( size_ - count ), count, facts_, unchecked }; }
-    [[ nodiscard ]] constexpr attributed_span subspan( size_type const offset, size_type const count ) const noexcept
+    [[ nodiscard, gnu::pure ]] constexpr attributed_span first( size_type const count ) const noexcept { BOOST_ASSERT( count <= size_ ); return { data_, count, facts_, unchecked }; }
+    [[ nodiscard, gnu::pure ]] constexpr attributed_span last ( size_type const count ) const noexcept { BOOST_ASSERT( count <= size_ ); return { data_ + ( size_ - count ), count, facts_, unchecked }; }
+    [[ nodiscard, gnu::pure ]] constexpr attributed_span subspan( size_type const offset, size_type const count ) const noexcept
     {
         BOOST_ASSERT( offset <= size_ && count <= size_ - offset );
         return { data_ + offset, count, facts_, unchecked };
     }
-    [[ nodiscard ]] constexpr attributed_span subspan( size_type const offset ) const noexcept { return subspan( offset, size_ - offset ); }
+    [[ nodiscard, gnu::pure ]] constexpr attributed_span subspan( size_type const offset ) const noexcept { return subspan( offset, size_ - offset ); }
 
 private:
     struct unchecked_t {};
@@ -330,12 +330,12 @@ public:
     requires( self_verifying_comparator<Comparator> )
         : sorted_range( std::forward<Range>( range ), Comparator{} ) {}
 
-    [[ nodiscard ]] constexpr auto begin() const { return std::ranges::begin( range_ ); }
-    [[ nodiscard ]] constexpr auto end  () const { return std::ranges::end  ( range_ ); }
-    [[ nodiscard ]] constexpr auto size () const requires std::ranges::sized_range<Range const> { return std::ranges::size( range_ ); }
-    [[ nodiscard ]] constexpr bool empty() const { return std::ranges::empty( range_ ); }
+    [[ nodiscard, gnu::pure ]] constexpr auto begin() const { return std::ranges::begin( range_ ); }
+    [[ nodiscard, gnu::pure ]] constexpr auto end  () const { return std::ranges::end  ( range_ ); }
+    [[ nodiscard, gnu::pure ]] constexpr auto size () const requires std::ranges::sized_range<Range const> { return std::ranges::size( range_ ); }
+    [[ nodiscard, gnu::pure ]] constexpr bool empty() const { return std::ranges::empty( range_ ); }
 
-    [[ nodiscard ]] constexpr Range const & base() const noexcept { return range_; }
+    [[ nodiscard, gnu::pure ]] constexpr Range const & base() const noexcept { return range_; }
 
 private:
     Range range_;
