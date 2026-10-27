@@ -8,6 +8,9 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
+#include <map>
+#include <algorithm>
 #include <deque>
 #include <string>
 #include <string_view>
@@ -573,6 +576,50 @@ TYPED_TEST( flat_map_typed, insert_range_with_duplicates )
     EXPECT_EQ( m.at( 7 ), "g" );
 }
 
+// insert_range merges the appended tail with the part of the map it interleaves
+// with: the cases below pin each way the tail can sit relative to the map.
+template <typename Map>
+std::vector<int> keys_of_map( Map const & m )
+{
+    std::vector<int> keys;
+    for ( auto const & kv : m )
+        keys.push_back( kv.first );
+    return keys;
+}
+
+TYPED_TEST( flat_map_typed, insert_range_tail_relative_to_map )
+{
+    using map_t = typename TypeParam::map_type;
+    using KT    = typename TypeParam::key_type;
+    using MT    = typename TypeParam::mapped_type;
+    using src_t = std::vector<std::pair<KT, MT>>;
+
+    map_t after{ { 1, "a" }, { 2, "b" }, { 3, "c" } };
+    after.insert_range( src_t{ { 5, "e" }, { 4, "d" } } );
+    EXPECT_EQ( keys_of_map( after ), ( std::vector<int>{ 1, 2, 3, 4, 5 } ) );
+    EXPECT_EQ( after.at( 4 ), "d" );
+    EXPECT_EQ( after.at( 5 ), "e" );
+
+    map_t lastEqual{ { 1, "a" }, { 2, "b" }, { 3, "c" } };
+    lastEqual.insert_range( src_t{ { 3, "X" }, { 4, "d" } } );
+    EXPECT_EQ( keys_of_map( lastEqual ), ( std::vector<int>{ 1, 2, 3, 4 } ) );
+    EXPECT_EQ( lastEqual.at( 3 ), "c" ); // existing value wins
+
+    map_t before{ { 10, "j" }, { 20, "t" } };
+    before.insert_range( src_t{ { 2, "b" }, { 1, "a" } } );
+    EXPECT_EQ( keys_of_map( before ), ( std::vector<int>{ 1, 2, 10, 20 } ) );
+    EXPECT_EQ( before.at( 1  ), "a" );
+    EXPECT_EQ( before.at( 20 ), "t" );
+
+    map_t overlapping{ { 10, "j" }, { 20, "t" }, { 30, "x" }, { 40, "y" } };
+    overlapping.insert_range( src_t{ { 60, "z" }, { 25, "m" }, { 5, "e" }, { 40, "X" }, { 20, "T" } } );
+    EXPECT_EQ( keys_of_map( overlapping ), ( std::vector<int>{ 5, 10, 20, 25, 30, 40, 60 } ) );
+    EXPECT_EQ( overlapping.at( 20 ), "t" );
+    EXPECT_EQ( overlapping.at( 40 ), "y" );
+    EXPECT_EQ( overlapping.at( 25 ), "m" );
+    EXPECT_EQ( overlapping.at( 60 ), "z" );
+}
+
 TYPED_TEST( flat_map_typed, insert_range_into_empty )
 {
     using map_t = typename TypeParam::map_type;
@@ -888,6 +935,23 @@ TEST( flat_map, emplace_hint_sorted_input )
     for ( int i{ 0 }; i < 100; ++i ) {
         EXPECT_EQ( m.at( i ), i * 10 );
     }
+}
+
+TEST( flat_map, repeated_single_element_insert_range_matches_reference )
+{
+    FM m;
+    std::map<int, int> reference;
+    std::uint32_t rng{ 4321 };
+    for ( int i{ 0 }; i < 3000; ++i )
+    {
+        rng = rng * 1664525u + 1013904223u;
+        int const key{ ( i % 3 == 0 ) ? 100000 + i : static_cast<int>( ( rng >> 8 ) % 1500 ) };
+        m.insert_range( std::array{ std::pair{ key, i } } );
+        reference.emplace( key, i ); // an existing key keeps its value in both
+        if ( i % 251 == 0 )
+            ASSERT_TRUE( std::ranges::equal( m, reference ) ) << "after " << i << " inserts";
+    }
+    EXPECT_TRUE( std::ranges::equal( m, reference ) );
 }
 
 TEST( flat_map, large_insert_range )
