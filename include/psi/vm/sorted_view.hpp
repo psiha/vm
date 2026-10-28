@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <bit>
 #include <functional>
+#include <span>
 #include <iterator>
 #include <type_traits>
 //------------------------------------------------------------------------------

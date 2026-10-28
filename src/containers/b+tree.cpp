@@ -1,6 +1,7 @@
 #include <psi/vm/containers/b+tree.hpp>
 
 #include <cstring> // memcmp, memcpy
+#include <span>
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
