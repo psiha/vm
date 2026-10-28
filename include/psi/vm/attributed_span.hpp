@@ -135,6 +135,14 @@ inline constexpr bool is_attributed_span_v<attributed_span<T, Comparator>>{ true
 template <std::ranges::range Range, bool Unique = false, typename Comparator = std::less<>>
 class sorted_range;
 
+/// A sorted_range by the Comparator: what states its order to an
+/// attributed_span of that comparator (and so is not taken as a plain range by
+/// it, whatever its value category).
+template <typename, typename>
+inline constexpr bool is_sorted_range_by_v{ false };
+template <typename Range, bool Unique, typename Comparator>
+inline constexpr bool is_sorted_range_by_v<sorted_range<Range, Unique, Comparator>, Comparator>{ true };
+
 
 template <typename T, typename Comparator>
 class [[ clang::trivial_abi ]] attributed_span
@@ -173,15 +181,15 @@ public:
         : attributed_span( span.data(), checked_size( span.size() ), span_facts{}, unchecked ) {}
 
     template <typename Range>
-    requires( !is_attributed_span_v<std::remove_cvref_t<Range>> && !std::same_as<std::remove_cvref_t<Range>, std::span<T>> && std::is_constructible_v<std::span<T>, Range> )
+    requires( !is_attributed_span_v<std::remove_cvref_t<Range>> && !std::same_as<std::remove_cvref_t<Range>, std::span<T>> && !is_sorted_range_by_v<std::remove_cvref_t<Range>, Comparator> && std::is_constructible_v<std::span<T>, Range> )
     constexpr attributed_span( Range && range, span_facts const facts, Comparator const & comp ) noexcept
         : attributed_span( std::span<T>( std::forward<Range>( range ) ), facts, comp ) {}
     template <typename Range>
-    requires( !is_attributed_span_v<std::remove_cvref_t<Range>> && !std::same_as<std::remove_cvref_t<Range>, std::span<T>> && std::is_constructible_v<std::span<T>, Range> && self_verifying_comparator<Comparator> )
+    requires( !is_attributed_span_v<std::remove_cvref_t<Range>> && !std::same_as<std::remove_cvref_t<Range>, std::span<T>> && !is_sorted_range_by_v<std::remove_cvref_t<Range>, Comparator> && std::is_constructible_v<std::span<T>, Range> && self_verifying_comparator<Comparator> )
     constexpr attributed_span( Range && range, span_facts const facts = {} ) noexcept
         : attributed_span( std::span<T>( std::forward<Range>( range ) ), facts, Comparator{} ) {}
     template <typename Range>
-    requires( !is_attributed_span_v<std::remove_cvref_t<Range>> && !std::same_as<std::remove_cvref_t<Range>, std::span<T>> && std::is_constructible_v<std::span<T>, Range> && !self_verifying_comparator<Comparator> )
+    requires( !is_attributed_span_v<std::remove_cvref_t<Range>> && !std::same_as<std::remove_cvref_t<Range>, std::span<T>> && !is_sorted_range_by_v<std::remove_cvref_t<Range>, Comparator> && std::is_constructible_v<std::span<T>, Range> && !self_verifying_comparator<Comparator> )
     constexpr attributed_span( Range && range ) noexcept
         : attributed_span( std::span<T>( std::forward<Range>( range ) ) ) {}
 
@@ -335,7 +343,10 @@ public:
     [[ nodiscard, gnu::pure ]] constexpr auto size () const requires std::ranges::sized_range<Range const> { return std::ranges::size( range_ ); }
     [[ nodiscard, gnu::pure ]] constexpr bool empty() const { return std::ranges::empty( range_ ); }
 
-    [[ nodiscard, gnu::pure ]] constexpr Range const & base() const noexcept { return range_; }
+    [[ nodiscard, gnu::pure ]] constexpr Range const & base() const & noexcept { return range_; }
+    /// The range itself, moved out (for a consumer that goes on to reorder or
+    /// change it, which ends what the claim was about).
+    [[ nodiscard ]] constexpr Range base() && noexcept( std::is_nothrow_move_constructible_v<Range> ) { return std::forward<Range>( range_ ); }
 
 private:
     Range range_;
