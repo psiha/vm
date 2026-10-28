@@ -20,6 +20,7 @@
 #include <std_fix/const_iterator.hpp>
 
 #include <iterator>
+#include <span>
 //------------------------------------------------------------------------------
 namespace psi::vm::detail
 {
