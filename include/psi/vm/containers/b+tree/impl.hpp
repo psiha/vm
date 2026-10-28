@@ -1075,6 +1075,14 @@ private:
         return { const_cast<leaf_node *>( &containing_leaf ), find_pos{ pos, false } };
     }
 
+    // erase_sorted_exact helpers for non-unique trees (independent of the search policy)
+    [[ gnu::noinline ]]
+    insertion_point_t find_equal_in_run       ( insertion_point_t cursor, std::span<Key const> keys, size_t key_idx ) const noexcept;
+    PSI_COLD [[ gnu::noinline ]]
+    insertion_point_t find_equal_in_run_before( insertion_point_t cursor, Key const & key ) const noexcept;
+    [[ gnu::noinline ]]
+    insertion_point_t scan_run_for_equal      ( leaf_node * p_leaf, node_size_type offset, Key const & key, leaf_node const * stop_leaf, node_size_type stop_offset ) const noexcept;
+
     // bulk insert helper: merge a new, presorted leaf into an existing leaf
     auto merge
     (
@@ -1193,7 +1201,10 @@ bp_tree_impl<Key, Comparator>::replace_keys_inplace( std::span<Key const> const 
 //
 // When require_exact_equality is true, keys must match by operator== (not
 // just comparator equivalence). This is useful when keys are indirect indices
-// and comparison is done by looking up external values.
+// and comparison is done by looking up external values. In a non-unique tree
+// several different keys can then be equivalent, in any order relative to
+// their order in keys_to_remove: the entry == a key can be anywhere in the
+// run of entries equivalent to it, which can span several leaves.
 //
 // Preconditions:
 // - keys_to_remove is sorted by the tree's comparator ordering
@@ -1216,105 +1227,173 @@ bp_tree_impl<Key, Comparator>::erase_sorted_impl( std::span<Key const> const key
     size_type erased_count{ 0 };
     size_t    key_idx     { 0 };
 
-    // Helper: checks if the key at a given position is a valid match.
-    // For equivalence-only mode, any comparator-equivalent key suffices.
-    // For exact mode, also requires operator== identity.
-    auto const is_match{ [&]( leaf_node const & lf, node_size_type pos, size_t kidx )
-    {
-        if constexpr ( require_exact_equality )
-            return eq( lf.key( pos ), keys_to_remove[ kidx ] ) && lf.key( pos ) == keys_to_remove[ kidx ];
-        else
-            return eq( lf.key( pos ), keys_to_remove[ kidx ] );
-    } };
-
-    // Helper: scan keys_to_remove[key_idx..] using find_from until a match is found.
-    // Uses forward-only cursor walk (keys_to_remove is sorted).
-    auto const find_next_match{ [&]( leaf_node *& lf, node_size_type & off ) -> bool
-    {
-        while ( key_idx < keys_to_remove.size() )
-        {
-            auto [next_leaf, found_pos]{ find_from<Search>( *lf, off, keys_to_remove[ key_idx ], unique ) };
-            if ( found_pos.exact_find && ( !require_exact_equality || next_leaf->key( found_pos.pos ) == keys_to_remove[ key_idx ] ) )
-            {
-                lf  = next_leaf;
-                off = found_pos.pos;
-                return true;
-            }
-            lf  = next_leaf;
-            off = found_pos.pos;
-            ++key_idx;
-        }
-        return false;
-    } };
-
-    // Find first key's position with full tree traversal — use the returned
-    // location (exact or not) as the starting point for find_from on subsequent keys.
+    // The cursor: where the search for keys_to_remove[ key_idx ] landed - the
+    // first entry, at or after the previous position, that is not less than
+    // the key - and whether that entry is equivalent to the key. The first key
+    // is searched from the root.
     auto const first_location{ find_nodes_for( keys_to_remove[ 0 ], unique ) };
-    auto * p_leaf{ &first_location.leaf };
-    auto   offset{ first_location.leaf_offset.pos };
-    if ( !first_location.leaf_offset.exact_find || ( require_exact_equality && p_leaf->key( offset ) != keys_to_remove[ 0 ] ) )
-    {
-        // First key not found — try remaining keys using find_from from this position
-        ++key_idx;
-        if ( !find_next_match( p_leaf, offset ) )
-            return 0;
-    }
+    auto * p_leaf    { &first_location.leaf };
+    auto   offset    { first_location.leaf_offset.pos };
+    bool   equivalent( first_location.leaf_offset.exact_find );
 
-    while ( key_idx < keys_to_remove.size() )
+    for ( ;; )
     {
-        // Verify and handle match at current position
+        auto found{ equivalent };
         if constexpr ( require_exact_equality )
         {
-            if ( p_leaf->key( offset ) != keys_to_remove[ key_idx ] )
+            found =
+                found &&
+                ( p_leaf->key( offset ) == keys_to_remove[ key_idx ] );
+            // a unique tree holds at most one entry equivalent to the key
+            if
+            (
+                ( !found  ) &&
+                ( !unique )
+            )
             {
-                ++key_idx;
-                if ( !find_next_match( p_leaf, offset ) )
-                    break;
-                continue;
+                auto const exact{ find_equal_in_run( { p_leaf, find_pos{ offset, equivalent } }, keys_to_remove, key_idx ) };
+                p_leaf = exact.first;
+                offset = exact.second.pos;
+                found  = exact.second.exact_find;
             }
         }
-        BOOST_ASSERT( eq( p_leaf->key( offset ), keys_to_remove[ key_idx ] ) );
 
-        // Update separator key if erasing at position 0
-        if ( offset == 0 && p_leaf->num_vals > 1 ) [[ unlikely ]]
+        if ( found )
         {
-            this->update_separator( *p_leaf, p_leaf->key( 1 ) );
+            // erase the key and, while the next one is at the position that
+            // follows, it as well
+            do
+            {
+                BOOST_ASSERT( eq( p_leaf->key( offset ), keys_to_remove[ key_idx ] ) );
+                BOOST_ASSERT( !require_exact_equality || ( p_leaf->key( offset ) == keys_to_remove[ key_idx ] ) );
+
+                // Update separator key if erasing at position 0
+                if ( offset == 0 && p_leaf->num_vals > 1 ) [[ unlikely ]]
+                {
+                    this->update_separator( *p_leaf, p_leaf->key( 1 ) );
+                }
+
+                auto const next_pos{ this->erase( *p_leaf, offset ) };
+                ++erased_count;
+                if
+                (
+                    ( ++key_idx == keys_to_remove.size() ) ||
+                    ( this->empty()                      )
+                )
+                {
+                    this->note_bulk_free( free_nodes_before );
+                    return erased_count;
+                }
+
+                p_leaf = &this->leaf( next_pos.node );
+                offset = next_pos.value_offset;
+                // The last entry of the tree was erased: continue from the
+                // entry that is now the last. find_from requires a past-the-end
+                // start to be less than the key, which a next key equivalent to
+                // the last entry (in exact mode) is not.
+                if ( offset == p_leaf->num_vals ) [[ unlikely ]]
+                    offset = static_cast<node_size_type>( offset - 1 );
+            } while
+            (
+                eq( p_leaf->key( offset ), keys_to_remove[ key_idx ] ) &&
+                ( !require_exact_equality || ( p_leaf->key( offset ) == keys_to_remove[ key_idx ] ) )
+            );
         }
-
-        // Erase the key
-        auto next_pos{ this->erase( *p_leaf, offset ) };
-        ++erased_count;
-        ++key_idx;
-
-        if ( key_idx >= keys_to_remove.size() || this->empty() )
-            break;
-
-        // Find next key using find_from from current position
-        if ( !next_pos.node ) [[ unlikely ]]
-            break;
-
-        p_leaf = &this->leaf( next_pos.node );
-        offset = next_pos.value_offset;
-
-        // Check if next key is at the current position
-        if ( offset < p_leaf->num_vals && is_match( *p_leaf, offset, key_idx ) )
-            continue;
-
-        // Use find_from to locate the next key
-        auto [next_leaf, found_pos]{ find_from<Search>( *p_leaf, offset, keys_to_remove[ key_idx ], unique ) };
-        if ( !found_pos.exact_find || ( require_exact_equality && next_leaf->key( found_pos.pos ) != keys_to_remove[ key_idx ] ) ) [[ unlikely ]]
+        else
         {
-            if ( !find_next_match( p_leaf, offset ) )
+            if ( ++key_idx == keys_to_remove.size() )
                 break;
-            continue;
         }
 
-        p_leaf = next_leaf;
-        offset = found_pos.pos;
+        auto const [next_leaf, found_pos]{ find_from<Search>( *p_leaf, offset, keys_to_remove[ key_idx ], unique ) };
+        p_leaf     = next_leaf;
+        offset     = found_pos.pos;
+        equivalent = found_pos.exact_find;
     }
 
     this->note_bulk_free( free_nodes_before );
     return erased_count;
+}
+
+// Exact erase from a non-unique tree, where the entry at the cursor is not ==
+// keys[ key_idx ]: looks for the entry that is in the run of entries
+// equivalent to the key. The run continues after the cursor, and only the
+// search for an earlier key, equivalent to this one, can have left the cursor
+// past the start of the run.
+template <typename Key, typename Comparator>
+bp_tree_impl<Key, Comparator>::insertion_point_t
+bp_tree_impl<Key, Comparator>::find_equal_in_run( insertion_point_t const cursor, std::span<Key const> const keys, size_t const key_idx ) const noexcept
+{
+    auto const & key{ keys[ key_idx ] };
+    auto const [p_leaf, pos]{ cursor };
+    if ( pos.exact_find )
+    {
+        auto const after_cursor{ scan_run_for_equal( p_leaf, static_cast<node_size_type>( pos.pos + 1 ), key, nullptr, 0 ) };
+        if ( after_cursor.second.exact_find )
+            return after_cursor;
+    }
+    if
+    (
+        ( key_idx == 0                     ) ||
+        ( !eq( keys[ key_idx - 1 ], key ) )
+    )
+        return { p_leaf, find_pos{ pos.pos, false } };
+    return find_equal_in_run_before( cursor, key );
+}
+
+// The rare part of find_equal_in_run: searches the run from its start up to
+// the cursor.
+template <typename Key, typename Comparator>
+bp_tree_impl<Key, Comparator>::insertion_point_t
+bp_tree_impl<Key, Comparator>::find_equal_in_run_before( insertion_point_t const cursor, Key const & key ) const noexcept
+{
+    auto const [p_leaf, pos]{ cursor };
+    insertion_point_t const not_found{ p_leaf, find_pos{ pos.pos, false } };
+    auto const run_start{ mutable_this().find_nodes_for( key, false ) };
+    if ( !run_start.leaf_offset.exact_find )
+        return not_found;
+    // without an equivalent entry at the cursor the run ends before it
+    auto const stop_leaf{ pos.exact_find ? p_leaf : nullptr };
+    auto const found{ scan_run_for_equal( &run_start.leaf, run_start.leaf_offset.pos, key, stop_leaf, pos.pos ) };
+    if ( !found.second.exact_find )
+        return not_found;
+    return found;
+}
+
+// Walks the run of entries equivalent to key forward from (p_leaf, offset),
+// across leaves, up to the end of the run or to (stop_leaf, stop_offset), for
+// the entry == key. The exact_find of the result tells whether it was found.
+template <typename Key, typename Comparator>
+bp_tree_impl<Key, Comparator>::insertion_point_t
+bp_tree_impl<Key, Comparator>::scan_run_for_equal
+(
+    leaf_node * p_leaf, node_size_type offset, Key const & key,
+    leaf_node const * const stop_leaf, node_size_type const stop_offset
+) const noexcept
+{
+    for ( ;; )
+    {
+        if
+        (
+            ( p_leaf == stop_leaf   ) &&
+            ( offset == stop_offset )
+        )
+            return { p_leaf, find_pos{ offset, false } };
+        if ( offset == p_leaf->num_vals )
+        {
+            if ( !p_leaf->right )
+                return { p_leaf, find_pos{ offset, false } };
+            p_leaf = &mutable_this().leaf( p_leaf->right );
+            offset = 0;
+            continue;
+        }
+        auto const & entry{ p_leaf->key( offset ) };
+        if ( !eq( entry, key ) )
+            return { p_leaf, find_pos{ offset, false } };
+        if ( entry == key )
+            return { p_leaf, find_pos{ offset, true } };
+        ++offset;
+    }
 }
 
 

@@ -2863,6 +2863,84 @@ TEST( bp_tree, erase_sorted_exact_mixed_present_absent )
     indirect_values.clear();
 }
 
+// erase_sorted_exact in a non-unique tree of ids ordered by an external value:
+// different ids with the same value are equivalent, and the entry == an id can
+// be anywhere in the run of entries with its value, which spans several leaves
+// for the longer runs. The ids to erase are ordered by value but, among equal
+// values, in an order other than the tree's (also with the last run of the
+// tree erased back to front), and some of them are not in the tree: every id
+// that is in it is erased, and nothing else.
+TEST( bp_tree, erase_sorted_exact_equivalent_keys_in_any_order )
+{
+    using tree_type = bp_tree<unsigned, false, indirect_comparator>;
+    auto constexpr leaf_size{ static_cast<unsigned>( tree_type::leaf_node::max_values ) };
+    std::mt19937 rng{ 42 };
+    for_each_forward_search( [&]( auto const policy, char const * const policy_name ) {
+        auto constexpr search{ decltype( policy )::value };
+        for ( auto const size : { leaf_size / 2, 3 * leaf_size, 8 * leaf_size } ) {
+            for ( auto const run : { 3U, leaf_size + leaf_size / 2 } ) {
+                for ( auto const shuffled : { false, true } ) {
+                    for ( auto const descending_ties : { false, true } ) {
+                        auto const context{ std::format( "{} size {} run {} shuffled {} descending ties {}", policy_name, size, run, shuffled, descending_ties ) };
+                        // id i and its twin size + i (never inserted) have the value i / run
+                        indirect_values.resize( 2 * size );
+                        for ( auto i{ 0U }; i < size; ++i ) {
+                            indirect_values[ i ] = static_cast<int>( i / run );
+                            indirect_values[ size + i ] = indirect_values[ i ];
+                        }
+                        std::vector<unsigned> ids( size );
+                        std::iota( ids.begin(), ids.end(), 0U );
+                        if ( shuffled )
+                            std::ranges::shuffle( ids, rng );
+                        tree_type bpt;
+                        bpt.map_memory();
+                        for ( auto const id : ids )
+                            bpt.insert( id );
+                        ASSERT_EQ( bpt.size(), size ) << context;
+
+                        auto const by_value{ [&]( unsigned const a, unsigned const b ) {
+                            if ( indirect_values[ a ] != indirect_values[ b ] )
+                                return indirect_values[ a ] < indirect_values[ b ];
+                            return descending_ties ? ( a > b ) : ( a < b );
+                        } };
+                        std::set<unsigned> model( ids.begin(), ids.end() );
+                        auto const erase_and_check{ [&]( std::vector<unsigned> keys, char const * const step ) {
+                            std::ranges::sort( keys, by_value );
+                            auto const present{ static_cast<std::size_t>( std::ranges::count_if( keys, [&]( unsigned const id ) { return model.contains( id ); } ) ) };
+                            EXPECT_EQ( bpt.template erase_sorted_exact<search>( keys ), present ) << context << ", " << step;
+                            for ( auto const id : keys )
+                                model.erase( id );
+                            EXPECT_EQ( bpt.size(), model.size() ) << context << ", " << step;
+                            std::vector<unsigned> contents( bpt.begin(), bpt.end() );
+                            std::ranges::sort( contents );
+                            EXPECT_TRUE( std::ranges::equal( contents, model ) ) << context << ", " << step;
+                            verify_invariants( bpt, context );
+                        } };
+
+                        // every third id, and the (absent) twins of every fifth
+                        std::vector<unsigned> subset;
+                        for ( auto i{ 0U }; i < size; ++i ) {
+                            if ( i % 3 == 0 )
+                                subset.push_back( i );
+                            if ( i % 5 == 0 )
+                                subset.push_back( size + i );
+                        }
+                        erase_and_check( subset, "subset" );
+
+                        // the rest, with every twin
+                        std::vector<unsigned> rest( model.begin(), model.end() );
+                        for ( auto i{ 0U }; i < size; ++i )
+                            rest.push_back( size + i );
+                        erase_and_check( rest, "rest" );
+                        EXPECT_TRUE( bpt.empty() ) << context;
+                    }
+                }
+            }
+        }
+    } );
+    indirect_values.clear();
+}
+
 // Iterator-range erase, for ranges starting at begin(), ending at end() and in
 // between. The ranges are expressed in leaves (read off the tree itself) so
 // that they cover the same shapes - part of a leaf, exactly one leaf, several
