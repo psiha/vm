@@ -50,6 +50,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstring> // memcpy
+#include <span>
 #include <stdexcept>
 //------------------------------------------------------------------------------
 namespace psi::vm
