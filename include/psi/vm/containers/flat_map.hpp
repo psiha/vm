@@ -573,8 +573,8 @@ public:
     //--------------------------------------------------------------------------
     // Iterators (cbegin/cend, rbegin/rend, crbegin/crend inherited from flat_impl)
     //--------------------------------------------------------------------------
-    constexpr auto begin( this auto && self ) noexcept { return self.storage_.begin(); }
-    constexpr auto end  ( this auto && self ) noexcept { return self.storage_.end  (); }
+    constexpr auto begin( this auto && self PSI_LIFETIMEBOUND ) noexcept { return self.storage_.begin(); }
+    constexpr auto end  ( this auto && self PSI_LIFETIMEBOUND ) noexcept { return self.storage_.end  (); }
 
     //--------------------------------------------------------------------------
     // Capacity (empty, size, reserve, shrink_to_fit -- inherited from flat_impl)
@@ -611,8 +611,8 @@ public:
     //--------------------------------------------------------------------------
     [[nodiscard]] constexpr value_compare value_comp() const noexcept { return value_compare{ this->key_comp() }; }
 
-    [[nodiscard]] constexpr mapped_container_type const & values() const noexcept { return this->storage_.values; }
-    [[nodiscard]] constexpr std::span<mapped_type>        values()       noexcept { return this->storage_.values; }
+    [[nodiscard]] constexpr mapped_container_type const & values() const noexcept PSI_LIFETIMEBOUND { return this->storage_.values; }
+    [[nodiscard]] constexpr std::span<mapped_type>        values()       noexcept PSI_LIFETIMEBOUND { return this->storage_.values; }
 
     // erase_if: inherited from flat_impl (friend, found via ADL)
 
@@ -677,7 +677,7 @@ template
     typename KeyContainer    = heap_vector<Key>,
     typename MappedContainer = heap_vector<T>
 >
-class flat_map
+class [[ gsl::Owner ]] flat_map // gsl::Owner (of the keys and of the mapped values): see vector
     : public flat_map_impl<Key, T, Compare, KeyContainer, MappedContainer>
 {
     using base = flat_map_impl<Key, T, Compare, KeyContainer, MappedContainer>;
@@ -748,21 +748,21 @@ public:
     //--------------------------------------------------------------------------
     // Element access
     //--------------------------------------------------------------------------
-    constexpr mapped_type & operator[]( key_type const & key ) {
+    constexpr mapped_type & operator[]( key_type const & key ) PSI_LIFETIMEBOUND {
         return try_emplace( key ).first->second;
     }
 
-    constexpr mapped_type & operator[]( key_type && key ) {
+    constexpr mapped_type & operator[]( key_type && key ) PSI_LIFETIMEBOUND {
         return try_emplace( std::move( key ) ).first->second;
     }
 
     template <typename K> requires( transparent_comparator )
-    constexpr mapped_type & operator[]( K && key ) {
+    constexpr mapped_type & operator[]( K && key ) PSI_LIFETIMEBOUND {
         return try_emplace( std::forward<K>( key ) ).first->second;
     }
 
     template <LookupType<transparent_comparator, key_type> K = key_type>
-    constexpr auto & at( this auto && self, K const & key ) {
+    constexpr auto & at( this auto && self PSI_LIFETIMEBOUND, K const & key ) {
         auto const it{ self.find( key ) };
         if ( it == self.end() )
             detail::throw_out_of_range( "psi::vm::flat_map::at" );
@@ -895,7 +895,7 @@ template
     typename KeyContainer    = heap_vector<Key>,
     typename MappedContainer = heap_vector<T>
 >
-class flat_multimap
+class [[ gsl::Owner ]] flat_multimap
     : public flat_map_impl<Key, T, Compare, KeyContainer, MappedContainer>
 {
     using base = flat_map_impl<Key, T, Compare, KeyContainer, MappedContainer>;

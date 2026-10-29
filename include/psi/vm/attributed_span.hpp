@@ -50,6 +50,8 @@
 
 #include <psi/vm/checked_iterator.hpp>
 
+#include <psi/build/attributes.hpp>
+
 #include <boost/assert.hpp>
 #include <boost/config_ex.hpp> // BOOST_ASSUME
 
@@ -64,21 +66,6 @@
 #include <span>
 #include <type_traits>
 #include <utility>
-//------------------------------------------------------------------------------
-
-/// The result (or the constructed object) refers to the parameter (or, after
-/// the qualifiers of a member function, to the object): the compilers that
-/// know the attribute warn when it is bound to a temporary that dies first.
-#ifndef PSI_VM_LIFETIMEBOUND
-#   if __has_cpp_attribute( clang::lifetimebound )
-#       define PSI_VM_LIFETIMEBOUND [[ clang::lifetimebound ]]
-#   elif __has_cpp_attribute( msvc::lifetimebound )
-#       define PSI_VM_LIFETIMEBOUND [[ msvc::lifetimebound ]]
-#   else
-#       define PSI_VM_LIFETIMEBOUND
-#   endif
-#endif
-
 //------------------------------------------------------------------------------
 namespace psi::vm
 {
@@ -137,6 +124,17 @@ namespace detail
         }
 #   endif
     }
+
+    //! What sorted_range::filled() constructs: a container (held by value) of
+    //! contiguous elements, made by its sized constructor, that the filler
+    //! writes through a span.
+    template <typename Range, typename Filler>
+    concept fillable_container =
+        !std::is_reference_v<Range>                                               &&
+        std::ranges::contiguous_range<Range>                                      &&
+        std::ranges::sized_range<Range>                                           &&
+        std::constructible_from<Range, std::ranges::range_size_t<Range>>          &&
+        std::invocable<Filler, std::span<std::ranges::range_value_t<Range>>>;
 } // namespace detail
 
 template <typename T, typename Comparator = std::less<>>
@@ -179,12 +177,12 @@ public:
     constexpr attributed_span() noexcept = default;
 
     // With the comparator the claims are verified by it (debug builds only).
-    constexpr attributed_span( T * const first PSI_VM_LIFETIMEBOUND, size_type const size, span_facts const facts, Comparator const & comp ) noexcept
+    constexpr attributed_span( T * const first PSI_LIFETIMEBOUND, size_type const size, span_facts const facts, Comparator const & comp ) noexcept
         : attributed_span( first, size, facts, unchecked )
     {
         detail::verify_facts( first, first + size, facts_, comp );
     }
-    constexpr attributed_span( T * const first PSI_VM_LIFETIMEBOUND, size_type const size, span_facts const facts = {} ) noexcept
+    constexpr attributed_span( T * const first PSI_LIFETIMEBOUND, size_type const size, span_facts const facts = {} ) noexcept
     requires( self_verifying_comparator<Comparator> )
         : attributed_span( first, size, facts, Comparator{} ) {}
 
@@ -221,7 +219,7 @@ public:
         : attributed_span( std::span<T>( range.base() ).data(), checked_size( std::span<T>( range.base() ).size() ), span_facts{ .sorted = true, .unique = Unique }, unchecked ) {}
     template <typename Range, bool Unique>
     requires( std::is_constructible_v<std::span<T>, Range const &> && !std::ranges::borrowed_range<Range> )
-    constexpr attributed_span( sorted_range<Range, Unique, Comparator> const & range PSI_VM_LIFETIMEBOUND ) noexcept
+    constexpr attributed_span( sorted_range<Range, Unique, Comparator> const & range PSI_LIFETIMEBOUND ) noexcept
         : attributed_span( std::span<T>( range.base() ).data(), checked_size( std::span<T>( range.base() ).size() ), span_facts{ .sorted = true, .unique = Unique }, unchecked ) {}
 
     /// From a span of elements that convert (T to T const): the facts about
@@ -367,12 +365,63 @@ public:
     [[ nodiscard, gnu::pure ]] constexpr auto size () const requires std::ranges::sized_range<Range const> { return std::ranges::size( range_ ); }
     [[ nodiscard, gnu::pure ]] constexpr bool empty() const { return std::ranges::empty( range_ ); }
 
+    /// Makes the container (of `size` elements, by its sized constructor) in
+    /// place, hands the filler the span over its elements - their final place,
+    /// nothing is copied or moved after the filler returns - and then checks
+    /// the claim (debug builds), so that a container that is built to be
+    /// sorted need not be built first and wrapped (moved) after:
+    ///   return sorted_range<heap_vector<std::uint32_t>, true>::filled( n, [&]( std::span<std::uint32_t> const out ) { ... } );
+    /// The elements the filler gets are as the sized constructor leaves them:
+    /// value-initialized by a standard container, default-initialized (so
+    /// uninitialized, for a trivial element type) by a psi::vm vector. The
+    /// filler has to leave them as claimed (sorted, and unique with Unique,
+    /// under the comparator): a release build trusts it. A filler that throws
+    /// leaves no sorted_range behind (the container is destroyed with the
+    /// exception).
+    template <typename Filler>
+    requires( detail::fillable_container<Range, Filler> )
+    [[ nodiscard ]] static constexpr sorted_range filled( std::size_t const size, Filler && filler, Comparator const & comp ) noexcept( nothrow_fillable<Filler> )
+    {
+        return sorted_range( filling{}, size, std::forward<Filler>( filler ), comp );
+    }
+    template <typename Filler>
+    requires( detail::fillable_container<Range, Filler> && self_verifying_comparator<Comparator> )
+    [[ nodiscard ]] static constexpr sorted_range filled( std::size_t const size, Filler && filler ) noexcept( nothrow_fillable<Filler> )
+    {
+        return sorted_range( filling{}, size, std::forward<Filler>( filler ), Comparator{} );
+    }
+
     [[ nodiscard, gnu::pure ]] constexpr Range const & base() const & noexcept { return range_; }
     /// The range itself, moved out (for a consumer that goes on to reorder or
     /// change it, which ends what the claim was about).
     [[ nodiscard ]] constexpr Range base() && noexcept( std::is_nothrow_move_constructible_v<Range> ) { return std::forward<Range>( range_ ); }
 
 private:
+    template <typename Filler>
+    static constexpr bool nothrow_fillable
+    {
+        std::is_nothrow_constructible_v<Range, std::ranges::range_size_t<Range>> &&
+        std::is_nothrow_invocable_v<Filler, std::span<std::ranges::range_value_t<Range>>>
+    };
+
+    struct filling {};
+    template <typename Filler>
+    constexpr sorted_range( filling, std::size_t const size, Filler && filler, Comparator const & comp ) noexcept( nothrow_fillable<Filler> )
+        : range_( checked_range_size( size ) )
+    {
+        std::invoke( std::forward<Filler>( filler ), std::span<std::ranges::range_value_t<Range>>( std::ranges::data( range_ ), std::ranges::size( range_ ) ) );
+        detail::verify_facts( std::ranges::begin( range_ ), std::ranges::end( range_ ), span_facts{ .sorted = true, .unique = Unique }, comp );
+    }
+
+    // The size in the container's own size type (which it is to hold).
+    [[ nodiscard ]] static constexpr auto checked_range_size( std::size_t const size ) noexcept
+    {
+        using size_type = std::ranges::range_size_t<Range>;
+        if constexpr ( sizeof( size_type ) < sizeof( size ) )
+            BOOST_ASSERT_MSG( size <= std::numeric_limits<size_type>::max(), "more elements than the container can count" );
+        return static_cast<size_type>( size );
+    }
+
     Range range_;
 }; // class sorted_range
 

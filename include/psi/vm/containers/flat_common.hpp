@@ -27,6 +27,8 @@
 #include "heap_vector.hpp"
 #include "../inplace_merge.hpp" // vm::inplace_merge, PSI_VM_HAS_ADAPTIVE_MERGE
 
+#include <psi/build/attributes.hpp>
+
 #include <boost/assert.hpp>
 
 #include <algorithm>
@@ -463,14 +465,14 @@ public:
     //--------------------------------------------------------------------------
     // Derived iterators (require begin()/end() from derived class via deducing-this)
     //--------------------------------------------------------------------------
-    constexpr auto cbegin( this auto const & self ) noexcept { return self.begin(); }
-    constexpr auto cend  ( this auto const & self ) noexcept { return self.end();   }
+    constexpr auto cbegin( this auto const & self PSI_LIFETIMEBOUND ) noexcept { return self.begin(); }
+    constexpr auto cend  ( this auto const & self PSI_LIFETIMEBOUND ) noexcept { return self.end();   }
 
-    constexpr auto rbegin( this auto && self ) noexcept { return std::reverse_iterator{ self.end()   }; }
-    constexpr auto rend  ( this auto && self ) noexcept { return std::reverse_iterator{ self.begin() }; }
+    constexpr auto rbegin( this auto && self PSI_LIFETIMEBOUND ) noexcept { return std::reverse_iterator{ self.end()   }; }
+    constexpr auto rend  ( this auto && self PSI_LIFETIMEBOUND ) noexcept { return std::reverse_iterator{ self.begin() }; }
 
-    constexpr auto crbegin( this auto const & self ) noexcept { return std::reverse_iterator{ self.end()   }; }
-    constexpr auto crend  ( this auto const & self ) noexcept { return std::reverse_iterator{ self.begin() }; }
+    constexpr auto crbegin( this auto const & self PSI_LIFETIMEBOUND ) noexcept { return std::reverse_iterator{ self.end()   }; }
+    constexpr auto crend  ( this auto const & self PSI_LIFETIMEBOUND ) noexcept { return std::reverse_iterator{ self.begin() }; }
 
     //--------------------------------------------------------------------------
     // Capacity
@@ -674,7 +676,7 @@ public:
     // etc. are converted to the derived class's iterator via iter_from_key().
     //--------------------------------------------------------------------------
     template <LookupType<Komp::transparent_comparator, key_type> K = key_type>
-    constexpr auto find( this auto && self, K const & key ) noexcept {
+    constexpr auto find( this auto && self PSI_LIFETIMEBOUND, K const & key ) noexcept {
         auto const & keys  { keys_of( self.storage_ ) };
         auto const   key_it{ self.lower_bound_keys( enreg( key ) ) };
         if ( key_it != keys.end() && !self.comp()( key, *key_it ) )
@@ -698,7 +700,7 @@ public:
     }
 
     template <LookupType<Komp::transparent_comparator, key_type> K = key_type>
-    constexpr auto lower_bound( this auto && self, K const & key ) noexcept {
+    constexpr auto lower_bound( this auto && self PSI_LIFETIMEBOUND, K const & key ) noexcept {
         return self.iter_from_key( self.lower_bound_keys( enreg( key ) ) );
     }
 
@@ -737,12 +739,12 @@ public:
     }
 
     template <LookupType<Komp::transparent_comparator, key_type> K = key_type>
-    constexpr auto upper_bound( this auto && self, K const & key ) noexcept {
+    constexpr auto upper_bound( this auto && self PSI_LIFETIMEBOUND, K const & key ) noexcept {
         return self.iter_from_key( self.upper_bound_keys( enreg( key ) ) );
     }
 
     template <LookupType<Komp::transparent_comparator, key_type> K = key_type>
-    constexpr auto equal_range( this auto && self, K const & key ) noexcept {
+    constexpr auto equal_range( this auto && self PSI_LIFETIMEBOUND, K const & key ) noexcept {
         auto const [lb, ub]{ self.equal_range_keys( enreg( key ) ) };
         return std::pair{ self.iter_from_key( lb ), self.iter_from_key( ub ) };
     }
@@ -750,7 +752,7 @@ public:
     //--------------------------------------------------------------------------
     // Positional access
     //--------------------------------------------------------------------------
-    constexpr auto nth( this auto && self, size_type const n ) noexcept {
+    constexpr auto nth( this auto && self PSI_LIFETIMEBOUND, size_type const n ) noexcept {
         BOOST_ASSERT( n <= self.size() );
         return self.make_iter( n );
     }
@@ -766,7 +768,7 @@ public:
         return std::move( storage_ );
     }
 
-    [[nodiscard]] constexpr auto const & keys() const noexcept {
+    [[nodiscard]] constexpr auto const & keys() const noexcept PSI_LIFETIMEBOUND {
         return keys_of( storage_ );
     }
 

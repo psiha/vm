@@ -4,16 +4,19 @@
 
 #include <psi/vm/attributed_span.hpp>
 #include <psi/vm/sorted_view.hpp>
+#include <psi/vm/containers/fc_vector.hpp>
 #include <psi/vm/containers/heap_vector.hpp>
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <compare>
 #include <cstdint>
 #include <numeric>
 #include <random>
 #include <span>
+#include <stdexcept>
 #include <tuple>
 #include <string>
 #include <vector>
@@ -404,6 +407,111 @@ TEST( sorted_view, sorts_by_the_comparator_of_the_span )
     auto const already{ sorted_view( attributed_span<std::uint32_t const, by_rank>{ ordered, sorted_facts, comp }, scratch, comp ) };
     EXPECT_EQ( already.data(), ordered.data() );
 }
+
+namespace
+{
+    // A container that can be neither copied nor moved: what filled() returns
+    // can only have been made in place.
+    class pinned_buffer
+    {
+    public:
+        explicit pinned_buffer( std::size_t const size ) noexcept : size_{ size } {}
+        pinned_buffer( pinned_buffer && ) = delete;
+
+        std::uint32_t       * data()       noexcept { return values_.data(); }
+        std::uint32_t const * data() const noexcept { return values_.data(); }
+        std::size_t           size() const noexcept { return size_; }
+        std::uint32_t       * begin()       noexcept { return data(); }
+        std::uint32_t const * begin() const noexcept { return data(); }
+        std::uint32_t       * end  ()       noexcept { return data() + size_; }
+        std::uint32_t const * end  () const noexcept { return data() + size_; }
+
+    private:
+        std::array<std::uint32_t, 8> values_{};
+        std::size_t                  size_;
+    };
+
+    void fill_ascending( std::span<std::uint32_t> const out ) noexcept { std::iota( out.begin(), out.end(), std::uint32_t{ 1 } ); }
+
+    template <typename SortedRange, typename Filler>
+    constexpr bool fillable_without_a_comparator{ requires( Filler & filler ) { SortedRange::filled( 3, filler ); } };
+} // anonymous namespace
+
+TEST( sorted_range, filled_makes_the_container_in_place )
+{
+    std::uint32_t const * handed_out{};
+    auto const pinned{ sorted_range<pinned_buffer, true>::filled( 3, [ & ]( std::span<std::uint32_t> const out ) noexcept { handed_out = out.data(); fill_ascending( out ); } ) };
+    EXPECT_EQ( pinned.base().data(), handed_out );
+    EXPECT_TRUE( std::ranges::equal( pinned, std::vector<std::uint32_t>{ 1, 2, 3 } ) );
+
+    // An inline (fixed capacity) psi::vm vector: a move would have changed data().
+    auto const inline_storage{ sorted_range<fc_vector<std::uint32_t, 8>, true>::filled( 4, [ & ]( std::span<std::uint32_t> const out ) noexcept { handed_out = out.data(); fill_ascending( out ); } ) };
+    EXPECT_EQ( inline_storage.base().data(), handed_out );
+    EXPECT_EQ( inline_storage.size(), 4U );
+    attributed_span<std::uint32_t const> const view{ inline_storage };
+    EXPECT_EQ( view.facts(), sorted_unique_facts );
+}
+
+TEST( sorted_range, filled_works_with_the_standard_and_the_psi_vm_vectors )
+{
+    auto const standard{ sorted_range<std::vector<std::uint32_t>>::filled( 3, []( std::span<std::uint32_t> const out )
+    {
+        EXPECT_TRUE( std::ranges::all_of( out, []( std::uint32_t const value ) { return value == 0; } ) ) << "value-initialized by std::vector";
+        out[ 0 ] = 1; out[ 1 ] = 1; out[ 2 ] = 2;
+    } ) };
+    EXPECT_EQ( standard.base(), ( std::vector<std::uint32_t>{ 1, 1, 2 } ) );
+
+    auto const heap{ sorted_range<heap_vector<std::uint32_t, std::uint32_t>, true>::filled( 5, fill_ascending ) };
+    EXPECT_EQ( heap.base().size(), 5U );
+    EXPECT_TRUE( std::ranges::equal( heap, std::vector<std::uint32_t>{ 1, 2, 3, 4, 5 } ) );
+    EXPECT_EQ( attributed_span<std::uint32_t const>{ heap }.facts(), sorted_unique_facts );
+}
+
+TEST( sorted_range, filled_with_nothing_hands_out_an_empty_span )
+{
+    bool called{ false };
+    auto const empty{ sorted_range<heap_vector<std::uint32_t>, true>::filled( 0, [ & ]( std::span<std::uint32_t> const out ) noexcept { called = true; EXPECT_TRUE( out.empty() ); } ) };
+    EXPECT_TRUE( called );
+    EXPECT_TRUE( empty.empty() );
+}
+
+TEST( sorted_range, filled_by_another_comparator )
+{
+    auto const descending{ sorted_range<std::vector<std::uint32_t>, true, std::greater<>>::filled( 3, []( std::span<std::uint32_t> const out ) noexcept { out[ 0 ] = 5; out[ 1 ] = 2; out[ 2 ] = 1; } ) };
+    EXPECT_EQ( descending.base(), ( std::vector<std::uint32_t>{ 5, 2, 1 } ) );
+
+    // A comparator that is not self verifying is passed in (to the debug check).
+    using ranked = sorted_range<heap_vector<std::uint32_t>, false, by_rank>;
+    std::vector<int> const rank{ 2, 0, 1 }; // the order of the ids is 1, 2, 0
+    by_rank const comp{ &rank };
+    auto const fill_ranked{ []( std::span<std::uint32_t> const out ) noexcept { out[ 0 ] = 1; out[ 1 ] = 2; out[ 2 ] = 0; } };
+    static_assert( !fillable_without_a_comparator<ranked, decltype( fill_ranked )> );
+    auto const by_rank_order{ ranked::filled( 3, fill_ranked, comp ) };
+    EXPECT_TRUE( std::ranges::equal( by_rank_order, std::vector<std::uint32_t>{ 1, 2, 0 } ) );
+}
+
+TEST( sorted_range, filled_is_noexcept_as_its_parts_are )
+{
+    using fixed = sorted_range<pinned_buffer, true>;
+    auto const nothrow_filler{ []( std::span<std::uint32_t> ) noexcept {} };
+    auto const throwing_filler{ []( std::span<std::uint32_t> ) {} };
+    static_assert(  noexcept( fixed::filled( 1, nothrow_filler  ) ) );
+    static_assert( !noexcept( fixed::filled( 1, throwing_filler ) ) );
+    static_assert( !noexcept( sorted_range<std::vector<std::uint32_t>>::filled( 1, nothrow_filler ) ), "std::vector's allocation can throw" );
+
+    // A filler that throws leaves no sorted_range behind.
+    EXPECT_THROW( std::ignore = ( sorted_range<heap_vector<std::uint32_t>>::filled( 2, []( std::span<std::uint32_t> ) { throw std::runtime_error{ "fill" }; } ) ), std::runtime_error );
+}
+
+#ifndef NDEBUG
+TEST( sorted_range, a_false_fill_is_caught_in_debug_builds )
+{
+    auto const fill_unsorted{ []( std::span<std::uint32_t> const out ) noexcept { out[ 0 ] = 3; out[ 1 ] = 1; } };
+    auto const fill_repeated{ []( std::span<std::uint32_t> const out ) noexcept { out[ 0 ] = 1; out[ 1 ] = 1; } };
+    EXPECT_DEATH( std::ignore = ( sorted_range<heap_vector<std::uint32_t>      >::filled( 2, fill_unsorted ) ), "" );
+    EXPECT_DEATH( std::ignore = ( sorted_range<heap_vector<std::uint32_t>, true>::filled( 2, fill_repeated ) ), "" );
+}
+#endif
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm

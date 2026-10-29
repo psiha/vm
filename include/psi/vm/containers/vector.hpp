@@ -36,6 +36,7 @@
 #include <psi/vm/containers/trivially_destructible_after_move.hpp>
 #include <psi/vm/populate.hpp>
 
+#include <psi/build/attributes.hpp>
 #include <psi/build/disable_warnings.hpp>
 
 #include <boost/assert.hpp>
@@ -234,9 +235,15 @@ consteval bool vector_destroys_elements() noexcept {
 ///     void storage_shrink_to_fit() noexcept
 ///     void swap(Storage &) noexcept
 ///
+/// A gsl::Owner (it owns the elements it views), so clang warns, as it does for
+/// the standard containers, when a gsl::Pointer (a std::span, an
+/// attributed_span, ...) made from a temporary one outlives it; and the members
+/// that hand out a pointer, a reference, an iterator or a span into the
+/// elements are lifetimebound, so the same holds for what they return.
+///
 ////////////////////////////////////////////////////////////////////////////////
 template <typename Storage, geometric_growth Growth = geometric_growth{}, bool support_incomplete_types = false>
-class [[ nodiscard, clang::trivial_abi ]] vector
+class [[ nodiscard, clang::trivial_abi, gsl::Owner( typename Storage::value_type ) ]] vector
     :
     public Storage
 {
@@ -616,34 +623,34 @@ public:
     //! <b>Effects</b>: Returns an iterator to the first element contained in the vector.
     //! <b>Throws</b>: Nothing.
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]]       iterator  begin()       noexcept { return make_iterator( size_type{ 0 } ); }
-    [[ nodiscard ]] const_iterator  begin() const noexcept { return const_cast<vector &>( *this ).begin(); }
-    [[ nodiscard ]] const_iterator cbegin() const noexcept { return begin(); }
+    [[ nodiscard ]]       iterator  begin()       noexcept PSI_LIFETIMEBOUND { return make_iterator( size_type{ 0 } ); }
+    [[ nodiscard ]] const_iterator  begin() const noexcept PSI_LIFETIMEBOUND { return const_cast<vector &>( *this ).begin(); }
+    [[ nodiscard ]] const_iterator cbegin() const noexcept PSI_LIFETIMEBOUND { return begin(); }
 
     //! <b>Effects</b>: Returns an iterator to the end of the vector.
     //!
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]]       iterator  end()       noexcept { return make_iterator( this->size() ); }
-    [[ nodiscard ]] const_iterator  end() const noexcept { return const_cast<vector &>( *this ).end(); }
-    [[ nodiscard ]] const_iterator cend() const noexcept { return end(); }
+    [[ nodiscard ]]       iterator  end()       noexcept PSI_LIFETIMEBOUND { return make_iterator( this->size() ); }
+    [[ nodiscard ]] const_iterator  end() const noexcept PSI_LIFETIMEBOUND { return const_cast<vector &>( *this ).end(); }
+    [[ nodiscard ]] const_iterator cend() const noexcept PSI_LIFETIMEBOUND { return end(); }
 
     //! <b>Effects</b>: Returns a reverse_iterator pointing to the beginning
     //! of the reversed vector.
     //! <b>Throws</b>: Nothing.
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] reverse_iterator        rbegin()       noexcept { return std::make_reverse_iterator( end() ); }
-    [[ nodiscard ]] const_reverse_iterator  rbegin() const noexcept { return std::make_reverse_iterator( end() ); }
-    [[ nodiscard ]] const_reverse_iterator crbegin() const noexcept { return rbegin(); }
+    [[ nodiscard ]] reverse_iterator        rbegin()       noexcept PSI_LIFETIMEBOUND { return std::make_reverse_iterator( end() ); }
+    [[ nodiscard ]] const_reverse_iterator  rbegin() const noexcept PSI_LIFETIMEBOUND { return std::make_reverse_iterator( end() ); }
+    [[ nodiscard ]] const_reverse_iterator crbegin() const noexcept PSI_LIFETIMEBOUND { return rbegin(); }
 
     //! <b>Effects</b>: Returns a reverse_iterator pointing to the end
     //! of the reversed vector.
     //! <b>Throws</b>: Nothing.
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] reverse_iterator        rend()       noexcept { return std::make_reverse_iterator( begin() ); }
-    [[ nodiscard ]] const_reverse_iterator  rend() const noexcept { return std::make_reverse_iterator( begin() ); }
-    [[ nodiscard ]] const_reverse_iterator crend() const noexcept { return rend(); }
+    [[ nodiscard ]] reverse_iterator        rend()       noexcept PSI_LIFETIMEBOUND { return std::make_reverse_iterator( begin() ); }
+    [[ nodiscard ]] const_reverse_iterator  rend() const noexcept PSI_LIFETIMEBOUND { return std::make_reverse_iterator( begin() ); }
+    [[ nodiscard ]] const_reverse_iterator crend() const noexcept PSI_LIFETIMEBOUND { return rend(); }
 
     //////////////////////////////////////////////
     //
@@ -771,7 +778,7 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto & front( this auto && self ) noexcept { return self.span().front(); }
+    [[ nodiscard ]] auto & front( this auto && self PSI_LIFETIMEBOUND ) noexcept { return self.span().front(); }
 
     //! <b>Requires</b>: !this->empty()
     //!
@@ -781,7 +788,7 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto & back( this auto && self ) noexcept { return self.span().back(); }
+    [[ nodiscard ]] auto & back( this auto && self PSI_LIFETIMEBOUND ) noexcept { return self.span().back(); }
 
     //! <b>Requires</b>: this->size() > n.
     //!
@@ -791,7 +798,10 @@ public:
     //! <b>Throws</b>: Nothing.
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto & operator[]( this auto && self, size_type const n ) noexcept { return self.span()[ n ]; }
+    //! (Not with an explicit object parameter: clang ignores lifetimebound on
+    //! one in the operator syntax.)
+    [[ nodiscard ]]       reference operator[]( size_type const n )       noexcept PSI_LIFETIMEBOUND { return span()[ n ]; }
+    [[ nodiscard ]] const_reference operator[]( size_type const n ) const noexcept PSI_LIFETIMEBOUND { return span()[ n ]; }
 
     //! <b>Requires</b>: this->size() >= n.
     //!
@@ -804,7 +814,7 @@ public:
     //! <b>Complexity</b>: Constant.
     //!
     //! <b>Note</b>: Non-standard extension
-    [[ nodiscard ]] auto nth( this auto && self, size_type const n ) noexcept
+    [[ nodiscard ]] auto nth( this auto && self PSI_LIFETIMEBOUND, size_type const n ) noexcept
     {
         BOOST_ASSUME( n <= self.size() );
         return self.begin() + static_cast<difference_type>( n );
@@ -834,7 +844,7 @@ public:
     //! <b>Throws</b>: range_error if n >= this->size()
     //!
     //! <b>Complexity</b>: Constant.
-    [[ nodiscard ]] auto & at( this auto && self, size_type const n )
+    [[ nodiscard ]] auto & at( this auto && self PSI_LIFETIMEBOUND, size_type const n )
     {
 #   if __cpp_lib_span >= 202311L
         return self.span().at( n );
@@ -851,10 +861,10 @@ public:
     //
     //////////////////////////////////////////////
 
-    using storage_t::data; // make non-const data() from storage visible alongside the const overload below
-    [[ nodiscard, gnu::pure ]] const_pointer data() const noexcept { return storage_t::data(); }
+    [[ nodiscard, gnu::pure ]]       pointer data()       noexcept PSI_LIFETIMEBOUND { return storage_t::data(); }
+    [[ nodiscard, gnu::pure ]] const_pointer data() const noexcept PSI_LIFETIMEBOUND { return storage_t::data(); }
 
-    [[ nodiscard, gnu::pure ]] auto span( this auto && self ) noexcept { return std::span( self.data(), self.size() ); }
+    [[ nodiscard, gnu::pure ]] auto span( this auto && self PSI_LIFETIMEBOUND ) noexcept { return std::span( self.data(), self.size() ); }
 
     //////////////////////////////////////////////
     //
