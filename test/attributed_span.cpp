@@ -163,6 +163,29 @@ TEST( sorted_range, converts_to_an_attributed_span_with_its_facts )
     EXPECT_EQ( unique_view.facts(), sorted_unique_facts );
 }
 
+TEST( sorted_range, states_its_facts_in_every_value_category )
+{
+    using owning = sorted_range<std::vector<std::uint32_t>, true>;
+    auto const facts_of{ []( attributed_span<std::uint32_t const> const view ) { return view.facts(); } };
+    owning mutable_range{ std::vector<std::uint32_t>{ 1, 2, 5 } };
+    EXPECT_EQ( facts_of( mutable_range ), sorted_unique_facts );
+    EXPECT_EQ( facts_of( owning{ std::vector<std::uint32_t>{ 1, 2, 5 } } ), sorted_unique_facts );
+
+    // Sorted by another order: a plain range to a span of operator<.
+    sorted_range<std::vector<std::uint32_t>, false, std::greater<>> const descending{ std::vector<std::uint32_t>{ 5, 2, 1 } };
+    EXPECT_EQ( facts_of( descending ), span_facts{} );
+}
+
+TEST( sorted_range, an_rvalue_hands_over_the_range_it_owns )
+{
+    std::vector<std::uint32_t> values{ 1, 2, 5 };
+    auto const * const data{ values.data() };
+    sorted_range<std::vector<std::uint32_t>> sorted{ std::move( values ) };
+    auto const moved_out{ std::move( sorted ).base() };
+    EXPECT_EQ( moved_out.data(), data );
+    EXPECT_EQ( moved_out, ( std::vector<std::uint32_t>{ 1, 2, 5 } ) );
+}
+
 #ifndef NDEBUG
 TEST( attributed_span, a_false_claim_is_caught_in_debug_builds )
 {
