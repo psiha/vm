@@ -106,6 +106,18 @@ PSI_target_fix_debug_symbols_for_osx_lto( vm_unit_tests )
 
 add_test( "vm_unit_tests" vm_unit_tests )
 
+# The lifetime annotations of attributed_span, sorted_range and sorted_view: a
+# compile, not a test to run - clang's -verify fails it when a line that
+# dangles does not draw the warning it is annotated with, or any other line
+# draws one.
+if ( CMAKE_CXX_COMPILER_ID MATCHES "Clang" )
+    add_library( attributed_span_dangling OBJECT EXCLUDE_FROM_ALL "${CMAKE_CURRENT_SOURCE_DIR}/attributed_span_dangling.cpp" )
+    target_link_libraries( attributed_span_dangling PRIVATE psi::vm )
+    target_compile_options( attributed_span_dangling PRIVATE -Wno-error -Xclang -verify )
+    set_target_properties( attributed_span_dangling PROPERTIES DISABLE_PRECOMPILE_HEADERS ON )
+    add_dependencies( vm_unit_tests attributed_span_dangling )
+endif()
+
 # Codegen comparison for small_vector layouts (not a test — for disassembly inspection)
 add_library( small_vector_codegen OBJECT EXCLUDE_FROM_ALL
     "${CMAKE_CURRENT_SOURCE_DIR}/small_vector_codegen.cpp"
