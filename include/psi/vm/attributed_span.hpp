@@ -65,6 +65,21 @@
 #include <type_traits>
 #include <utility>
 //------------------------------------------------------------------------------
+
+/// The result (or the constructed object) refers to the parameter (or, after
+/// the qualifiers of a member function, to the object): the compilers that
+/// know the attribute warn when it is bound to a temporary that dies first.
+#ifndef PSI_VM_LIFETIMEBOUND
+#   if __has_cpp_attribute( clang::lifetimebound )
+#       define PSI_VM_LIFETIMEBOUND [[ clang::lifetimebound ]]
+#   elif __has_cpp_attribute( msvc::lifetimebound )
+#       define PSI_VM_LIFETIMEBOUND [[ msvc::lifetimebound ]]
+#   else
+#       define PSI_VM_LIFETIMEBOUND
+#   endif
+#endif
+
+//------------------------------------------------------------------------------
 namespace psi::vm
 {
 //------------------------------------------------------------------------------
@@ -144,8 +159,11 @@ template <typename Range, bool Unique, typename Comparator>
 inline constexpr bool is_sorted_range_by_v<sorted_range<Range, Unique, Comparator>, Comparator>{ true };
 
 
+/// A gsl::Pointer (a view of elements it does not own), so clang warns, as it
+/// does for std::span, when one is made from a temporary gsl::Owner (a standard
+/// container) and outlives it, or is returned viewing a local.
 template <typename T, typename Comparator>
-class [[ clang::trivial_abi ]] attributed_span
+class [[ clang::trivial_abi, gsl::Pointer( T ) ]] attributed_span
 {
 public:
     using element_type     = T;
@@ -161,12 +179,12 @@ public:
     constexpr attributed_span() noexcept = default;
 
     // With the comparator the claims are verified by it (debug builds only).
-    constexpr attributed_span( T * const first, size_type const size, span_facts const facts, Comparator const & comp ) noexcept
+    constexpr attributed_span( T * const first PSI_VM_LIFETIMEBOUND, size_type const size, span_facts const facts, Comparator const & comp ) noexcept
         : attributed_span( first, size, facts, unchecked )
     {
         detail::verify_facts( first, first + size, facts_, comp );
     }
-    constexpr attributed_span( T * const first, size_type const size, span_facts const facts = {} ) noexcept
+    constexpr attributed_span( T * const first PSI_VM_LIFETIMEBOUND, size_type const size, span_facts const facts = {} ) noexcept
     requires( self_verifying_comparator<Comparator> )
         : attributed_span( first, size, facts, Comparator{} ) {}
 
@@ -194,10 +212,16 @@ public:
         : attributed_span( std::span<T>( std::forward<Range>( range ) ) ) {}
 
     /// A range that states it is sorted (and unique) passes that on; it has
-    /// verified it already.
+    /// verified it already. A sorted_range that holds the elements (its range
+    /// is not borrowed: a container by value) binds the span to its lifetime;
+    /// one that refers to them (a reference, a view) does not.
     template <typename Range, bool Unique>
-    requires( std::is_constructible_v<std::span<T>, Range const &> )
+    requires( std::is_constructible_v<std::span<T>, Range const &> && std::ranges::borrowed_range<Range> )
     constexpr attributed_span( sorted_range<Range, Unique, Comparator> const & range ) noexcept
+        : attributed_span( std::span<T>( range.base() ).data(), checked_size( std::span<T>( range.base() ).size() ), span_facts{ .sorted = true, .unique = Unique }, unchecked ) {}
+    template <typename Range, bool Unique>
+    requires( std::is_constructible_v<std::span<T>, Range const &> && !std::ranges::borrowed_range<Range> )
+    constexpr attributed_span( sorted_range<Range, Unique, Comparator> const & range PSI_VM_LIFETIMEBOUND ) noexcept
         : attributed_span( std::span<T>( range.base() ).data(), checked_size( std::span<T>( range.base() ).size() ), span_facts{ .sorted = true, .unique = Unique }, unchecked ) {}
 
     /// From a span of elements that convert (T to T const): the facts about
