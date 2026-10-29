@@ -36,7 +36,7 @@ PSI_WARNING_MSVC_DISABLE( 4127 ) // conditional expression is constant
 PSI_WARNING_MSVC_DISABLE( 5030 ) // unrecognized attribute
 
 template <typename Key, bool unique, typename Comparator = std::less<>>
-class bp_tree
+class [[ gsl::Owner( Key ) ]] bp_tree // (the attribute is not inherited from bptree_base)
     :
     public bp_tree_impl<Key, Comparator>
 {

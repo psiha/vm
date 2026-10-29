@@ -119,8 +119,8 @@ public:
     //--------------------------------------------------------------------------
     // Iterators (cbegin/cend, rbegin/rend, crbegin/crend inherited from flat_impl)
     //--------------------------------------------------------------------------
-    constexpr iterator begin() const noexcept { return this->storage_.cbegin(); }
-    constexpr iterator end  () const noexcept { return this->storage_.cend();   }
+    constexpr iterator begin() const noexcept PSI_LIFETIMEBOUND { return this->storage_.cbegin(); }
+    constexpr iterator end  () const noexcept PSI_LIFETIMEBOUND { return this->storage_.cend();   }
 
     //--------------------------------------------------------------------------
     // Capacity (empty, size, reserve, shrink_to_fit -- inherited from flat_impl)
@@ -252,7 +252,7 @@ template
     typename Compare      = std::less<>,
     typename KeyContainer = heap_vector<Key>
 >
-class flat_set
+class [[ gsl::Owner( Key ) ]] flat_set // gsl::Owner: see vector
     : public flat_set_impl<Key, Compare, KeyContainer>
 {
     using base = flat_set_impl<Key, Compare, KeyContainer>;
@@ -403,7 +403,7 @@ template
     typename Compare      = std::less<>,
     typename KeyContainer = heap_vector<Key>
 >
-class flat_multiset
+class [[ gsl::Owner( Key ) ]] flat_multiset
     : public flat_set_impl<Key, Compare, KeyContainer>
 {
     using base = flat_set_impl<Key, Compare, KeyContainer>;

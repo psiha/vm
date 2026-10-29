@@ -54,7 +54,7 @@ requires(
     ( sort_key<std::remove_const_t<T>> && std::same_as<Comparator, std::less<>> ) ||
     ( Algo == key_sort_algo::pdq && std::copy_constructible<std::remove_const_t<T>> )
 )
-[[ nodiscard ]] attributed_span<std::remove_const_t<T> const, Comparator> sorted_view( attributed_span<T, Comparator> const keys, Scratch & scratch PSI_VM_LIFETIMEBOUND, Comparator const & comp = {} )
+[[ nodiscard ]] attributed_span<std::remove_const_t<T> const, Comparator> sorted_view( attributed_span<T, Comparator> const keys, Scratch & scratch PSI_LIFETIMEBOUND, Comparator const & comp = {} )
 {
     using key_t   = std::remove_const_t<T>;
     using result  = attributed_span<key_t const, Comparator>;

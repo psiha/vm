@@ -58,6 +58,8 @@
 #include <psi/vm/containers/storage/heap.hpp>
 #include <psi/vm/containers/vector.hpp>
 
+#include <psi/build/attributes.hpp>
+
 #include <boost/assert.hpp>
 #include <boost/integer.hpp>
 
@@ -467,7 +469,7 @@ template <typename T,
           unsigned MaxStride      = 64,
           typename Storage        = heap_storage<T>,
           geometric_growth Growth = geometric_growth{}>
-class [[ nodiscard ]] strided_vector
+class [[ nodiscard, gsl::Owner( T ) ]] strided_vector
 {
 public:
     using backing_vector_type = vector<Storage, Growth>;
@@ -635,36 +637,36 @@ public:
     // Each entry is addressed by index and exposed as a proxy reference that
     // writes through the underlying buffer on assignment (see strided_reference).
     //--------------------------------------------------------------------------
-    [[ nodiscard ]] constexpr reference operator[]( size_type const i ) noexcept
+    [[ nodiscard ]] constexpr reference operator[]( size_type const i ) noexcept PSI_LIFETIMEBOUND
     {
         BOOST_ASSUME( stride_ >= 1 );
         return { data_.data() + i * stride_, stride_ };
     }
 
-    [[ nodiscard ]] constexpr const_reference operator[]( size_type const i ) const noexcept
+    [[ nodiscard ]] constexpr const_reference operator[]( size_type const i ) const noexcept PSI_LIFETIMEBOUND
     {
         BOOST_ASSUME( stride_ >= 1 );
         return { data_.data() + i * stride_, stride_ };
     }
 
-    [[ nodiscard ]] constexpr reference at( size_type const i )
+    [[ nodiscard ]] constexpr reference at( size_type const i ) PSI_LIFETIMEBOUND
     {
         if ( i >= size() )
             throw std::out_of_range{ "psi::vm::strided_vector::at" };
         return ( *this )[ i ];
     }
 
-    [[ nodiscard ]] constexpr const_reference at( size_type const i ) const
+    [[ nodiscard ]] constexpr const_reference at( size_type const i ) const PSI_LIFETIMEBOUND
     {
         if ( i >= size() )
             throw std::out_of_range{ "psi::vm::strided_vector::at" };
         return ( *this )[ i ];
     }
 
-    [[ nodiscard ]] constexpr reference       front()       noexcept { BOOST_ASSERT( !empty() ); return (*this)[ 0 ]; }
-    [[ nodiscard ]] constexpr const_reference front() const noexcept { BOOST_ASSERT( !empty() ); return (*this)[ 0 ]; }
-    [[ nodiscard ]] constexpr reference       back ()       noexcept { BOOST_ASSERT( !empty() ); return (*this)[ size() - 1 ]; }
-    [[ nodiscard ]] constexpr const_reference back () const noexcept { BOOST_ASSERT( !empty() ); return (*this)[ size() - 1 ]; }
+    [[ nodiscard ]] constexpr reference       front()       noexcept PSI_LIFETIMEBOUND { BOOST_ASSERT( !empty() ); return (*this)[ 0 ]; }
+    [[ nodiscard ]] constexpr const_reference front() const noexcept PSI_LIFETIMEBOUND { BOOST_ASSERT( !empty() ); return (*this)[ 0 ]; }
+    [[ nodiscard ]] constexpr reference       back ()       noexcept PSI_LIFETIMEBOUND { BOOST_ASSERT( !empty() ); return (*this)[ size() - 1 ]; }
+    [[ nodiscard ]] constexpr const_reference back () const noexcept PSI_LIFETIMEBOUND { BOOST_ASSERT( !empty() ); return (*this)[ size() - 1 ]; }
 
     //--------------------------------------------------------------------------
     // Transverse (per-field) access
@@ -683,41 +685,41 @@ private:
     }
 
 public:
-    [[ nodiscard ]] constexpr strided_view<T const> field( stride_type const lane ) const noexcept { BOOST_ASSERT( lane < stride() ); return { data_.data() + lane, stride_ * sizeof( T ), field_size() }; }
-    [[ nodiscard ]] constexpr strided_view<T      > field( stride_type const lane )       noexcept { BOOST_ASSERT( lane < stride() ); return { data_.data() + lane, stride_ * sizeof( T ), field_size() }; }
+    [[ nodiscard ]] constexpr strided_view<T const> field( stride_type const lane ) const noexcept PSI_LIFETIMEBOUND { BOOST_ASSERT( lane < stride() ); return { data_.data() + lane, stride_ * sizeof( T ), field_size() }; }
+    [[ nodiscard ]] constexpr strided_view<T      > field( stride_type const lane )       noexcept PSI_LIFETIMEBOUND { BOOST_ASSERT( lane < stride() ); return { data_.data() + lane, stride_ * sizeof( T ), field_size() }; }
 
     //--------------------------------------------------------------------------
     // Raw data access
     //--------------------------------------------------------------------------
-    [[ nodiscard ]] constexpr       pointer data()       noexcept { return data_.data(); }
-    [[ nodiscard ]] constexpr const_pointer data() const noexcept { return data_.data(); }
+    [[ nodiscard ]] constexpr       pointer data()       noexcept PSI_LIFETIMEBOUND { return data_.data(); }
+    [[ nodiscard ]] constexpr const_pointer data() const noexcept PSI_LIFETIMEBOUND { return data_.data(); }
 
-    [[ nodiscard ]] constexpr backing_vector_type const & backing() const noexcept { return data_; }
+    [[ nodiscard ]] constexpr backing_vector_type const & backing() const noexcept PSI_LIFETIMEBOUND { return data_; }
 
     // Flat view over every currently held entry (size() * stride() elements),
     // for bulk consumers (sort/insert/capture) that want the whole buffer
     // rather than one entry at a time. data_ (backing_vector_type) already
     // satisfies span's contiguous_range + sized_range range-constructor, so
     // this is a plain conversion, not a construction.
-    [[ nodiscard, gnu::pure ]] constexpr std::span<T const> flat_view() const noexcept { return data_; }
-    [[ nodiscard, gnu::pure ]] constexpr std::span<T      > flat_view()       noexcept { return data_; }
+    [[ nodiscard, gnu::pure ]] constexpr std::span<T const> flat_view() const noexcept PSI_LIFETIMEBOUND { return data_; }
+    [[ nodiscard, gnu::pure ]] constexpr std::span<T      > flat_view()       noexcept PSI_LIFETIMEBOUND { return data_; }
 
     //--------------------------------------------------------------------------
     // Iterators
     //--------------------------------------------------------------------------
-    [[ nodiscard ]] constexpr       iterator  begin()       noexcept { return { data_.data()               , stride_ }; }
-    [[ nodiscard ]] constexpr const_iterator  begin() const noexcept { return { data_.data()               , stride_ }; }
-    [[ nodiscard ]] constexpr       iterator  end  ()       noexcept { return { data_.data() + data_.size(), stride_ }; }
-    [[ nodiscard ]] constexpr const_iterator  end  () const noexcept { return { data_.data() + data_.size(), stride_ }; }
-    [[ nodiscard ]] constexpr const_iterator cbegin() const noexcept { return begin(); }
-    [[ nodiscard ]] constexpr const_iterator cend  () const noexcept { return end  (); }
+    [[ nodiscard ]] constexpr       iterator  begin()       noexcept PSI_LIFETIMEBOUND { return { data_.data()               , stride_ }; }
+    [[ nodiscard ]] constexpr const_iterator  begin() const noexcept PSI_LIFETIMEBOUND { return { data_.data()               , stride_ }; }
+    [[ nodiscard ]] constexpr       iterator  end  ()       noexcept PSI_LIFETIMEBOUND { return { data_.data() + data_.size(), stride_ }; }
+    [[ nodiscard ]] constexpr const_iterator  end  () const noexcept PSI_LIFETIMEBOUND { return { data_.data() + data_.size(), stride_ }; }
+    [[ nodiscard ]] constexpr const_iterator cbegin() const noexcept PSI_LIFETIMEBOUND { return begin(); }
+    [[ nodiscard ]] constexpr const_iterator cend  () const noexcept PSI_LIFETIMEBOUND { return end  (); }
 
-    [[ nodiscard ]] constexpr       reverse_iterator  rbegin()       noexcept { return       reverse_iterator{ end  () }; }
-    [[ nodiscard ]] constexpr const_reverse_iterator  rbegin() const noexcept { return const_reverse_iterator{ end  () }; }
-    [[ nodiscard ]] constexpr       reverse_iterator  rend  ()       noexcept { return       reverse_iterator{ begin() }; }
-    [[ nodiscard ]] constexpr const_reverse_iterator  rend  () const noexcept { return const_reverse_iterator{ begin() }; }
-    [[ nodiscard ]] constexpr const_reverse_iterator crbegin() const noexcept { return rbegin(); }
-    [[ nodiscard ]] constexpr const_reverse_iterator crend  () const noexcept { return rend(); }
+    [[ nodiscard ]] constexpr       reverse_iterator  rbegin()       noexcept PSI_LIFETIMEBOUND { return       reverse_iterator{ end  () }; }
+    [[ nodiscard ]] constexpr const_reverse_iterator  rbegin() const noexcept PSI_LIFETIMEBOUND { return const_reverse_iterator{ end  () }; }
+    [[ nodiscard ]] constexpr       reverse_iterator  rend  ()       noexcept PSI_LIFETIMEBOUND { return       reverse_iterator{ begin() }; }
+    [[ nodiscard ]] constexpr const_reverse_iterator  rend  () const noexcept PSI_LIFETIMEBOUND { return const_reverse_iterator{ begin() }; }
+    [[ nodiscard ]] constexpr const_reverse_iterator crbegin() const noexcept PSI_LIFETIMEBOUND { return rbegin(); }
+    [[ nodiscard ]] constexpr const_reverse_iterator crend  () const noexcept PSI_LIFETIMEBOUND { return rend(); }
 
     //--------------------------------------------------------------------------
     // Assign (std::vector-compatible, stride-aware)
