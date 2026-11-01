@@ -221,6 +221,11 @@ enum class huge_pages : bool { no, yes };
 #   define PSI_VM_HUGE_PAGE_MAX_COVERAGE 0
 #endif
 
+//! How map_file() treats a recorded data length past what the file holds:
+//! strict refuses the file (invalid_data), relaxed opens it at what the file
+//! holds (see set_committed_size() for a caller that knows better).
+enum class size_check : bool { strict, relaxed };
+
 PSI_WARNING_DISABLE_PUSH()
 PSI_WARNING_CLANGCL_DISABLE( -Wignored-attributes )
 
@@ -276,9 +281,10 @@ public:
     [[ nodiscard, gnu::pure ]] size_type size       () const noexcept { return live_size_; }
     //! The length recorded in the persisted header, i.e. the extent as of the
     //! last header-covering flush (or clean detach). After an abnormal
-    //! termination this is what a reopen reports as size(); everything
-    //! physically beyond it is uncommitted by construction. Equals size()
-    //! outside an in-flight mutation.
+    //! termination this is what a reopen reports as size() - unless the
+    //! caller sets the length (see set_committed_size()) or the open clamped
+    //! it (see size_check::relaxed).
+    //! Equals size() outside an in-flight mutation.
     [[ nodiscard, gnu::pure ]] size_type committed_size() const noexcept { return has_attached_storage() ? get_sizes().data_size : size_type{ 0 }; }
     [[ nodiscard, gnu::pure ]] size_type fs_capacity() const noexcept { return storage_size() - get_sizes().data_offset; }
     [[ nodiscard, gnu::pure ]] size_type vm_capacity() const noexcept { return has_attached_storage() ? attached_vm_capacity() : size_type{ 0 }; }
@@ -355,15 +361,26 @@ public:
     bool punch_hole( std::uint64_t const offset, std::uint64_t const length ) noexcept { return file_backed() && vm::punch_hole( mapping_.underlying_file(), offset, length ); }
 
     err::fallible_result<void, error>
-    map_file( auto const * const file_name, flags::named_object_construction_policy const policy, header_info const hdr_info ) noexcept
+    map_file( auto const * const file_name, flags::named_object_construction_policy const policy, header_info const hdr_info, size_check const check = size_check::strict ) noexcept
     {
         return map_file
         (
             create_file( file_name, create_rw_file_flags( policy ) ),
             policy,
-            hdr_info
+            hdr_info,
+            check
         );
     }
+
+    //! Sets the data length to `length` bytes and records it in the header:
+    //! for a caller that keeps its own authoritative record of the extent
+    //! (the recorded length is only the container's own: the header page and
+    //! the file size reach storage independently, so after a crash it can
+    //! claim more than the file holds, or more than the caller committed).
+    //! It can grow the length up to what the file holds; the bytes it exposes
+    //! are the file's, left as they are. A length past that fails with
+    //! invalid_data and changes nothing.
+    err::result_or_error<void, error> set_committed_size( size_type length ) noexcept;
 
     // With huge_pages::yes, storage that spans at least one PMD (2 MiB with
     // the 4 KiB granule) when mapped is advised to be backed by transparent
@@ -488,7 +505,7 @@ protected:
     // template (char type) independent portion of map_file
     PSI_COLD
     err::result_or_error<void, error>
-    map_file( file_handle file, flags::named_object_construction_policy, header_info ) noexcept;
+    map_file( file_handle file, flags::named_object_construction_policy, header_info, size_check = size_check::strict ) noexcept;
 
     void swap( mem_mapping & other ) noexcept { std::swap( *this, other ); }
 
@@ -670,11 +687,18 @@ public:
     vm_storage( vm_storage       &&       ) = default;
     vm_storage & operator=( vm_storage && ) = default;
 
-    auto map_file( auto const file, flags::named_object_construction_policy const policy, header_info const hdr_info = {} ) noexcept
+    err::fallible_result<void, error>
+    map_file( auto const file, flags::named_object_construction_policy const policy, header_info const hdr_info = {}, size_check const check = size_check::strict ) noexcept
     requires( does_not_hold_addresses<T> )
     {
-        return base::map_file( file, policy, hdr_info.with_final_alignment_for<T>() );
+        auto mapped{ base::map_file( file, policy, hdr_info.with_final_alignment_for<T>(), check )() };
+        // What a relaxed open clamps to need not be whole elements.
+        if ( check == size_check::relaxed )
+            base::shrink_size_to( base::size() / sizeof( T ) * sizeof( T ) );
+        return std::move( mapped );
     }
+    //! See mem_mapping::set_committed_size(): here in elements.
+    auto set_committed_size( sz_t const committed_length ) noexcept { return base::set_committed_size( to_byte_sz( committed_length ) ); }
 
     template <typename InitPolicy = value_init_t>
     err::fallible_result<void, error>

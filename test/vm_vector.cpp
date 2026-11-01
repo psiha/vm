@@ -522,6 +522,179 @@ TEST( vm_vector, rejected_open_does_not_rewrite_the_corrupt_header )
     EXPECT_EQ( readDataSize(), before ) << "a rejected open repaired the corrupt length it rejected";
 }
 
+namespace
+{
+    // data_size follows two std::uint32_t fields at the start of sizes_hdr
+    auto constexpr data_size_offset{ 2 * sizeof( std::uint32_t ) };
+
+    std::uint64_t read_data_size( char const * const file )
+    {
+        std::ifstream in{ file, std::ios::binary };
+        in.seekg( static_cast<std::streamoff>( data_size_offset ) );
+        std::uint64_t v{};
+        in.read( reinterpret_cast<char *>( &v ), sizeof( v ) );
+        return v;
+    }
+
+    void write_data_size( char const * const file, std::uint64_t const data_size )
+    {
+        std::fstream f{ file, std::ios::binary | std::ios::in | std::ios::out };
+        f.seekp( static_cast<std::streamoff>( data_size_offset ) );
+        f.write( reinterpret_cast<char const *>( &data_size ), sizeof( data_size ) );
+    }
+
+    using test_vector = psi::vm::vm_vector<double, std::uint32_t>;
+
+    // A file holding the elements 0, 1, 2, ... `held` of them, whose header
+    // records `recorded` elements: what a crash can leave behind when the
+    // header page reaches storage while the file size change it relies on
+    // does not. Returns the data offset.
+    std::uint64_t make_recorded_past_file_end( char const * const file, std::uint32_t const held, std::uint32_t const recorded )
+    {
+        std::filesystem::remove( file );
+        std::uint64_t data_offset;
+        {
+            test_vector vec;
+            vec.map_file( file, flags::named_object_construction_policy::create_new_or_truncate_existing );
+            for ( std::uint32_t i{ 0 }; i < held; ++i )
+                vec.emplace_back( i );
+            data_offset = vec.storage_size() - vec.fs_capacity();
+        } // published on destruction
+        std::filesystem::resize_file( file, data_offset + held * sizeof( double ) );
+        write_data_size( file, recorded * sizeof( double ) );
+        return data_offset;
+    }
+} // anonymous namespace
+
+TEST( vm_vector, recorded_length_past_the_file_end_is_refused )
+{
+    auto const test_vec{ "recorded_past_file_end.vec" };
+    make_recorded_past_file_end( test_vec, 1000, 5000 );
+    {
+        test_vector vec;
+        EXPECT_ANY_THROW( vec.map_file( test_vec, flags::named_object_construction_policy::open_existing ) );
+    }
+    EXPECT_EQ( read_data_size( test_vec ), 5000 * sizeof( double ) );
+}
+
+// A relaxed open takes what the file holds, and that length is published like
+// any other: by a flush and by a close.
+TEST( vm_vector, relaxed_open_takes_what_the_file_holds )
+{
+    auto const test_vec{ "relaxed_open.vec" };
+    make_recorded_past_file_end( test_vec, 1000, 5000 );
+    {
+        test_vector vec;
+        vec.map_file( test_vec, flags::named_object_construction_policy::open_existing, {}, size_check::relaxed );
+        EXPECT_EQ( vec.size(), 1000 );
+        for ( std::uint32_t i{ 0 }; i < 1000; ++i )
+            ASSERT_EQ( vec[ i ], i );
+        vec.flush_blocking();
+        EXPECT_EQ( vec.committed_size(), 1000 );
+        EXPECT_EQ( read_data_size( test_vec ), 1000 * sizeof( double ) );
+    }
+    EXPECT_EQ( read_data_size( test_vec ), 1000 * sizeof( double ) );
+}
+
+TEST( vm_vector, relaxed_open_publishes_the_clamped_length_on_close )
+{
+    auto const test_vec{ "relaxed_open_close.vec" };
+    make_recorded_past_file_end( test_vec, 1000, 5000 );
+    {
+        test_vector vec;
+        vec.map_file( test_vec, flags::named_object_construction_policy::open_existing, {}, size_check::relaxed );
+    }
+    EXPECT_EQ( read_data_size( test_vec ), 1000 * sizeof( double ) );
+    test_vector vec;
+    vec.map_file( test_vec, flags::named_object_construction_policy::open_existing );
+    EXPECT_EQ( vec.size(), 1000 );
+}
+
+TEST( vm_vector, set_length_shrinks )
+{
+    auto const test_vec{ "set_length_shrinks.vec" };
+    make_recorded_past_file_end( test_vec, 1000, 5000 );
+    {
+        test_vector vec;
+        vec.map_file( test_vec, flags::named_object_construction_policy::open_existing, {}, size_check::relaxed );
+        ASSERT_TRUE( vec.set_committed_size( 800 ) );
+        EXPECT_EQ( vec.size(), 800 );
+        EXPECT_EQ( vec.committed_size(), 800 );
+        for ( std::uint32_t i{ 0 }; i < 800; ++i )
+            ASSERT_EQ( vec[ i ], i );
+        vec.emplace_back( 800 );
+    }
+    test_vector vec;
+    vec.map_file( test_vec, flags::named_object_construction_policy::open_existing );
+    EXPECT_EQ( vec.size(), 801 );
+}
+
+// Growing exposes the file's bytes as they are, after any open.
+TEST( vm_vector, set_length_grows_up_to_what_the_file_holds )
+{
+    auto const test_vec{ "set_length_grows.vec" };
+    make_recorded_past_file_end( test_vec, 1000, 500 );
+    {
+        test_vector vec;
+        vec.map_file( test_vec, flags::named_object_construction_policy::open_existing );
+        ASSERT_EQ( vec.size(), 500 );
+        ASSERT_TRUE( vec.set_committed_size( 1000 ) );
+        EXPECT_EQ( vec.size(), 1000 );
+        for ( std::uint32_t i{ 0 }; i < 1000; ++i )
+            ASSERT_EQ( vec[ i ], i );
+    }
+    EXPECT_EQ( read_data_size( test_vec ), 1000 * sizeof( double ) );
+}
+
+TEST( vm_vector, set_length_past_what_the_file_holds_changes_nothing )
+{
+    auto const test_vec{ "set_length_past_file_end.vec" };
+    make_recorded_past_file_end( test_vec, 1000, 5000 );
+    {
+        test_vector vec;
+        vec.map_file( test_vec, flags::named_object_construction_policy::open_existing, {}, size_check::relaxed );
+        auto const result{ vec.set_committed_size( 1001 ) };
+        ASSERT_FALSE( result );
+        EXPECT_TRUE( result.error().value == error::invalid_data );
+        EXPECT_TRUE( vec.has_attached_storage() );
+        EXPECT_EQ( vec.size(), 1000 );
+    }
+    EXPECT_EQ( read_data_size( test_vec ), 1000 * sizeof( double ) );
+}
+
+// The length counts from the data offset, not from the start of the file: a
+// length that the file holds only together with its header is past its end.
+TEST( vm_vector, length_past_the_file_end_by_less_than_the_header_is_refused )
+{
+    auto const test_vec{ "past_file_end_by_header.vec" };
+    auto const data_offset{ make_recorded_past_file_end( test_vec, 1000, 1001 ) };
+    ASSERT_GE( data_offset, sizeof( double ) );
+    test_vector vec;
+    EXPECT_ANY_THROW( vec.map_file( test_vec, flags::named_object_construction_policy::open_existing ) );
+    vec.map_file( test_vec, flags::named_object_construction_policy::open_existing, {}, size_check::relaxed );
+    EXPECT_EQ( vec.size(), 1000 );
+    EXPECT_FALSE( vec.set_committed_size( 1001 ) );
+}
+
+// The caller's record of the length can live in the file's own client header.
+TEST( vm_vector, the_length_is_read_from_the_client_header )
+{
+    auto const test_vec{ "length_in_client_header.vec" };
+    std::filesystem::remove( test_vec );
+    using header = std::uint32_t;
+    {
+        test_vector vec;
+        vec.map_file( test_vec, flags::named_object_construction_policy::create_new, header_info{ std::in_place_type<header> } );
+        for ( std::uint32_t i{ 0 }; i < 10; ++i )
+            vec.emplace_back( i );
+        *header_data<header>( vec.user_header_data() ).first = 7;
+    }
+    test_vector vec;
+    vec.map_file( test_vec, flags::named_object_construction_policy::open_existing, header_info{ std::in_place_type<header> }, size_check::relaxed );
+    ASSERT_TRUE( vec.set_committed_size( *header_data<header>( vec.user_header_data() ).first ) );
+    EXPECT_EQ( vec.size(), 7 );
+}
+
 #if defined( __linux__ ) && !defined( __ANDROID__ )
 namespace
 {
