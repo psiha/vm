@@ -417,7 +417,7 @@ mem_mapping::unpack( header_info const hdr_info ) noexcept
 
 PSI_COLD
 err::result_or_error<void, error>
-mem_mapping::map_file( file_handle file, flags::named_object_construction_policy const policy, header_info const hdr_info ) noexcept
+mem_mapping::map_file( file_handle file, flags::named_object_construction_policy const policy, header_info const hdr_info, size_check const check ) noexcept
 {
     if ( !file )
         return error{};
@@ -488,11 +488,18 @@ mem_mapping::map_file( file_handle file, flags::named_object_construction_policy
 #           pragma GCC diagnostic pop
 #           endif
             }
+            // The data starts at the persisted offset (of an extendable header
+            // it can lie past the expected one), within the file, and - for a
+            // strict open - the file holds the length its header records.
             if
             (
-                ( match.data_offset       != hdr.data_offset       ) ||
-                ( match.client_hdr_size() != hdr.client_hdr_size() ) ||
-                ( match.data_size          > mapping_size          )
+                ( match.data_offset         != hdr.data_offset       ) ||
+                ( match.client_hdr_size()   != hdr.client_hdr_size() ) ||
+                ( on_disk_sizes.data_offset >  mapping_size          ) ||
+                (
+                    ( check == size_check::strict ) &&
+                    ( match.data_size > mapping_size - on_disk_sizes.data_offset )
+                )
             ) [[ unlikely ]]
             {
                 // Corrupted file: bogus or unexpected on-disk header.
@@ -510,10 +517,24 @@ mem_mapping::map_file( file_handle file, flags::named_object_construction_policy
         // Seed the live length from the committed one: an attach observes
         // exactly what the last header-covering flush (or clean detach)
         // published - which, after an abnormal termination, is the last
-        // committed extent rather than an in-flight cursor.
-        live_size_ = get_sizes().data_size;
+        // committed extent rather than an in-flight cursor. A relaxed open
+        // takes no more than the file holds.
+        auto const held{ mapping_size - on_disk_sizes.data_offset };
+        live_size_ = std::min( on_disk_sizes.data_size, held );
     }
     return map_rslt.propagate();
+}
+
+PSI_COLD
+err::result_or_error<void, error> mem_mapping::set_committed_size( size_type const length ) noexcept
+{
+    BOOST_ASSERT( has_attached_storage() );
+    // The view maps the whole file: what it holds past the data offset.
+    if ( length > attached_vm_capacity() ) [[ unlikely ]]
+        return error{ error::invalid_data };
+    live_size_ = length;
+    publish_size();
+    return err::success;
 }
 PSI_COLD
 err::result_or_error<void, error> mem_mapping::map_memory( size_type const data_size, header_info const hdr_info, huge_pages const huge ) noexcept
