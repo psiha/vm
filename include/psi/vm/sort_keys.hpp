@@ -490,6 +490,149 @@ void argsort_keys( Keys const & keys, std::span<std::type_identity_t<Index>> con
 
 namespace key_sort_detail
 {
+    // The range as the iterator the bodies below are instantiated for: a
+    // contiguous range as the pointer to its elements, so that a vector, an
+    // array, a span and a C array of one element type share them.
+    template <std::ranges::random_access_range Range>
+    [[ nodiscard ]] auto range_iterator( Range & range ) noexcept
+    {
+        if constexpr ( std::ranges::contiguous_range<Range> )
+            return std::ranges::data( range );
+        else
+            return std::ranges::begin( range );
+    }
+
+    template <typename It>
+    bool constexpr nothrow_moves{ std::is_nothrow_move_constructible_v<std::iter_value_t<It>> && std::is_nothrow_move_assignable_v<std::iter_value_t<It>> };
+
+    // The in-place gather behind apply_permutation. Out of line and
+    // independent of the range, the key and the order: one body per
+    // (iterator, index) pair.
+    template <std::random_access_iterator It, std::unsigned_integral Index>
+    [[ gnu::noinline, gnu::sysv_abi ]]
+    void permute_in_place( It const first, std::span<Index> const perm ) noexcept( nothrow_moves<It> )
+    {
+        auto const at{ [ first ]( std::size_t const i ) noexcept -> decltype( auto ) { return first[ static_cast<std::iter_difference_t<It>>( i ) ]; } };
+        for ( std::size_t start{ 0 }; start < perm.size(); ++start )
+        {
+            if ( perm[ start ] == start )
+                continue;
+            auto held{ std::move( at( start ) ) };
+            auto hole{ start };
+            for ( auto from{ static_cast<std::size_t>( perm[ hole ] ) }; from != start; from = static_cast<std::size_t>( perm[ hole ] ) )
+            {
+                at  ( hole ) = std::move( at( from ) );
+                perm[ hole ] = static_cast<Index>( hole );
+                hole = from;
+            }
+            at  ( hole ) = std::move( held );
+            perm[ hole ] = static_cast<Index>( hole );
+        }
+    }
+
+    // Up to this many elements stable_sort_by_key insertion sorts: the cost
+    // of the quadratic shifts stays below that of gathering the keys and
+    // permuting the elements.
+    std::size_t constexpr stable_insertion_sort_limit{ 20 };
+
+    // stable_sort_by_key on the iterator the range came down to, the key
+    // function and the order: the one body per (iterator, key function, algo,
+    // order) that every range of the same iterator shares.
+    template <key_sort_algo Algo, key_order Order, std::random_access_iterator It, typename KeyOf>
+    void stable_sort_by_key_n( It const first, std::size_t const n, KeyOf & key_of )
+        noexcept( allocation_nothrow && std::is_nothrow_invocable_v<KeyOf &, std::iter_reference_t<It>> && nothrow_moves<It> )
+    {
+        using key_t    = std::remove_cvref_t<std::invoke_result_t<KeyOf &, std::iter_reference_t<It>>>;
+        using key_uint = key_uint_t<key_t>;
+        using Index    = std::uint32_t;
+        auto const at{ [ first ]( std::size_t const i ) noexcept -> decltype( auto ) { return first[ static_cast<std::iter_difference_t<It>>( i ) ]; } };
+        BOOST_ASSERT( n <= std::numeric_limits<Index>::max() );
+        if ( n <= stable_insertion_sort_limit )
+        {
+            auto const unsigned_key{ [ & ]( auto && element ) noexcept( std::is_nothrow_invocable_v<KeyOf &, decltype( element )> )
+            {
+                return static_cast<key_uint>( std::bit_cast<key_uint>( key_t{ key_of( element ) } ) ^ order_mask<Order, key_uint> );
+            } };
+            for ( std::size_t i{ 1 }; i < n; ++i )
+            {
+                auto const key{ unsigned_key( at( i ) ) };
+                if ( !( key < unsigned_key( at( i - 1 ) ) ) )
+                    continue;
+                auto held{ std::move( at( i ) ) };
+                auto hole{ i };
+                do
+                {
+                    at( hole ) = std::move( at( hole - 1 ) );
+                    --hole;
+                } while ( hole != 0 && key < unsigned_key( at( hole - 1 ) ) );
+                at( hole ) = std::move( held );
+            }
+        }
+        else
+        {
+            small_vector<Index, 4096 / sizeof( Index ), scratch_size_t<Index>> perm( static_cast<Index>( n ), no_init );
+            argsort_by_key<Algo, Index>
+            (
+                static_cast<Index>( n ),
+                [ & ]( Index const i ) noexcept( std::is_nothrow_invocable_v<KeyOf &, std::iter_reference_t<It>> ) { return key_of( at( i ) ); },
+                std::span{ perm },
+                Order{}
+            );
+            permute_in_place( first, std::span{ perm } );
+        }
+    }
+} // namespace key_sort_detail
+
+/// Rearranges the elements of a range in place so that afterwards element k is
+/// what element perm[ k ] was - the effect of the permutation argsort_by_key
+/// writes. Each element is moved once, and one more is held aside per cycle of
+/// the permutation: nothing is allocated, and the elements need only be
+/// movable (a move-only or container-owning element is not copied).
+/// perm is consumed: it is left the identity permutation.
+template <std::ranges::random_access_range Range, std::unsigned_integral Index>
+requires( std::movable<std::ranges::range_value_t<Range>> )
+void apply_permutation( Range && range, std::span<Index> const perm )
+    noexcept( key_sort_detail::nothrow_moves<std::ranges::iterator_t<Range>> )
+{
+    BOOST_ASSERT( std::ranges::size( range ) == perm.size() );
+    key_sort_detail::permute_in_place( key_sort_detail::range_iterator( range ), perm );
+}
+
+/// Sorts a range stably - equal keys keep their order, as std::stable_sort
+/// leaves them - by the key key_of( element ) computes, in the order of the
+/// keys' unsigned reading, ascending unless std::greater<> is passed (see
+/// sort_key and key_order). For a range of elements that are costly or
+/// impossible to copy (move-only, or owning a container): they are only ever
+/// moved, and the sort allocates no buffer of them, which std::stable_sort
+/// does.
+///  * a short range (up to 20 elements) is insertion sorted, key_of being
+///    called a few times per element;
+///  * a longer one is argsorted by argsort_by_key, with Algo and on its
+///    scratch, and permuted in place by apply_permutation: key_of is called
+///    once per element, and a further 4 KiB of the permutation is on the stack
+///    (the rest on the heap, so the call is noexcept only where allocation
+///    cannot fail, key_of does not throw and the elements move without
+///    throwing).
+/// A range of more than 2^32 - 1 elements is not supported.
+/// A thin forwarder: the work is instantiated per iterator (a contiguous
+/// range being the pointer to its elements), not per range, so that a vector,
+/// an array, a span and a C array of one element type, sorted by the same key
+/// function, share it. The permutation is out of line and further independent
+/// of the key function, algorithm and order.
+template <key_sort_algo Algo = key_sort_algo::pdq, std::ranges::random_access_range Range, typename KeyOf, key_order Order = std::less<>>
+requires( std::movable<std::ranges::range_value_t<Range>> && sort_key<std::remove_cvref_t<std::invoke_result_t<KeyOf &, std::ranges::range_reference_t<Range>>>> )
+void stable_sort_by_key( Range && range, KeyOf && key_of, Order = {} )
+    noexcept
+    (
+        key_sort_detail::allocation_nothrow &&
+        std::is_nothrow_invocable_v<KeyOf &, std::ranges::range_reference_t<Range>> &&
+        key_sort_detail::nothrow_moves<std::ranges::iterator_t<Range>>
+    )
+{
+    key_sort_detail::stable_sort_by_key_n<Algo, Order>( key_sort_detail::range_iterator( range ), std::ranges::size( range ), key_of );
+}
+namespace key_sort_detail
+{
     [[ nodiscard ]] constexpr std::uint64_t low_bits( unsigned const bits ) noexcept { return ( bits >= 64 ) ? ~std::uint64_t{ 0 } : ( ( std::uint64_t{ 1 } << bits ) - 1 ); }
 
     template <std::random_access_iterator It, typename KeyOf, typename SortBucket>

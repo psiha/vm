@@ -20,6 +20,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <compare>
 #include <concepts>
@@ -28,11 +29,13 @@
 #include <deque>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <random>
 #include <ranges>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -1226,6 +1229,134 @@ TEST( sort_by_key, wide_keys_beside_wide_items_still_sort )
     std::ranges::sort( expected, [ & ]( std::uint64_t const l, std::uint64_t const r ) { return std::pair{ key_of( l ), l } < std::pair{ key_of( r ), r }; } );
     sort_by_key( items.begin(), items.end(), key_of, 64, 64, 64 );
     EXPECT_EQ( items, expected );
+}
+
+// An element that owns its storage and cannot be copied, with a key that
+// repeats: stable_sort_by_key must move it and keep equal keys in order.
+struct owning_item
+{
+    std::uint32_t                key;
+    std::uint32_t                serial;
+    std::unique_ptr<std::vector<std::uint32_t>> payload;
+};
+
+template <typename Order>
+void check_stable_sort_by_key()
+{
+    std::mt19937 rng{ 5 };
+    for ( auto const n : { 0U, 1U, 2U, 3U, 19U, 20U, 21U, 22U, 64U, 513U, 5'000U } )
+    for ( auto const distinct : { 1U, 3U, 1'000'000U } )
+    {
+        std::vector<owning_item> items;
+        for ( std::uint32_t i{ 0 }; i < n; ++i )
+        {
+            auto const key{ static_cast<std::uint32_t>( rng() % distinct ) };
+            items.push_back( { key, i, std::make_unique<std::vector<std::uint32_t>>( 1 + i % 3, i ) } );
+        }
+        std::vector<std::uint32_t> expected( n );
+        std::iota( expected.begin(), expected.end(), 0U );
+        std::stable_sort( expected.begin(), expected.end(), [ & ]( std::uint32_t const l, std::uint32_t const r ) { return reference_order<Order>( items[ l ].key, items[ r ].key ); } );
+
+        stable_sort_by_key( items, []( owning_item const & item ) noexcept { return item.key; }, Order{} );
+
+        ASSERT_EQ( items.size(), n );
+        for ( std::uint32_t k{ 0 }; k < n; ++k )
+        {
+            EXPECT_EQ( items[ k ].serial, expected[ k ] ) << "n " << n << ", distinct " << distinct << ", position " << k;
+            ASSERT_TRUE( items[ k ].payload ) << "n " << n << ", position " << k;
+            EXPECT_EQ( items[ k ].payload->front(), items[ k ].serial );
+        }
+    }
+}
+
+TEST( stable_sort_by_key, ascending_keeps_equal_keys_in_order_of_move_only_elements )
+{
+    check_stable_sort_by_key<std::less<>>();
+}
+
+TEST( stable_sort_by_key, descending_keeps_equal_keys_in_order_of_move_only_elements )
+{
+    check_stable_sort_by_key<std::greater<>>();
+}
+
+TEST( stable_sort_by_key, wide_keys_and_biased_signed_keys )
+{
+    std::mt19937_64 rng{ 9 };
+    for ( auto const n : { 7U, 20U, 21U, 700U } )
+    {
+        std::vector<std::pair<std::int64_t, std::uint32_t>> items;
+        for ( std::uint32_t i{ 0 }; i < n; ++i )
+            items.emplace_back( static_cast<std::int64_t>( rng() % 5 ) - 2, i );
+        auto expected{ items };
+        std::stable_sort( expected.begin(), expected.end(), []( auto const & l, auto const & r ) { return l.first < r.first; } );
+        // a signed key biased to order as unsigned: the sign bit flipped
+        stable_sort_by_key( items, []( auto const & item ) noexcept { return static_cast<std::uint64_t>( item.first ) ^ ( std::uint64_t{ 1 } << 63 ); } );
+        EXPECT_EQ( items, expected ) << "n " << n;
+    }
+}
+
+// The sort does not depend on what holds the elements: a vector, an array, a
+// span, a C array and a (non-contiguous) deque all come out the same.
+template <std::size_t N>
+void check_stable_sort_by_key_over_containers()
+{
+    using item = std::pair<std::uint32_t, std::uint32_t>;
+    std::mt19937 rng{ 17 };
+    std::array<item, N> source;
+    for ( std::uint32_t i{ 0 }; i < N; ++i )
+        source[ i ] = { static_cast<std::uint32_t>( rng() % 4 ), i };
+    auto expected{ source };
+    std::ranges::stable_sort( expected, {}, &item::first );
+    auto const key_of{ []( item const & i ) noexcept { return i.first; } };
+
+    std::vector<item> vector( source.begin(), source.end() );
+    stable_sort_by_key( vector, key_of );
+    EXPECT_TRUE( std::ranges::equal( vector, expected ) ) << "vector, N " << N;
+
+    auto array{ source };
+    stable_sort_by_key( array, key_of );
+    EXPECT_EQ( array, expected ) << "array, N " << N;
+
+    std::vector<item> spanned( source.begin(), source.end() );
+    stable_sort_by_key( std::span{ spanned }, key_of );
+    EXPECT_TRUE( std::ranges::equal( spanned, expected ) ) << "span, N " << N;
+
+    item c_array[ N ];
+    std::ranges::copy( source, c_array );
+    stable_sort_by_key( c_array, key_of );
+    EXPECT_TRUE( std::ranges::equal( c_array, expected ) ) << "C array, N " << N;
+
+    std::deque<item> deque( source.begin(), source.end() );
+    stable_sort_by_key( deque, key_of );
+    EXPECT_TRUE( std::ranges::equal( deque, expected ) ) << "deque, N " << N;
+}
+
+TEST( stable_sort_by_key, is_the_same_over_vector_array_span_c_array_and_deque )
+{
+    check_stable_sort_by_key_over_containers<12>();
+    check_stable_sort_by_key_over_containers<300>();
+}
+
+TEST( apply_permutation, is_the_gather_the_permutation_describes_and_leaves_the_identity )
+{
+    std::mt19937 rng{ 3 };
+    for ( auto const n : { 0U, 1U, 2U, 5U, 100U, 1'001U } )
+    {
+        std::vector<std::uint32_t> perm( n );
+        std::iota( perm.begin(), perm.end(), 0U );
+        std::ranges::shuffle( perm, rng );
+        std::vector<std::string> items;
+        for ( std::uint32_t i{ 0 }; i < n; ++i )
+            items.push_back( std::string( 40, 'a' ) + std::to_string( i ) );
+        auto const original{ items };
+        auto const requested{ perm };
+        apply_permutation( items, std::span{ perm } );
+        for ( std::uint32_t k{ 0 }; k < n; ++k )
+        {
+            EXPECT_EQ( items[ k ], original[ requested[ k ] ] );
+            EXPECT_EQ( perm[ k ], k );
+        }
+    }
 }
 
 //------------------------------------------------------------------------------
