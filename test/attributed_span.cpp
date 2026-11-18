@@ -536,7 +536,7 @@ TEST( attributed_span, a_span_that_claims_no_order_needs_no_ordering_of_its_elem
     attributed_span<element> const from_pointer( elements.data(), static_cast<std::uint32_t>( elements.size() ) );
     EXPECT_EQ( from_pointer.data(), elements.data() );
 
-    attributed_span<element> const from_span( std::span<element>( elements ) );
+    attributed_span<element> const from_span{ std::span<element>{ elements } };
     EXPECT_EQ( from_span.size(), 2u );
 }
 
