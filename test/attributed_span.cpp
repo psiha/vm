@@ -18,6 +18,7 @@
 #include <span>
 #include <stdexcept>
 #include <tuple>
+#include <variant>
 #include <string>
 #include <vector>
 
@@ -512,6 +513,32 @@ TEST( sorted_range, a_false_fill_is_caught_in_debug_builds )
     EXPECT_DEATH( std::ignore = ( sorted_range<heap_vector<std::uint32_t>, true>::filled( 2, fill_repeated ) ), "" );
 }
 #endif
+
+namespace
+{
+    struct unordered_a { int value; };
+    struct unordered_b { int value; };
+}
+
+// A span that claims no order never touches the comparator: elements with no
+// ordering at all (here a variant whose alternatives have no operator<, which
+// some standard libraries' variant::operator< is nevertheless callable on) are
+// fine, also in debug builds.
+TEST( attributed_span, a_span_that_claims_no_order_needs_no_ordering_of_its_elements )
+{
+    using element = std::variant<unordered_a, unordered_b>;
+    std::vector<element> elements{ unordered_a{ 2 }, unordered_b{ 1 } };
+
+    attributed_span<element> const from_range( elements );
+    EXPECT_EQ( from_range.size(), 2u );
+    EXPECT_FALSE( from_range.is_sorted() );
+
+    attributed_span<element> const from_pointer( elements.data(), static_cast<std::uint32_t>( elements.size() ) );
+    EXPECT_EQ( from_pointer.data(), elements.data() );
+
+    attributed_span<element> const from_span( std::span<element>( elements ) );
+    EXPECT_EQ( from_span.size(), 2u );
+}
 
 //------------------------------------------------------------------------------
 } // namespace psi::vm
