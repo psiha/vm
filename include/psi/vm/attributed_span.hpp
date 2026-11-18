@@ -182,18 +182,20 @@ public:
     {
         detail::verify_facts( first, first + size, facts_, comp );
     }
-    constexpr attributed_span( T * const first PSI_LIFETIMEBOUND, size_type const size, span_facts const facts = {} ) noexcept
+    constexpr attributed_span( T * const first PSI_LIFETIMEBOUND, size_type const size, span_facts const facts ) noexcept
     requires( self_verifying_comparator<Comparator> )
         : attributed_span( first, size, facts, Comparator{} ) {}
+    /// No facts: nothing to verify, whatever the comparator (which is never
+    /// touched, so the elements need not even be comparable).
+    constexpr attributed_span( T * const first PSI_LIFETIMEBOUND, size_type const size ) noexcept
+        : attributed_span( first, size, span_facts{}, unchecked ) {}
 
     constexpr attributed_span( std::span<T> const span, span_facts const facts, Comparator const & comp ) noexcept
         : attributed_span( span.data(), checked_size( span.size() ), facts, comp ) {}
-    constexpr attributed_span( std::span<T> const span, span_facts const facts = {} ) noexcept
+    constexpr attributed_span( std::span<T> const span, span_facts const facts ) noexcept
     requires( self_verifying_comparator<Comparator> )
         : attributed_span( span, facts, Comparator{} ) {}
-    /// No facts: nothing to verify, whatever the comparator.
     constexpr attributed_span( std::span<T> const span ) noexcept
-    requires( !self_verifying_comparator<Comparator> )
         : attributed_span( span.data(), checked_size( span.size() ), span_facts{}, unchecked ) {}
 
     template <typename Range>
@@ -202,10 +204,10 @@ public:
         : attributed_span( std::span<T>( std::forward<Range>( range ) ), facts, comp ) {}
     template <typename Range>
     requires( !is_attributed_span_v<std::remove_cvref_t<Range>> && !std::same_as<std::remove_cvref_t<Range>, std::span<T>> && !is_sorted_range_by_v<std::remove_cvref_t<Range>, Comparator> && std::is_constructible_v<std::span<T>, Range> && self_verifying_comparator<Comparator> )
-    constexpr attributed_span( Range && range, span_facts const facts = {} ) noexcept
+    constexpr attributed_span( Range && range, span_facts const facts ) noexcept
         : attributed_span( std::span<T>( std::forward<Range>( range ) ), facts, Comparator{} ) {}
     template <typename Range>
-    requires( !is_attributed_span_v<std::remove_cvref_t<Range>> && !std::same_as<std::remove_cvref_t<Range>, std::span<T>> && !is_sorted_range_by_v<std::remove_cvref_t<Range>, Comparator> && std::is_constructible_v<std::span<T>, Range> && !self_verifying_comparator<Comparator> )
+    requires( !is_attributed_span_v<std::remove_cvref_t<Range>> && !std::same_as<std::remove_cvref_t<Range>, std::span<T>> && !is_sorted_range_by_v<std::remove_cvref_t<Range>, Comparator> && std::is_constructible_v<std::span<T>, Range> )
     constexpr attributed_span( Range && range ) noexcept
         : attributed_span( std::span<T>( std::forward<Range>( range ) ) ) {}
 
