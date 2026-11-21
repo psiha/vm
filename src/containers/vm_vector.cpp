@@ -81,7 +81,9 @@ namespace detail
 
 void mem_mapping::publish_size() noexcept
 {
-    if ( !has_attached_storage() )
+    // No view: the section was never mapped, or it is a zero-length mapping.
+    // There is no header page to store the length into.
+    if ( !has_attached_storage() || view_.empty() )
         return;
 
     // Store only on an actual change - publishing an unchanged length would
@@ -893,8 +895,15 @@ mem_mapping::map( file_handle file, std::size_t const mapping_size ) noexcept
     if ( mapping_size ) [[ likely ]]
     {
         auto view{ extendable_mapped_view::map( mapping_, 0, mapping_size ).as_result_or_error() };
-        if ( !view )
+        if ( !view ) [[ unlikely ]]
+        {
+            // The section is open but nothing was mapped. Leaving it attached
+            // makes destruction publish the live length through the view, and
+            // an empty view is not storage that store can land in.
+            unmap();
+            mapping_ = {};
             return view.error();
+        }
         view_ = *std::move( view );
         BOOST_ASSERT( view_.size() == mapping_size );
     }
