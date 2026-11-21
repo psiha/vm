@@ -121,9 +121,13 @@ windows_mmap
 #   ifndef NDEBUG
         ::SetLastError( ::RtlNtStatusToDosError( success ) );
 #   endif
-        BOOST_ASSUME( sz          == actual_size                      );
-        BOOST_ASSUME( view_startv == desired_position                 );
-        BOOST_ASSUME( success     == nt::STATUS_CONFLICTING_ADDRESSES );
+        BOOST_ASSUME( sz          == actual_size      );
+        BOOST_ASSUME( view_startv == desired_position );
+        // A placement at a fixed address fails with CONFLICTING_ADDRESSES when
+        // that address is taken. A map with no preferred address can fail for
+        // other reasons (a section larger than the process can hold among
+        // them) and those are ordinary errors, not broken assumptions.
+        BOOST_ASSUME( !desired_position || ( success == nt::STATUS_CONFLICTING_ADDRESSES ) );
         return {};
     }
 #endif
