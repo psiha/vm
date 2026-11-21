@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <new>
 #include <print>
 #include <system_error>
@@ -41,6 +42,18 @@ TEST( vm_vector, anon_memory_backed )
     EXPECT_EQ( vec[ 0 ], 3.14 );
     EXPECT_EQ( vec[ 1 ], 0.14 );
     EXPECT_EQ( vec[ 2 ], 0.04 );
+}
+
+// A request the process cannot map must fail and leave nothing attached. Where
+// the section object is created before the view, a failed view used to keep
+// the section, and destruction then stored the length through that view.
+TEST( vm_vector, impossible_map_leaves_storage_unattached )
+{
+    psi::vm::vm_vector<std::byte> vec;
+    auto const tooLarge{ std::numeric_limits<std::size_t>::max() / 4 };
+    auto mapped{ vec.map_memory( tooLarge )() };
+    EXPECT_FALSE( static_cast<bool>( mapped ) );
+    EXPECT_FALSE( vec.storage_base().has_attached_storage() );
 }
 
 // A default constructed vm_vector has no backing store: it reads as empty,
