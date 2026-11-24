@@ -22,7 +22,7 @@
 //------------------------------------------------------------------------------
 #pragma once
 
-#include "sort.hpp" // comparator_erasure, erasure_applies, erased_ref_predicate
+#include "sort.hpp" // comparator_erasure, erases, erased_ref_predicate
 
 #if __has_include( <boost/move/algo/adaptive_merge.hpp> )
 #include <boost/move/algo/adaptive_merge.hpp>
@@ -118,7 +118,7 @@ constexpr void inplace_merge(
     {
         if !consteval
         {
-            if constexpr ( Erasure == comparator_erasure::allowed && detail::erasure_applies<Comparator, key_t> )
+            if constexpr ( detail::erases<Erasure, Comparator, key_t> )
             {
                 detail::erased_adaptive_merge<key_t>(
                     std::to_address( first ), std::to_address( middle ), std::to_address( last ),
@@ -134,7 +134,7 @@ constexpr void inplace_merge(
         }
     }
 #endif // PSI_VM_HAS_ADAPTIVE_MERGE
-    if constexpr ( Erasure == comparator_erasure::allowed && detail::erasure_applies<Comparator, key_t> )
+    if constexpr ( detail::erases<Erasure, Comparator, key_t> )
     {
         if !consteval
         {
