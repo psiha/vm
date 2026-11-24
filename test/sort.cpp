@@ -10,6 +10,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #include <psi/vm/sort.hpp>
+#include <psi/vm/inplace_merge.hpp>
 #include <psi/vm/sort_keys.hpp>
 #include <psi/vm/sort_keys_radix.hpp>
 #include <psi/vm/containers/flat_set.hpp>
@@ -838,6 +839,37 @@ TEST( sort, a_projection_orders_by_the_projected_value )
     // register-sized, so the erasure heuristic does not take that path.
     vm::sort<comparator_erasure::allowed>( items, {}, &item::key );
     EXPECT_TRUE( std::ranges::is_sorted( items, {}, &item::key ) );
+}
+
+TEST( sort, erasure_always_erases_a_register_comparator )
+{
+    using comparator = std::ranges::less;
+    static_assert(  can_be_passed_in_reg<comparator> );
+    static_assert( !detail::erases<comparator_erasure::never  , comparator, int> );
+    static_assert( !detail::erases<comparator_erasure::allowed, comparator, int> ); // the size heuristic declines...
+    static_assert(  detail::erases<comparator_erasure::always , comparator, int> ); // ...'always' does not
+    static_assert(  comparator_erasure_of<erasure_forced <comparator>> == comparator_erasure::always  );
+    static_assert(  comparator_erasure_of<erasure_opt_in<comparator>> == comparator_erasure::allowed );
+
+    std::vector<int> values{ 5, 3, 9, 1, 7, 2, 8, 2 };
+    vm::sort<comparator_erasure::always>( values.begin(), values.end() );
+    EXPECT_TRUE( std::ranges::is_sorted( values ) );
+
+    std::deque<int> deque{ 5, 3, 9, 1, 7, 2, 8, 2 }; // non-contiguous: erased_iter_sort
+    vm::sort<comparator_erasure::always>( deque.begin(), deque.end(), std::ranges::greater{} );
+    EXPECT_TRUE( std::ranges::is_sorted( deque, std::ranges::greater{} ) );
+
+    // a small stateful comparator is stored inline in the erased predicate
+    auto const by_modulo{ []( int const a, int const b ) noexcept { return a % 7 < b % 7; } };
+    static_assert( can_be_passed_in_reg<decltype( by_modulo )> );
+    static_assert( detail::erases<comparator_erasure::always, decltype( by_modulo ), int> );
+    std::vector<int> mods{ 15, 8, 6, 14, 1 };
+    vm::sort<comparator_erasure::always>( mods.begin(), mods.end(), by_modulo );
+    EXPECT_TRUE( std::ranges::is_sorted( mods, by_modulo ) );
+
+    std::vector<int> halves{ 1, 4, 9, 2, 3, 10 };
+    vm::inplace_merge<comparator_erasure::always>( halves.begin(), halves.begin() + 3, halves.end(), comparator{} );
+    EXPECT_TRUE( std::ranges::is_sorted( halves ) );
 }
 
 constexpr int first_of_a_sorted_array() noexcept

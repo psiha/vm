@@ -151,7 +151,8 @@ private:
             return static_cast<bool>( std::bit_cast<Pred>( pp )( left, right ) );
         } else {
             alignas( Pred ) std::byte buf[ sizeof( Pred ) ];
-            std::memcpy( buf, &pp, sizeof( Pred ) );
+            void const * const slot{ pp }; // un-restricted, as above
+            std::memcpy( buf, &slot, sizeof( Pred ) );
             return static_cast<bool>( ( *std::launder( reinterpret_cast<Pred const *>( buf ) ) )( left, right ) );
         }
 #endif

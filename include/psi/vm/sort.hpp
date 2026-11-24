@@ -14,7 +14,8 @@
 ///     Komparator) so a user picks the size-optimised-erased vs
 ///     fully-typed-monomorphic shape per container instantiation.
 /// Even when allowed, erasure is ATTEMPTED only when the internal heuristics
-/// say it can win (see erasure_applies below).
+/// say it can win (see erasure_applies below); comparator_erasure::always
+/// skips that heuristic and erases whenever the key permits it (see erases).
 ///
 /// Copyright (c) Domagoj Saric.
 ///
@@ -62,17 +63,30 @@ namespace psi::vm
 enum struct comparator_erasure : std::uint8_t
 {
     never,  ///< fully typed, monomorphic codegen at every call site
-    allowed ///< attempt type erasure when the internal heuristics deem it a win
+    allowed,///< attempt type erasure when the internal heuristics deem it a win
+    always  ///< type-erase unconditionally, regardless of the comparator's size:
+            ///< for callers that want no per-comparator-type instantiation of
+            ///< the algorithm. The comparator's size says nothing about whether
+            ///< erasure pays: the typical case is a cold call site sorting a very
+            ///< common key type (e.g. a span of integers) with a custom
+            ///< comparator, where the one shared erased-comparator instantiation
+            ///< for that key type beats a new pdqsort instantiation per
+            ///< comparator, whatever the comparator's size. Requires a scalar,
+            ///< register-passable key (the erased predicate takes keys by
+            ///< value) - anything else is a compile error, never a silent
+            ///< fallback to the typed instantiation.
 }; // enum struct comparator_erasure
 
 /// Comparator opt-in trait: a comparator type carrying
 /// `static constexpr bool allow_comparator_erasure{ true };` selects
-/// comparator_erasure::allowed wherever the containers sort or merge with it.
+/// comparator_erasure::allowed wherever the containers sort or merge with it;
+/// `static constexpr bool force_comparator_erasure{ true };` selects
+/// comparator_erasure::always (taking precedence).
 template <typename Comparator>
 constexpr comparator_erasure comparator_erasure_of{
-    requires { requires( Comparator::allow_comparator_erasure ); }
-        ? comparator_erasure::allowed
-        : comparator_erasure::never
+    requires { requires( Comparator::force_comparator_erasure ); } ? comparator_erasure::always  :
+    requires { requires( Comparator::allow_comparator_erasure ); } ? comparator_erasure::allowed :
+                                                                     comparator_erasure::never
 };
 
 /// Which of pdqsort's two partitionings sort() uses. The branchless one (block
@@ -124,6 +138,14 @@ struct erasure_opt_in : Comparator
     static constexpr bool allow_comparator_erasure{ true };
 };
 
+/// As erasure_opt_in but selects comparator_erasure::always: erased even when
+/// the comparator is small enough to be passed in registers.
+template <typename Comparator>
+struct erasure_forced : Comparator
+{
+    static constexpr bool force_comparator_erasure{ true };
+};
+
 template <typename Comparator>
 struct erasure_opt_out : Comparator
 {
@@ -132,13 +154,35 @@ struct erasure_opt_out : Comparator
 
 namespace detail
 {
-    /// The heuristic gate: erasure can win only for a fat (non-reg-passable)
-    /// comparator -- the ones make_trivially_copyable_predicate mints a
-    /// distinct by-ref closure type for, re-stamping the algorithm family per
-    /// comparator type -- over register-scalar keys (the erased predicate
-    /// passes keys by value).
+    /// The structural requirement of erasure: the erased predicate passes
+    /// keys by value, so the key must be a register-passable scalar.
+    template <typename Key>
+    bool constexpr erasable_key{ std::is_scalar_v<Key> && can_be_passed_in_reg<Key> };
+
+    /// The heuristic gate of comparator_erasure::allowed: beyond the key
+    /// requirement, erasure is attempted only for a fat (non-reg-passable)
+    /// comparator. Erasure removes the per-comparator-type re-stamping of the
+    /// algorithm family -- which is what make_trivially_copyable_predicate's
+    /// distinct by-ref closure type for a fat comparator causes -- while a
+    /// register-passable comparator is assumed to be worth more as an inlined
+    /// typed sort than as an indirect call through the shared worker. The
+    /// comparator's size is only a proxy for that: it says nothing about
+    /// whether erasure pays at a given call site (e.g. a cold site sorting a
+    /// very common key type wants the shared erased instantiation whatever
+    /// the comparator's size) - such callers select comparator_erasure::always.
     template <typename Comparator, typename Key>
-    bool constexpr erasure_applies{ !can_be_passed_in_reg<Comparator> && std::is_scalar_v<Key> && can_be_passed_in_reg<Key> };
+    bool constexpr erasure_applies{ !can_be_passed_in_reg<Comparator> && erasable_key<Key> };
+
+    /// Whether a sort/merge with the given policy goes through the erased
+    /// worker. `always` is deterministic: it depends on the key only and is a
+    /// compile error when the key cannot be erased.
+    template <comparator_erasure Erasure, typename Comparator, typename Key>
+    bool constexpr erases{ []
+    {
+        static_assert( Erasure != comparator_erasure::always || erasable_key<Key>,
+                       "comparator_erasure::always requires a scalar, register-passable key type" );
+        return Erasure == comparator_erasure::always || ( Erasure == comparator_erasure::allowed && erasure_applies<Comparator, Key> );
+    }() };
 
     // Out-of-line pdqsort entries for the type-erased comparator path. The
     // noinline barrier is load-bearing: erased_ref_predicate's thunk pointer
@@ -272,7 +316,7 @@ constexpr void sort( It const first, It const last, Comparator const & __restric
             Partitioning == sort_partitioning::branchless ||
             ( Partitioning == sort_partitioning::automatic && key_sort_detail::branchless_by_default<Comparator, key_t> )
         };
-        if constexpr ( Erasure == comparator_erasure::allowed && detail::erasure_applies<Comparator, key_t> )
+        if constexpr ( detail::erases<Erasure, Comparator, key_t> )
         {
             if !consteval
             {
