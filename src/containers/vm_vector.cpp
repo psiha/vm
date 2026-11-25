@@ -362,7 +362,7 @@ void * mem_mapping::shrink_to( size_type const target_size ) noexcept
         return data();
     }
 
-    if ( align_down( sz, commit_granularity ) == align_down( target_size, commit_granularity ) ) {
+    if ( align_down( size_type{ sz }, commit_granularity ) == align_down( target_size, commit_granularity ) ) {
         sz = target_size;
         return attached_data();
     }

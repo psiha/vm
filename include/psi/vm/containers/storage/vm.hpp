@@ -36,6 +36,7 @@
 
 #include <boost/assert.hpp>
 
+#include <atomic>
 #include <cstddef>
 #include <span>
 #include <utility>
@@ -558,10 +559,11 @@ private:
 
     static constexpr sizes_hdr unpack( header_info ) noexcept;
 
+    struct live_length;
     //! Mutable access to the LIVE length (the in-flight one). Every internal
     //! growth/shrink path moves this and only this - publishing to the header
     //! is the caller's explicit act (publish_size()).
-    [[ nodiscard, gnu::pure ]] size_type & live_size() noexcept { return live_size_.value; }
+    [[ nodiscard, gnu::pure ]] live_length & live_size() noexcept { return live_size_; }
     //! Mutable access to the PERSISTED length in the mapped header. Only
     //! publish_size() may move it.
     [[ nodiscard, gnu::pure ]] size_type & persisted_size() noexcept { return get_sizes().data_size; }
@@ -599,6 +601,15 @@ private:
     // is deliberately NOT updated by growth/shrinkage - see size() and
     // committed_size(). A move hands it over and leaves zero behind, so it is
     // zero whenever no storage is attached and size() needs no check.
+    //
+    // Read and written through std::atomic_ref, relaxed: the owner may move
+    // the length while other threads read it - e.g. drop elements past the
+    // length those readers use, without excluding them, when nothing is
+    // unmapped. Relaxed suffices because the length publishes no other
+    // memory: a reader that sees either value sees a valid length, and
+    // whatever must be ordered with it (elements written before a growth, a
+    // remap) the owner publishes with its own synchronisation, as before.
+    // Uncontended, it compiles to the plain load and store it replaces.
     struct [[ clang::trivial_abi ]] live_length
     {
         size_type value{ 0 };
@@ -608,8 +619,21 @@ private:
         constexpr live_length( live_length       && other ) noexcept : value{ std::exchange( other.value, size_type{ 0 } ) } {}
         constexpr live_length & operator=( live_length const &  ) noexcept = default;
         constexpr live_length & operator=( live_length       && other ) noexcept { value = std::exchange( other.value, size_type{ 0 } ); return *this; }
-        constexpr live_length & operator=( size_type const v ) noexcept { value = v; return *this; }
-        constexpr operator size_type() const noexcept { return value; }
+        constexpr live_length & operator=( size_type const v ) noexcept { store( v ); return *this; }
+        constexpr live_length & operator+=( size_type const delta ) noexcept { store( load() + delta ); return *this; } // the owner's alone: not an atomic RMW
+        constexpr operator size_type() const noexcept { return load(); }
+
+    private:
+        constexpr size_type load() const noexcept
+        {
+            if consteval { return value; }
+            else         { return std::atomic_ref{ const_cast<size_type &>( value ) }.load( std::memory_order_relaxed ); }
+        }
+        constexpr void store( size_type const v ) noexcept
+        {
+            if consteval { value = v; }
+            else         { std::atomic_ref{ value }.store( v, std::memory_order_relaxed ); }
+        }
     };
     live_length            live_size_;
     // Private views (COW clones) only: how much of the view's address range,
