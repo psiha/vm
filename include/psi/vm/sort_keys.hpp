@@ -43,6 +43,7 @@
 #include <array>
 #include <bit>
 #include <concepts>
+#include <iterator>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -502,6 +503,13 @@ namespace key_sort_detail
             return std::ranges::begin( range );
     }
 
+    // What the in-place bodies do with an element: move it out of the range
+    // (iter_move), construct a value from that and assign the value back
+    // through the reference - the standard concept for exactly that, which
+    // also holds for proxy-reference iterators.
+    template <typename Range>
+    concept movable_in_place = std::indirectly_movable_storable<decltype( range_iterator( std::declval<Range &>() ) ), decltype( range_iterator( std::declval<Range &>() ) )>;
+
     template <typename It>
     bool constexpr nothrow_moves{ std::is_nothrow_move_constructible_v<std::iter_value_t<It>> && std::is_nothrow_move_assignable_v<std::iter_value_t<It>> };
 
@@ -513,15 +521,18 @@ namespace key_sort_detail
     void permute_in_place( It const first, std::span<Index> const perm ) noexcept( nothrow_moves<It> )
     {
         auto const at{ [ first ]( std::size_t const i ) noexcept -> decltype( auto ) { return first[ static_cast<std::iter_difference_t<It>>( i ) ]; } };
+        // What moving out of element i yields (the element as an rvalue, or what a proxy iterator defines): never a move of a prvalue proxy.
+        auto const take{ [ first ]( std::size_t const i ) -> decltype( auto ) { return std::ranges::iter_move( first + static_cast<std::iter_difference_t<It>>( i ) ); } };
         for ( std::size_t start{ 0 }; start < perm.size(); ++start )
         {
             if ( perm[ start ] == start )
                 continue;
-            auto held{ std::move( at( start ) ) };
+            // The value, not what the iterator dereferences to: for a proxy-reference range a copy of the proxy names the same slot.
+            std::iter_value_t<It> held( take( start ) );
             auto hole{ start };
             for ( auto from{ static_cast<std::size_t>( perm[ hole ] ) }; from != start; from = static_cast<std::size_t>( perm[ hole ] ) )
             {
-                at  ( hole ) = std::move( at( from ) );
+                at  ( hole ) = take( from );
                 perm[ hole ] = static_cast<Index>( hole );
                 hole = from;
             }
@@ -546,6 +557,8 @@ namespace key_sort_detail
         using key_uint = key_uint_t<key_t>;
         using Index    = std::uint32_t;
         auto const at{ [ first ]( std::size_t const i ) noexcept -> decltype( auto ) { return first[ static_cast<std::iter_difference_t<It>>( i ) ]; } };
+        // What moving out of element i yields (the element as an rvalue, or what a proxy iterator defines): never a move of a prvalue proxy.
+        auto const take{ [ first ]( std::size_t const i ) -> decltype( auto ) { return std::ranges::iter_move( first + static_cast<std::iter_difference_t<It>>( i ) ); } };
         BOOST_ASSERT( n <= std::numeric_limits<Index>::max() );
         if ( n <= stable_insertion_sort_limit )
         {
@@ -558,11 +571,11 @@ namespace key_sort_detail
                 auto const key{ unsigned_key( at( i ) ) };
                 if ( !( key < unsigned_key( at( i - 1 ) ) ) )
                     continue;
-                auto held{ std::move( at( i ) ) };
+                std::iter_value_t<It> held( take( i ) );
                 auto hole{ i };
                 do
                 {
-                    at( hole ) = std::move( at( hole - 1 ) );
+                    at( hole ) = take( hole - 1 );
                     --hole;
                 } while ( hole != 0 && key < unsigned_key( at( hole - 1 ) ) );
                 at( hole ) = std::move( held );
@@ -590,7 +603,7 @@ namespace key_sort_detail
 /// movable (a move-only or container-owning element is not copied).
 /// perm is consumed: it is left the identity permutation.
 template <std::ranges::random_access_range Range, std::unsigned_integral Index>
-requires( std::movable<std::ranges::range_value_t<Range>> )
+requires( key_sort_detail::movable_in_place<Range> )
 void apply_permutation( Range && range, std::span<Index> const perm )
     noexcept( key_sort_detail::nothrow_moves<std::ranges::iterator_t<Range>> )
 {
@@ -620,7 +633,7 @@ void apply_permutation( Range && range, std::span<Index> const perm )
 /// function, share it. The permutation is out of line and further independent
 /// of the key function, algorithm and order.
 template <key_sort_algo Algo = key_sort_algo::pdq, std::ranges::random_access_range Range, typename KeyOf, key_order Order = std::less<>>
-requires( std::movable<std::ranges::range_value_t<Range>> && sort_key<std::remove_cvref_t<std::invoke_result_t<KeyOf &, std::ranges::range_reference_t<Range>>>> )
+requires( key_sort_detail::movable_in_place<Range> && sort_key<std::remove_cvref_t<std::invoke_result_t<KeyOf &, std::ranges::range_reference_t<Range>>>> )
 void stable_sort_by_key( Range && range, KeyOf && key_of, Order = {} )
     noexcept
     (

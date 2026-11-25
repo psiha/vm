@@ -151,6 +151,15 @@ namespace detail
         explicit constexpr strided_value( std::span<T const> const src ) noexcept( nothrow_storage && std::is_nothrow_copy_constructible_v<T> )
             : data_( src.begin(), src.end() ) {}
 
+        // From a reference to an entry: an exact match, so that the conversion
+        // is not left to the reference's span and value conversion operators,
+        // which a compiler may find ambiguous (MSVC does, making the iterator
+        // fail std::indirectly_readable).
+        template <typename U>
+        requires( std::is_same_v<std::remove_const_t<U>, T> )
+        constexpr strided_value( strided_reference<U, MaxStride> const reference ) noexcept( nothrow_storage && std::is_nothrow_copy_constructible_v<T> )
+            : strided_value( std::span<T const>{ reference.data(), reference.size() } ) {}
+
         //-- span-like interface --------------------------------------------------
         [[ nodiscard ]] constexpr std::span<T const> as_span() const noexcept { return { data_.data(), data_.size() }; }
         [[ nodiscard ]] constexpr std::span<T      > as_span()       noexcept { return { data_.data(), data_.size() }; }

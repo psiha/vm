@@ -17,6 +17,7 @@
 #include <psi/vm/containers/heap_vector.hpp>
 #include <psi/vm/containers/komparator.hpp>
 #include <psi/vm/containers/small_vector.hpp>
+#include <psi/vm/containers/strided_vector.hpp>
 
 #include <gtest/gtest.h>
 
@@ -1386,6 +1387,36 @@ TEST( apply_permutation, is_the_gather_the_permutation_describes_and_leaves_the_
         for ( std::uint32_t k{ 0 }; k < n; ++k )
         {
             EXPECT_EQ( items[ k ], original[ requested[ k ] ] );
+            EXPECT_EQ( perm[ k ], k );
+        }
+    }
+}
+
+// A range whose iterator dereferences to a proxy (a strided_vector's entry is a
+// reference to a slot, not a value): the element held aside across a cycle is
+// the value, not a second name for the slot.
+TEST( apply_permutation, permutes_a_proxy_reference_range )
+{
+    std::mt19937 rng{ 5 };
+    for ( auto const n : { 0U, 1U, 2U, 5U, 100U, 1'001U } )
+    {
+        std::vector<std::uint32_t> perm( n );
+        std::iota( perm.begin(), perm.end(), 0U );
+        std::ranges::shuffle( perm, rng );
+        strided_vector<std::uint32_t> items( 3 );
+        for ( std::uint32_t i{ 0 }; i < n; ++i )
+        {
+            std::array<std::uint32_t, 3> const entry{ i, i * 7, i * 13 };
+            items.push_back( std::span{ entry } );
+        }
+        auto const requested{ perm };
+        apply_permutation( items, std::span{ perm } );
+        for ( std::uint32_t k{ 0 }; k < n; ++k )
+        {
+            auto const entry{ items[ k ] };
+            EXPECT_EQ( entry[ 0 ], requested[ k ] );
+            EXPECT_EQ( entry[ 1 ], requested[ k ] * 7 );
+            EXPECT_EQ( entry[ 2 ], requested[ k ] * 13 );
             EXPECT_EQ( perm[ k ], k );
         }
     }
