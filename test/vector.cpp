@@ -3,6 +3,7 @@
 #include <psi/vm/containers/fc_vector.hpp>
 #include <psi/vm/containers/small_vector.hpp>
 #include <psi/vm/containers/heap_vector.hpp>
+#include <psi/vm/containers/flat_set.hpp>
 #include <psi/vm/allocators/crt.hpp>
 #if PSI_VM_HAS_MIMALLOC
 #   include <psi/vm/allocators/mimalloc.hpp>
@@ -2370,6 +2371,60 @@ TEST( vector_insert, gap_past_the_old_end_is_constructed_not_assigned )
         }
     }
     EXPECT_EQ( live().size(), baseline );
+}
+
+// A trivially moveable element that is constructible from its emplace args but
+// not assignable from them (nor at all): emplace/insert must only ever
+// construct into the gap, never instantiate the assign branch.
+namespace emplace_construct_only
+{
+    struct element
+    {
+        static constexpr bool is_trivially_moveable{ true };
+
+        int value;
+
+        explicit element( int const v ) noexcept : value{ v } {}
+        element( element const & ) = default;
+        element & operator=( element const & ) = delete;
+        auto operator<=>( element const & ) const = default;
+    };
+    static_assert( is_trivially_moveable<element> );
+    static_assert( !std::is_assignable_v<element &, int> );
+} // namespace emplace_construct_only
+
+TEST( vector_insert, emplace_into_trivially_moveable_not_assignable_from_args )
+{
+    using emplace_construct_only::element;
+    for ( auto const position : { 0u, 2u, 4u } ) // begin / middle / end
+    {
+        heap_vector<element> v;
+        v.reserve( 16 );
+        for ( int i{ 0 }; i < 4; ++i )
+            v.emplace_back( i );
+        auto const it{ v.emplace( v.begin() + position, 100 ) };
+        EXPECT_EQ( it - v.begin(), position );
+        ASSERT_EQ( v.size(), 5u );
+        EXPECT_EQ( v[ position ].value, 100 );
+        for ( std::uint32_t i{ 0 }; i < 5; ++i )
+            if ( i != position )
+                EXPECT_EQ( v[ i ].value, static_cast<int>( i < position ? i : i - 1 ) );
+    }
+}
+
+TEST( vector_insert, flat_set_insert_of_trivially_moveable_not_assignable_from_args )
+{
+    using emplace_construct_only::element;
+    flat_set<element> set;
+    for ( int const v : { 5, 1, 9, 3, 7 } ) // begin / middle / end positions
+        set.insert( element{ v } );
+    ASSERT_EQ( set.size(), 5u );
+    int expected{ 1 };
+    for ( auto const & e : set )
+    {
+        EXPECT_EQ( e.value, expected );
+        expected += 2;
+    }
 }
 
 //------------------------------------------------------------------------------
