@@ -18,6 +18,7 @@
 #include <cstring>
 #include <list>
 #include <numeric>
+#include <set>
 #include <ranges>
 #include <span>
 #include <string>
@@ -2272,6 +2273,103 @@ TEST( vector_append, append_range_amortized_grows_geometrically )
     // 1.5x geometric growth: ~log_1.5( 1000 ) reallocations, against one per
     // append under exact fit.
     EXPECT_LT( reallocations, 40u );
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Insert into the gap opened by make_space_for_insert: the part of it past the
+// old end is raw storage and must be constructed, never assigned to.
+////////////////////////////////////////////////////////////////////////////////
+
+namespace insert_gap
+{
+    // Asserts it is only ever assigned to while alive (a std::string member
+    // makes it non-trivially relocatable on every stdlib).
+    std::set<void const *> & live() { static std::set<void const *> instances; return instances; }
+
+    struct tracked
+    {
+        std::string text;
+
+        tracked( std::string s = {} ) : text{ std::move( s ) } { live().insert( this ); }
+        tracked( tracked const &  o ) : text{ o.text            } { live().insert( this ); }
+        tracked( tracked &&       o ) noexcept : text{ std::move( o.text ) } { live().insert( this ); }
+        tracked & operator=( tracked const & o ) { EXPECT_TRUE( live().contains( this ) ) << "assignment into raw storage"; text = o.text           ; return *this; }
+        tracked & operator=( tracked &&      o ) noexcept { EXPECT_TRUE( live().contains( this ) ) << "assignment into raw storage"; text = std::move( o.text ); return *this; }
+        ~tracked() { live().erase( this ); }
+    };
+    static_assert( !is_trivially_moveable<tracked> );
+
+    template <typename Vec>
+    void check( Vec const & v, std::vector<std::string> const & expected )
+    {
+        ASSERT_EQ( v.size(), expected.size() );
+        for ( std::size_t i{ 0 }; i < expected.size(); ++i )
+            EXPECT_EQ( v[ i ].text, expected[ i ] );
+    }
+
+    using vec = heap_vector<tracked>;
+
+    vec make( std::uint32_t const count, std::uint32_t const spare_capacity )
+    {
+        vec v;
+        v.reserve( count + spare_capacity );
+        for ( std::uint32_t i{ 0 }; i < count; ++i )
+            v.emplace_back( "old-element-with-heap-allocated-storage-" + std::to_string( i ) );
+        return v;
+    }
+} // namespace insert_gap
+// The destructor of a moved-from tracked is observable (it unregisters), so the default
+// (nothrow move-assignable => nothing to destroy after a move) does not hold.
+template <> constexpr bool trivially_destructible_after_move_assignment<insert_gap::tracked>{ false };
+
+TEST( vector_insert, gap_past_the_old_end_is_constructed_not_assigned )
+{
+    using namespace insert_gap;
+    std::vector<std::string> const payload{ "new-element-with-heap-allocated-storage-0", "new-element-with-heap-allocated-storage-1", "new-element-with-heap-allocated-storage-2" };
+    std::vector<tracked>     const tracked_payload( payload.begin(), payload.end() );
+    auto const baseline{ live().size() };
+
+    for ( auto const spare : { 0u, 16u } ) // with / without reallocation
+    for ( auto const position : { 0u, 2u, 4u } ) // begin / middle / end ( 4 elements )
+    {
+        auto const expected_after = [ & ]( std::vector<std::string> const & inserted )
+        {
+            std::vector<std::string> e;
+            for ( std::uint32_t i{ 0 }; i < 4; ++i ) e.push_back( "old-element-with-heap-allocated-storage-" + std::to_string( i ) );
+            e.insert( e.begin() + position, inserted.begin(), inserted.end() );
+            return e;
+        };
+        SCOPED_TRACE( "position " + std::to_string( position ) + ", spare " + std::to_string( spare ) );
+
+        { // iterator range
+            auto v{ make( 4, spare ) };
+            auto const it{ v.insert( v.begin() + position, tracked_payload.begin(), tracked_payload.end() ) };
+            EXPECT_EQ( it - v.begin(), position );
+            check( v, expected_after( payload ) );
+        }
+        { // lvalue range
+            auto v{ make( 4, spare ) };
+            v.insert_range( v.begin() + position, tracked_payload );
+            check( v, expected_after( payload ) );
+        }
+        { // rvalue range
+            auto v{ make( 4, spare ) };
+            auto src{ tracked_payload };
+            v.insert_range( v.begin() + position, std::move( src ) );
+            check( v, expected_after( payload ) );
+        }
+        { // n copies
+            auto v{ make( 4, spare ) };
+            v.insert( v.begin() + position, 3, tracked{ "copy" } );
+            check( v, expected_after( { "copy", "copy", "copy" } ) );
+        }
+        { // single element
+            auto v{ make( 4, spare ) };
+            v.emplace( v.begin() + position, "single" );
+            check( v, expected_after( { "single" } ) );
+        }
+    }
+    EXPECT_EQ( live().size(), baseline );
 }
 
 //------------------------------------------------------------------------------
