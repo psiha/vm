@@ -124,7 +124,7 @@ namespace detail
             (
                 &data[ current_size - uninit_count ],
                 &data[ current_size ],
-                &data[ current_size ]
+                &data[ current_size - uninit_count + n ] // each element lands n slots up (== current_size only when n <= elements_to_move)
             );
             // Phase 2: shift remaining elements backward within initialized
             // space (source and destination may overlap but move_backward
@@ -982,7 +982,9 @@ public:
         //   * else (element-move)          => moved-from HUSK slot => constructing
         //     over it (skipping its dtor) is safe iff that dtor is elidable, i.e.
         //     trivially_destructible_after_move; otherwise assign.
-        if constexpr ( is_trivially_moveable<value_type> || trivially_destructible_after_move_assignment<value_type> )
+        //   * the slot is raw storage (not a husk) if nothing was shifted over it,
+        //     i.e. when inserting at the end (reachable here without Growth).
+        if ( construct_whole_gap<value_type>() || is_raw_gap_slot( iter ) )
             construct_at( *iter, std::forward<Args>( args )... );
         else
             *iter = { std::forward<Args>( args )... };
@@ -1069,10 +1071,16 @@ public:
     iterator insert( const_iterator const position, size_type const n, param_const_ref x )
     {
         auto const iter{ make_space_for_insert( position, n ) };
-        if constexpr ( is_trivially_moveable<value_type> || trivially_destructible_after_move_assignment<value_type> ) // see emplace()
+        if constexpr ( construct_whole_gap<value_type>() ) // see emplace()
             std::uninitialized_fill_n( iter, n, x );
         else
-            std::fill_n( iter, n, x );
+        {
+            // the gap = moved-from (live) husks followed by raw storage past the old end
+            auto const live{ live_gap_size( iter, n ) };
+            value_type const & value{ x };
+            std::fill_n( iter, live, value );
+            std::uninitialized_fill_n( iter + live, n - live, value );
+        }
         return iter;
     }
 
@@ -1091,10 +1099,15 @@ public:
     {
         auto const n{ checked_size( std::distance( first, last ) ) };
         auto const iter{ make_space_for_insert( position, n ) };
-        if constexpr ( is_trivially_moveable<value_type> || trivially_destructible_after_move_assignment<value_type> ) // see emplace()
+        if constexpr ( construct_whole_gap<value_type>() ) // see emplace()
             std::uninitialized_copy_n( first, n, iter );
         else
-            std::copy_n( first, n, iter );
+        {
+            // the gap = moved-from (live) husks followed by raw storage past the old end
+            auto const live{ live_gap_size( iter, n ) };
+            auto const rest{ std::ranges::copy_n( first, static_cast<std::iter_difference_t<InIt>>( live ), iter ) };
+            std::uninitialized_copy_n( rest.in, n - live, rest.out );
+        }
         return iter;
     }
 
@@ -1119,17 +1132,31 @@ public:
             auto const iter{ make_space_for_insert( position, n ) };
             if constexpr ( std::is_rvalue_reference_v<Rng &&> )
             {
-                if constexpr ( is_trivially_moveable<value_type> || trivially_destructible_after_move_assignment<value_type> ) // see emplace()
+                if constexpr ( construct_whole_gap<value_type>() ) // see emplace()
                     std::ranges::uninitialized_move( std::ranges::begin( rng ), std::ranges::end( rng ), iter, std::unreachable_sentinel );
                 else
-                    std::ranges::move( rng, iter );
+                {
+                    auto const live{ live_gap_size( iter, n ) };
+                    auto in { std::ranges::begin( rng ) };
+                    auto out{ iter };
+                    for ( auto i{ live }; i; --i, ++in, ++out )
+                        *out = std::move( *in );
+                    std::ranges::uninitialized_move( std::move( in ), std::ranges::end( rng ), out, std::unreachable_sentinel );
+                }
             }
             else
             {
-                if constexpr ( is_trivially_moveable<value_type> || trivially_destructible_after_move_assignment<value_type> ) // see emplace()
+                if constexpr ( construct_whole_gap<value_type>() ) // see emplace()
                     std::uninitialized_copy( std::ranges::begin( rng ), std::ranges::end( rng ), iter );
                 else
-                    std::ranges::copy( rng, iter );
+                {
+                    auto const live{ live_gap_size( iter, n ) };
+                    auto in { std::ranges::begin( rng ) };
+                    auto out{ iter };
+                    for ( auto i{ live }; i; --i, ++in, ++out )
+                        *out = *in;
+                    std::uninitialized_copy( std::move( in ), std::ranges::end( rng ), out );
+                }
             }
             return iter;
         }
@@ -1455,6 +1482,22 @@ private:
         detail::shift_elements_right( data, current_size, position_index, n );
         return make_iterator( &data[ position_index ] );
     }
+
+    // What shift_elements_right leaves in the n-slot gap it opens:
+    //   * is_trivially_moveable / trivially_destructible_after_move: raw or
+    //     byte-duplicate slots => construct all of them (see emplace());
+    //   * otherwise: min( n, elements shifted ) moved-from husks (live objects,
+    //     assigned to) followed by raw storage past the old end (MUST be
+    //     constructed - assigning there is UB for non-trivial types).
+    template <typename T>
+    static consteval bool construct_whole_gap() noexcept { return is_trivially_moveable<T> || trivially_destructible_after_move_assignment<T>; }
+
+    size_type live_gap_size( const_iterator const gap_begin, size_type const n ) const noexcept
+    {
+        auto const shifted{ static_cast<std::size_t>( cend() - gap_begin ) - n };
+        return static_cast<size_type>( std::min<std::size_t>( n, shifted ) );
+    }
+    bool is_raw_gap_slot( const_iterator const slot ) const noexcept { return live_gap_size( slot, 1 ) == 0; }
 
 public:
     // --- append growth ---
