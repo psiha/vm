@@ -984,7 +984,11 @@ public:
         //     trivially_destructible_after_move; otherwise assign.
         //   * the slot is raw storage (not a husk) if nothing was shifted over it,
         //     i.e. when inserting at the end (reachable here without Growth).
-        if ( construct_whole_gap<value_type>() || is_raw_gap_slot( iter ) )
+        // (the assign branch is only instantiated for types that need it: a
+        // trivially moveable element need not be assignable from the args)
+        if constexpr ( construct_whole_gap<value_type>() )
+            construct_at( *iter, std::forward<Args>( args )... );
+        else if ( is_raw_gap_slot( iter ) )
             construct_at( *iter, std::forward<Args>( args )... );
         else
             *iter = { std::forward<Args>( args )... };
